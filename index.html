@@ -1,0 +1,868 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Deal Command Center · FundLocators</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #0c0a09; color: #fafaf9; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; }
+  * { box-sizing: border-box; }
+  button { font-family: inherit; cursor: pointer; }
+  input, textarea, select { font-family: inherit; }
+  ::placeholder { color: #57534e; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #44403c; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect, useCallback, useRef } = React;
+const SUPABASE_URL = 'https://fmrtiaszjfoaeghboycn.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_I0T4RT55gkggJ9EqXNvX3A_uFU6jtDe';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ─── Helpers ────────────────────────────────────────────────────────
+const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+const DEAL_STATUSES = {
+  flip: ["lead", "under-contract", "rehab", "listing", "under-offer", "closed", "dead"],
+  surplus: ["new-lead", "signed", "filed", "probate", "awaiting-distribution", "recovered", "urgent", "dead"],
+};
+const STATUS_COLORS = {
+  "lead": "#3b82f6", "under-contract": "#f59e0b", "rehab": "#d97706", "listing": "#8b5cf6",
+  "under-offer": "#06b6d4", "closed": "#10b981", "dead": "#78716c",
+  "new-lead": "#3b82f6", "signed": "#f59e0b", "filed": "#8b5cf6",
+  "probate": "#ec4899", "awaiting-distribution": "#06b6d4", "recovered": "#10b981", "urgent": "#ef4444",
+};
+const EXPENSE_CATEGORIES = ["Acquisition","Inspection","Plumbing","Electrical","Well/Septic","Cleanup","Labor","Holding","Marketing","Setup","Site","Legal","Filing","Other"];
+
+// ─── Styles ──────────────────────────────────────────────────────────
+const inputStyle = { width: "100%", background: "#0c0a09", border: "1px solid #44403c", color: "#fafaf9", padding: "8px 10px", borderRadius: 6, fontSize: 13, outline: "none" };
+const selectStyle = { background: "#1c1917", border: "1px solid #44403c", color: "#fafaf9", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600 };
+const btnPrimary = { background: "#d97706", color: "#0c0a09", border: "none", padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700 };
+const btnGhost = { background: "transparent", color: "#78716c", border: "1px solid #44403c", padding: "4px 10px", borderRadius: 4, fontSize: 14, fontWeight: 600 };
+const th = { textAlign: "left", padding: "10px 12px", fontSize: 10, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", textTransform: "uppercase" };
+const td = { padding: "10px 12px", verticalAlign: "top" };
+
+// ─── Shell ───────────────────────────────────────────────────────────
+function Shell({ children }) {
+  return (
+    <div style={{ minHeight: "100vh", padding: "20px 24px" }}>
+      <div style={{ maxWidth: 1340, margin: "0 auto" }}>{children}</div>
+    </div>
+  );
+}
+
+// ─── Login (magic link) ──────────────────────────────────────────────
+function Login() {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const send = async () => {
+    if (!email) return;
+    setBusy(true); setErr("");
+    const { error } = await sb.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: window.location.origin + window.location.pathname }
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    setSent(true);
+  };
+
+  return (
+    <Shell>
+      <div style={{ maxWidth: 420, margin: "120px auto", textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>FundLocators</div>
+        <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6 }}>Deal Command Center</div>
+        <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 8, marginBottom: 32 }}>Sign in with your work email — we'll send you a magic link.</div>
+        {sent ? (
+          <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>Check your email</div>
+            <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 8 }}>Click the link in <b>{email}</b> to sign in. You can close this tab.</div>
+          </div>
+        ) : (
+          <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
+            <input type="email" autoFocus value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="you@fundlocators.com" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }} />
+            <button onClick={send} disabled={busy || !email} style={{ ...btnPrimary, width: "100%", padding: "10px 14px", fontSize: 13, marginTop: 12, opacity: busy||!email ? 0.5 : 1 }}>{busy ? "Sending..." : "Send magic link"}</button>
+            {err && <div style={{ fontSize: 11, color: "#fca5a5", marginTop: 10 }}>{err}</div>}
+          </div>
+        )}
+      </div>
+    </Shell>
+  );
+}
+
+// ─── Root: session gate ──────────────────────────────────────────────
+function Root() {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    sb.auth.getSession().then(({ data }) => { setSession(data.session); setChecking(false); });
+    const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) { setProfile(null); return; }
+    sb.from('profiles').select('*').eq('id', session.user.id).single().then(({ data }) => {
+      if (data) setProfile(data);
+      else setProfile({ id: session.user.id, name: session.user.email.split('@')[0], role: 'team' });
+    });
+  }, [session]);
+
+  if (checking) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading...</div></Shell>;
+  if (!session) return <Login />;
+  if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
+  return <DealCommandCenter session={session} profile={profile} />;
+}
+
+// ─── Main App ────────────────────────────────────────────────────────
+function DealCommandCenter({ session, profile }) {
+  const [deals, setDeals] = useState([]);
+  const [activeDealId, setActiveDealId] = useState(null);
+  const [loaded, setLoaded] = useState(false);
+  const [showNewDeal, setShowNewDeal] = useState(false);
+  const [teamMembers, setTeamMembers] = useState([profile.name]);
+
+  const userName = profile.name;
+
+  const loadDeals = async () => {
+    const { data } = await sb.from('deals').select('*').order('created_at', { ascending: false });
+    setDeals(data || []);
+    setLoaded(true);
+  };
+  const loadTeam = async () => {
+    const { data } = await sb.from('profiles').select('name').order('name');
+    if (data) setTeamMembers(data.map(d => d.name));
+  };
+
+  useEffect(() => { loadDeals(); loadTeam(); }, []);
+
+  // realtime: any change to deals triggers refresh
+  useEffect(() => {
+    const ch = sb.channel('deals-ch')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, loadDeals)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const activeDeal = deals.find(d => d.id === activeDealId);
+
+  const addDeal = async (deal) => {
+    const { error } = await sb.from('deals').insert({ ...deal, owner_id: session.user.id });
+    if (error) { alert(error.message); return; }
+    await loadDeals();
+    setShowNewDeal(false);
+    setActiveDealId(deal.id);
+  };
+
+  const updateDealMeta = async (id, patch) => {
+    setDeals(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d)); // optimistic
+    await sb.from('deals').update(patch).eq('id', id);
+  };
+
+  const deleteDeal = async (id) => {
+    if (!confirm("Delete this deal and all its data? This cannot be undone.")) return;
+    await sb.from('deals').delete().eq('id', id);
+    if (activeDealId === id) setActiveDealId(null);
+    await loadDeals();
+  };
+
+  const signOut = async () => { await sb.auth.signOut(); };
+
+  if (!loaded) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading deals...</div></Shell>;
+
+  return (
+    <Shell>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          {activeDeal && (
+            <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+              ← All Deals
+            </button>
+          )}
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
+              {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "FundLocators Deal Hub"}
+            </div>
+            <div style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
+              {activeDeal ? activeDeal.name : "Deal Command Center"}
+            </div>
+            {activeDeal && <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>{activeDeal.address}</div>}
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+          <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
+          <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
+          <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
+        </div>
+      </div>
+
+      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} />}
+
+      {!activeDeal ? (
+        <DealList deals={deals} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} />
+      ) : (
+        <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
+      )}
+    </Shell>
+  );
+}
+
+// ─── Deal List ───────────────────────────────────────────────────────
+function DealList({ deals, onSelect, onNew, onDelete }) {
+  const flips = deals.filter(d => d.type === "flip");
+  const surplus = deals.filter(d => d.type === "surplus");
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
+          <span style={{ fontSize: 13, color: "#a8a29e" }}>{deals.length} deals</span>
+          <span style={{ fontSize: 12, color: "#78716c" }}>{flips.length} flips · {surplus.length} surplus</span>
+        </div>
+        <button onClick={onNew} style={btnPrimary}>+ New Deal</button>
+      </div>
+      {flips.length > 0 && (<>
+        <SectionLabel icon="🏠" label="Real Estate Flips" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14, marginBottom: 28 }}>
+          {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+        </div>
+      </>)}
+      {surplus.length > 0 && (<>
+        <SectionLabel icon="💰" label="Surplus Fund Cases" />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14 }}>
+          {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+        </div>
+      </>)}
+      {deals.length === 0 && (
+        <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
+          No deals yet. Click <b>+ New Deal</b> to add one.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SectionLabel({ icon, label }) {
+  return <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><span>{icon}</span>{label}</div>;
+}
+
+function DealCard({ deal, onClick, onDelete }) {
+  const sc = STATUS_COLORS[deal.status] || "#78716c";
+  const m = deal.meta || {};
+  return (
+    <div onClick={onClick} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+        </div>
+        <StatusBadge status={deal.status} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+        <MiniStat label="List Price" value={fmt(m.listPrice)} />
+        <MiniStat label="Lien Payoff" value={fmt(m.lienPayoff)} />
+      </div>
+      <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
+    </div>
+  );
+}
+
+function SurplusCard({ deal, onClick, onDelete }) {
+  const sc = STATUS_COLORS[deal.status] || "#78716c";
+  const m = deal.meta || {};
+  return (
+    <div onClick={onClick} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+        </div>
+        <StatusBadge status={deal.status} />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+        {m.estimatedSurplus > 0 && <MiniStat label="Est. Surplus" value={fmt(m.estimatedSurplus)} />}
+        {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
+        {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
+        {m.county && <MiniStat label="County" value={m.county} />}
+      </div>
+      <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
+    </div>
+  );
+}
+
+function StatusBadge({ status }) {
+  const c = STATUS_COLORS[status] || "#78716c";
+  return <span style={{ padding: "3px 10px", borderRadius: 5, fontSize: 9, fontWeight: 700, background: `${c}18`, color: c, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{status.replace(/-/g, " ")}</span>;
+}
+
+function MiniStat({ label, value }) {
+  return (
+    <div>
+      <div style={{ fontSize: 9, fontWeight: 600, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{value}</div>
+    </div>
+  );
+}
+
+// ─── New Deal Modal ──────────────────────────────────────────────────
+function NewDealModal({ onAdd, onClose }) {
+  const [type, setType] = useState("flip");
+  const [name, setName] = useState("");
+  const [address, setAddress] = useState("");
+
+  const create = () => {
+    if (!name) return;
+    const id = type + "-" + uid();
+    const meta = type === "flip"
+      ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [] }
+      : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "" };
+    onAdd({ id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta });
+  };
+
+  return (
+    <Modal onClose={onClose} title="Add New Deal">
+      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
+        <TabBtn active={type === "flip"} onClick={() => setType("flip")}>🏠 Flip / RE Deal</TabBtn>
+        <TabBtn active={type === "surplus"} onClick={() => setType("surplus")}>💰 Surplus Fund</TabBtn>
+      </div>
+      <Field label="Deal Name"><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "Property address or nickname" : "Client name"} /></Field>
+      <Field label="Location / County" style={{ marginTop: 12 }}><input value={address} onChange={e => setAddress(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "City, State" : "County, State"} /></Field>
+      <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+        <button onClick={onClose} style={btnGhost}>Cancel</button>
+        <button onClick={create} style={btnPrimary}>Create Deal</button>
+      </div>
+    </Modal>
+  );
+}
+
+function Modal({ onClose, title, children }) {
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+          <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
+          <button onClick={onClose} style={{ ...btnGhost, fontSize: 16, padding: "2px 10px" }}>×</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── Deal Detail ─────────────────────────────────────────────────────
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
+  const [tab, setTab] = useState("overview");
+  const [expenses, setExpenses] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [notes, setNotes] = useState("");
+  const [activity, setActivity] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const loadAll = async () => {
+    setLoaded(false);
+    const [e, t, v, n, a] = await Promise.all([
+      sb.from('expenses').select('*').eq('deal_id', deal.id).order('date', { ascending: false }),
+      sb.from('tasks').select('*').eq('deal_id', deal.id).order('done').order('created_at'),
+      sb.from('vendors').select('*').eq('deal_id', deal.id).order('created_at'),
+      sb.from('deal_notes').select('*').eq('deal_id', deal.id).maybeSingle(),
+      sb.from('activity').select('*, profiles(name)').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(60),
+    ]);
+    setExpenses(e.data || []);
+    setTasks(t.data || []);
+    setVendors(v.data || []);
+    setNotes(n.data?.content || `# ${deal.name}\n\n`);
+    setActivity((a.data || []).map(r => ({ ts: r.created_at, who: r.profiles?.name || '?', msg: r.action })));
+    setLoaded(true);
+  };
+
+  useEffect(() => { loadAll(); }, [deal.id]);
+
+  // realtime per-deal subscription
+  useEffect(() => {
+    const ch = sb.channel('deal-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses', filter: `deal_id=eq.${deal.id}` }, loadAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `deal_id=eq.${deal.id}` }, loadAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors', filter: `deal_id=eq.${deal.id}` }, loadAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${deal.id}` }, loadAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity', filter: `deal_id=eq.${deal.id}` }, loadAll)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [deal.id]);
+
+  const logAct = async (msg) => {
+    await sb.from('activity').insert({ deal_id: deal.id, user_id: userId, action: msg });
+  };
+
+  const totalExpenses = expenses.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+
+  const isFlip = deal.type === "flip";
+  const m = deal.meta || {};
+  let netProfit = 0;
+  if (isFlip) {
+    const closingPct = ((m.buyerAgentPct || 0) + (m.closingMiscPct || 0)) / 100;
+    const closingDollars = (m.listPrice || 0) * closingPct + (m.flatFee || 0);
+    netProfit = (m.listPrice || 0) - closingDollars - (m.lienPayoff || 0) - totalExpenses;
+  }
+  let projectedFee = 0;
+  if (!isFlip) projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
+
+  const tasksDone = tasks.filter(t => t.done).length;
+  const tasksHigh = tasks.filter(t => !t.done && t.priority === "high").length;
+
+  if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
+
+  const tabs = ["overview", "expenses", "tasks", "vendors", "notes", "activity"];
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, color: "#78716c" }}>Status:</span>
+        <select value={deal.status} onChange={e => onUpdateDeal({ status: e.target.value })} style={{ ...selectStyle, fontSize: 11 }}>
+          {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
+        </select>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+        {isFlip ? (<>
+          <Metric label="Cash Deployed" value={fmt(totalExpenses)} sub="All expenses to date" color="#f59e0b" />
+          <Metric label="Lien Payoff" value={fmt(m.lienPayoff)} sub="Cleared at close" color="#a8a29e" />
+          <Metric label="List Price" value={fmt(m.listPrice)} sub={deal.status === "listing" ? "Active listing" : "Target"} color="#3b82f6" />
+          <Metric label="Projected Net" value={fmt(netProfit)} sub={netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative"} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
+        </>) : (<>
+          <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? m.county + " County" : "—"} color="#3b82f6" />
+          <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
+          <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
+        </>)}
+      </div>
+
+      <div style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
+        {tabs.map(id => (
+          <button key={id} onClick={() => setTab(id)} style={{
+            background: "transparent", border: "none", color: tab === id ? "#fafaf9" : "#78716c",
+            padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
+            borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
+          }}>
+            {id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" && (isFlip
+        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />
+        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />)}
+      {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
+      {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
+      {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
+      {tab === "notes" && <Notes value={notes} dealId={deal.id} userId={userId} setLocal={setNotes} />}
+      {tab === "activity" && <Activity items={activity} />}
+    </div>
+  );
+}
+
+// ─── Flip Overview ───────────────────────────────────────────────────
+function FlipOverview({ deal, expenses, totalExpenses, netProfit, tasksDone, tasksTotal, onUpdateDeal }) {
+  const m = deal.meta || {};
+  const closingPct = ((m.buyerAgentPct || 0) + (m.closingMiscPct || 0)) / 100;
+  const closingDollars = (m.listPrice || 0) * closingPct + (m.flatFee || 0);
+  const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
+  const byCat = {};
+  expenses.forEach(e => { const cat = e.category || "Other"; byCat[cat] = (byCat[cat] || 0) + (parseFloat(e.amount) || 0); });
+  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const maxCat = cats[0]?.[1] || 1;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+      <div>
+        <Card title="Live P&L Waterfall">
+          <WaterfallLine label="List / Sale Price" value={m.listPrice} positive bold />
+          <WaterfallLine label={`Closing costs (${m.flatFee} flat + ${m.buyerAgentPct}% buyer + ${m.closingMiscPct}% misc)`} value={-closingDollars} />
+          <WaterfallLine label="Lien payoff (from proceeds)" value={-(m.lienPayoff || 0)} />
+          <WaterfallLine label="Cash deployed (all expenses)" value={-totalExpenses} />
+          <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
+          <WaterfallLine label="NET PROFIT" value={netProfit} bold huge />
+        </Card>
+        <Card title="Deal Parameters" style={{ marginTop: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <Field label="List Price"><input type="number" value={m.listPrice || ""} onChange={e => updateMeta({ listPrice: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Lien Payoff"><input type="number" value={m.lienPayoff || ""} onChange={e => updateMeta({ lienPayoff: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Flat Fee"><input type="number" value={m.flatFee || ""} onChange={e => updateMeta({ flatFee: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Buyer Agent %"><input type="number" step="0.5" value={m.buyerAgentPct || ""} onChange={e => updateMeta({ buyerAgentPct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Misc Closing %"><input type="number" step="0.5" value={m.closingMiscPct || ""} onChange={e => updateMeta({ closingMiscPct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Contract Price"><input type="number" value={m.contractPrice || ""} onChange={e => updateMeta({ contractPrice: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+          </div>
+        </Card>
+      </div>
+      <div>
+        <Card title="Progress">
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
+            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
+          </div>
+          <ProgressBar pct={tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0} />
+        </Card>
+        <Card title="Spend by Category" style={{ marginTop: 16 }}>
+          {cats.length === 0 && <div style={{ fontSize: 12, color: "#78716c" }}>No expenses yet.</div>}
+          {cats.map(([cat, amt]) => (
+            <div key={cat} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                <span style={{ color: "#a8a29e" }}>{cat}</span>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>{fmt(amt)}</span>
+              </div>
+              <div style={{ height: 4, background: "#0c0a09", borderRadius: 2, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${(amt / maxCat) * 100}%`, background: "#d97706", borderRadius: 2 }} />
+              </div>
+            </div>
+          ))}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── Surplus Overview ────────────────────────────────────────────────
+function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal }) {
+  const m = deal.meta || {};
+  const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+      <div>
+        <Card title="Case Details">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Estimated Surplus"><input type="number" value={m.estimatedSurplus || ""} onChange={e => updateMeta({ estimatedSurplus: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            <Field label="Attorney"><input value={m.attorney || ""} onChange={e => updateMeta({ attorney: e.target.value })} style={inputStyle} /></Field>
+            <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
+            <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
+          </div>
+        </Card>
+        <Card title="Financial Summary" style={{ marginTop: 16 }}>
+          <WaterfallLine label="Estimated Surplus" value={m.estimatedSurplus || 0} positive bold />
+          <WaterfallLine label={`Our fee (${m.feePct || 0}%)`} value={projectedFee} positive />
+          {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
+          <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
+          <WaterfallLine label="NET TO US" value={projectedFee - totalExpenses} bold huge />
+        </Card>
+      </div>
+      <div>
+        <Card title="Progress">
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
+            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
+          </div>
+          <ProgressBar pct={tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0} />
+        </Card>
+        <Card title="Pipeline Stage" style={{ marginTop: 16 }}>
+          {DEAL_STATUSES.surplus.filter(s => s !== "dead").map(s => {
+            const active = s === deal.status;
+            const done = DEAL_STATUSES.surplus.indexOf(s) < DEAL_STATUSES.surplus.indexOf(deal.status);
+            return (
+              <div key={s} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1c1917" }}>
+                <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${active ? "#d97706" : done ? "#10b981" : "#44403c"}`, background: done ? "#10b981" : active ? "#d97706" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: done || active ? "#0c0a09" : "#44403c", fontWeight: 700 }}>{done ? "✓" : ""}</div>
+                <span style={{ fontSize: 12, color: active ? "#fafaf9" : done ? "#a8a29e" : "#57534e", fontWeight: active ? 700 : 400, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.replace(/-/g, " ")}</span>
+              </div>
+            );
+          })}
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── Shared primitives ───────────────────────────────────────────────
+function WaterfallLine({ label, value, bold, huge, positive }) {
+  const neg = value < 0;
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0" }}>
+      <span style={{ fontSize: huge ? 14 : 13, color: bold ? "#fafaf9" : "#a8a29e", fontWeight: bold ? 700 : 400 }}>{label}</span>
+      <span style={{ fontFamily: "'DM Mono', monospace", fontSize: huge ? 22 : 14, fontWeight: bold ? 700 : 500, color: huge ? (value >= 60000 ? "#10b981" : value >= 0 ? "#f59e0b" : "#ef4444") : neg ? "#fca5a5" : positive ? "#86efac" : "#fafaf9" }}>
+        {neg ? "-" : ""}{fmt(Math.abs(value))}
+      </span>
+    </div>
+  );
+}
+
+function ProgressBar({ pct }) {
+  return (
+    <div style={{ height: 8, background: "#0c0a09", borderRadius: 4, overflow: "hidden", border: "1px solid #292524" }}>
+      <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #d97706, #f59e0b)", transition: "width 0.3s", borderRadius: 4 }} />
+    </div>
+  );
+}
+
+function Metric({ label, value, sub, color, big }) {
+  return (
+    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16, borderLeft: `3px solid ${color}` }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", marginBottom: 8, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: big ? 26 : 20, fontWeight: 700, letterSpacing: "-0.02em" }}>{value}</div>
+      <div style={{ fontSize: 11, color: "#78716c", marginTop: 6 }}>{sub}</div>
+    </div>
+  );
+}
+
+function Card({ title, children, action, style }) {
+  return (
+    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, ...style }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#fafaf9", letterSpacing: "0.05em", textTransform: "uppercase" }}>{title}</div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children, style }) {
+  return (
+    <div style={style}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: "#a8a29e", letterSpacing: "0.1em", marginBottom: 4, textTransform: "uppercase" }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function TabBtn({ active, onClick, children }) {
+  return <button onClick={onClick} style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: active ? "1px solid #d97706" : "1px solid #44403c", background: active ? "#d9770618" : "transparent", color: active ? "#fafaf9" : "#a8a29e", fontSize: 13, fontWeight: 600 }}>{children}</button>;
+}
+
+// ─── Expenses Tab ────────────────────────────────────────────────────
+function Expenses({ items, dealId, userId, logAct, reload }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ payee: "", amount: "", date: "", notes: "", category: "Other" });
+  const total = items.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+
+  const add = async () => {
+    if (!draft.payee || !draft.amount) return;
+    const row = { id: "e" + uid(), deal_id: dealId, payee: draft.payee, amount: parseFloat(draft.amount), date: draft.date || null, notes: draft.notes, category: draft.category, created_by: userId };
+    await sb.from('expenses').insert(row);
+    await logAct(`Added expense: ${draft.payee} ${fmt(parseFloat(draft.amount))}`);
+    setDraft({ payee: "", amount: "", date: "", notes: "", category: "Other" });
+    setAdding(false);
+    reload();
+  };
+  const del = async (id) => {
+    const it = items.find(i => i.id === id);
+    await sb.from('expenses').delete().eq('id', id);
+    await logAct(`Deleted expense: ${it?.payee}`);
+    reload();
+  };
+
+  return (
+    <Card title={`Expenses (${items.length} items · ${fmt(total)} total)`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
+      {adding && (
+        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="Payee"><input value={draft.payee} onChange={e => setDraft({ ...draft, payee: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
+          <Field label="Amount"><input type="number" value={draft.amount} onChange={e => setDraft({ ...draft, amount: e.target.value })} style={inputStyle} placeholder="0" /></Field>
+          <Field label="Date"><input type="date" value={draft.date} onChange={e => setDraft({ ...draft, date: e.target.value })} style={inputStyle} /></Field>
+          <Field label="Category"><select value={draft.category} onChange={e => setDraft({ ...draft, category: e.target.value })} style={inputStyle}>{EXPENSE_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></Field>
+          <button onClick={add} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+          <Field label="Notes" style={{ gridColumn: "1 / -1" }}><input value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} style={inputStyle} placeholder="Details" /></Field>
+        </div>
+      )}
+      <div style={{ maxHeight: 520, overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead style={{ position: "sticky", top: 0, background: "#1c1917" }}>
+            <tr style={{ borderBottom: "1px solid #44403c" }}>
+              <th style={th}>Payee</th><th style={{ ...th, textAlign: "right" }}>Amount</th><th style={th}>Date</th><th style={th}>Category</th><th style={th}>Notes</th><th style={th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(item => (
+              <tr key={item.id} style={{ borderBottom: "1px solid #292524" }}>
+                <td style={td}>{item.payee}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", fontWeight: 600, color: "#fca5a5" }}>{fmt(item.amount)}</td>
+                <td style={{ ...td, color: "#a8a29e", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{item.date || "—"}</td>
+                <td style={td}><span style={{ padding: "2px 8px", background: "#292524", borderRadius: 4, fontSize: 10, fontWeight: 600, color: "#d97706" }}>{item.category}</span></td>
+                <td style={{ ...td, color: "#a8a29e", fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{item.notes}</td>
+                <td style={td}><button onClick={() => del(item.id)} style={btnGhost}>×</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+// ─── Tasks Tab ───────────────────────────────────────────────────────
+function Tasks({ items, dealId, userId, teamMembers, logAct, reload }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
+
+  const toggle = async (id) => {
+    const it = items.find(i => i.id === id);
+    await sb.from('tasks').update({ done: !it.done }).eq('id', id);
+    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${it.label}`);
+    reload();
+  };
+  const add = async () => {
+    if (!draft.label) return;
+    const row = { id: "t" + uid(), deal_id: dealId, label: draft.label, due: draft.due || null, owner: draft.owner, priority: draft.priority, done: false, created_by: userId };
+    await sb.from('tasks').insert(row);
+    await logAct(`Added task: ${draft.label}`);
+    setDraft({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
+    setAdding(false);
+    reload();
+  };
+  const del = async (id) => {
+    const it = items.find(i => i.id === id);
+    await sb.from('tasks').delete().eq('id', id);
+    await logAct(`Deleted task: ${it?.label}`);
+    reload();
+  };
+
+  const sorted = [...items].sort((a, b) => { if (a.done !== b.done) return a.done ? 1 : -1; const p = { high: 0, med: 1, low: 2 }; return (p[a.priority] || 1) - (p[b.priority] || 1); });
+
+  return (
+    <Card title={`Tasks (${items.filter(t => !t.done).length} open)`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
+      {adding && (
+        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "3fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="Task"><input value={draft.label} onChange={e => setDraft({ ...draft, label: e.target.value })} style={inputStyle} placeholder="What needs done?" /></Field>
+          <Field label="Due"><input type="date" value={draft.due} onChange={e => setDraft({ ...draft, due: e.target.value })} style={inputStyle} /></Field>
+          <Field label="Owner"><select value={draft.owner} onChange={e => setDraft({ ...draft, owner: e.target.value })} style={inputStyle}>{teamMembers.map(m => <option key={m}>{m}</option>)}</select></Field>
+          <Field label="Priority"><select value={draft.priority} onChange={e => setDraft({ ...draft, priority: e.target.value })} style={inputStyle}><option value="high">High</option><option value="med">Med</option><option value="low">Low</option></select></Field>
+          <button onClick={add} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {sorted.map(t => (
+          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: t.done ? "#0c0a09" : "#1c1917", border: `1px solid ${t.done ? "#1c1917" : "#292524"}`, borderRadius: 8, opacity: t.done ? 0.45 : 1 }}>
+            <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706" }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none" }}>{t.label}</div>
+              <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
+                <span>{t.owner}</span>{t.due && <span>· Due {t.due}</span>}
+              </div>
+            </div>
+            <PriorityBadge p={t.priority} />
+            <button onClick={() => del(t.id)} style={btnGhost}>×</button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function PriorityBadge({ p }) {
+  const bg = p === "high" ? "#7f1d1d" : p === "med" ? "#78350f" : "#1c1917";
+  const fg = p === "high" ? "#fca5a5" : p === "med" ? "#fbbf24" : "#a8a29e";
+  return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{(p || "med").toUpperCase()}</span>;
+}
+
+// ─── Vendors Tab ─────────────────────────────────────────────────────
+function Vendors({ items, dealId, logAct, reload }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ name: "", role: "", phone: "", status: "Active", notes: "" });
+  const sc = (s) => ({ "Complete": "#10b981", "Active": "#f59e0b", "Pending": "#3b82f6", "Quoted": "#a78bfa" })[s] || "#a8a29e";
+
+  const add = async () => {
+    if (!draft.name) return;
+    const row = { id: "v" + uid(), deal_id: dealId, ...draft };
+    await sb.from('vendors').insert(row);
+    await logAct(`Added vendor: ${draft.name}`);
+    setDraft({ name: "", role: "", phone: "", status: "Active", notes: "" });
+    setAdding(false);
+    reload();
+  };
+  const del = async (id) => {
+    const it = items.find(i => i.id === id);
+    await sb.from('vendors').delete().eq('id', id);
+    await logAct(`Removed vendor: ${it?.name}`);
+    reload();
+  };
+
+  return (
+    <Card title={`Vendors (${items.length})`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
+      {adding && (
+        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 1fr 2fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="Name"><input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
+          <Field label="Role"><input value={draft.role} onChange={e => setDraft({ ...draft, role: e.target.value })} style={inputStyle} placeholder="What they do" /></Field>
+          <Field label="Phone"><input value={draft.phone} onChange={e => setDraft({ ...draft, phone: e.target.value })} style={inputStyle} placeholder="555-1234" /></Field>
+          <Field label="Status"><select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value })} style={inputStyle}><option>Active</option><option>Complete</option><option>Pending</option><option>Quoted</option></select></Field>
+          <Field label="Notes"><input value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} style={inputStyle} /></Field>
+          <button onClick={add} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+        </div>
+      )}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+        {items.map(v => (
+          <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14, position: "relative" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</div>
+                <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{v.role}</div>
+              </div>
+              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em" }}>{(v.status || "").toUpperCase()}</span>
+            </div>
+            {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}>{v.phone}</div>}
+            {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
+            <button onClick={() => del(v.id)} style={{ ...btnGhost, position: "absolute", top: 8, right: 8 }}>×</button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+// ─── Notes Tab ───────────────────────────────────────────────────────
+function Notes({ value, dealId, userId, setLocal }) {
+  const debounce = useRef(null);
+  const [savedAt, setSavedAt] = useState(null);
+
+  const handleChange = (e) => {
+    const v = e.target.value;
+    setLocal(v);
+    if (debounce.current) clearTimeout(debounce.current);
+    debounce.current = setTimeout(async () => {
+      await sb.from('deal_notes').upsert({ deal_id: dealId, content: v, updated_by: userId, updated_at: new Date().toISOString() });
+      setSavedAt(new Date());
+    }, 700);
+  };
+
+  return (
+    <Card title="Shared Notes">
+      <textarea value={value} onChange={handleChange} style={{ width: "100%", minHeight: 460, background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, color: "#fafaf9", padding: 14, fontSize: 13, fontFamily: "'DM Mono', monospace", lineHeight: 1.6, resize: "vertical" }} />
+      <div style={{ fontSize: 11, color: "#78716c", marginTop: 8 }}>Auto-saves to Supabase. Shared with all team members.{savedAt && ` · Last saved ${savedAt.toLocaleTimeString()}`}</div>
+    </Card>
+  );
+}
+
+// ─── Activity Tab ────────────────────────────────────────────────────
+function Activity({ items }) {
+  const whoColor = (w) => w === "Nathan" ? "#7c2d12" : w === "Justin" ? "#1e3a8a" : "#292524";
+  return (
+    <Card title="Recent Activity">
+      {items.length === 0 && <div style={{ color: "#78716c", fontSize: 13, padding: 12 }}>No activity yet.</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {items.map((a, i) => (
+          <div key={i} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, display: "flex", gap: 12, alignItems: "center" }}>
+            <span style={{ padding: "2px 8px", background: whoColor(a.who), color: "#fafaf9", borderRadius: 4, fontSize: 10, fontWeight: 700, minWidth: 60, textAlign: "center" }}>{a.who}</span>
+            <span style={{ flex: 1, fontSize: 13 }}>{a.msg}</span>
+            <span style={{ fontSize: 10, color: "#78716c", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>{new Date(a.ts).toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+</script>
+</body>
+</html>
