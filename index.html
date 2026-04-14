@@ -3,1282 +3,889 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Southeast Indiana Title, Inc. | Trusted Title & Closing Services | Batesville, IN</title>
-<meta name="description" content="Southeast Indiana Title Inc. provides trusted title search, title insurance, and real estate closing services throughout Southeast Indiana. Attorney-owned, 25+ years of experience. Batesville, IN.">
-<meta name="keywords" content="title company Batesville Indiana, title insurance, real estate closing, Doug Amberger attorney, Southeast Indiana Title, Ripley County title company">
-<link rel="icon" type="image/png" href="SElogo.png">
-<link rel="apple-touch-icon" href="SElogo.png">
+<title>Flip Command Center — 2533 County Road 102</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  :root {
-    --navy: #0f2a47;
-    --navy-dark: #081a2e;
-    --gold: #c9a961;
-    --gold-dark: #a88a47;
-    --cream: #faf7f2;
-    --text: #2a2a2a;
-    --muted: #5a6573;
-    --border: #e3e6ea;
-  }
-  html { scroll-behavior: smooth; }
-  body {
-    font-family: Georgia, 'Times New Roman', serif;
-    color: var(--text);
-    line-height: 1.65;
-    background: #fff;
-  }
-  h1, h2, h3, h4, .sans { font-family: 'Helvetica Neue', Arial, sans-serif; }
-
-  /* Top bar */
-  .topbar {
-    background: var(--navy-dark);
-    color: #c8d4e3;
-    font-size: 13px;
-    padding: 8px 0;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-  }
-  .topbar-inner {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 24px;
-    display: flex;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-  }
-  .topbar a { color: var(--gold); text-decoration: none; }
-  .topbar a:hover { color: #fff; }
-
-  /* Header / Nav */
-  header {
-    background: #fff;
-    border-bottom: 3px solid var(--gold);
-    position: sticky;
-    top: 0;
-    z-index: 100;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-  }
-  .nav {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 18px 24px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    text-decoration: none;
-    color: var(--navy);
-  }
-  .logo-mark {
-    width: 60px; height: 60px;
-    border-radius: 8px;
-    display: block;
-    object-fit: contain;
-  }
-  .logo-text h1 {
-    font-size: 20px;
-    color: var(--navy);
-    letter-spacing: 0.5px;
-    line-height: 1.1;
-  }
-  .logo-text p {
-    font-size: 11px;
-    color: var(--muted);
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    margin-top: 3px;
-  }
-  nav ul {
-    list-style: none;
-    display: flex;
-    gap: 28px;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 14px;
-    letter-spacing: 0.5px;
-  }
-  nav a {
-    text-decoration: none;
-    color: var(--navy);
-    font-weight: 500;
-    text-transform: uppercase;
-    transition: color 0.2s;
-  }
-  nav a:hover { color: var(--gold-dark); }
-  .cta-btn {
-    background: var(--gold);
-    color: #fff !important;
-    padding: 10px 22px;
-    border-radius: 3px;
-    font-weight: 600;
-    transition: background 0.2s;
-  }
-  .cta-btn:hover { background: var(--gold-dark); color: #fff !important; }
-
-  /* Hero */
-  .hero {
-    background:
-      linear-gradient(rgba(8, 26, 46, 0.82), rgba(15, 42, 71, 0.88)),
-      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='600' viewBox='0 0 1200 600'><rect fill='%230f2a47' width='1200' height='600'/><path fill='%23081a2e' d='M0 400 Q 300 350 600 400 T 1200 400 L 1200 600 L 0 600 Z'/><g opacity='0.15' fill='%23c9a961'><rect x='100' y='200' width='120' height='280'/><rect x='260' y='150' width='140' height='330'/><rect x='440' y='180' width='100' height='300'/><rect x='580' y='120' width='150' height='360'/><rect x='770' y='170' width='110' height='310'/><rect x='920' y='200' width='130' height='280'/></g></svg>");
-    background-size: cover;
-    background-position: center;
-    color: #fff;
-    padding: 110px 24px 120px;
-    text-align: center;
-  }
-  .hero-inner { max-width: 900px; margin: 0 auto; }
-  .hero-eyebrow {
-    display: inline-block;
-    color: var(--gold);
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 13px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    margin-bottom: 20px;
-    border-top: 1px solid var(--gold);
-    border-bottom: 1px solid var(--gold);
-    padding: 8px 24px;
-  }
-  .hero h2 {
-    font-family: Georgia, serif;
-    font-size: 52px;
-    line-height: 1.15;
-    margin-bottom: 24px;
-    font-weight: normal;
-  }
-  .hero h2 em { color: var(--gold); font-style: italic; }
-  .hero p {
-    font-size: 19px;
-    color: #d9e1ec;
-    max-width: 700px;
-    margin: 0 auto 36px;
-  }
-  .hero-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
-  .btn-primary {
-    background: var(--gold);
-    color: #fff;
-    padding: 16px 36px;
-    text-decoration: none;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    border-radius: 3px;
-    transition: all 0.2s;
-    display: inline-block;
-  }
-  .btn-primary:hover { background: var(--gold-dark); transform: translateY(-2px); }
-  .btn-secondary {
-    background: transparent;
-    color: #fff;
-    padding: 16px 36px;
-    text-decoration: none;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    border: 2px solid #fff;
-    border-radius: 3px;
-    transition: all 0.2s;
-    display: inline-block;
-  }
-  .btn-secondary:hover { background: #fff; color: var(--navy); }
-
-  /* Trust bar */
-  .trust-bar {
-    background: var(--cream);
-    padding: 30px 24px;
-    border-bottom: 1px solid var(--border);
-  }
-  .trust-inner {
-    max-width: 1200px;
-    margin: 0 auto;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 30px;
-    text-align: center;
-  }
-  .trust-item .num {
-    font-family: Georgia, serif;
-    font-size: 38px;
-    color: var(--navy);
-    font-weight: bold;
-    display: block;
-  }
-  .trust-item .lbl {
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-top: 4px;
-  }
-
-  /* Sections */
-  section { padding: 90px 24px; }
-  .container { max-width: 1200px; margin: 0 auto; }
-  .section-header { text-align: center; margin-bottom: 60px; }
-  .section-header .eyebrow {
-    color: var(--gold-dark);
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 13px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    margin-bottom: 14px;
-  }
-  .section-header h3 {
-    font-size: 40px;
-    color: var(--navy);
-    font-weight: normal;
-    font-family: Georgia, serif;
-    margin-bottom: 16px;
-  }
-  .section-header .divider {
-    width: 60px;
-    height: 2px;
-    background: var(--gold);
-    margin: 18px auto 24px;
-  }
-  .section-header p {
-    max-width: 700px;
-    margin: 0 auto;
-    color: var(--muted);
-    font-size: 17px;
-  }
-
-  /* About */
-  .about-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 60px;
-    align-items: center;
-  }
-  .about-img {
-    background: url('batesville.jpg') center/cover no-repeat, linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
-    border-radius: 4px;
-    height: 480px;
-    position: relative;
-    overflow: hidden;
-    box-shadow: 0 20px 60px rgba(15, 42, 71, 0.25);
-  }
-  .about-img::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(to bottom, rgba(15, 42, 71, 0.1) 0%, rgba(15, 42, 71, 0.75) 100%);
-  }
-  .about-img-badge {
-    position: absolute;
-    bottom: 30px;
-    left: 30px;
-    right: 30px;
-    background: rgba(201, 169, 97, 0.95);
-    color: var(--navy-dark);
-    padding: 20px 24px;
-    border-radius: 3px;
-  }
-  .about-img-badge strong {
-    display: block;
-    font-family: Georgia, serif;
-    font-size: 22px;
-    margin-bottom: 4px;
-  }
-  .about-img-badge span {
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-  }
-  .about-content .eyebrow {
-    color: var(--gold-dark);
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 13px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    margin-bottom: 14px;
-  }
-  .about-content h3 {
-    font-size: 36px;
-    color: var(--navy);
-    font-weight: normal;
-    font-family: Georgia, serif;
-    margin-bottom: 20px;
-    line-height: 1.2;
-  }
-  .about-content p {
-    color: var(--muted);
-    margin-bottom: 18px;
-    font-size: 16px;
-  }
-  .about-features {
-    list-style: none;
-    margin-top: 26px;
-  }
-  .about-features li {
-    padding: 10px 0;
-    padding-left: 32px;
-    position: relative;
-    color: var(--text);
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 15px;
-  }
-  .about-features li::before {
-    content: "✓";
-    position: absolute;
-    left: 0;
-    top: 10px;
-    color: var(--gold);
-    font-weight: bold;
-    font-size: 18px;
-  }
-
-  /* Services */
-  .services { background: var(--cream); }
-  .services-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 30px;
-  }
-  .service-card {
-    background: #fff;
-    padding: 40px 32px;
-    border-top: 4px solid var(--gold);
-    box-shadow: 0 4px 20px rgba(15, 42, 71, 0.08);
-    transition: transform 0.25s, box-shadow 0.25s;
-  }
-  .service-card:hover {
-    transform: translateY(-6px);
-    box-shadow: 0 14px 40px rgba(15, 42, 71, 0.15);
-  }
-  .service-icon {
-    width: 64px;
-    height: 64px;
-    background: var(--navy);
-    color: var(--gold);
-    border-radius: 3px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    margin-bottom: 22px;
-  }
-  .service-card h4 {
-    font-size: 22px;
-    color: var(--navy);
-    margin-bottom: 14px;
-    font-family: Georgia, serif;
-    font-weight: normal;
-  }
-  .service-card p {
-    color: var(--muted);
-    font-size: 15px;
-    line-height: 1.65;
-  }
-  .service-card ul {
-    margin-top: 16px;
-    padding-left: 20px;
-    color: var(--muted);
-    font-size: 14px;
-  }
-  .service-card li { padding: 3px 0; }
-
-  /* Doug section */
-  .founder {
-    background: var(--navy);
-    color: #fff;
-    position: relative;
-    overflow: hidden;
-  }
-  .founder::before {
-    content: "";
-    position: absolute;
-    top: -100px;
-    right: -100px;
-    width: 400px;
-    height: 400px;
-    border-radius: 50%;
-    background: radial-gradient(circle, rgba(201, 169, 97, 0.12), transparent);
-  }
-  .founder-grid {
-    display: grid;
-    grid-template-columns: 400px 1fr;
-    gap: 60px;
-    align-items: center;
-    position: relative;
-  }
-  .founder-img {
-    background: url('doug.jpg') center top/cover no-repeat;
-    border-radius: 4px;
-    aspect-ratio: 4/5;
-    position: relative;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
-    border: 3px solid var(--gold);
-  }
-  .founder-img::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    border-radius: 2px;
-    background: linear-gradient(to bottom, transparent 60%, rgba(8, 26, 46, 0.35) 100%);
-  }
-  .founder-content .eyebrow {
-    color: var(--gold);
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 13px;
-    letter-spacing: 4px;
-    text-transform: uppercase;
-    margin-bottom: 14px;
-  }
-  .founder-content h3 {
-    font-size: 42px;
-    font-family: Georgia, serif;
-    font-weight: normal;
-    margin-bottom: 8px;
-  }
-  .founder-title {
-    color: var(--gold);
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 15px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    margin-bottom: 24px;
-  }
-  .founder-content p {
-    color: #c8d4e3;
-    font-size: 16px;
-    margin-bottom: 16px;
-  }
-  .credentials {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-top: 30px;
-  }
-  .credential {
-    border-left: 2px solid var(--gold);
-    padding: 8px 0 8px 18px;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-  }
-  .credential strong {
-    display: block;
-    color: var(--gold);
-    font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    margin-bottom: 4px;
-  }
-  .credential span { color: #fff; font-size: 15px; }
-  .founder-links {
-    margin-top: 34px;
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-  }
-  .founder-links a {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 18px;
-    background: rgba(201, 169, 97, 0.12);
-    border: 1px solid rgba(201, 169, 97, 0.45);
-    color: var(--gold);
-    text-decoration: none;
-    font-size: 13px;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    border-radius: 3px;
-    transition: all 0.2s;
-  }
-  .founder-links a:hover {
-    background: var(--gold);
-    color: var(--navy-dark);
-    border-color: var(--gold);
-  }
-  .founder-links svg { width: 14px; height: 14px; }
-
-  /* Testimonials */
-  .testimonials-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 30px;
-  }
-  .testimonial {
-    background: var(--cream);
-    padding: 36px 32px;
-    border-left: 3px solid var(--gold);
-    position: relative;
-  }
-  .testimonial .quote-mark {
-    position: absolute;
-    top: 10px;
-    right: 24px;
-    font-family: Georgia, serif;
-    font-size: 70px;
-    color: var(--gold);
-    opacity: 0.25;
-    line-height: 1;
-  }
-  .stars { color: var(--gold); font-size: 18px; margin-bottom: 14px; letter-spacing: 2px; }
-  .testimonial p {
-    color: var(--text);
-    font-style: italic;
-    margin-bottom: 20px;
-    font-size: 15px;
-    line-height: 1.7;
-  }
-  .testimonial .author {
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-weight: 600;
-    color: var(--navy);
-    font-size: 14px;
-  }
-  .testimonial .role {
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 12px;
-    color: var(--muted);
-    margin-top: 2px;
-  }
-  .reviews-header {
-    text-align: center;
-    margin-top: 50px;
-    padding: 30px;
-    background: var(--navy);
-    color: #fff;
-    border-radius: 4px;
-  }
-  .reviews-header .big-rating {
-    font-family: Georgia, serif;
-    font-size: 48px;
-    color: var(--gold);
-  }
-  .reviews-header .big-stars { font-size: 24px; color: var(--gold); letter-spacing: 3px; margin: 6px 0; }
-  .reviews-header p {
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    font-size: 13px;
-    color: #c8d4e3;
-  }
-
-  /* Process */
-  .process { background: var(--cream); }
-  .process-steps {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 24px;
-    position: relative;
-  }
-  .step {
-    background: #fff;
-    padding: 36px 24px;
-    text-align: center;
-    border-radius: 4px;
-    box-shadow: 0 4px 18px rgba(15, 42, 71, 0.08);
-    position: relative;
-  }
-  .step-num {
-    display: inline-flex;
-    width: 56px;
-    height: 56px;
-    background: var(--gold);
-    color: var(--navy-dark);
-    font-family: Georgia, serif;
-    font-size: 24px;
-    font-weight: bold;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    margin-bottom: 18px;
-  }
-  .step h4 {
-    font-size: 18px;
-    color: var(--navy);
-    margin-bottom: 10px;
-    font-family: Georgia, serif;
-    font-weight: normal;
-  }
-  .step p {
-    color: var(--muted);
-    font-size: 14px;
-    line-height: 1.6;
-  }
-
-  /* Community */
-  .community-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 28px;
-  }
-  .community-card {
-    padding: 30px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: #fff;
-    transition: border-color 0.2s;
-  }
-  .community-card:hover { border-color: var(--gold); }
-  .community-card h4 {
-    font-size: 18px;
-    color: var(--navy);
-    margin-bottom: 12px;
-    font-family: Georgia, serif;
-    font-weight: normal;
-  }
-  .community-card p { color: var(--muted); font-size: 15px; }
-
-  /* Contact */
-  .contact {
-    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
-    color: #fff;
-  }
-  .contact .section-header h3 { color: #fff; }
-  .contact .section-header p { color: #c8d4e3; }
-  .contact-grid {
-    display: grid;
-    grid-template-columns: 1fr 1.3fr;
-    gap: 60px;
-    margin-top: 20px;
-  }
-  .contact-info h4 {
-    font-family: Georgia, serif;
-    font-size: 24px;
-    font-weight: normal;
-    margin-bottom: 20px;
-    color: var(--gold);
-  }
-  .contact-item {
-    display: flex;
-    gap: 16px;
-    margin-bottom: 22px;
-    align-items: flex-start;
-  }
-  .contact-icon {
-    background: var(--gold);
-    color: var(--navy-dark);
-    width: 44px;
-    height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    font-size: 18px;
-    flex-shrink: 0;
-  }
-  .contact-item strong {
-    display: block;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--gold);
-    margin-bottom: 4px;
-  }
-  .contact-item span, .contact-item a {
-    color: #fff;
-    font-size: 16px;
-    text-decoration: none;
-  }
-  .contact-item a:hover { color: var(--gold); }
-  form {
-    background: #fff;
-    padding: 40px;
-    border-radius: 4px;
-    color: var(--text);
-  }
-  .form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-bottom: 16px;
-  }
-  label {
-    display: block;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 12px;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: var(--navy);
-    margin-bottom: 6px;
-    font-weight: 600;
-  }
-  input, select, textarea {
-    width: 100%;
-    padding: 12px 14px;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 15px;
-    background: var(--cream);
-    transition: border-color 0.2s;
-  }
-  input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--gold);
-    background: #fff;
-  }
-  textarea { resize: vertical; min-height: 120px; }
-  .form-full { margin-bottom: 16px; }
-  form button {
-    background: var(--navy);
-    color: #fff;
-    border: none;
-    padding: 16px 32px;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    cursor: pointer;
-    border-radius: 3px;
-    width: 100%;
-    transition: background 0.2s;
-  }
-  form button:hover { background: var(--gold-dark); }
-
-  /* Footer */
-  footer {
-    background: var(--navy-dark);
-    color: #8fa0b5;
-    padding: 60px 24px 24px;
-    font-family: 'Helvetica Neue', Arial, sans-serif;
-    font-size: 14px;
-  }
-  .footer-grid {
-    max-width: 1200px;
-    margin: 0 auto;
-    display: grid;
-    grid-template-columns: 2fr 1fr 1fr 1fr;
-    gap: 40px;
-    padding-bottom: 40px;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
-  }
-  .footer-brand h4 {
-    color: #fff;
-    font-family: Georgia, serif;
-    font-size: 20px;
-    font-weight: normal;
-    margin-bottom: 12px;
-  }
-  .footer-brand p { margin-bottom: 14px; line-height: 1.7; }
-  .footer-col h5 {
-    color: var(--gold);
-    font-size: 13px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    margin-bottom: 16px;
-  }
-  .footer-col ul { list-style: none; }
-  .footer-col li { padding: 5px 0; }
-  .footer-col a, .footer-col span {
-    color: #8fa0b5;
-    text-decoration: none;
-    transition: color 0.2s;
-  }
-  .footer-col a:hover { color: var(--gold); }
-  .footer-bottom {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding-top: 24px;
-    text-align: center;
-    font-size: 13px;
-  }
-
-  /* Responsive */
-  @media (max-width: 900px) {
-    .about-grid, .founder-grid, .contact-grid { grid-template-columns: 1fr; gap: 40px; }
-    .services-grid, .testimonials-grid, .community-grid { grid-template-columns: 1fr; }
-    .process-steps { grid-template-columns: 1fr 1fr; }
-    .trust-inner { grid-template-columns: 1fr 1fr; }
-    .footer-grid { grid-template-columns: 1fr 1fr; }
-    .form-row { grid-template-columns: 1fr; }
-    .hero h2 { font-size: 36px; }
-    .section-header h3 { font-size: 30px; }
-    nav ul { gap: 16px; }
-    section { padding: 60px 20px; }
-  }
-  @media (max-width: 560px) {
-    .process-steps, .trust-inner, .footer-grid { grid-template-columns: 1fr; }
-    nav ul { display: none; }
-    .hero { padding: 70px 20px 80px; }
-    .hero h2 { font-size: 30px; }
-  }
+  html,body{margin:0;padding:0;background:#f5f5f4;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;}
+  *{box-sizing:border-box;}
 </style>
 </head>
 <body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect } = React;
 
-<!-- Top bar -->
-<div class="topbar">
-  <div class="topbar-inner">
-    <span>📞 <a href="tel:8129343208">(812) 934-3208</a> &nbsp; | &nbsp; 📍 1046 State Road 46 East, Batesville, IN 47006</span>
-    <span>Monday – Friday &nbsp;|&nbsp; Licensed &amp; Insured in Indiana</span>
-  </div>
-</div>
+const KEYS = {
+  expenses: "flip:2533:expenses",
+  tasks: "flip:2533:tasks",
+  vendors: "flip:2533:vendors",
+  notes: "flip:2533:notes",
+  deal: "flip:2533:deal",
+  activity: "flip:2533:activity",
+};
 
-<!-- Header -->
-<header>
-  <div class="nav">
-    <a href="#home" class="logo">
-      <img src="SElogo.png" alt="Southeast Indiana Title logo" class="logo-mark">
-      <div class="logo-text">
-        <h1>SOUTHEAST INDIANA TITLE</h1>
-        <p>Batesville &middot; Est. Trusted Service</p>
-      </div>
-    </a>
-    <nav>
-      <ul>
-        <li><a href="#about">About</a></li>
-        <li><a href="#services">Services</a></li>
-        <li><a href="#founder">Our Attorney</a></li>
-        <li><a href="#testimonials">Reviews</a></li>
-        <li><a href="#process">Process</a></li>
-        <li><a href="#contact" class="cta-btn">Request a Quote</a></li>
-      </ul>
-    </nav>
-  </div>
-</header>
+const SEED_EXPENSES = [
+  { id: "e1",  payee: "Carroll County Dumpster Rental", amount: 773.28, date: "2026-03-24", notes: "20 yard dumpster rental for 2 weeks", category: "Site" },
+  { id: "e2",  payee: "Carroll County Dumpster Rental", amount: 657,    date: "2026-04-03", notes: "20 yard dumpster rental for 2 weeks", category: "Site" },
+  { id: "e3",  payee: "Bud Boman",                       amount: 325,    date: "2026-03-30", notes: "Home Inspection", category: "Inspection" },
+  { id: "e4",  payee: "Beaver Lake Pump Service",        amount: 150,    date: "2026-04-07", notes: "Service pump - working good", category: "Well/Septic" },
+  { id: "e5",  payee: "Billy Williams Plumbing",         amount: 3300,   date: "2026-04-08", notes: "Hot water tank, new toilets, disposal, lines snaked, faucets", category: "Plumbing" },
+  { id: "e6",  payee: "Insurance",                       amount: 412,    date: "2026-03-15", notes: "Property insurance", category: "Holding" },
+  { id: "e7",  payee: "Rocket Mortgage (estimated)",     amount: 4000,   date: "",            notes: "Holding payments - guesstimate", category: "Holding" },
+  { id: "e8",  payee: "Nixon (Junk Out Crew)",           amount: 600,    date: "2026-04-06", notes: "Junked out inside & outside of house", category: "Cleanup" },
+  { id: "e9",  payee: "Cleaners",                        amount: 650,    date: "2026-04-08", notes: "Full cleanout", category: "Cleanup" },
+  { id: "e10", payee: "AJ & Mary (GC)",                  amount: 1195,   date: "2026-04-07", notes: "Mary 4hrs + AJ 21hrs @ $45 - door locks, cleanup", category: "Labor" },
+  { id: "e11", payee: "Mike (Septic Digger)",            amount: 350,    date: "2026-04-07", notes: "Installed septic tank riser - 417-342-9782", category: "Well/Septic" },
+  { id: "e12", payee: "Steve Septic",                    amount: 275,    date: "2026-04-08", notes: "Pumped + inspected tank - in great shape - 870-480-2747", category: "Well/Septic" },
+  { id: "e13", payee: "Roy / YourElectrician.net",       amount: 455,    date: "2026-04-10", notes: "Electrical updated + inspected - 870-654-9968", category: "Electrical" },
+  { id: "e14", payee: "MLS Photos + Drone",              amount: 350,    date: "2026-04-14", notes: "Listing photos and drone shots", category: "Marketing" },
+  { id: "e15", payee: "Carroll County Electric",         amount: 315,    date: "2026-04-10", notes: "Transaction ID 089918", category: "Holding" },
+  { id: "e16", payee: "Payment to Nathina",              amount: 8187,   date: "",            notes: "Seller-side payment", category: "Acquisition" },
+  { id: "e17", payee: "Amazon (smoke detectors, etc)",   amount: 300,    date: "2026-04-09", notes: "Smoke detectors, fire extinguisher, Febreze, lockbox", category: "Setup" },
+  { id: "e18", payee: "Mold Test",                       amount: 325,    date: "2026-04-15", notes: "4/15 at 9am", category: "Inspection" },
+  { id: "e19", payee: "Rocket Mortgage Reinstatement",   amount: 43500,  date: "2026-02-25", notes: "Reinstatement amount wired to Rocket", category: "Acquisition" },
+];
 
-<!-- Hero -->
-<section class="hero" id="home">
-  <div class="hero-inner">
-    <span class="hero-eyebrow">Southeast Indiana's Trusted Title Company</span>
-    <h2>Protecting Your Property Rights with <em>Integrity &amp; Precision</em> Since Day One</h2>
-    <p>Attorney-owned and operated in Batesville, Indiana. We provide thorough title searches, comprehensive title insurance, and smooth, stress-free real estate closings across Ripley County and throughout Southeast Indiana.</p>
-    <div class="hero-buttons">
-      <a href="#contact" class="btn-primary">Request a Title Quote</a>
-      <a href="tel:8129343208" class="btn-secondary">Call (812) 934-3208</a>
-    </div>
-  </div>
-</section>
+const SEED_TASKS = [
+  { id: "t1",  label: "Mold test results back clean",                                due: "2026-04-16", done: false, owner: "Nathan", priority: "high" },
+  { id: "t2",  label: "Listing photos + drone shots reviewed and ready",             due: "2026-04-15", done: false, owner: "Nathan", priority: "high" },
+  { id: "t3",  label: "Write listing description (secluded retreat angle)",          due: "2026-04-15", done: false, owner: "Nathan", priority: "high" },
+  { id: "t4",  label: "Send William Payne the listing details + photos",             due: "2026-04-15", done: false, owner: "Nathan", priority: "high" },
+  { id: "t5",  label: "Lockbox installed, code shared with Mary + William",          due: "2026-04-15", done: false, owner: "Nathan", priority: "med" },
+  { id: "t6",  label: "Confirm 6-month listing agreement with $0 cancel fee",        due: "2026-04-15", done: false, owner: "Nathan", priority: "med" },
+  { id: "t7",  label: "Confirm 3% buyer agent commission with William",              due: "2026-04-15", done: false, owner: "Nathan", priority: "med" },
+  { id: "t8",  label: "Private agent remarks: roof + HVAC concession with offer",    due: "2026-04-15", done: false, owner: "Nathan", priority: "med" },
+  { id: "t9",  label: "Brief Mary on showing process",                               due: "2026-04-15", done: false, owner: "Nathan", priority: "med" },
+  { id: "t10", label: "GO LIVE on MLS",                                              due: "2026-04-16", done: false, owner: "Nathan", priority: "high" },
+  { id: "t11", label: "Categorize Nathina $8,187 payment for tax records",           due: "2026-04-30", done: false, owner: "Justin",  priority: "low" },
+  { id: "t12", label: "Track Rocket Mortgage holding cost monthly",                  due: "",            done: false, owner: "Justin",  priority: "med" },
+  { id: "t13", label: "Set up offer review process",                                 due: "2026-04-16", done: false, owner: "Nathan", priority: "med" },
+];
 
-<!-- Trust Bar -->
-<div class="trust-bar">
-  <div class="trust-inner">
-    <div class="trust-item">
-      <span class="num">25+</span>
-      <span class="lbl">Years Practicing Law</span>
-    </div>
-    <div class="trust-item">
-      <span class="num">4.7★</span>
-      <span class="lbl">Google Rating</span>
-    </div>
-    <div class="trust-item">
-      <span class="num">1,000s</span>
-      <span class="lbl">Successful Closings</span>
-    </div>
-    <div class="trust-item">
-      <span class="num">100%</span>
-      <span class="lbl">Local &amp; Independent</span>
-    </div>
-  </div>
-</div>
+const SEED_VENDORS = [
+  { id: "v1",  name: "Billy Williams",            role: "Plumber",                 phone: "479-903-9008", status: "Complete", notes: "$3,300 final - all plumbing repairs done" },
+  { id: "v2",  name: "Beaver Lake Pump Service",  role: "Well & Pump",             phone: "",             status: "Complete", notes: "Pump serviced, water pressure great, well in good shape" },
+  { id: "v3",  name: "Steve Septic",              role: "Septic Pump/Inspect",     phone: "870-480-2747", status: "Complete", notes: "Pumped + inspected - tank in great shape" },
+  { id: "v4",  name: "Mike",                      role: "Septic Riser Install",    phone: "417-342-9782", status: "Complete", notes: "Riser installed on tank" },
+  { id: "v5",  name: "Roy / YourElectrician.net", role: "Electrician",             phone: "870-654-9968", status: "Complete", notes: "Updated + inspected electrical throughout" },
+  { id: "v6",  name: "AJ & Mary",                 role: "GC / Boots on Ground",    phone: "",             status: "Active",   notes: "$45/hr each. Mary will show house. AJ doing punch list." },
+  { id: "v7",  name: "William Payne",             role: "Flat Fee MLS Listing",    phone: "",             status: "Active",   notes: "$379 flat fee. 6mo agreement, $0 cancel. 3% to buyer agent." },
+  { id: "v8",  name: "Bud Boman",                 role: "Home Inspector",          phone: "",             status: "Complete", notes: "$325 inspection done 3/30" },
+  { id: "v9",  name: "Nixon (Junk Out Crew)",     role: "Junk Removal",            phone: "",             status: "Complete", notes: "Cleared house inside + out" },
+  { id: "v10", name: "Carroll County Electric",   role: "Utility",                 phone: "",             status: "Active",   notes: "Keep on through showings" },
+  { id: "v11", name: "Mold Test",                 role: "Mold Inspector",          phone: "",             status: "Pending",  notes: "Test on 4/15 @ 9am - results 4/16" },
+  { id: "v12", name: "Roof Contractor",           role: "Roof Replacement",        phone: "",             status: "Quoted",   notes: "$6,000 quote - hold for buyer concession" },
+  { id: "v13", name: "HVAC Contractor",           role: "AC + Furnace",            phone: "",             status: "Quoted",   notes: "$5,500 quote - hold for buyer concession" },
+];
 
-<!-- About -->
-<section id="about">
-  <div class="container">
-    <div class="about-grid">
-      <div class="about-img">
-        <div class="about-img-badge">
-          <strong>Batesville, Indiana</strong>
-          <span>Serving Ripley &amp; Surrounding Counties</span>
-        </div>
-      </div>
-      <div class="about-content">
-        <div class="eyebrow">About Our Company</div>
-        <h3>A Title Company Built on Relationships, Not Transactions</h3>
-        <p>Southeast Indiana Title, Inc. is a locally-owned title agency proudly serving Batesville and the surrounding Southeast Indiana region. We've earned our reputation one closing at a time — by treating every buyer, seller, lender, agent, and auctioneer like a neighbor, because here, they usually are.</p>
-        <p>From residential closings to complex commercial transactions, farm sales, and auction settlements, our team delivers the diligence of a big-city firm with the personal attention only a hometown company can provide.</p>
-        <ul class="about-features">
-          <li>Attorney-owned and operated for over two decades</li>
-          <li>Comprehensive title searches backed by local expertise</li>
-          <li>Trusted closing agent for regional auctions &amp; farm sales</li>
-          <li>Referenced in ALTA (American Land Title Association) industry publications</li>
-          <li>Members of the Batesville Area Chamber of Commerce</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-</section>
+const SEED_DEAL = {
+  contractPrice: 145000,
+  reinstatement: 43500,
+  rocketPayoff: 92338.05,
+  listPrice: 255000,
+  flatFee: 379,
+  buyerAgentPct: 3,
+  closingMiscPct: 1,
+  scenarioPrice: 255000,
+  scenarioConcession: false,
+  pendingConcessions: [
+    { label: "New Roof", amount: 6000 },
+    { label: "New AC/HVAC", amount: 5500 },
+  ],
+};
 
-<!-- Services -->
-<section class="services" id="services">
-  <div class="container">
-    <div class="section-header">
-      <div class="eyebrow">What We Do</div>
-      <h3>Comprehensive Title &amp; Closing Services</h3>
-      <div class="divider"></div>
-      <p>Every real estate transaction deserves thorough protection. Our services are designed to safeguard your investment and deliver a smooth, worry-free closing experience.</p>
-    </div>
-    <div class="services-grid">
-      <div class="service-card">
-        <div class="service-icon">🔍</div>
-        <h4>Title Search &amp; Examination</h4>
-        <p>We meticulously research public records to uncover liens, encumbrances, easements, and ownership history so you close with complete confidence.</p>
-        <ul>
-          <li>Full chain-of-title examination</li>
-          <li>Lien &amp; judgment research</li>
-          <li>Easement &amp; restriction review</li>
-          <li>Tax &amp; assessment verification</li>
-        </ul>
-      </div>
-      <div class="service-card">
-        <div class="service-icon">🛡️</div>
-        <h4>Title Insurance</h4>
-        <p>Protect your ownership rights and lender's interest with industry-standard title insurance policies. A one-time premium for lifetime peace of mind.</p>
-        <ul>
-          <li>Owner's title policies</li>
-          <li>Lender's title policies</li>
-          <li>Enhanced ALTA coverage available</li>
-          <li>Claims support &amp; defense</li>
-        </ul>
-      </div>
-      <div class="service-card">
-        <div class="service-icon">📋</div>
-        <h4>Real Estate Closings</h4>
-        <p>From document preparation to final settlement, we handle every detail of your closing with precision, professionalism, and a personal touch.</p>
-        <ul>
-          <li>Residential closings</li>
-          <li>Commercial transactions</li>
-          <li>Farm &amp; agricultural sales</li>
-          <li>Auction settlements</li>
-        </ul>
-      </div>
-      <div class="service-card">
-        <div class="service-icon">🏡</div>
-        <h4>For Home Buyers &amp; Sellers</h4>
-        <p>Whether you're buying your first home or selling a family property, we walk you through every step and keep your transaction on track.</p>
-      </div>
-      <div class="service-card">
-        <div class="service-icon">🏦</div>
-        <h4>For Lenders</h4>
-        <p>Reliable, accurate title work and on-time closings are the backbone of a healthy lender relationship. We deliver both — every file, every time.</p>
-      </div>
-      <div class="service-card">
-        <div class="service-icon">🤝</div>
-        <h4>For Agents &amp; Auctioneers</h4>
-        <p>Southeast Indiana's real estate professionals trust us as their go-to closing partner for residential listings, commercial deals, and auction settlements.</p>
-      </div>
-    </div>
-  </div>
-</section>
+const SEED_NOTES = `# 2533 County Road 102, Eureka Springs, AR
 
-<!-- Founder / Doug Amberger -->
-<section class="founder" id="founder">
-  <div class="container">
-    <div class="founder-grid">
-      <div class="founder-img" aria-label="Douglas C. Amberger, Attorney at Law"></div>
-      <div class="founder-content">
-        <div class="eyebrow">Meet Our Founder</div>
-        <h3>Douglas C. Amberger</h3>
-        <div class="founder-title">Attorney at Law &middot; Owner</div>
-        <p>Doug Amberger brings over 25 years of Indiana legal experience to every transaction that crosses his desk. Admitted to the Indiana State Bar in 2000 and a resident member in good standing, Doug built Southeast Indiana Title, Inc. on a foundation of thoroughness, integrity, and genuine care for the community he calls home.</p>
-        <p>Beyond the title company, Doug serves as an appointed member of the City of Batesville Planning Commission and Board of Zoning Appeals, and as President of Golden Villa, a long-established local nonprofit. He's also a regular contributor to Batesville Area Chamber of Commerce programs on elder law and estate planning.</p>
-        <div class="credentials">
-          <div class="credential">
-            <strong>Licensed</strong>
-            <span>Indiana Bar · 2000</span>
-          </div>
-          <div class="credential">
-            <strong>Status</strong>
-            <span>Active &middot; Good Standing</span>
-          </div>
-          <div class="credential">
-            <strong>Practice Focus</strong>
-            <span>Real Estate &amp; Title Law</span>
-          </div>
-          <div class="credential">
-            <strong>Community</strong>
-            <span>Planning Commission Member</span>
-          </div>
-          <div class="credential">
-            <strong>Affiliations</strong>
-            <span>Indiana State Bar Assoc.</span>
-          </div>
-          <div class="credential">
-            <strong>Nonprofit</strong>
-            <span>President, Golden Villa Inc.</span>
-          </div>
-        </div>
-        <div class="founder-links">
-          <a href="https://www.linkedin.com/in/doug-amberger-7603a913/" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
-            LinkedIn
-          </a>
-          <a href="https://www.inbar.org/members/?id=29037282" target="_blank" rel="noopener">
-            <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 1L3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4zm-1 17l-5-5 1.4-1.4L11 15.2l6.6-6.6L19 10l-8 8z"/></svg>
-            Indiana State Bar
-          </a>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
+## The Pitch
+1,040 sq ft home on full basement, 11 acres, secluded, near Beaver Lake + Eureka Springs.
+Up a steep road = privacy. Perfect for lake house, hunting cabin, Airbnb, or homestead.
 
-<!-- Testimonials -->
-<section id="testimonials">
-  <div class="container">
-    <div class="section-header">
-      <div class="eyebrow">Client Reviews</div>
-      <h3>What Our Clients &amp; Partners Say</h3>
-      <div class="divider"></div>
-      <p>We're proud of the relationships we've built with the real estate professionals, lenders, buyers, and sellers of Southeast Indiana.</p>
-    </div>
-    <div class="testimonials-grid">
-      <div class="testimonial">
-        <span class="quote-mark">"</span>
-        <div class="stars">★★★★★</div>
-        <p>"Thank you to Doug Amberger and SE Indiana Title for excellent service once again — and as usual. Always a smooth closing."</p>
-        <div class="author">Jennifer H.</div>
-        <div class="role">Real Estate Broker</div>
-      </div>
-      <div class="testimonial">
-        <span class="quote-mark">"</span>
-        <div class="stars">★★★★★</div>
-        <p>"It's always a pleasure working with Doug Amberger at Southeast Indiana Title. Professional, responsive, and they make closings easy for my clients."</p>
-        <div class="author">Amanda G.</div>
-        <div class="role">Real Estate Agent</div>
-      </div>
-      <div class="testimonial">
-        <span class="quote-mark">"</span>
-        <div class="stars">★★★★★</div>
-        <p>"Great to work with, highly recommended. The staff is very helpful and friendly — they truly make the entire process stress-free."</p>
-        <div class="author">Verified Google Reviewer</div>
-        <div class="role">Home Buyer</div>
-      </div>
-    </div>
-    <div class="reviews-header">
-      <div class="big-rating">4.7 / 5.0</div>
-      <div class="big-stars">★★★★★</div>
-      <p>Based on 23+ verified Google reviews</p>
-      <a href="https://share.google/4RrqvksLs4jocF3Pq" target="_blank" rel="noopener" style="display:inline-block; margin-top:18px; padding:12px 28px; background:var(--gold); color:var(--navy-dark); text-decoration:none; font-family:'Helvetica Neue',Arial,sans-serif; font-size:13px; letter-spacing:2px; text-transform:uppercase; font-weight:600; border-radius:3px;">Read Reviews on Google →</a>
-    </div>
-  </div>
-</section>
+## What's Done
+- Septic pumped + inspected, riser installed
+- Plumbing fully repaired (water heater, toilets, disposal, lines snaked)
+- Electrical updated + inspected
+- Well + pump serviced, pressure great
+- Junked out, cleaned, smoke detectors installed
 
-<!-- Process -->
-<section class="process" id="process">
-  <div class="container">
-    <div class="section-header">
-      <div class="eyebrow">How It Works</div>
-      <h3>Your Path to a Smooth Closing</h3>
-      <div class="divider"></div>
-      <p>A transparent, step-by-step approach so you always know where things stand.</p>
-    </div>
-    <div class="process-steps">
-      <div class="step">
-        <div class="step-num">1</div>
-        <h4>Order Opened</h4>
-        <p>Your agent, lender, or attorney opens a title order with our office. We confirm the details and get started right away.</p>
-      </div>
-      <div class="step">
-        <div class="step-num">2</div>
-        <h4>Title Searched</h4>
-        <p>Our team conducts a comprehensive search of public records to produce a complete title commitment.</p>
-      </div>
-      <div class="step">
-        <div class="step-num">3</div>
-        <h4>Issues Cleared</h4>
-        <p>We work with all parties to resolve any liens, judgments, or exceptions before your closing date.</p>
-      </div>
-      <div class="step">
-        <div class="step-num">4</div>
-        <h4>Closing Day</h4>
-        <p>Sign your documents, receive your policy, and walk away with full ownership — and total peace of mind.</p>
-      </div>
-    </div>
-  </div>
-</section>
+## What's Held Back for Negotiation
+- New roof ($6K)
+- New HVAC ($5.5K)
+Listed in private agent remarks only.
 
-<!-- Community -->
-<section id="community">
-  <div class="container">
-    <div class="section-header">
-      <div class="eyebrow">Our Community</div>
-      <h3>Rooted in Batesville &amp; Southeast Indiana</h3>
-      <div class="divider"></div>
-      <p>We believe a title company should do more than close transactions — it should invest in the community it serves.</p>
-    </div>
-    <div class="community-grid">
-      <div class="community-card">
-        <h4>City Planning Commission</h4>
-        <p>Doug Amberger is an appointed member of the City of Batesville Planning Commission and Board of Zoning Appeals, helping shape responsible growth in our community.</p>
-      </div>
-      <div class="community-card">
-        <h4>Golden Villa Nonprofit</h4>
-        <p>Doug serves as President of Golden Villa, Inc., a Batesville nonprofit dedicated to serving the community since 1976.</p>
-      </div>
-      <div class="community-card">
-        <h4>Batesville Chamber of Commerce</h4>
-        <p>Active members and frequent presenters at Chamber events — including programs on elder law, estate planning, and local real estate.</p>
-      </div>
-    </div>
-  </div>
-</section>
+## Listing Strategy
+- List $255,000 via William Payne flat fee
+- 3% to buyer agent
+- Mary handles showings as needed
 
-<!-- Contact -->
-<section class="contact" id="contact">
-  <div class="container">
-    <div class="section-header">
-      <div class="eyebrow">Get in Touch</div>
-      <h3>Request a Title Quote or Schedule a Closing</h3>
-      <div class="divider"></div>
-      <p>Have a transaction coming up? Reach out and we'll get back to you promptly — usually the same business day.</p>
-    </div>
-    <div class="contact-grid">
-      <div class="contact-info">
-        <h4>Visit or Call Us</h4>
-        <div class="contact-item">
-          <div class="contact-icon">📍</div>
+## Target Buyers
+1. Lake house / Airbnb investor (Beaver Lake proximity)
+2. Hunting cabin buyer (TX/OK/MO cash)
+3. Homestead / off-grid (well + septic + acreage)
+`;
+
+const hasStorage = typeof window !== "undefined" && window.storage && typeof window.storage.get === "function";
+
+async function safeLoad(key, seed) {
+  if (!hasStorage) return seed;
+  try {
+    const r = await Promise.race([
+      window.storage.get(key, true),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 2500)),
+    ]);
+    if (r && r.value) {
+      try { return JSON.parse(r.value); } catch { return seed; }
+    }
+    return seed;
+  } catch {
+    return seed;
+  }
+}
+
+async function safeSave(key, value) {
+  if (!hasStorage) return;
+  try {
+    await Promise.race([
+      window.storage.set(key, JSON.stringify(value), true),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 2500)),
+    ]);
+  } catch (e) {
+    console.warn("Save failed for", key, e);
+  }
+}
+
+const fmt = (n) => "$" + (Math.round(n || 0)).toLocaleString();
+const fmtCents = (n) => "$" + (n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+function FlipCommandCenter() {
+  const [tab, setTab] = useState("overview");
+  const [user, setUser] = useState("Nathan");
+
+  const [expenses, setExpenses] = useState(SEED_EXPENSES);
+  const [tasks, setTasks] = useState(SEED_TASKS);
+  const [vendors, setVendors] = useState(SEED_VENDORS);
+  const [notes, setNotes] = useState(SEED_NOTES);
+  const [deal, setDeal] = useState(SEED_DEAL);
+  const [activity, setActivity] = useState([]);
+  const [syncing, setSyncing] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const q = searchQuery.trim().toLowerCase();
+  const matchesQ = (text) => !q || (text || "").toString().toLowerCase().includes(q);
+  const matchesAny = (...fields) => fields.some(f => matchesQ(f));
+
+  const filteredExpenses = q ? expenses.filter(e => matchesAny(e.payee, e.notes, e.category, e.date, e.amount)) : expenses;
+  const filteredTasks    = q ? tasks.filter(t => matchesAny(t.label, t.owner, t.priority, t.due)) : tasks;
+  const filteredVendors  = q ? vendors.filter(v => matchesAny(v.name, v.role, v.phone, v.notes, v.status)) : vendors;
+  const filteredActivity = q ? activity.filter(a => matchesAny(a.msg, a.who)) : activity;
+  const notesHasMatch    = q ? matchesQ(notes) : false;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [e, t, v, n, d, a] = await Promise.all([
+          safeLoad(KEYS.expenses, SEED_EXPENSES),
+          safeLoad(KEYS.tasks, SEED_TASKS),
+          safeLoad(KEYS.vendors, SEED_VENDORS),
+          safeLoad(KEYS.notes, SEED_NOTES),
+          safeLoad(KEYS.deal, SEED_DEAL),
+          safeLoad(KEYS.activity, []),
+        ]);
+        if (cancelled) return;
+        setExpenses(e); setTasks(t); setVendors(v); setNotes(n); setDeal(d); setActivity(a);
+      } catch (err) {
+        console.warn("Init failed, using seeds", err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const logActivity = async (msg) => {
+    const newEntry = { ts: new Date().toISOString(), who: user, msg };
+    const updated = [newEntry, ...activity].slice(0, 50);
+    setActivity(updated);
+    safeSave(KEYS.activity, updated);
+  };
+
+  const sync = async () => {
+    setSyncing(true);
+    try {
+      const [e, t, v, n, d, a] = await Promise.all([
+        safeLoad(KEYS.expenses, expenses),
+        safeLoad(KEYS.tasks, tasks),
+        safeLoad(KEYS.vendors, vendors),
+        safeLoad(KEYS.notes, notes),
+        safeLoad(KEYS.deal, deal),
+        safeLoad(KEYS.activity, activity),
+      ]);
+      setExpenses(e); setTasks(t); setVendors(v); setNotes(n); setDeal(d); setActivity(a);
+    } catch {}
+    setTimeout(() => setSyncing(false), 400);
+  };
+
+  const totalExpenses = expenses.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+  const cashOutOfPocket = totalExpenses;
+  const totalConcessions = deal.scenarioConcession
+    ? deal.pendingConcessions.reduce((s, c) => s + c.amount, 0)
+    : 0;
+  const closingCostsPct = (deal.buyerAgentPct + deal.closingMiscPct) / 100;
+  const closingCostsDollars = deal.scenarioPrice * closingCostsPct + deal.flatFee;
+  const netAtClose = deal.scenarioPrice - closingCostsDollars - deal.rocketPayoff - cashOutOfPocket - totalConcessions;
+
+  const tasksDone = tasks.filter(t => t.done).length;
+  const tasksTotal = tasks.length;
+  const tasksHigh = tasks.filter(t => !t.done && t.priority === "high").length;
+
+  return (
+    <div style={{
+      minHeight: "100vh",
+      background: "#0c0a09",
+      color: "#fafaf9",
+      fontFamily: "system-ui, -apple-system, sans-serif",
+      padding: "24px",
+    }}>
+      <style>{`
+        * { box-sizing: border-box; }
+        button { font-family: inherit; cursor: pointer; }
+        input, textarea, select { font-family: inherit; }
+        ::placeholder { color: #57534e; }
+        .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+        .scroll::-webkit-scrollbar-track { background: #1c1917; }
+        .scroll::-webkit-scrollbar-thumb { background: #44403c; border-radius: 4px; }
+      `}</style>
+
+      <div style={{ maxWidth: 1280, margin: "0 auto" }}>
+
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
           <div>
-            <strong>Office</strong>
-            <span>1046 State Road 46 East<br>P.O. Box 95<br>Batesville, IN 47006</span>
+            <div style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", marginBottom: 6, textTransform: "uppercase" }}>Flip Command Center</div>
+            <div style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1 }}>2533 County Road 102</div>
+            <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 6 }}>Eureka Springs, AR · 11 acres · 1,040 sqft · Listing imminent</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 10, color: hasStorage ? "#10b981" : "#f59e0b", padding: "3px 8px", border: `1px solid ${hasStorage ? "#10b981" : "#f59e0b"}`, borderRadius: 4, fontWeight: 600, letterSpacing: "0.05em" }}>
+              {hasStorage ? "SHARED STORAGE" : "LOCAL ONLY"}
+            </span>
+            <select
+              value={user}
+              onChange={(e) => setUser(e.target.value)}
+              style={{ background: "#1c1917", border: "1px solid #44403c", color: "#fafaf9", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600 }}
+            >
+              <option>Nathan</option>
+              <option>Justin</option>
+            </select>
+            <button
+              onClick={sync}
+              style={{ background: syncing ? "#15803d" : "#1c1917", border: "1px solid #44403c", color: "#fafaf9", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}
+            >
+              <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: syncing ? "#86efac" : "#10b981" }} />
+              {syncing ? "Synced" : "Sync"}
+            </button>
           </div>
         </div>
-        <div class="contact-item">
-          <div class="contact-icon">📞</div>
-          <div>
-            <strong>Phone</strong>
-            <a href="tel:8129343208">(812) 934-3208</a>
-          </div>
-        </div>
-        <div class="contact-item">
-          <div class="contact-icon">✉️</div>
-          <div>
-            <strong>Email</strong>
-            <a href="mailto:info@southeastindianatitle.com">info@southeastindianatitle.com</a>
-          </div>
-        </div>
-        <div class="contact-item">
-          <div class="contact-icon">🕐</div>
-          <div>
-            <strong>Hours</strong>
-            <span>Monday – Friday<br>By appointment available</span>
-          </div>
-        </div>
-        <div class="contact-item">
-          <div class="contact-icon">⚖️</div>
-          <div>
-            <strong>Service Area</strong>
-            <span>Ripley County &amp; all of Southeast Indiana</span>
-          </div>
-        </div>
-      </div>
-      <form onsubmit="event.preventDefault(); alert('Thank you! Your request has been received. We will contact you shortly.'); this.reset();">
-        <div class="form-row">
-          <div>
-            <label for="fname">First Name</label>
-            <input type="text" id="fname" required>
-          </div>
-          <div>
-            <label for="lname">Last Name</label>
-            <input type="text" id="lname" required>
-          </div>
-        </div>
-        <div class="form-row">
-          <div>
-            <label for="email">Email</label>
-            <input type="email" id="email" required>
-          </div>
-          <div>
-            <label for="phone">Phone</label>
-            <input type="tel" id="phone" required>
-          </div>
-        </div>
-        <div class="form-full">
-          <label for="service">Service Needed</label>
-          <select id="service">
-            <option>Residential Closing</option>
-            <option>Commercial Closing</option>
-            <option>Farm / Agricultural Sale</option>
-            <option>Auction Settlement</option>
-            <option>Title Search Only</option>
-            <option>Title Insurance Quote</option>
-            <option>Other / General Inquiry</option>
-          </select>
-        </div>
-        <div class="form-full">
-          <label for="role">I am a...</label>
-          <select id="role">
-            <option>Home Buyer</option>
-            <option>Home Seller</option>
-            <option>Real Estate Agent</option>
-            <option>Lender</option>
-            <option>Auctioneer</option>
-            <option>Attorney</option>
-            <option>Other</option>
-          </select>
-        </div>
-        <div class="form-full">
-          <label for="msg">Tell Us About Your Transaction</label>
-          <textarea id="msg" placeholder="Property address, timeline, and any specific needs..."></textarea>
-        </div>
-        <button type="submit">Send My Request</button>
-      </form>
-    </div>
-  </div>
-</section>
 
-<!-- Footer -->
-<footer>
-  <div class="footer-grid">
-    <div class="footer-brand">
-      <h4>Southeast Indiana Title, Inc.</h4>
-      <p>Attorney-owned title and closing services serving Batesville and all of Southeast Indiana. Protecting your property rights with the integrity and precision your transaction deserves.</p>
-      <div style="margin-top:18px; display:flex; gap:10px;">
-        <a href="https://www.facebook.com/pages/Southeast%20Indiana%20Title/1520284608299008/" target="_blank" rel="noopener" title="Facebook" style="display:inline-flex; width:38px; height:38px; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.2); border-radius:50%; color:#8fa0b5; transition:all 0.2s;" onmouseover="this.style.background='var(--gold)'; this.style.color='var(--navy-dark)'; this.style.borderColor='var(--gold)';" onmouseout="this.style.background='transparent'; this.style.color='#8fa0b5'; this.style.borderColor='rgba(255,255,255,0.2)';">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
-        </a>
-        <a href="https://share.google/4RrqvksLs4jocF3Pq" target="_blank" rel="noopener" title="Google Business" style="display:inline-flex; width:38px; height:38px; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.2); border-radius:50%; color:#8fa0b5; transition:all 0.2s;" onmouseover="this.style.background='var(--gold)'; this.style.color='var(--navy-dark)'; this.style.borderColor='var(--gold)';" onmouseout="this.style.background='transparent'; this.style.color='#8fa0b5'; this.style.borderColor='rgba(255,255,255,0.2)';">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-        </a>
-        <a href="https://www.linkedin.com/in/doug-amberger-7603a913/" target="_blank" rel="noopener" title="LinkedIn" style="display:inline-flex; width:38px; height:38px; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.2); border-radius:50%; color:#8fa0b5; transition:all 0.2s;" onmouseover="this.style.background='var(--gold)'; this.style.color='var(--navy-dark)'; this.style.borderColor='var(--gold)';" onmouseout="this.style.background='transparent'; this.style.color='#8fa0b5'; this.style.borderColor='rgba(255,255,255,0.2)';">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
-        </a>
+        <div style={{ marginBottom: 16, position: "relative" }}>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search across expenses, tasks, vendors, notes, activity..."
+            style={{
+              width: "100%",
+              background: "#1c1917",
+              border: `1px solid ${q ? "#d97706" : "#292524"}`,
+              color: "#fafaf9",
+              padding: "12px 16px 12px 42px",
+              borderRadius: 8,
+              fontSize: 14,
+              outline: "none",
+              fontFamily: "inherit",
+            }}
+          />
+          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: q ? "#d97706" : "#78716c", fontSize: 16, pointerEvents: "none" }}>⌕</span>
+          {q && (
+            <button
+              onClick={() => setSearchQuery("")}
+              style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "transparent", border: "none", color: "#78716c", fontSize: 18, cursor: "pointer", padding: "4px 10px" }}
+            >×</button>
+          )}
+          {q && (
+            <div style={{ display: "flex", gap: 12, marginTop: 8, fontSize: 11, color: "#a8a29e", flexWrap: "wrap" }}>
+              <span>Found:</span>
+              <span style={{ color: filteredExpenses.length ? "#10b981" : "#57534e" }}>{filteredExpenses.length} expense{filteredExpenses.length !== 1 ? "s" : ""}</span>
+              <span style={{ color: filteredTasks.length ? "#10b981" : "#57534e" }}>· {filteredTasks.length} task{filteredTasks.length !== 1 ? "s" : ""}</span>
+              <span style={{ color: filteredVendors.length ? "#10b981" : "#57534e" }}>· {filteredVendors.length} vendor{filteredVendors.length !== 1 ? "s" : ""}</span>
+              <span style={{ color: notesHasMatch ? "#10b981" : "#57534e" }}>· {notesHasMatch ? "match in notes" : "no notes match"}</span>
+              <span style={{ color: filteredActivity.length ? "#10b981" : "#57534e" }}>· {filteredActivity.length} activity</span>
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
+          <Metric label="Cash Out of Pocket" value={fmt(cashOutOfPocket)} sub="Reinstatement + expenses" color="#f59e0b" />
+          <Metric label="Rocket Payoff (on deed)" value={fmt(deal.rocketPayoff)} sub="Cleared at close" color="#a8a29e" />
+          <Metric label="List Price" value={fmt(deal.scenarioPrice)} sub={deal.scenarioConcession ? "With roof + HVAC concession" : "As-is"} color="#3b82f6" />
+          <Metric label="Projected Net" value={fmt(netAtClose)} sub={netAtClose >= 60000 ? "Above $60K target" : "Below $60K target"} color={netAtClose >= 60000 ? "#10b981" : "#ef4444"} big />
+        </div>
+
+        <div style={{ display: "flex", gap: 4, marginBottom: 20, borderBottom: "1px solid #292524" }}>
+          {[
+            ["overview", "Overview"],
+            ["expenses", `Expenses${q ? ` (${filteredExpenses.length})` : ""}`],
+            ["tasks", `Tasks${q ? ` (${filteredTasks.length})` : tasksHigh > 0 ? " ●" : ""}`],
+            ["vendors", `Vendors${q ? ` (${filteredVendors.length})` : ""}`],
+            ["notes", `Notes${q && notesHasMatch ? " ●" : ""}`],
+            ["activity", `Activity${q ? ` (${filteredActivity.length})` : ""}`],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: tab === id ? "#fafaf9" : "#78716c",
+                padding: "10px 16px",
+                fontSize: 13,
+                fontWeight: tab === id ? 700 : 500,
+                borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent",
+                marginBottom: -1,
+              }}
+            >{label}</button>
+          ))}
+        </div>
+
+        {tab === "overview" && (
+          <Overview deal={deal} setDeal={(d) => { setDeal(d); safeSave(KEYS.deal, d); logActivity("Updated deal parameters"); }}
+            cashOOP={cashOutOfPocket} closingCosts={closingCostsDollars} concessions={totalConcessions} net={netAtClose}
+            tasksDone={tasksDone} tasksTotal={tasksTotal} expenses={expenses} />
+        )}
+        {tab === "expenses" && (
+          <Expenses items={expenses} displayItems={filteredExpenses} setItems={(e) => { setExpenses(e); safeSave(KEYS.expenses, e); }} logActivity={logActivity} searchActive={!!q} />
+        )}
+        {tab === "tasks" && (
+          <Tasks items={tasks} displayItems={filteredTasks} setItems={(t) => { setTasks(t); safeSave(KEYS.tasks, t); }} logActivity={logActivity} searchActive={!!q} />
+        )}
+        {tab === "vendors" && (
+          <Vendors items={vendors} displayItems={filteredVendors} setItems={(v) => { setVendors(v); safeSave(KEYS.vendors, v); }} logActivity={logActivity} searchActive={!!q} />
+        )}
+        {tab === "notes" && (
+          <Notes value={notes} setValue={(n) => { setNotes(n); safeSave(KEYS.notes, n); }} searchQuery={q} />
+        )}
+        {tab === "activity" && (
+          <Activity items={filteredActivity} searchActive={!!q} />
+        )}
+
       </div>
     </div>
-    <div class="footer-col">
-      <h5>Services</h5>
-      <ul>
-        <li><a href="#services">Title Search</a></li>
-        <li><a href="#services">Title Insurance</a></li>
-        <li><a href="#services">Residential Closings</a></li>
-        <li><a href="#services">Commercial Closings</a></li>
-        <li><a href="#services">Auction Settlements</a></li>
-      </ul>
-    </div>
-    <div class="footer-col">
-      <h5>Company</h5>
-      <ul>
-        <li><a href="#about">About Us</a></li>
-        <li><a href="#founder">Our Attorney</a></li>
-        <li><a href="#testimonials">Reviews</a></li>
-        <li><a href="#community">Community</a></li>
-        <li><a href="#contact">Contact</a></li>
-      </ul>
-    </div>
-    <div class="footer-col">
-      <h5>Contact</h5>
-      <ul>
-        <li><span>1046 State Road 46 East</span></li>
-        <li><span>Batesville, IN 47006</span></li>
-        <li><a href="tel:8129343208">(812) 934-3208</a></li>
-        <li><a href="mailto:info@southeastindianatitle.com">Email Us</a></li>
-      </ul>
-    </div>
-  </div>
-  <div class="footer-bottom">
-    &copy; 2026 Southeast Indiana Title, Inc. &nbsp;|&nbsp; All Rights Reserved &nbsp;|&nbsp; Licensed Title Agency in the State of Indiana<br>
-    <span style="font-size:11px; opacity: 0.7; margin-top: 6px; display:inline-block;">Douglas C. Amberger, Attorney at Law &middot; Indiana Bar Active &amp; In Good Standing</span>
-  </div>
-</footer>
+  );
+}
 
+function Metric({ label, value, sub, color, big }) {
+  return (
+    <div style={{
+      background: "#1c1917",
+      border: "1px solid #292524",
+      borderRadius: 10,
+      padding: 16,
+      borderLeft: `3px solid ${color}`,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: "#a8a29e", letterSpacing: "0.1em", marginBottom: 8, textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontFamily: "ui-monospace, monospace", fontSize: big ? 28 : 22, fontWeight: 700, color: "#fafaf9", letterSpacing: "-0.02em" }}>{value}</div>
+      <div style={{ fontSize: 11, color: "#78716c", marginTop: 6 }}>{sub}</div>
+    </div>
+  );
+}
+
+function Overview({ deal, setDeal, cashOOP, closingCosts, concessions, net, tasksDone, tasksTotal, expenses }) {
+  const updateDeal = (patch) => setDeal({ ...deal, ...patch });
+
+  const byCat = {};
+  expenses.forEach(e => {
+    const cat = e.category || "Other";
+    byCat[cat] = (byCat[cat] || 0) + (parseFloat(e.amount) || 0);
+  });
+  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+  const maxCat = cats[0]?.[1] || 1;
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+      <div>
+        <Card title="Live P&L Waterfall">
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <PLine label="List Price" value={deal.scenarioPrice} positive bold />
+            <PLine label={`Closing costs ($${deal.flatFee} flat fee + ${deal.buyerAgentPct}% buyer agent + ${deal.closingMiscPct}% misc)`} value={-closingCosts} />
+            <PLine label="Rocket Mortgage payoff (first lien on deed)" value={-deal.rocketPayoff} />
+            <PLine label="Cash already in (reinstatement + expenses)" value={-cashOOP} />
+            {deal.scenarioConcession && (
+              <PLine label="Roof + HVAC concession to buyer" value={-concessions} />
+            )}
+            <div style={{ height: 1, background: "#292524", margin: "6px 0" }} />
+            <PLine label="NET TO YOU AT CLOSE" value={net} bold huge />
+          </div>
+        </Card>
+
+        <Card title="Scenario Modeling" style={{ marginTop: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+            <Field label="Scenario sale price">
+              <input type="number" value={deal.scenarioPrice} onChange={(e) => updateDeal({ scenarioPrice: parseFloat(e.target.value) || 0 })}
+                style={inputStyle} />
+            </Field>
+            <Field label="Buyer agent %">
+              <input type="number" step="0.5" value={deal.buyerAgentPct} onChange={(e) => updateDeal({ buyerAgentPct: parseFloat(e.target.value) || 0 })}
+                style={inputStyle} />
+            </Field>
+            <Field label="Misc closing %">
+              <input type="number" step="0.5" value={deal.closingMiscPct} onChange={(e) => updateDeal({ closingMiscPct: parseFloat(e.target.value) || 0 })}
+                style={inputStyle} />
+            </Field>
+            <Field label="Flat fee MLS">
+              <input type="number" value={deal.flatFee} onChange={(e) => updateDeal({ flatFee: parseFloat(e.target.value) || 0 })}
+                style={inputStyle} />
+            </Field>
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14, cursor: "pointer" }}>
+            <input type="checkbox" checked={deal.scenarioConcession} onChange={(e) => updateDeal({ scenarioConcession: e.target.checked })} />
+            <span style={{ fontSize: 13 }}>Include roof + HVAC concession ({fmt(deal.pendingConcessions.reduce((s, c) => s + c.amount, 0))})</span>
+          </label>
+
+          <div style={{ marginTop: 16, padding: 12, background: "#0c0a09", borderRadius: 6, border: "1px solid #292524" }}>
+            <div style={{ fontSize: 10, fontWeight: 600, color: "#d97706", letterSpacing: "0.1em", marginBottom: 8, textTransform: "uppercase" }}>Quick Scenarios</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              <ScenarioBtn label="$255K as-is" onClick={() => updateDeal({ scenarioPrice: 255000, scenarioConcession: false })} active={deal.scenarioPrice === 255000 && !deal.scenarioConcession} />
+              <ScenarioBtn label="$255K + concession" onClick={() => updateDeal({ scenarioPrice: 255000, scenarioConcession: true })} active={deal.scenarioPrice === 255000 && deal.scenarioConcession} />
+              <ScenarioBtn label="$245K as-is" onClick={() => updateDeal({ scenarioPrice: 245000, scenarioConcession: false })} active={deal.scenarioPrice === 245000 && !deal.scenarioConcession} />
+              <ScenarioBtn label="$245K + concession" onClick={() => updateDeal({ scenarioPrice: 245000, scenarioConcession: true })} active={deal.scenarioPrice === 245000 && deal.scenarioConcession} />
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <div>
+        <Card title="Pre-Launch Progress">
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+            <span style={{ fontFamily: "ui-monospace, monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
+            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks complete</span>
+          </div>
+          <div style={{ height: 8, background: "#0c0a09", borderRadius: 4, overflow: "hidden", border: "1px solid #292524" }}>
+            <div style={{ height: "100%", width: `${(tasksDone / tasksTotal) * 100}%`, background: "linear-gradient(90deg, #d97706, #f59e0b)", transition: "width 0.3s" }} />
+          </div>
+        </Card>
+
+        <Card title="Spend by Category" style={{ marginTop: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {cats.map(([cat, amt]) => (
+              <div key={cat}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: "#a8a29e" }}>{cat}</span>
+                  <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 600 }}>{fmt(amt)}</span>
+                </div>
+                <div style={{ height: 4, background: "#0c0a09", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${(amt / maxCat) * 100}%`, background: "#d97706" }} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card title="Deal Quick Reference" style={{ marginTop: 16 }}>
+          <Row k="Contract Price" v={fmt(deal.contractPrice)} />
+          <Row k="Reinstatement Paid" v={fmt(deal.reinstatement)} />
+          <Row k="Rocket Payoff (on deed)" v={fmtCents(deal.rocketPayoff)} />
+          <Row k="Total to Clear at Close" v={fmt(deal.rocketPayoff + cashOOP)} />
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function PLine({ label, value, bold, huge, positive }) {
+  const isNeg = value < 0;
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <span style={{ fontSize: huge ? 14 : 13, color: bold ? "#fafaf9" : "#a8a29e", fontWeight: bold ? 700 : 400 }}>{label}</span>
+      <span style={{
+        fontFamily: "ui-monospace, monospace",
+        fontSize: huge ? 22 : 14,
+        fontWeight: bold ? 700 : 500,
+        color: huge ? (value >= 60000 ? "#10b981" : value >= 0 ? "#f59e0b" : "#ef4444") : isNeg ? "#fca5a5" : positive ? "#86efac" : "#fafaf9"
+      }}>
+        {isNeg ? "-" : ""}{fmt(Math.abs(value))}
+      </span>
+    </div>
+  );
+}
+
+function ScenarioBtn({ label, onClick, active }) {
+  return (
+    <button onClick={onClick} style={{
+      background: active ? "#d97706" : "#1c1917",
+      color: active ? "#0c0a09" : "#fafaf9",
+      border: active ? "1px solid #d97706" : "1px solid #44403c",
+      padding: "8px 10px",
+      borderRadius: 6,
+      fontSize: 11,
+      fontWeight: 600,
+    }}>{label}</button>
+  );
+}
+
+function Row({ k, v }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid #292524", fontSize: 12 }}>
+      <span style={{ color: "#a8a29e" }}>{k}</span>
+      <span style={{ fontFamily: "ui-monospace, monospace", fontWeight: 600 }}>{v}</span>
+    </div>
+  );
+}
+
+function Expenses({ items, displayItems, setItems, logActivity, searchActive }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ payee: "", amount: "", date: "", notes: "", category: "Other" });
+
+  const list = displayItems || items;
+  const total = list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+  const fullTotal = items.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
+
+  const addExpense = () => {
+    if (!draft.payee || !draft.amount) return;
+    const newItem = { ...draft, id: "e" + Date.now(), amount: parseFloat(draft.amount) };
+    setItems([...items, newItem]);
+    logActivity(`Added expense: ${draft.payee} ${fmt(draft.amount)}`);
+    setDraft({ payee: "", amount: "", date: "", notes: "", category: "Other" });
+    setAdding(false);
+  };
+
+  const deleteExpense = (id) => {
+    const item = items.find(i => i.id === id);
+    setItems(items.filter(i => i.id !== id));
+    logActivity(`Deleted expense: ${item?.payee}`);
+  };
+
+  const titleText = searchActive
+    ? `${list.length} of ${items.length} expenses match (${fmt(total)} of ${fmt(fullTotal)})`
+    : `All Expenses (${items.length} items, ${fmt(fullTotal)} total)`;
+
+  return (
+    <Card title={titleText} action={
+      <button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add Expense"}</button>
+    }>
+      {adding && (
+        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="Payee"><input value={draft.payee} onChange={(e) => setDraft({ ...draft, payee: e.target.value })} style={inputStyle} placeholder="Vendor name" /></Field>
+          <Field label="Amount"><input type="number" value={draft.amount} onChange={(e) => setDraft({ ...draft, amount: e.target.value })} style={inputStyle} placeholder="0" /></Field>
+          <Field label="Date"><input type="date" value={draft.date} onChange={(e) => setDraft({ ...draft, date: e.target.value })} style={inputStyle} /></Field>
+          <Field label="Category">
+            <select value={draft.category} onChange={(e) => setDraft({ ...draft, category: e.target.value })} style={inputStyle}>
+              {["Acquisition", "Inspection", "Plumbing", "Electrical", "Well/Septic", "Cleanup", "Labor", "Holding", "Marketing", "Setup", "Site", "Other"].map(c => <option key={c}>{c}</option>)}
+            </select>
+          </Field>
+          <button onClick={addExpense} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+          <Field label="Notes" style={{ gridColumn: "1 / -1" }}><input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} style={inputStyle} placeholder="Optional details" /></Field>
+        </div>
+      )}
+
+      <div className="scroll" style={{ maxHeight: 600, overflowY: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead style={{ position: "sticky", top: 0, background: "#1c1917" }}>
+            <tr style={{ borderBottom: "1px solid #44403c" }}>
+              <th style={th}>Payee</th>
+              <th style={{ ...th, textAlign: "right" }}>Amount</th>
+              <th style={th}>Date</th>
+              <th style={th}>Category</th>
+              <th style={th}>Notes</th>
+              <th style={th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {[...list].sort((a, b) => (b.date || "").localeCompare(a.date || "")).map(item => (
+              <tr key={item.id} style={{ borderBottom: "1px solid #292524" }}>
+                <td style={td}>{item.payee}</td>
+                <td style={{ ...td, textAlign: "right", fontFamily: "ui-monospace, monospace", fontWeight: 600, color: "#fca5a5" }}>{fmt(item.amount)}</td>
+                <td style={{ ...td, color: "#a8a29e", fontFamily: "ui-monospace, monospace", fontSize: 11 }}>{item.date || "—"}</td>
+                <td style={td}><span style={{ padding: "2px 8px", background: "#292524", borderRadius: 4, fontSize: 10, fontWeight: 600, color: "#d97706" }}>{item.category}</span></td>
+                <td style={{ ...td, color: "#a8a29e", fontSize: 11 }}>{item.notes}</td>
+                <td style={td}><button onClick={() => deleteExpense(item.id)} style={btnGhost}>×</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function Tasks({ items, displayItems, setItems, logActivity, searchActive }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ label: "", due: "", owner: "Nathan", priority: "med" });
+
+  const list = displayItems || items;
+
+  const toggle = (id) => {
+    const item = items.find(i => i.id === id);
+    const updated = items.map(t => t.id === id ? { ...t, done: !t.done } : t);
+    setItems(updated);
+    logActivity(`${!item.done ? "Completed" : "Reopened"}: ${item.label}`);
+  };
+
+  const addTask = () => {
+    if (!draft.label) return;
+    setItems([...items, { ...draft, id: "t" + Date.now(), done: false }]);
+    logActivity(`Added task: ${draft.label}`);
+    setDraft({ label: "", due: "", owner: "Nathan", priority: "med" });
+    setAdding(false);
+  };
+
+  const deleteTask = (id) => {
+    const item = items.find(i => i.id === id);
+    setItems(items.filter(i => i.id !== id));
+    logActivity(`Deleted task: ${item?.label}`);
+  };
+
+  const sorted = [...list].sort((a, b) => {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    const pri = { high: 0, med: 1, low: 2 };
+    return (pri[a.priority] || 1) - (pri[b.priority] || 1);
+  });
+
+  const titleText = searchActive
+    ? `${list.length} of ${items.length} tasks match`
+    : `Tasks (${items.filter(t => !t.done).length} open)`;
+
+  return (
+    <Card title={titleText} action={
+      <button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add Task"}</button>
+    }>
+      {adding && (
+        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "3fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="Task"><input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} style={inputStyle} placeholder="What needs done?" /></Field>
+          <Field label="Due"><input type="date" value={draft.due} onChange={(e) => setDraft({ ...draft, due: e.target.value })} style={inputStyle} /></Field>
+          <Field label="Owner">
+            <select value={draft.owner} onChange={(e) => setDraft({ ...draft, owner: e.target.value })} style={inputStyle}>
+              <option>Nathan</option><option>Justin</option><option>Mary</option><option>William</option>
+            </select>
+          </Field>
+          <Field label="Priority">
+            <select value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value })} style={inputStyle}>
+              <option value="high">High</option><option value="med">Med</option><option value="low">Low</option>
+            </select>
+          </Field>
+          <button onClick={addTask} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {sorted.map(t => (
+          <div key={t.id} style={{
+            display: "flex", alignItems: "center", gap: 12,
+            padding: "10px 12px",
+            background: t.done ? "#0c0a09" : "#1c1917",
+            border: `1px solid ${t.done ? "#1c1917" : "#292524"}`,
+            borderRadius: 8,
+            opacity: t.done ? 0.5 : 1,
+          }}>
+            <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer" }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none" }}>{t.label}</div>
+              <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
+                <span>{t.owner}</span>
+                {t.due && <span>· Due {t.due}</span>}
+              </div>
+            </div>
+            <span style={{
+              padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700,
+              background: t.priority === "high" ? "#7f1d1d" : t.priority === "med" ? "#78350f" : "#1c1917",
+              color: t.priority === "high" ? "#fca5a5" : t.priority === "med" ? "#fbbf24" : "#a8a29e",
+            }}>{t.priority.toUpperCase()}</span>
+            <button onClick={() => deleteTask(t.id)} style={btnGhost}>×</button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function Vendors({ items, displayItems, setItems, logActivity, searchActive }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ name: "", role: "", phone: "", status: "Active", notes: "" });
+
+  const list = displayItems || items;
+
+  const addVendor = () => {
+    if (!draft.name) return;
+    setItems([...items, { ...draft, id: "v" + Date.now() }]);
+    logActivity(`Added vendor: ${draft.name}`);
+    setDraft({ name: "", role: "", phone: "", status: "Active", notes: "" });
+    setAdding(false);
+  };
+
+  const deleteVendor = (id) => {
+    const item = items.find(i => i.id === id);
+    setItems(items.filter(i => i.id !== id));
+    logActivity(`Removed vendor: ${item?.name}`);
+  };
+
+  const statusColor = (s) => ({
+    "Complete": "#10b981",
+    "Active": "#f59e0b",
+    "Pending": "#3b82f6",
+    "Quoted": "#a78bfa",
+  })[s] || "#a8a29e";
+
+  const titleText = searchActive
+    ? `${list.length} of ${items.length} vendors match`
+    : `Vendors & Contacts (${items.length})`;
+
+  return (
+    <Card title={titleText} action={
+      <button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add Vendor"}</button>
+    }>
+      {adding && (
+        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 1fr 2fr auto", gap: 8, alignItems: "end" }}>
+          <Field label="Name"><input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
+          <Field label="Role"><input value={draft.role} onChange={(e) => setDraft({ ...draft, role: e.target.value })} style={inputStyle} placeholder="What they do" /></Field>
+          <Field label="Phone"><input value={draft.phone} onChange={(e) => setDraft({ ...draft, phone: e.target.value })} style={inputStyle} placeholder="555-1234" /></Field>
+          <Field label="Status">
+            <select value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value })} style={inputStyle}>
+              <option>Active</option><option>Complete</option><option>Pending</option><option>Quoted</option>
+            </select>
+          </Field>
+          <Field label="Notes"><input value={draft.notes} onChange={(e) => setDraft({ ...draft, notes: e.target.value })} style={inputStyle} /></Field>
+          <button onClick={addVendor} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 12 }}>
+        {list.map(v => (
+          <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14, position: "relative" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</div>
+                <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{v.role}</div>
+              </div>
+              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${statusColor(v.status)}22`, color: statusColor(v.status), letterSpacing: "0.05em" }}>{v.status.toUpperCase()}</span>
+            </div>
+            {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "ui-monospace, monospace", marginTop: 6 }}>{v.phone}</div>}
+            {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
+            <button onClick={() => deleteVendor(v.id)} style={{ ...btnGhost, position: "absolute", top: 8, right: 8 }}>×</button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function Notes({ value, setValue, searchQuery }) {
+  const matchCount = searchQuery
+    ? (value.toLowerCase().match(new RegExp(searchQuery.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g")) || []).length
+    : 0;
+
+  return (
+    <Card title="Shared Notes (markdown)">
+      {searchQuery && (
+        <div style={{ padding: "10px 14px", marginBottom: 12, background: matchCount > 0 ? "#1e3a1e" : "#1c1917", border: `1px solid ${matchCount > 0 ? "#10b981" : "#44403c"}`, borderRadius: 6, fontSize: 12, color: matchCount > 0 ? "#86efac" : "#a8a29e" }}>
+          {matchCount > 0
+            ? `${matchCount} occurrence${matchCount !== 1 ? "s" : ""} of "${searchQuery}" in notes — use Ctrl/Cmd+F inside the textarea to jump to them`
+            : `No matches for "${searchQuery}" in notes`}
+        </div>
+      )}
+      <textarea
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        style={{
+          width: "100%",
+          minHeight: 500,
+          background: "#0c0a09",
+          border: "1px solid #292524",
+          borderRadius: 8,
+          color: "#fafaf9",
+          padding: 14,
+          fontSize: 13,
+          fontFamily: "ui-monospace, monospace",
+          lineHeight: 1.6,
+          resize: "vertical",
+        }}
+      />
+      <div style={{ fontSize: 11, color: "#78716c", marginTop: 8 }}>Auto-saves on every keystroke.</div>
+    </Card>
+  );
+}
+
+function Activity({ items, searchActive }) {
+  return (
+    <Card title={searchActive ? `Activity (${items.length} matching)` : "Recent Activity"}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {items.length === 0 && <div style={{ color: "#78716c", fontSize: 13 }}>No activity yet. Make changes in other tabs and they'll show up here.</div>}
+        {items.map((a, i) => (
+          <div key={i} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, display: "flex", gap: 12, alignItems: "center" }}>
+            <span style={{ padding: "2px 8px", background: a.who === "Nathan" ? "#7c2d12" : a.who === "Justin" ? "#1e3a8a" : "#292524", color: "#fafaf9", borderRadius: 4, fontSize: 10, fontWeight: 700, minWidth: 55, textAlign: "center" }}>{a.who}</span>
+            <span style={{ flex: 1, fontSize: 13 }}>{a.msg}</span>
+            <span style={{ fontSize: 10, color: "#78716c", fontFamily: "ui-monospace, monospace" }}>{new Date(a.ts).toLocaleString()}</span>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function Card({ title, children, action, style }) {
+  return (
+    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, ...style }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: "#fafaf9", letterSpacing: "0.05em", textTransform: "uppercase" }}>{title}</div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, children, style }) {
+  return (
+    <div style={style}>
+      <div style={{ fontSize: 10, fontWeight: 600, color: "#a8a29e", letterSpacing: "0.1em", marginBottom: 4, textTransform: "uppercase" }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+
+const inputStyle = {
+  width: "100%",
+  background: "#1c1917",
+  border: "1px solid #44403c",
+  color: "#fafaf9",
+  padding: "8px 10px",
+  borderRadius: 6,
+  fontSize: 13,
+  outline: "none",
+};
+
+const btnPrimary = {
+  background: "#d97706",
+  color: "#0c0a09",
+  border: "none",
+  padding: "7px 12px",
+  borderRadius: 6,
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const btnGhost = {
+  background: "transparent",
+  color: "#78716c",
+  border: "1px solid #44403c",
+  padding: "4px 10px",
+  borderRadius: 4,
+  fontSize: 14,
+  fontWeight: 600,
+};
+
+const th = { textAlign: "left", padding: "10px 12px", fontSize: 10, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", textTransform: "uppercase" };
+const td = { padding: "10px 12px", verticalAlign: "top" };
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<FlipCommandCenter />);
+</script>
 </body>
 </html>
