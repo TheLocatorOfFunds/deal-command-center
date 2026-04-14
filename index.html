@@ -1,868 +1,1284 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Deal Command Center · FundLocators</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Southeast Indiana Title, Inc. | Trusted Title & Closing Services | Batesville, IN</title>
+<meta name="description" content="Southeast Indiana Title Inc. provides trusted title search, title insurance, and real estate closing services throughout Southeast Indiana. Attorney-owned, 25+ years of experience. Batesville, IN.">
+<meta name="keywords" content="title company Batesville Indiana, title insurance, real estate closing, Doug Amberger attorney, Southeast Indiana Title, Ripley County title company">
+<link rel="icon" type="image/png" href="SElogo.png">
+<link rel="apple-touch-icon" href="SElogo.png">
 <style>
-  html, body { margin: 0; padding: 0; background: #0c0a09; color: #fafaf9; font-family: 'DM Sans', system-ui, -apple-system, sans-serif; }
-  * { box-sizing: border-box; }
-  button { font-family: inherit; cursor: pointer; }
-  input, textarea, select { font-family: inherit; }
-  ::placeholder { color: #57534e; }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #44403c; border-radius: 3px; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --navy: #0f2a47;
+    --navy-dark: #081a2e;
+    --gold: #c9a961;
+    --gold-dark: #a88a47;
+    --cream: #faf7f2;
+    --text: #2a2a2a;
+    --muted: #5a6573;
+    --border: #e3e6ea;
+  }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: Georgia, 'Times New Roman', serif;
+    color: var(--text);
+    line-height: 1.65;
+    background: #fff;
+  }
+  h1, h2, h3, h4, .sans { font-family: 'Helvetica Neue', Arial, sans-serif; }
+
+  /* Top bar */
+  .topbar {
+    background: var(--navy-dark);
+    color: #c8d4e3;
+    font-size: 13px;
+    padding: 8px 0;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+  }
+  .topbar-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 24px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .topbar a { color: var(--gold); text-decoration: none; }
+  .topbar a:hover { color: #fff; }
+
+  /* Header / Nav */
+  header {
+    background: #fff;
+    border-bottom: 3px solid var(--gold);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+  }
+  .nav {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 18px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    text-decoration: none;
+    color: var(--navy);
+  }
+  .logo-mark {
+    width: 60px; height: 60px;
+    border-radius: 8px;
+    display: block;
+    object-fit: contain;
+  }
+  .logo-text h1 {
+    font-size: 20px;
+    color: var(--navy);
+    letter-spacing: 0.5px;
+    line-height: 1.1;
+  }
+  .logo-text p {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    margin-top: 3px;
+  }
+  nav ul {
+    list-style: none;
+    display: flex;
+    gap: 28px;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+    letter-spacing: 0.5px;
+  }
+  nav a {
+    text-decoration: none;
+    color: var(--navy);
+    font-weight: 500;
+    text-transform: uppercase;
+    transition: color 0.2s;
+  }
+  nav a:hover { color: var(--gold-dark); }
+  .cta-btn {
+    background: var(--gold);
+    color: #fff !important;
+    padding: 10px 22px;
+    border-radius: 3px;
+    font-weight: 600;
+    transition: background 0.2s;
+  }
+  .cta-btn:hover { background: var(--gold-dark); color: #fff !important; }
+
+  /* Hero */
+  .hero {
+    background:
+      linear-gradient(rgba(8, 26, 46, 0.82), rgba(15, 42, 71, 0.88)),
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='600' viewBox='0 0 1200 600'><rect fill='%230f2a47' width='1200' height='600'/><path fill='%23081a2e' d='M0 400 Q 300 350 600 400 T 1200 400 L 1200 600 L 0 600 Z'/><g opacity='0.15' fill='%23c9a961'><rect x='100' y='200' width='120' height='280'/><rect x='260' y='150' width='140' height='330'/><rect x='440' y='180' width='100' height='300'/><rect x='580' y='120' width='150' height='360'/><rect x='770' y='170' width='110' height='310'/><rect x='920' y='200' width='130' height='280'/></g></svg>");
+    background-size: cover;
+    background-position: center;
+    color: #fff;
+    padding: 110px 24px 120px;
+    text-align: center;
+  }
+  .hero-inner { max-width: 900px; margin: 0 auto; }
+  .hero-eyebrow {
+    display: inline-block;
+    color: var(--gold);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 20px;
+    border-top: 1px solid var(--gold);
+    border-bottom: 1px solid var(--gold);
+    padding: 8px 24px;
+  }
+  .hero h2 {
+    font-family: Georgia, serif;
+    font-size: 52px;
+    line-height: 1.15;
+    margin-bottom: 24px;
+    font-weight: normal;
+  }
+  .hero h2 em { color: var(--gold); font-style: italic; }
+  .hero p {
+    font-size: 19px;
+    color: #d9e1ec;
+    max-width: 700px;
+    margin: 0 auto 36px;
+  }
+  .hero-buttons { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  .btn-primary {
+    background: var(--gold);
+    color: #fff;
+    padding: 16px 36px;
+    text-decoration: none;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border-radius: 3px;
+    transition: all 0.2s;
+    display: inline-block;
+  }
+  .btn-primary:hover { background: var(--gold-dark); transform: translateY(-2px); }
+  .btn-secondary {
+    background: transparent;
+    color: #fff;
+    padding: 16px 36px;
+    text-decoration: none;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border: 2px solid #fff;
+    border-radius: 3px;
+    transition: all 0.2s;
+    display: inline-block;
+  }
+  .btn-secondary:hover { background: #fff; color: var(--navy); }
+
+  /* Trust bar */
+  .trust-bar {
+    background: var(--cream);
+    padding: 30px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .trust-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 30px;
+    text-align: center;
+  }
+  .trust-item .num {
+    font-family: Georgia, serif;
+    font-size: 38px;
+    color: var(--navy);
+    font-weight: bold;
+    display: block;
+  }
+  .trust-item .lbl {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Sections */
+  section { padding: 90px 24px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  .section-header { text-align: center; margin-bottom: 60px; }
+  .section-header .eyebrow {
+    color: var(--gold-dark);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .section-header h3 {
+    font-size: 40px;
+    color: var(--navy);
+    font-weight: normal;
+    font-family: Georgia, serif;
+    margin-bottom: 16px;
+  }
+  .section-header .divider {
+    width: 60px;
+    height: 2px;
+    background: var(--gold);
+    margin: 18px auto 24px;
+  }
+  .section-header p {
+    max-width: 700px;
+    margin: 0 auto;
+    color: var(--muted);
+    font-size: 17px;
+  }
+
+  /* About */
+  .about-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 60px;
+    align-items: center;
+  }
+  .about-img {
+    background: url('batesville.jpg') center/cover no-repeat, linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
+    border-radius: 4px;
+    height: 480px;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(15, 42, 71, 0.25);
+  }
+  .about-img::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom, rgba(15, 42, 71, 0.1) 0%, rgba(15, 42, 71, 0.75) 100%);
+  }
+  .about-img-badge {
+    position: absolute;
+    bottom: 30px;
+    left: 30px;
+    right: 30px;
+    background: rgba(201, 169, 97, 0.95);
+    color: var(--navy-dark);
+    padding: 20px 24px;
+    border-radius: 3px;
+  }
+  .about-img-badge strong {
+    display: block;
+    font-family: Georgia, serif;
+    font-size: 22px;
+    margin-bottom: 4px;
+  }
+  .about-img-badge span {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .about-content .eyebrow {
+    color: var(--gold-dark);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .about-content h3 {
+    font-size: 36px;
+    color: var(--navy);
+    font-weight: normal;
+    font-family: Georgia, serif;
+    margin-bottom: 20px;
+    line-height: 1.2;
+  }
+  .about-content p {
+    color: var(--muted);
+    margin-bottom: 18px;
+    font-size: 16px;
+  }
+  .about-features {
+    list-style: none;
+    margin-top: 26px;
+  }
+  .about-features li {
+    padding: 10px 0;
+    padding-left: 32px;
+    position: relative;
+    color: var(--text);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 15px;
+  }
+  .about-features li::before {
+    content: "✓";
+    position: absolute;
+    left: 0;
+    top: 10px;
+    color: var(--gold);
+    font-weight: bold;
+    font-size: 18px;
+  }
+
+  /* Services */
+  .services { background: var(--cream); }
+  .services-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 30px;
+  }
+  .service-card {
+    background: #fff;
+    padding: 40px 32px;
+    border-top: 4px solid var(--gold);
+    box-shadow: 0 4px 20px rgba(15, 42, 71, 0.08);
+    transition: transform 0.25s, box-shadow 0.25s;
+  }
+  .service-card:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 14px 40px rgba(15, 42, 71, 0.15);
+  }
+  .service-icon {
+    width: 64px;
+    height: 64px;
+    background: var(--navy);
+    color: var(--gold);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    margin-bottom: 22px;
+  }
+  .service-card h4 {
+    font-size: 22px;
+    color: var(--navy);
+    margin-bottom: 14px;
+    font-family: Georgia, serif;
+    font-weight: normal;
+  }
+  .service-card p {
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  .service-card ul {
+    margin-top: 16px;
+    padding-left: 20px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .service-card li { padding: 3px 0; }
+
+  /* Doug section */
+  .founder {
+    background: var(--navy);
+    color: #fff;
+    position: relative;
+    overflow: hidden;
+  }
+  .founder::before {
+    content: "";
+    position: absolute;
+    top: -100px;
+    right: -100px;
+    width: 400px;
+    height: 400px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(201, 169, 97, 0.12), transparent);
+  }
+  .founder-grid {
+    display: grid;
+    grid-template-columns: 400px 1fr;
+    gap: 60px;
+    align-items: center;
+    position: relative;
+  }
+  .founder-img {
+    background: url('doug.jpg') center top/cover no-repeat;
+    border-radius: 4px;
+    aspect-ratio: 4/5;
+    position: relative;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+    border: 3px solid var(--gold);
+  }
+  .founder-img::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 2px;
+    background: linear-gradient(to bottom, transparent 60%, rgba(8, 26, 46, 0.35) 100%);
+  }
+  .founder-content .eyebrow {
+    color: var(--gold);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .founder-content h3 {
+    font-size: 42px;
+    font-family: Georgia, serif;
+    font-weight: normal;
+    margin-bottom: 8px;
+  }
+  .founder-title {
+    color: var(--gold);
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 15px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 24px;
+  }
+  .founder-content p {
+    color: #c8d4e3;
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+  .credentials {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 30px;
+  }
+  .credential {
+    border-left: 2px solid var(--gold);
+    padding: 8px 0 8px 18px;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+  }
+  .credential strong {
+    display: block;
+    color: var(--gold);
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+  }
+  .credential span { color: #fff; font-size: 15px; }
+  .founder-links {
+    margin-top: 34px;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+  }
+  .founder-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 18px;
+    background: rgba(201, 169, 97, 0.12);
+    border: 1px solid rgba(201, 169, 97, 0.45);
+    color: var(--gold);
+    text-decoration: none;
+    font-size: 13px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 3px;
+    transition: all 0.2s;
+  }
+  .founder-links a:hover {
+    background: var(--gold);
+    color: var(--navy-dark);
+    border-color: var(--gold);
+  }
+  .founder-links svg { width: 14px; height: 14px; }
+
+  /* Testimonials */
+  .testimonials-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 30px;
+  }
+  .testimonial {
+    background: var(--cream);
+    padding: 36px 32px;
+    border-left: 3px solid var(--gold);
+    position: relative;
+  }
+  .testimonial .quote-mark {
+    position: absolute;
+    top: 10px;
+    right: 24px;
+    font-family: Georgia, serif;
+    font-size: 70px;
+    color: var(--gold);
+    opacity: 0.25;
+    line-height: 1;
+  }
+  .stars { color: var(--gold); font-size: 18px; margin-bottom: 14px; letter-spacing: 2px; }
+  .testimonial p {
+    color: var(--text);
+    font-style: italic;
+    margin-bottom: 20px;
+    font-size: 15px;
+    line-height: 1.7;
+  }
+  .testimonial .author {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-weight: 600;
+    color: var(--navy);
+    font-size: 14px;
+  }
+  .testimonial .role {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .reviews-header {
+    text-align: center;
+    margin-top: 50px;
+    padding: 30px;
+    background: var(--navy);
+    color: #fff;
+    border-radius: 4px;
+  }
+  .reviews-header .big-rating {
+    font-family: Georgia, serif;
+    font-size: 48px;
+    color: var(--gold);
+  }
+  .reviews-header .big-stars { font-size: 24px; color: var(--gold); letter-spacing: 3px; margin: 6px 0; }
+  .reviews-header p {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-size: 13px;
+    color: #c8d4e3;
+  }
+
+  /* Process */
+  .process { background: var(--cream); }
+  .process-steps {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 24px;
+    position: relative;
+  }
+  .step {
+    background: #fff;
+    padding: 36px 24px;
+    text-align: center;
+    border-radius: 4px;
+    box-shadow: 0 4px 18px rgba(15, 42, 71, 0.08);
+    position: relative;
+  }
+  .step-num {
+    display: inline-flex;
+    width: 56px;
+    height: 56px;
+    background: var(--gold);
+    color: var(--navy-dark);
+    font-family: Georgia, serif;
+    font-size: 24px;
+    font-weight: bold;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    margin-bottom: 18px;
+  }
+  .step h4 {
+    font-size: 18px;
+    color: var(--navy);
+    margin-bottom: 10px;
+    font-family: Georgia, serif;
+    font-weight: normal;
+  }
+  .step p {
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* Community */
+  .community-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 28px;
+  }
+  .community-card {
+    padding: 30px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: #fff;
+    transition: border-color 0.2s;
+  }
+  .community-card:hover { border-color: var(--gold); }
+  .community-card h4 {
+    font-size: 18px;
+    color: var(--navy);
+    margin-bottom: 12px;
+    font-family: Georgia, serif;
+    font-weight: normal;
+  }
+  .community-card p { color: var(--muted); font-size: 15px; }
+
+  /* Contact */
+  .contact {
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-dark) 100%);
+    color: #fff;
+  }
+  .contact .section-header h3 { color: #fff; }
+  .contact .section-header p { color: #c8d4e3; }
+  .contact-grid {
+    display: grid;
+    grid-template-columns: 1fr 1.3fr;
+    gap: 60px;
+    margin-top: 20px;
+  }
+  .contact-info h4 {
+    font-family: Georgia, serif;
+    font-size: 24px;
+    font-weight: normal;
+    margin-bottom: 20px;
+    color: var(--gold);
+  }
+  .contact-item {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 22px;
+    align-items: flex-start;
+  }
+  .contact-icon {
+    background: var(--gold);
+    color: var(--navy-dark);
+    width: 44px;
+    height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .contact-item strong {
+    display: block;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 4px;
+  }
+  .contact-item span, .contact-item a {
+    color: #fff;
+    font-size: 16px;
+    text-decoration: none;
+  }
+  .contact-item a:hover { color: var(--gold); }
+  form {
+    background: #fff;
+    padding: 40px;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  label {
+    display: block;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--navy);
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  input, select, textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 15px;
+    background: var(--cream);
+    transition: border-color 0.2s;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none;
+    border-color: var(--gold);
+    background: #fff;
+  }
+  textarea { resize: vertical; min-height: 120px; }
+  .form-full { margin-bottom: 16px; }
+  form button {
+    background: var(--navy);
+    color: #fff;
+    border: none;
+    padding: 16px 32px;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    border-radius: 3px;
+    width: 100%;
+    transition: background 0.2s;
+  }
+  form button:hover { background: var(--gold-dark); }
+
+  /* Footer */
+  footer {
+    background: var(--navy-dark);
+    color: #8fa0b5;
+    padding: 60px 24px 24px;
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    font-size: 14px;
+  }
+  .footer-grid {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 40px;
+    padding-bottom: 40px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .footer-brand h4 {
+    color: #fff;
+    font-family: Georgia, serif;
+    font-size: 20px;
+    font-weight: normal;
+    margin-bottom: 12px;
+  }
+  .footer-brand p { margin-bottom: 14px; line-height: 1.7; }
+  .footer-col h5 {
+    color: var(--gold);
+    font-size: 13px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    margin-bottom: 16px;
+  }
+  .footer-col ul { list-style: none; }
+  .footer-col li { padding: 5px 0; }
+  .footer-col a, .footer-col span {
+    color: #8fa0b5;
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  .footer-col a:hover { color: var(--gold); }
+  .footer-bottom {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding-top: 24px;
+    text-align: center;
+    font-size: 13px;
+  }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .about-grid, .founder-grid, .contact-grid { grid-template-columns: 1fr; gap: 40px; }
+    .services-grid, .testimonials-grid, .community-grid { grid-template-columns: 1fr; }
+    .process-steps { grid-template-columns: 1fr 1fr; }
+    .trust-inner { grid-template-columns: 1fr 1fr; }
+    .footer-grid { grid-template-columns: 1fr 1fr; }
+    .form-row { grid-template-columns: 1fr; }
+    .hero h2 { font-size: 36px; }
+    .section-header h3 { font-size: 30px; }
+    nav ul { gap: 16px; }
+    section { padding: 60px 20px; }
+  }
+  @media (max-width: 560px) {
+    .process-steps, .trust-inner, .footer-grid { grid-template-columns: 1fr; }
+    nav ul { display: none; }
+    .hero { padding: 70px 20px 80px; }
+    .hero h2 { font-size: 30px; }
+  }
 </style>
 </head>
 <body>
-<div id="root"></div>
 
-<script type="text/babel" data-presets="env,react">
-const { useState, useEffect, useCallback, useRef } = React;
-const SUPABASE_URL = 'https://fmrtiaszjfoaeghboycn.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_I0T4RT55gkggJ9EqXNvX3A_uFU6jtDe';
-const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+<!-- Top bar -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <span>📞 <a href="tel:8129343208">(812) 934-3208</a> &nbsp; | &nbsp; 📍 1046 State Road 46 East, Batesville, IN 47006</span>
+    <span>Monday – Friday &nbsp;|&nbsp; Licensed &amp; Insured in Indiana</span>
+  </div>
+</div>
 
-// ─── Helpers ────────────────────────────────────────────────────────
-const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
-const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-
-const DEAL_STATUSES = {
-  flip: ["lead", "under-contract", "rehab", "listing", "under-offer", "closed", "dead"],
-  surplus: ["new-lead", "signed", "filed", "probate", "awaiting-distribution", "recovered", "urgent", "dead"],
-};
-const STATUS_COLORS = {
-  "lead": "#3b82f6", "under-contract": "#f59e0b", "rehab": "#d97706", "listing": "#8b5cf6",
-  "under-offer": "#06b6d4", "closed": "#10b981", "dead": "#78716c",
-  "new-lead": "#3b82f6", "signed": "#f59e0b", "filed": "#8b5cf6",
-  "probate": "#ec4899", "awaiting-distribution": "#06b6d4", "recovered": "#10b981", "urgent": "#ef4444",
-};
-const EXPENSE_CATEGORIES = ["Acquisition","Inspection","Plumbing","Electrical","Well/Septic","Cleanup","Labor","Holding","Marketing","Setup","Site","Legal","Filing","Other"];
-
-// ─── Styles ──────────────────────────────────────────────────────────
-const inputStyle = { width: "100%", background: "#0c0a09", border: "1px solid #44403c", color: "#fafaf9", padding: "8px 10px", borderRadius: 6, fontSize: 13, outline: "none" };
-const selectStyle = { background: "#1c1917", border: "1px solid #44403c", color: "#fafaf9", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600 };
-const btnPrimary = { background: "#d97706", color: "#0c0a09", border: "none", padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700 };
-const btnGhost = { background: "transparent", color: "#78716c", border: "1px solid #44403c", padding: "4px 10px", borderRadius: 4, fontSize: 14, fontWeight: 600 };
-const th = { textAlign: "left", padding: "10px 12px", fontSize: 10, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", textTransform: "uppercase" };
-const td = { padding: "10px 12px", verticalAlign: "top" };
-
-// ─── Shell ───────────────────────────────────────────────────────────
-function Shell({ children }) {
-  return (
-    <div style={{ minHeight: "100vh", padding: "20px 24px" }}>
-      <div style={{ maxWidth: 1340, margin: "0 auto" }}>{children}</div>
-    </div>
-  );
-}
-
-// ─── Login (magic link) ──────────────────────────────────────────────
-function Login() {
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const send = async () => {
-    if (!email) return;
-    setBusy(true); setErr("");
-    const { error } = await sb.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: window.location.origin + window.location.pathname }
-    });
-    setBusy(false);
-    if (error) { setErr(error.message); return; }
-    setSent(true);
-  };
-
-  return (
-    <Shell>
-      <div style={{ maxWidth: 420, margin: "120px auto", textAlign: "center" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>FundLocators</div>
-        <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6 }}>Deal Command Center</div>
-        <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 8, marginBottom: 32 }}>Sign in with your work email — we'll send you a magic link.</div>
-        {sent ? (
-          <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Check your email</div>
-            <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 8 }}>Click the link in <b>{email}</b> to sign in. You can close this tab.</div>
-          </div>
-        ) : (
-          <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
-            <input type="email" autoFocus value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="you@fundlocators.com" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }} />
-            <button onClick={send} disabled={busy || !email} style={{ ...btnPrimary, width: "100%", padding: "10px 14px", fontSize: 13, marginTop: 12, opacity: busy||!email ? 0.5 : 1 }}>{busy ? "Sending..." : "Send magic link"}</button>
-            {err && <div style={{ fontSize: 11, color: "#fca5a5", marginTop: 10 }}>{err}</div>}
-          </div>
-        )}
+<!-- Header -->
+<header>
+  <div class="nav">
+    <a href="#home" class="logo">
+      <img src="SElogo.png" alt="Southeast Indiana Title logo" class="logo-mark">
+      <div class="logo-text">
+        <h1>SOUTHEAST INDIANA TITLE</h1>
+        <p>Batesville &middot; Est. Trusted Service</p>
       </div>
-    </Shell>
-  );
-}
+    </a>
+    <nav>
+      <ul>
+        <li><a href="#about">About</a></li>
+        <li><a href="#services">Services</a></li>
+        <li><a href="#founder">Our Attorney</a></li>
+        <li><a href="#testimonials">Reviews</a></li>
+        <li><a href="#process">Process</a></li>
+        <li><a href="#contact" class="cta-btn">Request a Quote</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
 
-// ─── Root: session gate ──────────────────────────────────────────────
-function Root() {
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [checking, setChecking] = useState(true);
+<!-- Hero -->
+<section class="hero" id="home">
+  <div class="hero-inner">
+    <span class="hero-eyebrow">Southeast Indiana's Trusted Title Company</span>
+    <h2>Protecting Your Property Rights with <em>Integrity &amp; Precision</em> Since Day One</h2>
+    <p>Attorney-owned and operated in Batesville, Indiana. We provide thorough title searches, comprehensive title insurance, and smooth, stress-free real estate closings across Ripley County and throughout Southeast Indiana.</p>
+    <div class="hero-buttons">
+      <a href="#contact" class="btn-primary">Request a Title Quote</a>
+      <a href="tel:8129343208" class="btn-secondary">Call (812) 934-3208</a>
+    </div>
+  </div>
+</section>
 
-  useEffect(() => {
-    sb.auth.getSession().then(({ data }) => { setSession(data.session); setChecking(false); });
-    const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
-  }, []);
+<!-- Trust Bar -->
+<div class="trust-bar">
+  <div class="trust-inner">
+    <div class="trust-item">
+      <span class="num">25+</span>
+      <span class="lbl">Years Practicing Law</span>
+    </div>
+    <div class="trust-item">
+      <span class="num">4.7★</span>
+      <span class="lbl">Google Rating</span>
+    </div>
+    <div class="trust-item">
+      <span class="num">1,000s</span>
+      <span class="lbl">Successful Closings</span>
+    </div>
+    <div class="trust-item">
+      <span class="num">100%</span>
+      <span class="lbl">Local &amp; Independent</span>
+    </div>
+  </div>
+</div>
 
-  useEffect(() => {
-    if (!session) { setProfile(null); return; }
-    sb.from('profiles').select('*').eq('id', session.user.id).single().then(({ data }) => {
-      if (data) setProfile(data);
-      else setProfile({ id: session.user.id, name: session.user.email.split('@')[0], role: 'team' });
-    });
-  }, [session]);
+<!-- About -->
+<section id="about">
+  <div class="container">
+    <div class="about-grid">
+      <div class="about-img">
+        <div class="about-img-badge">
+          <strong>Batesville, Indiana</strong>
+          <span>Serving Ripley &amp; Surrounding Counties</span>
+        </div>
+      </div>
+      <div class="about-content">
+        <div class="eyebrow">About Our Company</div>
+        <h3>A Title Company Built on Relationships, Not Transactions</h3>
+        <p>Southeast Indiana Title, Inc. is a locally-owned title agency proudly serving Batesville and the surrounding Southeast Indiana region. We've earned our reputation one closing at a time — by treating every buyer, seller, lender, agent, and auctioneer like a neighbor, because here, they usually are.</p>
+        <p>From residential closings to complex commercial transactions, farm sales, and auction settlements, our team delivers the diligence of a big-city firm with the personal attention only a hometown company can provide.</p>
+        <ul class="about-features">
+          <li>Attorney-owned and operated for over two decades</li>
+          <li>Comprehensive title searches backed by local expertise</li>
+          <li>Trusted closing agent for regional auctions &amp; farm sales</li>
+          <li>Referenced in ALTA (American Land Title Association) industry publications</li>
+          <li>Members of the Batesville Area Chamber of Commerce</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
 
-  if (checking) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading...</div></Shell>;
-  if (!session) return <Login />;
-  if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
-  return <DealCommandCenter session={session} profile={profile} />;
-}
+<!-- Services -->
+<section class="services" id="services">
+  <div class="container">
+    <div class="section-header">
+      <div class="eyebrow">What We Do</div>
+      <h3>Comprehensive Title &amp; Closing Services</h3>
+      <div class="divider"></div>
+      <p>Every real estate transaction deserves thorough protection. Our services are designed to safeguard your investment and deliver a smooth, worry-free closing experience.</p>
+    </div>
+    <div class="services-grid">
+      <div class="service-card">
+        <div class="service-icon">🔍</div>
+        <h4>Title Search &amp; Examination</h4>
+        <p>We meticulously research public records to uncover liens, encumbrances, easements, and ownership history so you close with complete confidence.</p>
+        <ul>
+          <li>Full chain-of-title examination</li>
+          <li>Lien &amp; judgment research</li>
+          <li>Easement &amp; restriction review</li>
+          <li>Tax &amp; assessment verification</li>
+        </ul>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">🛡️</div>
+        <h4>Title Insurance</h4>
+        <p>Protect your ownership rights and lender's interest with industry-standard title insurance policies. A one-time premium for lifetime peace of mind.</p>
+        <ul>
+          <li>Owner's title policies</li>
+          <li>Lender's title policies</li>
+          <li>Enhanced ALTA coverage available</li>
+          <li>Claims support &amp; defense</li>
+        </ul>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">📋</div>
+        <h4>Real Estate Closings</h4>
+        <p>From document preparation to final settlement, we handle every detail of your closing with precision, professionalism, and a personal touch.</p>
+        <ul>
+          <li>Residential closings</li>
+          <li>Commercial transactions</li>
+          <li>Farm &amp; agricultural sales</li>
+          <li>Auction settlements</li>
+        </ul>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">🏡</div>
+        <h4>For Home Buyers &amp; Sellers</h4>
+        <p>Whether you're buying your first home or selling a family property, we walk you through every step and keep your transaction on track.</p>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">🏦</div>
+        <h4>For Lenders</h4>
+        <p>Reliable, accurate title work and on-time closings are the backbone of a healthy lender relationship. We deliver both — every file, every time.</p>
+      </div>
+      <div class="service-card">
+        <div class="service-icon">🤝</div>
+        <h4>For Agents &amp; Auctioneers</h4>
+        <p>Southeast Indiana's real estate professionals trust us as their go-to closing partner for residential listings, commercial deals, and auction settlements.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-// ─── Main App ────────────────────────────────────────────────────────
-function DealCommandCenter({ session, profile }) {
-  const [deals, setDeals] = useState([]);
-  const [activeDealId, setActiveDealId] = useState(null);
-  const [loaded, setLoaded] = useState(false);
-  const [showNewDeal, setShowNewDeal] = useState(false);
-  const [teamMembers, setTeamMembers] = useState([profile.name]);
+<!-- Founder / Doug Amberger -->
+<section class="founder" id="founder">
+  <div class="container">
+    <div class="founder-grid">
+      <div class="founder-img" aria-label="Douglas C. Amberger, Attorney at Law"></div>
+      <div class="founder-content">
+        <div class="eyebrow">Meet Our Founder</div>
+        <h3>Douglas C. Amberger</h3>
+        <div class="founder-title">Attorney at Law &middot; Owner</div>
+        <p>Doug Amberger brings over 25 years of Indiana legal experience to every transaction that crosses his desk. Admitted to the Indiana State Bar in 2000 and a resident member in good standing, Doug built Southeast Indiana Title, Inc. on a foundation of thoroughness, integrity, and genuine care for the community he calls home.</p>
+        <p>Beyond the title company, Doug serves as an appointed member of the City of Batesville Planning Commission and Board of Zoning Appeals, and as President of Golden Villa, a long-established local nonprofit. He's also a regular contributor to Batesville Area Chamber of Commerce programs on elder law and estate planning.</p>
+        <div class="credentials">
+          <div class="credential">
+            <strong>Licensed</strong>
+            <span>Indiana Bar · 2000</span>
+          </div>
+          <div class="credential">
+            <strong>Status</strong>
+            <span>Active &middot; Good Standing</span>
+          </div>
+          <div class="credential">
+            <strong>Practice Focus</strong>
+            <span>Real Estate &amp; Title Law</span>
+          </div>
+          <div class="credential">
+            <strong>Community</strong>
+            <span>Planning Commission Member</span>
+          </div>
+          <div class="credential">
+            <strong>Affiliations</strong>
+            <span>Indiana State Bar Assoc.</span>
+          </div>
+          <div class="credential">
+            <strong>Nonprofit</strong>
+            <span>President, Golden Villa Inc.</span>
+          </div>
+        </div>
+        <div class="founder-links">
+          <a href="https://www.linkedin.com/in/doug-amberger-7603a913/" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
+            LinkedIn
+          </a>
+          <a href="https://www.inbar.org/members/?id=29037282" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 1L3 5v6c0 5.5 3.8 10.7 9 12 5.2-1.3 9-6.5 9-12V5l-9-4zm-1 17l-5-5 1.4-1.4L11 15.2l6.6-6.6L19 10l-8 8z"/></svg>
+            Indiana State Bar
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
 
-  const userName = profile.name;
+<!-- Testimonials -->
+<section id="testimonials">
+  <div class="container">
+    <div class="section-header">
+      <div class="eyebrow">Client Reviews</div>
+      <h3>What Our Clients &amp; Partners Say</h3>
+      <div class="divider"></div>
+      <p>We're proud of the relationships we've built with the real estate professionals, lenders, buyers, and sellers of Southeast Indiana.</p>
+    </div>
+    <div class="testimonials-grid">
+      <div class="testimonial">
+        <span class="quote-mark">"</span>
+        <div class="stars">★★★★★</div>
+        <p>"Thank you to Doug Amberger and SE Indiana Title for excellent service once again — and as usual. Always a smooth closing."</p>
+        <div class="author">Jennifer H.</div>
+        <div class="role">Real Estate Broker</div>
+      </div>
+      <div class="testimonial">
+        <span class="quote-mark">"</span>
+        <div class="stars">★★★★★</div>
+        <p>"It's always a pleasure working with Doug Amberger at Southeast Indiana Title. Professional, responsive, and they make closings easy for my clients."</p>
+        <div class="author">Amanda G.</div>
+        <div class="role">Real Estate Agent</div>
+      </div>
+      <div class="testimonial">
+        <span class="quote-mark">"</span>
+        <div class="stars">★★★★★</div>
+        <p>"Great to work with, highly recommended. The staff is very helpful and friendly — they truly make the entire process stress-free."</p>
+        <div class="author">Verified Google Reviewer</div>
+        <div class="role">Home Buyer</div>
+      </div>
+    </div>
+    <div class="reviews-header">
+      <div class="big-rating">4.7 / 5.0</div>
+      <div class="big-stars">★★★★★</div>
+      <p>Based on 23+ verified Google reviews</p>
+      <a href="https://share.google/4RrqvksLs4jocF3Pq" target="_blank" rel="noopener" style="display:inline-block; margin-top:18px; padding:12px 28px; background:var(--gold); color:var(--navy-dark); text-decoration:none; font-family:'Helvetica Neue',Arial,sans-serif; font-size:13px; letter-spacing:2px; text-transform:uppercase; font-weight:600; border-radius:3px;">Read Reviews on Google →</a>
+    </div>
+  </div>
+</section>
 
-  const loadDeals = async () => {
-    const { data } = await sb.from('deals').select('*').order('created_at', { ascending: false });
-    setDeals(data || []);
-    setLoaded(true);
-  };
-  const loadTeam = async () => {
-    const { data } = await sb.from('profiles').select('name').order('name');
-    if (data) setTeamMembers(data.map(d => d.name));
-  };
+<!-- Process -->
+<section class="process" id="process">
+  <div class="container">
+    <div class="section-header">
+      <div class="eyebrow">How It Works</div>
+      <h3>Your Path to a Smooth Closing</h3>
+      <div class="divider"></div>
+      <p>A transparent, step-by-step approach so you always know where things stand.</p>
+    </div>
+    <div class="process-steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h4>Order Opened</h4>
+        <p>Your agent, lender, or attorney opens a title order with our office. We confirm the details and get started right away.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h4>Title Searched</h4>
+        <p>Our team conducts a comprehensive search of public records to produce a complete title commitment.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h4>Issues Cleared</h4>
+        <p>We work with all parties to resolve any liens, judgments, or exceptions before your closing date.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <h4>Closing Day</h4>
+        <p>Sign your documents, receive your policy, and walk away with full ownership — and total peace of mind.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-  useEffect(() => { loadDeals(); loadTeam(); }, []);
+<!-- Community -->
+<section id="community">
+  <div class="container">
+    <div class="section-header">
+      <div class="eyebrow">Our Community</div>
+      <h3>Rooted in Batesville &amp; Southeast Indiana</h3>
+      <div class="divider"></div>
+      <p>We believe a title company should do more than close transactions — it should invest in the community it serves.</p>
+    </div>
+    <div class="community-grid">
+      <div class="community-card">
+        <h4>City Planning Commission</h4>
+        <p>Doug Amberger is an appointed member of the City of Batesville Planning Commission and Board of Zoning Appeals, helping shape responsible growth in our community.</p>
+      </div>
+      <div class="community-card">
+        <h4>Golden Villa Nonprofit</h4>
+        <p>Doug serves as President of Golden Villa, Inc., a Batesville nonprofit dedicated to serving the community since 1976.</p>
+      </div>
+      <div class="community-card">
+        <h4>Batesville Chamber of Commerce</h4>
+        <p>Active members and frequent presenters at Chamber events — including programs on elder law, estate planning, and local real estate.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
-  // realtime: any change to deals triggers refresh
-  useEffect(() => {
-    const ch = sb.channel('deals-ch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, loadDeals)
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, []);
-
-  const activeDeal = deals.find(d => d.id === activeDealId);
-
-  const addDeal = async (deal) => {
-    const { error } = await sb.from('deals').insert({ ...deal, owner_id: session.user.id });
-    if (error) { alert(error.message); return; }
-    await loadDeals();
-    setShowNewDeal(false);
-    setActiveDealId(deal.id);
-  };
-
-  const updateDealMeta = async (id, patch) => {
-    setDeals(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d)); // optimistic
-    await sb.from('deals').update(patch).eq('id', id);
-  };
-
-  const deleteDeal = async (id) => {
-    if (!confirm("Delete this deal and all its data? This cannot be undone.")) return;
-    await sb.from('deals').delete().eq('id', id);
-    if (activeDealId === id) setActiveDealId(null);
-    await loadDeals();
-  };
-
-  const signOut = async () => { await sb.auth.signOut(); };
-
-  if (!loaded) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading deals...</div></Shell>;
-
-  return (
-    <Shell>
-      {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          {activeDeal && (
-            <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-              ← All Deals
-            </button>
-          )}
+<!-- Contact -->
+<section class="contact" id="contact">
+  <div class="container">
+    <div class="section-header">
+      <div class="eyebrow">Get in Touch</div>
+      <h3>Request a Title Quote or Schedule a Closing</h3>
+      <div class="divider"></div>
+      <p>Have a transaction coming up? Reach out and we'll get back to you promptly — usually the same business day.</p>
+    </div>
+    <div class="contact-grid">
+      <div class="contact-info">
+        <h4>Visit or Call Us</h4>
+        <div class="contact-item">
+          <div class="contact-icon">📍</div>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-              {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "FundLocators Deal Hub"}
-            </div>
-            <div style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
-              {activeDeal ? activeDeal.name : "Deal Command Center"}
-            </div>
-            {activeDeal && <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>{activeDeal.address}</div>}
+            <strong>Office</strong>
+            <span>1046 State Road 46 East<br>P.O. Box 95<br>Batesville, IN 47006</span>
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
-          <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
-          <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
-        </div>
-      </div>
-
-      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} />}
-
-      {!activeDeal ? (
-        <DealList deals={deals} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} />
-      ) : (
-        <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
-      )}
-    </Shell>
-  );
-}
-
-// ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, onSelect, onNew, onDelete }) {
-  const flips = deals.filter(d => d.type === "flip");
-  const surplus = deals.filter(d => d.type === "surplus");
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
-          <span style={{ fontSize: 13, color: "#a8a29e" }}>{deals.length} deals</span>
-          <span style={{ fontSize: 12, color: "#78716c" }}>{flips.length} flips · {surplus.length} surplus</span>
-        </div>
-        <button onClick={onNew} style={btnPrimary}>+ New Deal</button>
-      </div>
-      {flips.length > 0 && (<>
-        <SectionLabel icon="🏠" label="Real Estate Flips" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14, marginBottom: 28 }}>
-          {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
-        </div>
-      </>)}
-      {surplus.length > 0 && (<>
-        <SectionLabel icon="💰" label="Surplus Fund Cases" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14 }}>
-          {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
-        </div>
-      </>)}
-      {deals.length === 0 && (
-        <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
-          No deals yet. Click <b>+ New Deal</b> to add one.
-        </div>
-      )}
-    </div>
-  );
-}
-
-function SectionLabel({ icon, label }) {
-  return <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><span>{icon}</span>{label}</div>;
-}
-
-function DealCard({ deal, onClick, onDelete }) {
-  const sc = STATUS_COLORS[deal.status] || "#78716c";
-  const m = deal.meta || {};
-  return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
-          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
-        </div>
-        <StatusBadge status={deal.status} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-        <MiniStat label="List Price" value={fmt(m.listPrice)} />
-        <MiniStat label="Lien Payoff" value={fmt(m.lienPayoff)} />
-      </div>
-      <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
-    </div>
-  );
-}
-
-function SurplusCard({ deal, onClick, onDelete }) {
-  const sc = STATUS_COLORS[deal.status] || "#78716c";
-  const m = deal.meta || {};
-  return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
-          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
-        </div>
-        <StatusBadge status={deal.status} />
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-        {m.estimatedSurplus > 0 && <MiniStat label="Est. Surplus" value={fmt(m.estimatedSurplus)} />}
-        {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
-        {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
-        {m.county && <MiniStat label="County" value={m.county} />}
-      </div>
-      <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
-    </div>
-  );
-}
-
-function StatusBadge({ status }) {
-  const c = STATUS_COLORS[status] || "#78716c";
-  return <span style={{ padding: "3px 10px", borderRadius: 5, fontSize: 9, fontWeight: 700, background: `${c}18`, color: c, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{status.replace(/-/g, " ")}</span>;
-}
-
-function MiniStat({ label, value }) {
-  return (
-    <div>
-      <div style={{ fontSize: 9, fontWeight: 600, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 13, fontWeight: 600, fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{value}</div>
-    </div>
-  );
-}
-
-// ─── New Deal Modal ──────────────────────────────────────────────────
-function NewDealModal({ onAdd, onClose }) {
-  const [type, setType] = useState("flip");
-  const [name, setName] = useState("");
-  const [address, setAddress] = useState("");
-
-  const create = () => {
-    if (!name) return;
-    const id = type + "-" + uid();
-    const meta = type === "flip"
-      ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [] }
-      : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "" };
-    onAdd({ id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta });
-  };
-
-  return (
-    <Modal onClose={onClose} title="Add New Deal">
-      <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
-        <TabBtn active={type === "flip"} onClick={() => setType("flip")}>🏠 Flip / RE Deal</TabBtn>
-        <TabBtn active={type === "surplus"} onClick={() => setType("surplus")}>💰 Surplus Fund</TabBtn>
-      </div>
-      <Field label="Deal Name"><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "Property address or nickname" : "Client name"} /></Field>
-      <Field label="Location / County" style={{ marginTop: 12 }}><input value={address} onChange={e => setAddress(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "City, State" : "County, State"} /></Field>
-      <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
-        <button onClick={onClose} style={btnGhost}>Cancel</button>
-        <button onClick={create} style={btnPrimary}>Create Deal</button>
-      </div>
-    </Modal>
-  );
-}
-
-function Modal({ onClose, title, children }) {
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
-          <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
-          <button onClick={onClose} style={{ ...btnGhost, fontSize: 16, padding: "2px 10px" }}>×</button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// ─── Deal Detail ─────────────────────────────────────────────────────
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
-  const [tab, setTab] = useState("overview");
-  const [expenses, setExpenses] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [vendors, setVendors] = useState([]);
-  const [notes, setNotes] = useState("");
-  const [activity, setActivity] = useState([]);
-  const [loaded, setLoaded] = useState(false);
-
-  const loadAll = async () => {
-    setLoaded(false);
-    const [e, t, v, n, a] = await Promise.all([
-      sb.from('expenses').select('*').eq('deal_id', deal.id).order('date', { ascending: false }),
-      sb.from('tasks').select('*').eq('deal_id', deal.id).order('done').order('created_at'),
-      sb.from('vendors').select('*').eq('deal_id', deal.id).order('created_at'),
-      sb.from('deal_notes').select('*').eq('deal_id', deal.id).maybeSingle(),
-      sb.from('activity').select('*, profiles(name)').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(60),
-    ]);
-    setExpenses(e.data || []);
-    setTasks(t.data || []);
-    setVendors(v.data || []);
-    setNotes(n.data?.content || `# ${deal.name}\n\n`);
-    setActivity((a.data || []).map(r => ({ ts: r.created_at, who: r.profiles?.name || '?', msg: r.action })));
-    setLoaded(true);
-  };
-
-  useEffect(() => { loadAll(); }, [deal.id]);
-
-  // realtime per-deal subscription
-  useEffect(() => {
-    const ch = sb.channel('deal-' + deal.id)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'expenses', filter: `deal_id=eq.${deal.id}` }, loadAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks', filter: `deal_id=eq.${deal.id}` }, loadAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors', filter: `deal_id=eq.${deal.id}` }, loadAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${deal.id}` }, loadAll)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity', filter: `deal_id=eq.${deal.id}` }, loadAll)
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, [deal.id]);
-
-  const logAct = async (msg) => {
-    await sb.from('activity').insert({ deal_id: deal.id, user_id: userId, action: msg });
-  };
-
-  const totalExpenses = expenses.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
-
-  const isFlip = deal.type === "flip";
-  const m = deal.meta || {};
-  let netProfit = 0;
-  if (isFlip) {
-    const closingPct = ((m.buyerAgentPct || 0) + (m.closingMiscPct || 0)) / 100;
-    const closingDollars = (m.listPrice || 0) * closingPct + (m.flatFee || 0);
-    netProfit = (m.listPrice || 0) - closingDollars - (m.lienPayoff || 0) - totalExpenses;
-  }
-  let projectedFee = 0;
-  if (!isFlip) projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
-
-  const tasksDone = tasks.filter(t => t.done).length;
-  const tasksHigh = tasks.filter(t => !t.done && t.priority === "high").length;
-
-  if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
-
-  const tabs = ["overview", "expenses", "tasks", "vendors", "notes", "activity"];
-
-  return (
-    <div>
-      <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
-        <span style={{ fontSize: 11, color: "#78716c" }}>Status:</span>
-        <select value={deal.status} onChange={e => onUpdateDeal({ status: e.target.value })} style={{ ...selectStyle, fontSize: 11 }}>
-          {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
-        </select>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {isFlip ? (<>
-          <Metric label="Cash Deployed" value={fmt(totalExpenses)} sub="All expenses to date" color="#f59e0b" />
-          <Metric label="Lien Payoff" value={fmt(m.lienPayoff)} sub="Cleared at close" color="#a8a29e" />
-          <Metric label="List Price" value={fmt(m.listPrice)} sub={deal.status === "listing" ? "Active listing" : "Target"} color="#3b82f6" />
-          <Metric label="Projected Net" value={fmt(netProfit)} sub={netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative"} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
-        </>) : (<>
-          <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? m.county + " County" : "—"} color="#3b82f6" />
-          <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
-          <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
-        </>)}
-      </div>
-
-      <div style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
-        {tabs.map(id => (
-          <button key={id} onClick={() => setTab(id)} style={{
-            background: "transparent", border: "none", color: tab === id ? "#fafaf9" : "#78716c",
-            padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
-            borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
-          }}>
-            {id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
-          </button>
-        ))}
-      </div>
-
-      {tab === "overview" && (isFlip
-        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />
-        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />)}
-      {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
-      {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
-      {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
-      {tab === "notes" && <Notes value={notes} dealId={deal.id} userId={userId} setLocal={setNotes} />}
-      {tab === "activity" && <Activity items={activity} />}
-    </div>
-  );
-}
-
-// ─── Flip Overview ───────────────────────────────────────────────────
-function FlipOverview({ deal, expenses, totalExpenses, netProfit, tasksDone, tasksTotal, onUpdateDeal }) {
-  const m = deal.meta || {};
-  const closingPct = ((m.buyerAgentPct || 0) + (m.closingMiscPct || 0)) / 100;
-  const closingDollars = (m.listPrice || 0) * closingPct + (m.flatFee || 0);
-  const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
-  const byCat = {};
-  expenses.forEach(e => { const cat = e.category || "Other"; byCat[cat] = (byCat[cat] || 0) + (parseFloat(e.amount) || 0); });
-  const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
-  const maxCat = cats[0]?.[1] || 1;
-
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
-      <div>
-        <Card title="Live P&L Waterfall">
-          <WaterfallLine label="List / Sale Price" value={m.listPrice} positive bold />
-          <WaterfallLine label={`Closing costs (${m.flatFee} flat + ${m.buyerAgentPct}% buyer + ${m.closingMiscPct}% misc)`} value={-closingDollars} />
-          <WaterfallLine label="Lien payoff (from proceeds)" value={-(m.lienPayoff || 0)} />
-          <WaterfallLine label="Cash deployed (all expenses)" value={-totalExpenses} />
-          <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
-          <WaterfallLine label="NET PROFIT" value={netProfit} bold huge />
-        </Card>
-        <Card title="Deal Parameters" style={{ marginTop: 16 }}>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="List Price"><input type="number" value={m.listPrice || ""} onChange={e => updateMeta({ listPrice: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Lien Payoff"><input type="number" value={m.lienPayoff || ""} onChange={e => updateMeta({ lienPayoff: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Flat Fee"><input type="number" value={m.flatFee || ""} onChange={e => updateMeta({ flatFee: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Buyer Agent %"><input type="number" step="0.5" value={m.buyerAgentPct || ""} onChange={e => updateMeta({ buyerAgentPct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Misc Closing %"><input type="number" step="0.5" value={m.closingMiscPct || ""} onChange={e => updateMeta({ closingMiscPct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Contract Price"><input type="number" value={m.contractPrice || ""} onChange={e => updateMeta({ contractPrice: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+        <div class="contact-item">
+          <div class="contact-icon">📞</div>
+          <div>
+            <strong>Phone</strong>
+            <a href="tel:8129343208">(812) 934-3208</a>
           </div>
-        </Card>
-      </div>
-      <div>
-        <Card title="Progress">
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
-            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
-          </div>
-          <ProgressBar pct={tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0} />
-        </Card>
-        <Card title="Spend by Category" style={{ marginTop: 16 }}>
-          {cats.length === 0 && <div style={{ fontSize: 12, color: "#78716c" }}>No expenses yet.</div>}
-          {cats.map(([cat, amt]) => (
-            <div key={cat} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
-                <span style={{ color: "#a8a29e" }}>{cat}</span>
-                <span style={{ fontFamily: "'DM Mono', monospace", fontWeight: 600 }}>{fmt(amt)}</span>
-              </div>
-              <div style={{ height: 4, background: "#0c0a09", borderRadius: 2, overflow: "hidden" }}>
-                <div style={{ height: "100%", width: `${(amt / maxCat) * 100}%`, background: "#d97706", borderRadius: 2 }} />
-              </div>
-            </div>
-          ))}
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-// ─── Surplus Overview ────────────────────────────────────────────────
-function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal }) {
-  const m = deal.meta || {};
-  const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
-      <div>
-        <Card title="Case Details">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Estimated Surplus"><input type="number" value={m.estimatedSurplus || ""} onChange={e => updateMeta({ estimatedSurplus: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Attorney"><input value={m.attorney || ""} onChange={e => updateMeta({ attorney: e.target.value })} style={inputStyle} /></Field>
-            <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
-            <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
-          </div>
-        </Card>
-        <Card title="Financial Summary" style={{ marginTop: 16 }}>
-          <WaterfallLine label="Estimated Surplus" value={m.estimatedSurplus || 0} positive bold />
-          <WaterfallLine label={`Our fee (${m.feePct || 0}%)`} value={projectedFee} positive />
-          {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
-          <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
-          <WaterfallLine label="NET TO US" value={projectedFee - totalExpenses} bold huge />
-        </Card>
-      </div>
-      <div>
-        <Card title="Progress">
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
-            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
-          </div>
-          <ProgressBar pct={tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0} />
-        </Card>
-        <Card title="Pipeline Stage" style={{ marginTop: 16 }}>
-          {DEAL_STATUSES.surplus.filter(s => s !== "dead").map(s => {
-            const active = s === deal.status;
-            const done = DEAL_STATUSES.surplus.indexOf(s) < DEAL_STATUSES.surplus.indexOf(deal.status);
-            return (
-              <div key={s} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid #1c1917" }}>
-                <div style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${active ? "#d97706" : done ? "#10b981" : "#44403c"}`, background: done ? "#10b981" : active ? "#d97706" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: done || active ? "#0c0a09" : "#44403c", fontWeight: 700 }}>{done ? "✓" : ""}</div>
-                <span style={{ fontSize: 12, color: active ? "#fafaf9" : done ? "#a8a29e" : "#57534e", fontWeight: active ? 700 : 400, textTransform: "uppercase", letterSpacing: "0.06em" }}>{s.replace(/-/g, " ")}</span>
-              </div>
-            );
-          })}
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-// ─── Shared primitives ───────────────────────────────────────────────
-function WaterfallLine({ label, value, bold, huge, positive }) {
-  const neg = value < 0;
-  return (
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "4px 0" }}>
-      <span style={{ fontSize: huge ? 14 : 13, color: bold ? "#fafaf9" : "#a8a29e", fontWeight: bold ? 700 : 400 }}>{label}</span>
-      <span style={{ fontFamily: "'DM Mono', monospace", fontSize: huge ? 22 : 14, fontWeight: bold ? 700 : 500, color: huge ? (value >= 60000 ? "#10b981" : value >= 0 ? "#f59e0b" : "#ef4444") : neg ? "#fca5a5" : positive ? "#86efac" : "#fafaf9" }}>
-        {neg ? "-" : ""}{fmt(Math.abs(value))}
-      </span>
-    </div>
-  );
-}
-
-function ProgressBar({ pct }) {
-  return (
-    <div style={{ height: 8, background: "#0c0a09", borderRadius: 4, overflow: "hidden", border: "1px solid #292524" }}>
-      <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg, #d97706, #f59e0b)", transition: "width 0.3s", borderRadius: 4 }} />
-    </div>
-  );
-}
-
-function Metric({ label, value, sub, color, big }) {
-  return (
-    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16, borderLeft: `3px solid ${color}` }}>
-      <div style={{ fontSize: 9, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", marginBottom: 8, textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontFamily: "'DM Mono', monospace", fontSize: big ? 26 : 20, fontWeight: 700, letterSpacing: "-0.02em" }}>{value}</div>
-      <div style={{ fontSize: 11, color: "#78716c", marginTop: 6 }}>{sub}</div>
-    </div>
-  );
-}
-
-function Card({ title, children, action, style }) {
-  return (
-    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, ...style }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-        <div style={{ fontSize: 12, fontWeight: 700, color: "#fafaf9", letterSpacing: "0.05em", textTransform: "uppercase" }}>{title}</div>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function Field({ label, children, style }) {
-  return (
-    <div style={style}>
-      <div style={{ fontSize: 10, fontWeight: 600, color: "#a8a29e", letterSpacing: "0.1em", marginBottom: 4, textTransform: "uppercase" }}>{label}</div>
-      {children}
-    </div>
-  );
-}
-
-function TabBtn({ active, onClick, children }) {
-  return <button onClick={onClick} style={{ flex: 1, padding: "10px 16px", borderRadius: 8, border: active ? "1px solid #d97706" : "1px solid #44403c", background: active ? "#d9770618" : "transparent", color: active ? "#fafaf9" : "#a8a29e", fontSize: 13, fontWeight: 600 }}>{children}</button>;
-}
-
-// ─── Expenses Tab ────────────────────────────────────────────────────
-function Expenses({ items, dealId, userId, logAct, reload }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ payee: "", amount: "", date: "", notes: "", category: "Other" });
-  const total = items.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
-
-  const add = async () => {
-    if (!draft.payee || !draft.amount) return;
-    const row = { id: "e" + uid(), deal_id: dealId, payee: draft.payee, amount: parseFloat(draft.amount), date: draft.date || null, notes: draft.notes, category: draft.category, created_by: userId };
-    await sb.from('expenses').insert(row);
-    await logAct(`Added expense: ${draft.payee} ${fmt(parseFloat(draft.amount))}`);
-    setDraft({ payee: "", amount: "", date: "", notes: "", category: "Other" });
-    setAdding(false);
-    reload();
-  };
-  const del = async (id) => {
-    const it = items.find(i => i.id === id);
-    await sb.from('expenses').delete().eq('id', id);
-    await logAct(`Deleted expense: ${it?.payee}`);
-    reload();
-  };
-
-  return (
-    <Card title={`Expenses (${items.length} items · ${fmt(total)} total)`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
-      {adding && (
-        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
-          <Field label="Payee"><input value={draft.payee} onChange={e => setDraft({ ...draft, payee: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
-          <Field label="Amount"><input type="number" value={draft.amount} onChange={e => setDraft({ ...draft, amount: e.target.value })} style={inputStyle} placeholder="0" /></Field>
-          <Field label="Date"><input type="date" value={draft.date} onChange={e => setDraft({ ...draft, date: e.target.value })} style={inputStyle} /></Field>
-          <Field label="Category"><select value={draft.category} onChange={e => setDraft({ ...draft, category: e.target.value })} style={inputStyle}>{EXPENSE_CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></Field>
-          <button onClick={add} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
-          <Field label="Notes" style={{ gridColumn: "1 / -1" }}><input value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} style={inputStyle} placeholder="Details" /></Field>
         </div>
-      )}
-      <div style={{ maxHeight: 520, overflowY: "auto" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead style={{ position: "sticky", top: 0, background: "#1c1917" }}>
-            <tr style={{ borderBottom: "1px solid #44403c" }}>
-              <th style={th}>Payee</th><th style={{ ...th, textAlign: "right" }}>Amount</th><th style={th}>Date</th><th style={th}>Category</th><th style={th}>Notes</th><th style={th}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map(item => (
-              <tr key={item.id} style={{ borderBottom: "1px solid #292524" }}>
-                <td style={td}>{item.payee}</td>
-                <td style={{ ...td, textAlign: "right", fontFamily: "'DM Mono', monospace", fontWeight: 600, color: "#fca5a5" }}>{fmt(item.amount)}</td>
-                <td style={{ ...td, color: "#a8a29e", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{item.date || "—"}</td>
-                <td style={td}><span style={{ padding: "2px 8px", background: "#292524", borderRadius: 4, fontSize: 10, fontWeight: 600, color: "#d97706" }}>{item.category}</span></td>
-                <td style={{ ...td, color: "#a8a29e", fontSize: 11, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }}>{item.notes}</td>
-                <td style={td}><button onClick={() => del(item.id)} style={btnGhost}>×</button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Card>
-  );
-}
-
-// ─── Tasks Tab ───────────────────────────────────────────────────────
-function Tasks({ items, dealId, userId, teamMembers, logAct, reload }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
-
-  const toggle = async (id) => {
-    const it = items.find(i => i.id === id);
-    await sb.from('tasks').update({ done: !it.done }).eq('id', id);
-    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${it.label}`);
-    reload();
-  };
-  const add = async () => {
-    if (!draft.label) return;
-    const row = { id: "t" + uid(), deal_id: dealId, label: draft.label, due: draft.due || null, owner: draft.owner, priority: draft.priority, done: false, created_by: userId };
-    await sb.from('tasks').insert(row);
-    await logAct(`Added task: ${draft.label}`);
-    setDraft({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
-    setAdding(false);
-    reload();
-  };
-  const del = async (id) => {
-    const it = items.find(i => i.id === id);
-    await sb.from('tasks').delete().eq('id', id);
-    await logAct(`Deleted task: ${it?.label}`);
-    reload();
-  };
-
-  const sorted = [...items].sort((a, b) => { if (a.done !== b.done) return a.done ? 1 : -1; const p = { high: 0, med: 1, low: 2 }; return (p[a.priority] || 1) - (p[b.priority] || 1); });
-
-  return (
-    <Card title={`Tasks (${items.filter(t => !t.done).length} open)`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
-      {adding && (
-        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "3fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
-          <Field label="Task"><input value={draft.label} onChange={e => setDraft({ ...draft, label: e.target.value })} style={inputStyle} placeholder="What needs done?" /></Field>
-          <Field label="Due"><input type="date" value={draft.due} onChange={e => setDraft({ ...draft, due: e.target.value })} style={inputStyle} /></Field>
-          <Field label="Owner"><select value={draft.owner} onChange={e => setDraft({ ...draft, owner: e.target.value })} style={inputStyle}>{teamMembers.map(m => <option key={m}>{m}</option>)}</select></Field>
-          <Field label="Priority"><select value={draft.priority} onChange={e => setDraft({ ...draft, priority: e.target.value })} style={inputStyle}><option value="high">High</option><option value="med">Med</option><option value="low">Low</option></select></Field>
-          <button onClick={add} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+        <div class="contact-item">
+          <div class="contact-icon">✉️</div>
+          <div>
+            <strong>Email</strong>
+            <a href="mailto:info@southeastindianatitle.com">info@southeastindianatitle.com</a>
+          </div>
         </div>
-      )}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {sorted.map(t => (
-          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: t.done ? "#0c0a09" : "#1c1917", border: `1px solid ${t.done ? "#1c1917" : "#292524"}`, borderRadius: 8, opacity: t.done ? 0.45 : 1 }}>
-            <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706" }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none" }}>{t.label}</div>
-              <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
-                <span>{t.owner}</span>{t.due && <span>· Due {t.due}</span>}
-              </div>
-            </div>
-            <PriorityBadge p={t.priority} />
-            <button onClick={() => del(t.id)} style={btnGhost}>×</button>
+        <div class="contact-item">
+          <div class="contact-icon">🕐</div>
+          <div>
+            <strong>Hours</strong>
+            <span>Monday – Friday<br>By appointment available</span>
           </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
-
-function PriorityBadge({ p }) {
-  const bg = p === "high" ? "#7f1d1d" : p === "med" ? "#78350f" : "#1c1917";
-  const fg = p === "high" ? "#fca5a5" : p === "med" ? "#fbbf24" : "#a8a29e";
-  return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{(p || "med").toUpperCase()}</span>;
-}
-
-// ─── Vendors Tab ─────────────────────────────────────────────────────
-function Vendors({ items, dealId, logAct, reload }) {
-  const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ name: "", role: "", phone: "", status: "Active", notes: "" });
-  const sc = (s) => ({ "Complete": "#10b981", "Active": "#f59e0b", "Pending": "#3b82f6", "Quoted": "#a78bfa" })[s] || "#a8a29e";
-
-  const add = async () => {
-    if (!draft.name) return;
-    const row = { id: "v" + uid(), deal_id: dealId, ...draft };
-    await sb.from('vendors').insert(row);
-    await logAct(`Added vendor: ${draft.name}`);
-    setDraft({ name: "", role: "", phone: "", status: "Active", notes: "" });
-    setAdding(false);
-    reload();
-  };
-  const del = async (id) => {
-    const it = items.find(i => i.id === id);
-    await sb.from('vendors').delete().eq('id', id);
-    await logAct(`Removed vendor: ${it?.name}`);
-    reload();
-  };
-
-  return (
-    <Card title={`Vendors (${items.length})`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
-      {adding && (
-        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 1fr 2fr auto", gap: 8, alignItems: "end" }}>
-          <Field label="Name"><input value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
-          <Field label="Role"><input value={draft.role} onChange={e => setDraft({ ...draft, role: e.target.value })} style={inputStyle} placeholder="What they do" /></Field>
-          <Field label="Phone"><input value={draft.phone} onChange={e => setDraft({ ...draft, phone: e.target.value })} style={inputStyle} placeholder="555-1234" /></Field>
-          <Field label="Status"><select value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value })} style={inputStyle}><option>Active</option><option>Complete</option><option>Pending</option><option>Quoted</option></select></Field>
-          <Field label="Notes"><input value={draft.notes} onChange={e => setDraft({ ...draft, notes: e.target.value })} style={inputStyle} /></Field>
-          <button onClick={add} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
         </div>
-      )}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-        {items.map(v => (
-          <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14, position: "relative" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</div>
-                <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{v.role}</div>
-              </div>
-              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em" }}>{(v.status || "").toUpperCase()}</span>
-            </div>
-            {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}>{v.phone}</div>}
-            {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
-            <button onClick={() => del(v.id)} style={{ ...btnGhost, position: "absolute", top: 8, right: 8 }}>×</button>
+        <div class="contact-item">
+          <div class="contact-icon">⚖️</div>
+          <div>
+            <strong>Service Area</strong>
+            <span>Ripley County &amp; all of Southeast Indiana</span>
           </div>
-        ))}
+        </div>
       </div>
-    </Card>
-  );
-}
-
-// ─── Notes Tab ───────────────────────────────────────────────────────
-function Notes({ value, dealId, userId, setLocal }) {
-  const debounce = useRef(null);
-  const [savedAt, setSavedAt] = useState(null);
-
-  const handleChange = (e) => {
-    const v = e.target.value;
-    setLocal(v);
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(async () => {
-      await sb.from('deal_notes').upsert({ deal_id: dealId, content: v, updated_by: userId, updated_at: new Date().toISOString() });
-      setSavedAt(new Date());
-    }, 700);
-  };
-
-  return (
-    <Card title="Shared Notes">
-      <textarea value={value} onChange={handleChange} style={{ width: "100%", minHeight: 460, background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, color: "#fafaf9", padding: 14, fontSize: 13, fontFamily: "'DM Mono', monospace", lineHeight: 1.6, resize: "vertical" }} />
-      <div style={{ fontSize: 11, color: "#78716c", marginTop: 8 }}>Auto-saves to Supabase. Shared with all team members.{savedAt && ` · Last saved ${savedAt.toLocaleTimeString()}`}</div>
-    </Card>
-  );
-}
-
-// ─── Activity Tab ────────────────────────────────────────────────────
-function Activity({ items }) {
-  const whoColor = (w) => w === "Nathan" ? "#7c2d12" : w === "Justin" ? "#1e3a8a" : "#292524";
-  return (
-    <Card title="Recent Activity">
-      {items.length === 0 && <div style={{ color: "#78716c", fontSize: 13, padding: 12 }}>No activity yet.</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {items.map((a, i) => (
-          <div key={i} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, display: "flex", gap: 12, alignItems: "center" }}>
-            <span style={{ padding: "2px 8px", background: whoColor(a.who), color: "#fafaf9", borderRadius: 4, fontSize: 10, fontWeight: 700, minWidth: 60, textAlign: "center" }}>{a.who}</span>
-            <span style={{ flex: 1, fontSize: 13 }}>{a.msg}</span>
-            <span style={{ fontSize: 10, color: "#78716c", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>{new Date(a.ts).toLocaleString()}</span>
+      <form onsubmit="event.preventDefault(); alert('Thank you! Your request has been received. We will contact you shortly.'); this.reset();">
+        <div class="form-row">
+          <div>
+            <label for="fname">First Name</label>
+            <input type="text" id="fname" required>
           </div>
-        ))}
-      </div>
-    </Card>
-  );
-}
+          <div>
+            <label for="lname">Last Name</label>
+            <input type="text" id="lname" required>
+          </div>
+        </div>
+        <div class="form-row">
+          <div>
+            <label for="email">Email</label>
+            <input type="email" id="email" required>
+          </div>
+          <div>
+            <label for="phone">Phone</label>
+            <input type="tel" id="phone" required>
+          </div>
+        </div>
+        <div class="form-full">
+          <label for="service">Service Needed</label>
+          <select id="service">
+            <option>Residential Closing</option>
+            <option>Commercial Closing</option>
+            <option>Farm / Agricultural Sale</option>
+            <option>Auction Settlement</option>
+            <option>Title Search Only</option>
+            <option>Title Insurance Quote</option>
+            <option>Other / General Inquiry</option>
+          </select>
+        </div>
+        <div class="form-full">
+          <label for="role">I am a...</label>
+          <select id="role">
+            <option>Home Buyer</option>
+            <option>Home Seller</option>
+            <option>Real Estate Agent</option>
+            <option>Lender</option>
+            <option>Auctioneer</option>
+            <option>Attorney</option>
+            <option>Other</option>
+          </select>
+        </div>
+        <div class="form-full">
+          <label for="msg">Tell Us About Your Transaction</label>
+          <textarea id="msg" placeholder="Property address, timeline, and any specific needs..."></textarea>
+        </div>
+        <button type="submit">Send My Request</button>
+      </form>
+    </div>
+  </div>
+</section>
 
-ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
-</script>
+<!-- Footer -->
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <h4>Southeast Indiana Title, Inc.</h4>
+      <p>Attorney-owned title and closing services serving Batesville and all of Southeast Indiana. Protecting your property rights with the integrity and precision your transaction deserves.</p>
+      <div style="margin-top:18px; display:flex; gap:10px;">
+        <a href="https://www.facebook.com/pages/Southeast%20Indiana%20Title/1520284608299008/" target="_blank" rel="noopener" title="Facebook" style="display:inline-flex; width:38px; height:38px; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.2); border-radius:50%; color:#8fa0b5; transition:all 0.2s;" onmouseover="this.style.background='var(--gold)'; this.style.color='var(--navy-dark)'; this.style.borderColor='var(--gold)';" onmouseout="this.style.background='transparent'; this.style.color='#8fa0b5'; this.style.borderColor='rgba(255,255,255,0.2)';">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+        </a>
+        <a href="https://share.google/4RrqvksLs4jocF3Pq" target="_blank" rel="noopener" title="Google Business" style="display:inline-flex; width:38px; height:38px; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.2); border-radius:50%; color:#8fa0b5; transition:all 0.2s;" onmouseover="this.style.background='var(--gold)'; this.style.color='var(--navy-dark)'; this.style.borderColor='var(--gold)';" onmouseout="this.style.background='transparent'; this.style.color='#8fa0b5'; this.style.borderColor='rgba(255,255,255,0.2)';">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+        </a>
+        <a href="https://www.linkedin.com/in/doug-amberger-7603a913/" target="_blank" rel="noopener" title="LinkedIn" style="display:inline-flex; width:38px; height:38px; align-items:center; justify-content:center; border:1px solid rgba(255,255,255,0.2); border-radius:50%; color:#8fa0b5; transition:all 0.2s;" onmouseover="this.style.background='var(--gold)'; this.style.color='var(--navy-dark)'; this.style.borderColor='var(--gold)';" onmouseout="this.style.background='transparent'; this.style.color='#8fa0b5'; this.style.borderColor='rgba(255,255,255,0.2)';">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452z"/></svg>
+        </a>
+      </div>
+    </div>
+    <div class="footer-col">
+      <h5>Services</h5>
+      <ul>
+        <li><a href="#services">Title Search</a></li>
+        <li><a href="#services">Title Insurance</a></li>
+        <li><a href="#services">Residential Closings</a></li>
+        <li><a href="#services">Commercial Closings</a></li>
+        <li><a href="#services">Auction Settlements</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h5>Company</h5>
+      <ul>
+        <li><a href="#about">About Us</a></li>
+        <li><a href="#founder">Our Attorney</a></li>
+        <li><a href="#testimonials">Reviews</a></li>
+        <li><a href="#community">Community</a></li>
+        <li><a href="#contact">Contact</a></li>
+      </ul>
+    </div>
+    <div class="footer-col">
+      <h5>Contact</h5>
+      <ul>
+        <li><span>1046 State Road 46 East</span></li>
+        <li><span>Batesville, IN 47006</span></li>
+        <li><a href="tel:8129343208">(812) 934-3208</a></li>
+        <li><a href="mailto:info@southeastindianatitle.com">Email Us</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    &copy; 2026 Southeast Indiana Title, Inc. &nbsp;|&nbsp; All Rights Reserved &nbsp;|&nbsp; Licensed Title Agency in the State of Indiana<br>
+    <span style="font-size:11px; opacity: 0.7; margin-top: 6px; display:inline-block;">Douglas C. Amberger, Attorney at Law &middot; Indiana Bar Active &amp; In Good Standing</span>
+  </div>
+</footer>
+
 </body>
 </html>
