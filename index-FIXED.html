@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flip Command Center – 2533 County Road 102</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🏠</text></svg>" />
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0c0a09; color: #fafaf9; font-family: system-ui, -apple-system, sans-serif; }
+    button { font-family: inherit; cursor: pointer; }
+    input, textarea, select { font-family: inherit; }
+    ::placeholder { color: #57534e; }
+    .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+    .scroll::-webkit-scrollbar-track { background: #1c1917; }
+    .scroll::-webkit-scrollbar-thumb { background: #44403c; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    const KEYS = {
+      expenses: "flip:2533:expenses",
+      tasks:    "flip:2533:tasks",
+      vendors:  "flip:2533:vendors",
+      notes:    "flip:2533:notes",
+      deal:     "flip:2533:deal",
+      activity: "flip:2533:activity",
+    };
+
+    const SEED_EXPENSES = [
+      { id:"e1",  payee:"Carroll County Dumpster Rental", amount:773.28, date:"2026-03-24", notes:"20 yard dumpster rental for 2 weeks",                                      category:"Site" },
+      { id:"e2",  payee:"Carroll County Dumpster Rental", amount:657,    date:"2026-04-03", notes:"20 yard dumpster rental for 2 weeks",                                      category:"Site" },
+      { id:"e3",  payee:"Bud Boman",                      amount:325,    date:"2026-03-30", notes:"Home Inspection",                                                          category:"Inspection" },
+      { id:"e4",  payee:"Beaver Lake Pump Service",       amount:150,    date:"2026-04-07", notes:"Service pump - working good",                                              category:"Well/Septic" },
+      { id:"e5",  payee:"Billy Williams Plumbing",        amount:3300,   date:"2026-04-08", notes:"Hot water tank, new toilets, disposal, lines snaked, faucets",             category:"Plumbing" },
+      { id:"e6",  payee:"Insurance",                      amount:412,    date:"2026-03-15", notes:"Property insurance",                                                       category:"Holding" },
+      { id:"e7",  payee:"Rocket Mortgage (estimated)",    amount:4000,   date:"",           notes:"Holding payments - guesstimate",                                           category:"Holding" },
+      { id:"e8",  payee:"Nixon (Junk Out Crew)",          amount:600,    date:"2026-04-06", notes:"Junked out inside & outside of house",                                     category:"Cleanup" },
+      { id:"e9",  payee:"Cleaners",                       amount:650,    date:"2026-04-08", notes:"Full cleanout",                                                            category:"Cleanup" },
+      { id:"e10", payee:"AJ & Mary (GC)",                 amount:1195,   date:"2026-04-07", notes:"Mary 4hrs + AJ 21hrs @ $45 - door locks, cleanup",                        category:"Labor" },
+      { id:"e11", payee:"Mike (Septic Digger)",           amount:350,    date:"2026-04-07", notes:"Installed septic tank riser - 417-342-9782",                               category:"Well/Septic" },
+      { id:"e12", payee:"Steve Septic",                   amount:275,    date:"2026-04-08", notes:"Pumped + inspected tank - in great shape - 870-480-2747",                 category:"Well/Septic" },
+      { id:"e13", payee:"Roy / YourElectrician.net",      amount:455,    date:"2026-04-10", notes:"Electrical updated + inspected - 870-654-9968",                            category:"Electrical" },
+      { id:"e14", payee:"MLS Photos + Drone",             amount:350,    date:"2026-04-14", notes:"Listing photos and drone shots",                                           category:"Marketing" },
+      { id:"e15", payee:"Carroll County Electric",        amount:315,    date:"2026-04-10", notes:"Transaction ID 089918",                                                    category:"Holding" },
+      { id:"e16", payee:"Payment to Nathina",             amount:8187,   date:"",           notes:"Seller-side payment",                                                      category:"Acquisition" },
+      { id:"e17", payee:"Amazon (smoke detectors, etc)",  amount:300,    date:"2026-04-09", notes:"Smoke detectors, fire extinguisher, Febreze, lockbox",                    category:"Setup" },
+      { id:"e18", payee:"Mold Test",                      amount:325,    date:"2026-04-15", notes:"4/15 at 9am",                                                              category:"Inspection" },
+      { id:"e19", payee:"Rocket Mortgage Reinstatement",  amount:43500,  date:"2026-02-25", notes:"Reinstatement amount wired to Rocket",                                     category:"Acquisition" },
+    ];
+
+    const SEED_TASKS = [
+      { id:"t1",  label:"Mold test results back clean",                             due:"2026-04-16", done:false, owner:"Nathan", priority:"high" },
+      { id:"t2",  label:"Listing photos + drone shots reviewed and ready",          due:"2026-04-15", done:false, owner:"Nathan", priority:"high" },
+      { id:"t3",  label:"Write listing description (secluded retreat angle)",       due:"2026-04-15", done:false, owner:"Nathan", priority:"high" },
+      { id:"t4",  label:"Send William Payne the listing details + photos",          due:"2026-04-15", done:false, owner:"Nathan", priority:"high" },
+      { id:"t5",  label:"Lockbox installed, code shared with Mary + William",       due:"2026-04-15", done:false, owner:"Nathan", priority:"med" },
+      { id:"t6",  label:"Confirm 6-month listing agreement with $0 cancel fee",    due:"2026-04-15", done:false, owner:"Nathan", priority:"med" },
+      { id:"t7",  label:"Confirm 3% buyer agent commission with William",           due:"2026-04-15", done:false, owner:"Nathan", priority:"med" },
+      { id:"t8",  label:"Private agent remarks: roof + HVAC concession with offer",due:"2026-04-15", done:false, owner:"Nathan", priority:"med" },
+      { id:"t9",  label:"Brief Mary on showing process",                            due:"2026-04-15", done:false, owner:"Nathan", priority:"med" },
+      { id:"t10", label:"GO LIVE on MLS",                                           due:"2026-04-16", done:false, owner:"Nathan", priority:"high" },
+      { id:"t11", label:"Categorize Nathina $8,187 payment for tax records",        due:"2026-04-30", done:false, owner:"Justin",  priority:"low" },
+      { id:"t12", label:"Track Rocket Mortgage holding cost monthly",               due:"",           done:false, owner:"Justin",  priority:"med" },
+      { id:"t13", label:"Set up offer review process",                              due:"2026-04-16", done:false, owner:"Nathan", priority:"med" },
+    ];
+
+    const SEED_VENDORS = [
+      { id:"v1",  name:"Billy Williams",            role:"Plumber",              phone:"479-903-9008", status:"Complete", notes:"$3,300 final - all plumbing repairs done" },
+      { id:"v2",  name:"Beaver Lake Pump Service",  role:"Well & Pump",          phone:"",             status:"Complete", notes:"Pump serviced, water pressure great, well in good shape" },
+      { id:"v3",  name:"Steve Septic",              role:"Septic Pump/Inspect",  phone:"870-480-2747", status:"Complete", notes:"Pumped + inspected - tank in great shape" },
+      { id:"v4",  name:"Mike",                      role:"Septic Riser Install", phone:"417-342-9782", status:"Complete", notes:"Riser installed on tank" },
+      { id:"v5",  name:"Roy / YourElectrician.net", role:"Electrician",          phone:"870-654-9968", status:"Complete", notes:"Updated + inspected electrical throughout" },
+      { id:"v6",  name:"AJ & Mary",                 role:"GC / Boots on Ground", phone:"",             status:"Active",   notes:"$45/hr each. Mary will show house." },
+      { id:"v7",  name:"William Payne",             role:"Flat Fee MLS Listing", phone:"",             status:"Active",   notes:"$379 flat fee. 6mo agreement, $0 cancel. 3% to buyer agent." },
+      { id:"v8",  name:"Bud Boman",                 role:"Home Inspector",       phone:"",             status:"Complete", notes:"$325 inspection done 3/30" },
+      { id:"v9",  name:"Nixon (Junk Out Crew)",      role:"Junk Removal",         phone:"",             status:"Complete", notes:"Cleared house inside + out" },
+      { id:"v10", name:"Carroll County Electric",   role:"Utility",              phone:"",             status:"Active",   notes:"Keep on through showings" },
+      { id:"v11", name:"Mold Test",                 role:"Mold Inspector",       phone:"",             status:"Pending",  notes:"Test on 4/15 @ 9am - results 4/16" },
+      { id:"v12", name:"Roof Contractor",           role:"Roof Replacement",     phone:"",             status:"Quoted",   notes:"$6,000 quote - hold for buyer concession" },
+      { id:"v13", name:"HVAC Contractor",           role:"AC + Furnace",         phone:"",             status:"Quoted",   notes:"$5,500 quote - hold for buyer concession" },
+    ];
+
+    const SEED_DEAL = {
+      contractPrice:145000, reinstatement:43500, rocketPayoff:92338.05,
+      listPrice:255000, flatFee:379, buyerAgentPct:3, closingMiscPct:1,
+      scenarioPrice:255000, scenarioConcession:false,
+      pendingConcessions:[{label:"New Roof",amount:6000},{label:"New AC/HVAC",amount:5500}],
+    };
+
+    const SEED_NOTES = `# 2533 County Road 102, Eureka Springs, AR
+
+## The Pitch
+1,040 sq ft home on full basement, 11 acres, secluded, near Beaver Lake + Eureka Springs.
+Up a steep road = privacy. Perfect for lake house, hunting cabin, Airbnb, or homestead.
+
+## What's Done
+- Septic pumped + inspected, riser installed
+- Plumbing fully repaired (water heater, toilets, disposal, lines snaked)
+- Electrical updated + inspected
+- Well + pump serviced, pressure great
+- Junked out, cleaned, smoke detectors installed
+
+## Held Back for Negotiation
+- New roof ($6K)
+- New HVAC ($5.5K)
+Listed in private agent remarks only.
+
+## Listing Strategy
+- List $255,000 via William Payne flat fee
+- 3% to buyer agent
+- Mary handles showings as needed
+
+## Target Buyers
+1. Lake house / Airbnb investor (Beaver Lake proximity)
+2. Hunting cabin buyer (TX/OK/MO cash)
+3. Homestead / off-grid (well + septic + acreage)`;
+
+    function safeLoad(key, seed) {
+      try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : seed; }
+      catch { return seed; }
+    }
+    function safeSave(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+    }
+
+    const fmt = n => "$" + Math.round(n||0).toLocaleString();
+    const fmtC = n => "$" + (n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+    const inputStyle = { width:"100%", background:"#1c1917", border:"1px solid #44403c", color:"#fafaf9", padding:"8px 10px", borderRadius:6, fontSize:13, outline:"none", fontFamily:"inherit" };
+    const btnPrimary = { background:"#d97706", color:"#0c0a09", border:"none", padding:"7px 12px", borderRadius:6, fontSize:12, fontWeight:700, cursor:"pointer" };
+    const btnGhost   = { background:"transparent", color:"#78716c", border:"1px solid #44403c", padding:"4px 10px", borderRadius:4, fontSize:14, fontWeight:600, cursor:"pointer" };
+    const TH = { textAlign:"left", padding:"10px 12px", fontSize:10, fontWeight:700, color:"#a8a29e", letterSpacing:"0.1em", textTransform:"uppercase" };
+    const TD = { padding:"10px 12px", verticalAlign:"top" };
+
+    function Card({ title, children, action, style={} }) {
+      return (
+        <div style={{ background:"#1c1917", border:"1px solid #292524", borderRadius:10, padding:18, ...style }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+            <div style={{ fontSize:12, fontWeight:700, color:"#fafaf9", letterSpacing:"0.05em", textTransform:"uppercase" }}>{title}</div>
+            {action}
+          </div>
+          {children}
+        </div>
+      );
+    }
+
+    function Metric({ label, value, sub, color, big }) {
+      return (
+        <div style={{ background:"#1c1917", border:"1px solid #292524", borderRadius:10, padding:16, borderLeft:`3px solid ${color}` }}>
+          <div style={{ fontSize:10, fontWeight:600, color:"#a8a29e", letterSpacing:"0.1em", marginBottom:8, textTransform:"uppercase" }}>{label}</div>
+          <div style={{ fontFamily:"ui-monospace,monospace", fontSize:big?28:22, fontWeight:700, color:"#fafaf9", letterSpacing:"-0.02em" }}>{value}</div>
+          <div style={{ fontSize:11, color:"#78716c", marginTop:6 }}>{sub}</div>
+        </div>
+      );
+    }
+
+    function PLine({ label, value, bold, huge, positive }) {
+      const isNeg = value < 0;
+      return (
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <span style={{ fontSize:huge?14:13, color:bold?"#fafaf9":"#a8a29e", fontWeight:bold?700:400 }}>{label}</span>
+          <span style={{ fontFamily:"ui-monospace,monospace", fontSize:huge?22:14, fontWeight:bold?700:500,
+            color:huge?(value>=60000?"#10b981":value>=0?"#f59e0b":"#ef4444"):isNeg?"#fca5a5":positive?"#86efac":"#fafaf9" }}>
+            {isNeg?"-":""}{fmt(Math.abs(value))}
+          </span>
+        </div>
+      );
+    }
+
+    function Field({ label, children, style={} }) {
+      return (
+        <div style={style}>
+          <div style={{ fontSize:10, fontWeight:600, color:"#a8a29e", letterSpacing:"0.1em", marginBottom:4, textTransform:"uppercase" }}>{label}</div>
+          {children}
+        </div>
+      );
+    }
+
+    function Row({ k, v }) {
+      return (
+        <div style={{ display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:"1px solid #292524", fontSize:12 }}>
+          <span style={{ color:"#a8a29e" }}>{k}</span>
+          <span style={{ fontFamily:"ui-monospace,monospace", fontWeight:600 }}>{v}</span>
+        </div>
+      );
+    }
+
+    function ScenarioBtn({ label, onClick, active }) {
+      return (
+        <button onClick={onClick} style={{ background:active?"#d97706":"#1c1917", color:active?"#0c0a09":"#fafaf9",
+          border:active?"1px solid #d97706":"1px solid #44403c", padding:"8px 10px", borderRadius:6, fontSize:11, fontWeight:600 }}>
+          {label}
+        </button>
+      );
+    }
+
+    function Overview({ deal, setDeal, cashOOP, closingCosts, concessions, net, tasksDone, tasksTotal, expenses }) {
+      const upd = patch => setDeal({...deal,...patch});
+      const byCat = {};
+      expenses.forEach(e => { const c=e.category||"Other"; byCat[c]=(byCat[c]||0)+(parseFloat(e.amount)||0); });
+      const cats = Object.entries(byCat).sort((a,b)=>b[1]-a[1]);
+      const maxCat = cats[0]?.[1]||1;
+      return (
+        <div style={{ display:"grid", gridTemplateColumns:"1.4fr 1fr", gap:20 }}>
+          <div>
+            <Card title="Live P&L Waterfall">
+              <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+                <PLine label="List Price" value={deal.scenarioPrice} positive bold />
+                <PLine label={`Closing costs ($${deal.flatFee} flat + ${deal.buyerAgentPct}% buyer agent + ${deal.closingMiscPct}% misc)`} value={-closingCosts} />
+                <PLine label="Rocket Mortgage payoff (first lien on deed)" value={-deal.rocketPayoff} />
+                <PLine label="Cash already in (reinstatement + expenses)" value={-cashOOP} />
+                {deal.scenarioConcession && <PLine label="Roof + HVAC concession to buyer" value={-concessions} />}
+                <div style={{ height:1, background:"#292524", margin:"6px 0" }} />
+                <PLine label="NET TO YOU AT CLOSE" value={net} bold huge />
+              </div>
+            </Card>
+            <Card title="Scenario Modeling" style={{ marginTop:16 }}>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:14 }}>
+                <Field label="Sale price"><input type="number" value={deal.scenarioPrice} onChange={e=>upd({scenarioPrice:parseFloat(e.target.value)||0})} style={inputStyle}/></Field>
+                <Field label="Buyer agent %"><input type="number" step="0.5" value={deal.buyerAgentPct} onChange={e=>upd({buyerAgentPct:parseFloat(e.target.value)||0})} style={inputStyle}/></Field>
+                <Field label="Misc closing %"><input type="number" step="0.5" value={deal.closingMiscPct} onChange={e=>upd({closingMiscPct:parseFloat(e.target.value)||0})} style={inputStyle}/></Field>
+                <Field label="Flat fee MLS"><input type="number" value={deal.flatFee} onChange={e=>upd({flatFee:parseFloat(e.target.value)||0})} style={inputStyle}/></Field>
+              </div>
+              <label style={{ display:"flex", alignItems:"center", gap:10, marginTop:14, cursor:"pointer" }}>
+                <input type="checkbox" checked={deal.scenarioConcession} onChange={e=>upd({scenarioConcession:e.target.checked})} />
+                <span style={{ fontSize:13 }}>Include roof + HVAC concession ({fmt(deal.pendingConcessions.reduce((s,c)=>s+c.amount,0))})</span>
+              </label>
+              <div style={{ marginTop:16, padding:12, background:"#0c0a09", borderRadius:6, border:"1px solid #292524" }}>
+                <div style={{ fontSize:10, fontWeight:600, color:"#d97706", letterSpacing:"0.1em", marginBottom:8, textTransform:"uppercase" }}>Quick Scenarios</div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8 }}>
+                  <ScenarioBtn label="$255K as-is"        onClick={()=>upd({scenarioPrice:255000,scenarioConcession:false})} active={deal.scenarioPrice===255000&&!deal.scenarioConcession}/>
+                  <ScenarioBtn label="$255K + concession" onClick={()=>upd({scenarioPrice:255000,scenarioConcession:true})}  active={deal.scenarioPrice===255000&&deal.scenarioConcession}/>
+                  <ScenarioBtn label="$245K as-is"        onClick={()=>upd({scenarioPrice:245000,scenarioConcession:false})} active={deal.scenarioPrice===245000&&!deal.scenarioConcession}/>
+                  <ScenarioBtn label="$245K + concession" onClick={()=>upd({scenarioPrice:245000,scenarioConcession:true})}  active={deal.scenarioPrice===245000&&deal.scenarioConcession}/>
+                </div>
+              </div>
+            </Card>
+          </div>
+          <div>
+            <Card title="Pre-Launch Progress">
+              <div style={{ display:"flex", alignItems:"baseline", gap:8, marginBottom:10 }}>
+                <span style={{ fontFamily:"ui-monospace,monospace", fontSize:32, fontWeight:700 }}>{tasksDone}</span>
+                <span style={{ fontSize:14, color:"#a8a29e" }}>of {tasksTotal} tasks complete</span>
+              </div>
+              <div style={{ height:8, background:"#0c0a09", borderRadius:4, overflow:"hidden", border:"1px solid #292524" }}>
+                <div style={{ height:"100%", width:`${(tasksDone/tasksTotal)*100}%`, background:"linear-gradient(90deg,#d97706,#f59e0b)", transition:"width 0.3s" }}/>
+              </div>
+            </Card>
+            <Card title="Spend by Category" style={{ marginTop:16 }}>
+              <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+                {cats.map(([cat,amt])=>(
+                  <div key={cat}>
+                    <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginBottom:4 }}>
+                      <span style={{ color:"#a8a29e" }}>{cat}</span>
+                      <span style={{ fontFamily:"ui-monospace,monospace", fontWeight:600 }}>{fmt(amt)}</span>
+                    </div>
+                    <div style={{ height:4, background:"#0c0a09", borderRadius:2, overflow:"hidden" }}>
+                      <div style={{ height:"100%", width:`${(amt/maxCat)*100}%`, background:"#d97706" }}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+            <Card title="Deal Quick Reference" style={{ marginTop:16 }}>
+              <Row k="Contract Price"          v={fmt(deal.contractPrice)}/>
+              <Row k="Reinstatement Paid"      v={fmt(deal.reinstatement)}/>
+              <Row k="Rocket Payoff (on deed)" v={fmtC(deal.rocketPayoff)}/>
+              <Row k="Total to Clear at Close" v={fmt(deal.rocketPayoff+cashOOP)}/>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
+    function Expenses({ items, displayItems, setItems, logActivity, searchActive }) {
+      const [adding, setAdding] = useState(false);
+      const [draft, setDraft]   = useState({payee:"",amount:"",date:"",notes:"",category:"Other"});
+      const list = displayItems||items;
+      const total = list.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      const fullTotal = items.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      const add = () => {
+        if(!draft.payee||!draft.amount) return;
+        setItems([...items,{...draft,id:"e"+Date.now(),amount:parseFloat(draft.amount)}]);
+        logActivity(`Added expense: ${draft.payee} ${fmt(draft.amount)}`);
+        setDraft({payee:"",amount:"",date:"",notes:"",category:"Other"}); setAdding(false);
+      };
+      const del = id => { const i=items.find(x=>x.id===id); setItems(items.filter(x=>x.id!==id)); logActivity(`Deleted: ${i?.payee}`); };
+      return (
+        <Card title={searchActive?`${list.length} of ${items.length} expenses (${fmt(total)} of ${fmt(fullTotal)})`:`All Expenses (${items.length} · ${fmt(fullTotal)} total)`}
+          action={<button onClick={()=>setAdding(!adding)} style={btnPrimary}>{adding?"Cancel":"+ Add"}</button>}>
+          {adding&&(
+            <div style={{ padding:14, background:"#0c0a09", borderRadius:8, border:"1px solid #44403c", marginBottom:14, display:"grid", gridTemplateColumns:"2fr 1fr 1fr 1fr auto", gap:8, alignItems:"end" }}>
+              <Field label="Payee"><input value={draft.payee} onChange={e=>setDraft({...draft,payee:e.target.value})} style={inputStyle} placeholder="Vendor"/></Field>
+              <Field label="Amount"><input type="number" value={draft.amount} onChange={e=>setDraft({...draft,amount:e.target.value})} style={inputStyle}/></Field>
+              <Field label="Date"><input type="date" value={draft.date} onChange={e=>setDraft({...draft,date:e.target.value})} style={inputStyle}/></Field>
+              <Field label="Category">
+                <select value={draft.category} onChange={e=>setDraft({...draft,category:e.target.value})} style={inputStyle}>
+                  {["Acquisition","Inspection","Plumbing","Electrical","Well/Septic","Cleanup","Labor","Holding","Marketing","Setup","Site","Other"].map(c=><option key={c}>{c}</option>)}
+                </select>
+              </Field>
+              <button onClick={add} style={{...btnPrimary,padding:"8px 14px"}}>Save</button>
+              <Field label="Notes" style={{gridColumn:"1 / -1"}}><input value={draft.notes} onChange={e=>setDraft({...draft,notes:e.target.value})} style={inputStyle}/></Field>
+            </div>
+          )}
+          <div className="scroll" style={{ maxHeight:560, overflowY:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead style={{ position:"sticky", top:0, background:"#1c1917" }}>
+                <tr style={{ borderBottom:"1px solid #44403c" }}>
+                  <th style={TH}>Payee</th><th style={{...TH,textAlign:"right"}}>Amount</th>
+                  <th style={TH}>Date</th><th style={TH}>Category</th><th style={TH}>Notes</th><th style={TH}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...list].sort((a,b)=>(b.date||"").localeCompare(a.date||"")).map(item=>(
+                  <tr key={item.id} style={{ borderBottom:"1px solid #292524" }}>
+                    <td style={TD}>{item.payee}</td>
+                    <td style={{...TD,textAlign:"right",fontFamily:"ui-monospace,monospace",fontWeight:600,color:"#fca5a5"}}>{fmt(item.amount)}</td>
+                    <td style={{...TD,color:"#a8a29e",fontFamily:"ui-monospace,monospace",fontSize:11}}>{item.date||"—"}</td>
+                    <td style={TD}><span style={{ padding:"2px 8px", background:"#292524", borderRadius:4, fontSize:10, fontWeight:600, color:"#d97706" }}>{item.category}</span></td>
+                    <td style={{...TD,color:"#a8a29e",fontSize:11}}>{item.notes}</td>
+                    <td style={TD}><button onClick={()=>del(item.id)} style={btnGhost}>×</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      );
+    }
+
+    function Tasks({ items, displayItems, setItems, logActivity, searchActive }) {
+      const [adding, setAdding] = useState(false);
+      const [draft, setDraft]   = useState({label:"",due:"",owner:"Nathan",priority:"med"});
+      const list = displayItems||items;
+      const toggle = id => { const i=items.find(x=>x.id===id); setItems(items.map(t=>t.id===id?{...t,done:!t.done}:t)); logActivity(`${!i.done?"Completed":"Reopened"}: ${i.label}`); };
+      const add = () => { if(!draft.label) return; setItems([...items,{...draft,id:"t"+Date.now(),done:false}]); logActivity(`Added task: ${draft.label}`); setDraft({label:"",due:"",owner:"Nathan",priority:"med"}); setAdding(false); };
+      const del = id => { const i=items.find(x=>x.id===id); setItems(items.filter(x=>x.id!==id)); logActivity(`Deleted task: ${i?.label}`); };
+      const sorted = [...list].sort((a,b)=>{ if(a.done!==b.done) return a.done?1:-1; return ({high:0,med:1,low:2}[a.priority]||1)-({high:0,med:1,low:2}[b.priority]||1); });
+      return (
+        <Card title={searchActive?`${list.length} of ${items.length} tasks match`:`Tasks (${items.filter(t=>!t.done).length} open)`}
+          action={<button onClick={()=>setAdding(!adding)} style={btnPrimary}>{adding?"Cancel":"+ Add"}</button>}>
+          {adding&&(
+            <div style={{ padding:14, background:"#0c0a09", borderRadius:8, border:"1px solid #44403c", marginBottom:14, display:"grid", gridTemplateColumns:"3fr 1fr 1fr 1fr auto", gap:8, alignItems:"end" }}>
+              <Field label="Task"><input value={draft.label} onChange={e=>setDraft({...draft,label:e.target.value})} style={inputStyle} placeholder="What needs done?"/></Field>
+              <Field label="Due"><input type="date" value={draft.due} onChange={e=>setDraft({...draft,due:e.target.value})} style={inputStyle}/></Field>
+              <Field label="Owner"><select value={draft.owner} onChange={e=>setDraft({...draft,owner:e.target.value})} style={inputStyle}><option>Nathan</option><option>Justin</option><option>Mary</option><option>William</option></select></Field>
+              <Field label="Priority"><select value={draft.priority} onChange={e=>setDraft({...draft,priority:e.target.value})} style={inputStyle}><option value="high">High</option><option value="med">Med</option><option value="low">Low</option></select></Field>
+              <button onClick={add} style={{...btnPrimary,padding:"8px 14px"}}>Save</button>
+            </div>
+          )}
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {sorted.map(t=>(
+              <div key={t.id} style={{ display:"flex", alignItems:"center", gap:12, padding:"10px 12px", background:t.done?"#0c0a09":"#1c1917", border:`1px solid ${t.done?"#1c1917":"#292524"}`, borderRadius:8, opacity:t.done?0.5:1 }}>
+                <input type="checkbox" checked={t.done} onChange={()=>toggle(t.id)} style={{ width:18, height:18, cursor:"pointer" }}/>
+                <div style={{ flex:1 }}>
+                  <div style={{ fontSize:13, fontWeight:500, textDecoration:t.done?"line-through":"none" }}>{t.label}</div>
+                  <div style={{ fontSize:11, color:"#78716c", marginTop:2, display:"flex", gap:10 }}><span>{t.owner}</span>{t.due&&<span>· Due {t.due}</span>}</div>
+                </div>
+                <span style={{ padding:"2px 8px", borderRadius:4, fontSize:10, fontWeight:700,
+                  background:t.priority==="high"?"#7f1d1d":t.priority==="med"?"#78350f":"#1c1917",
+                  color:t.priority==="high"?"#fca5a5":t.priority==="med"?"#fbbf24":"#a8a29e" }}>{t.priority.toUpperCase()}</span>
+                <button onClick={()=>del(t.id)} style={btnGhost}>×</button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      );
+    }
+
+    function Vendors({ items, displayItems, setItems, logActivity, searchActive }) {
+      const [adding, setAdding] = useState(false);
+      const [draft, setDraft]   = useState({name:"",role:"",phone:"",status:"Active",notes:""});
+      const list = displayItems||items;
+      const add = () => { if(!draft.name) return; setItems([...items,{...draft,id:"v"+Date.now()}]); logActivity(`Added vendor: ${draft.name}`); setDraft({name:"",role:"",phone:"",status:"Active",notes:""}); setAdding(false); };
+      const del = id => { const i=items.find(x=>x.id===id); setItems(items.filter(x=>x.id!==id)); logActivity(`Removed vendor: ${i?.name}`); };
+      const sc = s => ({Complete:"#10b981",Active:"#f59e0b",Pending:"#3b82f6",Quoted:"#a78bfa"})[s]||"#a8a29e";
+      return (
+        <Card title={searchActive?`${list.length} of ${items.length} vendors match`:`Vendors & Contacts (${items.length})`}
+          action={<button onClick={()=>setAdding(!adding)} style={btnPrimary}>{adding?"Cancel":"+ Add"}</button>}>
+          {adding&&(
+            <div style={{ padding:14, background:"#0c0a09", borderRadius:8, border:"1px solid #44403c", marginBottom:14, display:"grid", gridTemplateColumns:"1.5fr 1.5fr 1fr 1fr 2fr auto", gap:8, alignItems:"end" }}>
+              <Field label="Name"><input value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})} style={inputStyle}/></Field>
+              <Field label="Role"><input value={draft.role} onChange={e=>setDraft({...draft,role:e.target.value})} style={inputStyle}/></Field>
+              <Field label="Phone"><input value={draft.phone} onChange={e=>setDraft({...draft,phone:e.target.value})} style={inputStyle}/></Field>
+              <Field label="Status"><select value={draft.status} onChange={e=>setDraft({...draft,status:e.target.value})} style={inputStyle}><option>Active</option><option>Complete</option><option>Pending</option><option>Quoted</option></select></Field>
+              <Field label="Notes"><input value={draft.notes} onChange={e=>setDraft({...draft,notes:e.target.value})} style={inputStyle}/></Field>
+              <button onClick={add} style={{...btnPrimary,padding:"8px 14px"}}>Save</button>
+            </div>
+          )}
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))", gap:12 }}>
+            {list.map(v=>(
+              <div key={v.id} style={{ background:"#0c0a09", border:"1px solid #292524", borderRadius:8, padding:14, position:"relative" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:6 }}>
+                  <div><div style={{ fontSize:14, fontWeight:700 }}>{v.name}</div><div style={{ fontSize:11, color:"#a8a29e", marginTop:2 }}>{v.role}</div></div>
+                  <span style={{ padding:"2px 8px", borderRadius:4, fontSize:9, fontWeight:700, background:`${sc(v.status)}22`, color:sc(v.status), letterSpacing:"0.05em" }}>{v.status.toUpperCase()}</span>
+                </div>
+                {v.phone&&<div style={{ fontSize:12, color:"#d97706", fontFamily:"ui-monospace,monospace", marginTop:6 }}>{v.phone}</div>}
+                {v.notes&&<div style={{ fontSize:11, color:"#a8a29e", marginTop:8, lineHeight:1.5 }}>{v.notes}</div>}
+                <button onClick={()=>del(v.id)} style={{...btnGhost,position:"absolute",top:8,right:8}}>×</button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      );
+    }
+
+    function Notes({ value, setValue, searchQuery }) {
+      const mc = searchQuery ? (value.toLowerCase().match(new RegExp(searchQuery.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g,"\\$&"),"g"))||[]).length : 0;
+      return (
+        <Card title="Shared Notes (markdown)">
+          {searchQuery&&(
+            <div style={{ padding:"10px 14px", marginBottom:12, background:mc>0?"#1e3a1e":"#1c1917", border:`1px solid ${mc>0?"#10b981":"#44403c"}`, borderRadius:6, fontSize:12, color:mc>0?"#86efac":"#a8a29e" }}>
+              {mc>0?`${mc} match${mc!==1?"es":""} for "${searchQuery}" — use Ctrl/Cmd+F to jump`:`No matches for "${searchQuery}"`}
+            </div>
+          )}
+          <textarea value={value} onChange={e=>setValue(e.target.value)}
+            style={{ width:"100%", minHeight:500, background:"#0c0a09", border:"1px solid #292524", borderRadius:8, color:"#fafaf9", padding:14, fontSize:13, fontFamily:"ui-monospace,monospace", lineHeight:1.6, resize:"vertical" }}/>
+          <div style={{ fontSize:11, color:"#78716c", marginTop:8 }}>Auto-saves on every keystroke.</div>
+        </Card>
+      );
+    }
+
+    function Activity({ items, searchActive }) {
+      return (
+        <Card title={searchActive?`Activity (${items.length} matching)`:"Recent Activity"}>
+          <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+            {items.length===0&&<div style={{ color:"#78716c", fontSize:13 }}>No activity yet. Make changes in other tabs and they'll show up here.</div>}
+            {items.map((a,i)=>(
+              <div key={i} style={{ padding:"10px 12px", background:"#0c0a09", border:"1px solid #292524", borderRadius:6, display:"flex", gap:12, alignItems:"center" }}>
+                <span style={{ padding:"2px 8px", background:a.who==="Nathan"?"#7c2d12":a.who==="Justin"?"#1e3a8a":"#292524", color:"#fafaf9", borderRadius:4, fontSize:10, fontWeight:700, minWidth:55, textAlign:"center" }}>{a.who}</span>
+                <span style={{ flex:1, fontSize:13 }}>{a.msg}</span>
+                <span style={{ fontSize:10, color:"#78716c", fontFamily:"ui-monospace,monospace" }}>{new Date(a.ts).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      );
+    }
+
+    function App() {
+      const [tab, setTab]         = useState("overview");
+      const [user, setUser]       = useState("Nathan");
+      const [expenses, setExp]    = useState(()=>safeLoad(KEYS.expenses, SEED_EXPENSES));
+      const [tasks,    setTasks]  = useState(()=>safeLoad(KEYS.tasks,    SEED_TASKS));
+      const [vendors,  setVend]   = useState(()=>safeLoad(KEYS.vendors,  SEED_VENDORS));
+      const [notes,    setNotes]  = useState(()=>safeLoad(KEYS.notes,    SEED_NOTES));
+      const [deal,     setDeal]   = useState(()=>safeLoad(KEYS.deal,     SEED_DEAL));
+      const [activity, setAct]    = useState(()=>safeLoad(KEYS.activity, []));
+      const [q, setQ]             = useState("");
+
+      const sq = q.trim().toLowerCase();
+      const mQ  = t => !sq||(t||"").toString().toLowerCase().includes(sq);
+      const mAny = (...f) => f.some(mQ);
+      const fExp  = sq ? expenses.filter(e=>mAny(e.payee,e.notes,e.category,e.date,e.amount)) : expenses;
+      const fTask = sq ? tasks.filter(t=>mAny(t.label,t.owner,t.priority,t.due))              : tasks;
+      const fVend = sq ? vendors.filter(v=>mAny(v.name,v.role,v.phone,v.notes,v.status))      : vendors;
+      const fAct  = sq ? activity.filter(a=>mAny(a.msg,a.who))                                : activity;
+      const noteMatch = sq ? mQ(notes) : false;
+
+      const log = msg => { const e={ts:new Date().toISOString(),who:user,msg}; const u=[e,...activity].slice(0,50); setAct(u); safeSave(KEYS.activity,u); };
+      const wrapExp  = v => { setExp(v);   safeSave(KEYS.expenses,v); };
+      const wrapTask = v => { setTasks(v); safeSave(KEYS.tasks,v); };
+      const wrapVend = v => { setVend(v);  safeSave(KEYS.vendors,v); };
+      const wrapNote = v => { setNotes(v); safeSave(KEYS.notes,v); };
+      const wrapDeal = v => { setDeal(v);  safeSave(KEYS.deal,v); log("Updated deal parameters"); };
+
+      const totalExp = expenses.reduce((s,x)=>s+(parseFloat(x.amount)||0),0);
+      const conc     = deal.scenarioConcession ? deal.pendingConcessions.reduce((s,c)=>s+c.amount,0) : 0;
+      const closing  = deal.scenarioPrice*((deal.buyerAgentPct+deal.closingMiscPct)/100)+deal.flatFee;
+      const net      = deal.scenarioPrice - closing - deal.rocketPayoff - totalExp - conc;
+      const done     = tasks.filter(t=>t.done).length;
+      const highOpen = tasks.filter(t=>!t.done&&t.priority==="high").length;
+
+      const tabs = [
+        ["overview","Overview"],
+        ["expenses",`Expenses${sq?` (${fExp.length})`:""}`],
+        ["tasks",   `Tasks${sq?` (${fTask.length})`:highOpen>0?" ●":""}`],
+        ["vendors", `Vendors${sq?` (${fVend.length})`:""}`],
+        ["notes",   `Notes${sq&&noteMatch?" ●":""}`],
+        ["activity",`Activity${sq?` (${fAct.length})`:""}`],
+      ];
+
+      return (
+        <div style={{ minHeight:"100vh", background:"#0c0a09", color:"#fafaf9", fontFamily:"system-ui,-apple-system,sans-serif", padding:"24px" }}>
+          <div style={{ maxWidth:1280, margin:"0 auto" }}>
+
+            {/* Header */}
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:24, paddingBottom:20, borderBottom:"1px solid #292524" }}>
+              <div>
+                <div style={{ fontSize:11, fontWeight:600, color:"#d97706", letterSpacing:"0.15em", marginBottom:6, textTransform:"uppercase" }}>Flip Command Center</div>
+                <div style={{ fontSize:32, fontWeight:700, letterSpacing:"-0.02em", lineHeight:1 }}>2533 County Road 102</div>
+                <div style={{ fontSize:13, color:"#a8a29e", marginTop:6 }}>Eureka Springs, AR · 11 acres · 1,040 sqft · Listing imminent</div>
+              </div>
+              <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                <span style={{ fontSize:10, color:"#10b981", padding:"3px 8px", border:"1px solid #10b981", borderRadius:4, fontWeight:600, letterSpacing:"0.05em" }}>LIVE</span>
+                <select value={user} onChange={e=>setUser(e.target.value)} style={{ background:"#1c1917", border:"1px solid #44403c", color:"#fafaf9", padding:"6px 10px", borderRadius:6, fontSize:12, fontWeight:600 }}>
+                  <option>Nathan</option><option>Justin</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Search */}
+            <div style={{ marginBottom:16, position:"relative" }}>
+              <input type="text" value={q} onChange={e=>setQ(e.target.value)} placeholder="Search expenses, tasks, vendors, notes..."
+                style={{ width:"100%", background:"#1c1917", border:`1px solid ${sq?"#d97706":"#292524"}`, color:"#fafaf9", padding:"12px 16px 12px 42px", borderRadius:8, fontSize:14, outline:"none", fontFamily:"inherit" }}/>
+              <span style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)", color:sq?"#d97706":"#78716c", fontSize:16, pointerEvents:"none" }}>⌕</span>
+              {sq&&<button onClick={()=>setQ("")} style={{ position:"absolute", right:10, top:"50%", transform:"translateY(-50%)", background:"transparent", border:"none", color:"#78716c", fontSize:18, cursor:"pointer", padding:"4px 10px" }}>×</button>}
+            </div>
+
+            {/* Metrics */}
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:14, marginBottom:20 }}>
+              <Metric label="Cash Out of Pocket"      value={fmt(totalExp)}          sub="Reinstatement + expenses"                           color="#f59e0b"/>
+              <Metric label="Rocket Payoff (on deed)" value={fmt(deal.rocketPayoff)} sub="Cleared at close"                                  color="#a8a29e"/>
+              <Metric label="List Price"              value={fmt(deal.scenarioPrice)} sub={deal.scenarioConcession?"With roof+HVAC":"As-is"} color="#3b82f6"/>
+              <Metric label="Projected Net"           value={fmt(net)}               sub={net>=60000?"Above $60K target":"Below $60K target"} color={net>=60000?"#10b981":"#ef4444"} big/>
+            </div>
+
+            {/* Tabs */}
+            <div style={{ display:"flex", gap:4, marginBottom:20, borderBottom:"1px solid #292524" }}>
+              {tabs.map(([id,label])=>(
+                <button key={id} onClick={()=>setTab(id)} style={{ background:"transparent", border:"none", color:tab===id?"#fafaf9":"#78716c", padding:"10px 16px", fontSize:13, fontWeight:tab===id?700:500, borderBottom:tab===id?"2px solid #d97706":"2px solid transparent", marginBottom:-1 }}>{label}</button>
+              ))}
+            </div>
+
+            {/* Panels */}
+            {tab==="overview"  && <Overview deal={deal} setDeal={wrapDeal} cashOOP={totalExp} closingCosts={closing} concessions={conc} net={net} tasksDone={done} tasksTotal={tasks.length} expenses={expenses}/>}
+            {tab==="expenses"  && <Expenses  items={expenses} displayItems={fExp}  setItems={wrapExp}  logActivity={log} searchActive={!!sq}/>}
+            {tab==="tasks"     && <Tasks     items={tasks}    displayItems={fTask} setItems={wrapTask} logActivity={log} searchActive={!!sq}/>}
+            {tab==="vendors"   && <Vendors   items={vendors}  displayItems={fVend} setItems={wrapVend} logActivity={log} searchActive={!!sq}/>}
+            {tab==="notes"     && <Notes     value={notes}    setValue={wrapNote}  searchQuery={sq}/>}
+            {tab==="activity"  && <Activity  items={fAct}     searchActive={!!sq}/>}
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
