@@ -34,6 +34,39 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+const daysSince = (dateStr) => {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d)) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+};
+const deadlineInfo = (dateStr) => {
+  if (!dateStr) return { label: "", overdue: false, soon: false };
+  const d = new Date(dateStr);
+  if (isNaN(d)) return { label: "", overdue: false, soon: false };
+  const diff = Math.ceil((d.getTime() - Date.now()) / 86400000);
+  if (diff < 0) return { label: `${-diff}d overdue`, overdue: true, soon: false };
+  if (diff === 0) return { label: "DUE TODAY", overdue: false, soon: true };
+  if (diff <= 7) return { label: `Due in ${diff}d`, overdue: false, soon: true };
+  if (diff <= 30) return { label: `Due in ${diff}d`, overdue: false, soon: false };
+  return { label: "", overdue: false, soon: false };
+};
+const csvEscape = (v) => {
+  if (v == null) return "";
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const downloadCSV = (rows, filename) => {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const csv = [headers.join(","), ...rows.map(r => headers.map(h => csvEscape(r[h])).join(","))].join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
 const DEAL_STATUSES = {
   flip: ["lead", "under-contract", "rehab", "listing", "under-offer", "closed", "dead"],
   surplus: ["new-lead", "signed", "filed", "probate", "awaiting-distribution", "recovered", "urgent", "dead"],
@@ -138,6 +171,7 @@ function DealCommandCenter({ session, profile }) {
   const [loaded, setLoaded] = useState(false);
   const [showNewDeal, setShowNewDeal] = useState(false);
   const [teamMembers, setTeamMembers] = useState([profile.name]);
+  const [recentActivity, setRecentActivity] = useState([]);
 
   const userName = profile.name;
 
@@ -150,13 +184,18 @@ function DealCommandCenter({ session, profile }) {
     const { data } = await sb.from('profiles').select('name').order('name');
     if (data) setTeamMembers(data.map(d => d.name));
   };
+  const loadRecentActivity = async () => {
+    const { data } = await sb.from('activity').select('*, profiles(name), deals(name)').order('created_at', { ascending: false }).limit(25);
+    setRecentActivity(data || []);
+  };
 
-  useEffect(() => { loadDeals(); loadTeam(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); }, []);
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
     const ch = sb.channel('deals-ch')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, loadDeals)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -217,7 +256,7 @@ function DealCommandCenter({ session, profile }) {
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} />
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} />
       ) : (
         <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
       )}
@@ -226,35 +265,94 @@ function DealCommandCenter({ session, profile }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, onSelect, onNew, onDelete }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete }) {
   const flips = deals.filter(d => d.type === "flip");
   const surplus = deals.filter(d => d.type === "surplus");
+  const year = new Date().getFullYear();
+  const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && d.actual_net != null && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
+  const ytdProfit = closedYtd.reduce((s, d) => s + (parseFloat(d.actual_net) || 0), 0);
+  const pipeline = deals.filter(d => !["closed", "recovered", "dead"].includes(d.status));
+  const overdue = deals.filter(d => deadlineInfo(d.deadline).overdue);
+
+  const exportCSV = () => {
+    const rows = deals.map(d => ({
+      id: d.id, type: d.type, name: d.name, address: d.address || "",
+      status: d.status, lead_source: d.lead_source || "", deadline: d.deadline || "",
+      filed_at: d.filed_at || "", actual_net: d.actual_net || "",
+      list_price: d.meta?.listPrice || "", contract_price: d.meta?.contractPrice || "",
+      estimated_surplus: d.meta?.estimatedSurplus || "", county: d.meta?.county || "",
+      created: d.created || "",
+    }));
+    downloadCSV(rows, `deals-${new Date().toISOString().slice(0,10)}.csv`);
+  };
+
   return (
     <div>
+      {/* Portfolio summary */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+        <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />
+        <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${flips.filter(d=>!["closed","dead"].includes(d.status)).length} flips · ${surplus.filter(d=>!["recovered","dead"].includes(d.status)).length} surplus`} color="#3b82f6" />
+        <PortfolioStat label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all caught up"} color={overdue.length ? "#ef4444" : "#78716c"} />
+        <PortfolioStat label="Total Deals" value={deals.length} sub={`${flips.length} flips · ${surplus.length} surplus`} color="#a8a29e" />
+      </div>
+
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
           <span style={{ fontSize: 13, color: "#a8a29e" }}>{deals.length} deals</span>
-          <span style={{ fontSize: 12, color: "#78716c" }}>{flips.length} flips · {surplus.length} surplus</span>
         </div>
-        <button onClick={onNew} style={btnPrimary}>+ New Deal</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
+          <button onClick={onNew} style={btnPrimary}>+ New Deal</button>
+        </div>
       </div>
-      {flips.length > 0 && (<>
-        <SectionLabel icon="🏠" label="Real Estate Flips" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14, marginBottom: 28 }}>
-          {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
+        <div>
+          {flips.length > 0 && (<>
+            <SectionLabel icon="🏠" label="Real Estate Flips" />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
+              {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+            </div>
+          </>)}
+          {surplus.length > 0 && (<>
+            <SectionLabel icon="💰" label="Surplus Fund Cases" />
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+              {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+            </div>
+          </>)}
+          {deals.length === 0 && (
+            <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
+              No deals yet. Click <b>+ New Deal</b> to add one.
+            </div>
+          )}
         </div>
-      </>)}
-      {surplus.length > 0 && (<>
-        <SectionLabel icon="💰" label="Surplus Fund Cases" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))", gap: 14 }}>
-          {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+        <div>
+          <Card title="Team Activity">
+            {(!activity || activity.length === 0) ? (
+              <div style={{ fontSize: 12, color: "#78716c", padding: "8px 0" }}>No recent activity.</div>
+            ) : activity.slice(0, 25).map(a => (
+              <div key={a.id} style={{ padding: "8px 0", borderBottom: "1px solid #292524", fontSize: 11 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+                  <span style={{ color: "#d97706", fontWeight: 600 }}>{a.profiles?.name || "?"}</span>
+                  <span style={{ color: "#78716c" }}>{new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+                <div style={{ color: "#a8a29e", marginTop: 2 }}>{a.action}</div>
+                {a.deals?.name && <div style={{ color: "#78716c", marginTop: 2, fontStyle: "italic" }}>on {a.deals.name}</div>}
+              </div>
+            ))}
+          </Card>
         </div>
-      </>)}
-      {deals.length === 0 && (
-        <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
-          No deals yet. Click <b>+ New Deal</b> to add one.
-        </div>
-      )}
+      </div>
+    </div>
+  );
+}
+
+function PortfolioStat({ label, value, sub, color }) {
+  return (
+    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14, borderTop: `2px solid ${color}` }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono', monospace", marginTop: 6, color }}>{value}</div>
+      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>{sub}</div>
     </div>
   );
 }
@@ -266,8 +364,9 @@ function SectionLabel({ icon, label }) {
 function DealCard({ deal, onClick, onDelete }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
+  const dl = deadlineInfo(deal.deadline);
   return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
@@ -279,6 +378,11 @@ function DealCard({ deal, onClick, onDelete }) {
         <MiniStat label="List Price" value={fmt(m.listPrice)} />
         <MiniStat label="Lien Payoff" value={fmt(m.lienPayoff)} />
       </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+        {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
+        {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
+        {deal.status === "closed" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>NET {fmt(deal.actual_net)}</span>}
+      </div>
       <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
     </div>
   );
@@ -287,8 +391,10 @@ function DealCard({ deal, onClick, onDelete }) {
 function SurplusCard({ deal, onClick, onDelete }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
+  const dl = deadlineInfo(deal.deadline);
+  const filedDays = daysSince(deal.filed_at);
   return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
@@ -301,6 +407,12 @@ function SurplusCard({ deal, onClick, onDelete }) {
         {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
         {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
         {m.county && <MiniStat label="County" value={m.county} />}
+        {filedDays != null && <MiniStat label="Days Since Filed" value={filedDays + "d"} />}
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+        {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
+        {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
+        {deal.status === "recovered" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>FEE {fmt(deal.actual_net)}</span>}
       </div>
       <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
     </div>
@@ -326,6 +438,9 @@ function NewDealModal({ onAdd, onClose }) {
   const [type, setType] = useState("flip");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
+  const [leadSource, setLeadSource] = useState("");
+  const [deadline, setDeadline] = useState("");
+  const [filedAt, setFiledAt] = useState("");
 
   const create = () => {
     if (!name) return;
@@ -333,8 +448,14 @@ function NewDealModal({ onAdd, onClose }) {
     const meta = type === "flip"
       ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [] }
       : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "" };
-    onAdd({ id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta });
+    const deal = { id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta };
+    if (leadSource) deal.lead_source = leadSource;
+    if (deadline) deal.deadline = deadline;
+    if (type === "surplus" && filedAt) deal.filed_at = filedAt;
+    onAdd(deal);
   };
+
+  const LEAD_SOURCES = ["MLS", "Direct Mail", "Tax Sale List", "Auction", "Referral", "Cold Call", "Online Lead", "Drive-by", "Other"];
 
   return (
     <Modal onClose={onClose} title="Add New Deal">
@@ -344,6 +465,22 @@ function NewDealModal({ onAdd, onClose }) {
       </div>
       <Field label="Deal Name"><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "Property address or nickname" : "Client name"} /></Field>
       <Field label="Location / County" style={{ marginTop: 12 }}><input value={address} onChange={e => setAddress(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "City, State" : "County, State"} /></Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+        <Field label="Lead Source">
+          <select value={leadSource} onChange={e => setLeadSource(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
+            <option value="">—</option>
+            {LEAD_SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </Field>
+        <Field label={type === "surplus" ? "Deadline (optional)" : "Closing / Target Date"}>
+          <input type="date" value={deadline} onChange={e => setDeadline(e.target.value)} style={inputStyle} />
+        </Field>
+      </div>
+      {type === "surplus" && (
+        <Field label="Filed Date (claim filed)" style={{ marginTop: 12 }}>
+          <input type="date" value={filedAt} onChange={e => setFiledAt(e.target.value)} style={inputStyle} />
+        </Field>
+      )}
       <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
         <button onClick={onClose} style={btnGhost}>Cancel</button>
         <button onClick={create} style={btnPrimary}>Create Deal</button>
@@ -374,22 +511,25 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
   const [vendors, setVendors] = useState([]);
   const [notes, setNotes] = useState("");
   const [activity, setActivity] = useState([]);
+  const [documents, setDocuments] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
   const loadAll = async () => {
     setLoaded(false);
-    const [e, t, v, n, a] = await Promise.all([
+    const [e, t, v, n, a, d] = await Promise.all([
       sb.from('expenses').select('*').eq('deal_id', deal.id).order('date', { ascending: false }),
       sb.from('tasks').select('*').eq('deal_id', deal.id).order('done').order('created_at'),
       sb.from('vendors').select('*').eq('deal_id', deal.id).order('created_at'),
       sb.from('deal_notes').select('*').eq('deal_id', deal.id).maybeSingle(),
       sb.from('activity').select('*, profiles(name)').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(60),
+      sb.from('documents').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false }),
     ]);
     setExpenses(e.data || []);
     setTasks(t.data || []);
     setVendors(v.data || []);
     setNotes(n.data?.content || `# ${deal.name}\n\n`);
     setActivity((a.data || []).map(r => ({ ts: r.created_at, who: r.profiles?.name || '?', msg: r.action })));
+    setDocuments(d.data || []);
     setLoaded(true);
   };
 
@@ -403,6 +543,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vendors', filter: `deal_id=eq.${deal.id}` }, loadAll)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${deal.id}` }, loadAll)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity', filter: `deal_id=eq.${deal.id}` }, loadAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'documents', filter: `deal_id=eq.${deal.id}` }, loadAll)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [deal.id]);
@@ -433,7 +574,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
 
   if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
 
-  const tabs = ["overview", "expenses", "tasks", "vendors", "notes", "activity"];
+  const tabs = ["overview", "expenses", "tasks", "vendors", "documents", "notes", "activity"];
 
   return (
     <div>
@@ -475,6 +616,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
+      {tab === "documents" && <Documents items={documents} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "notes" && <Notes value={notes} dealId={deal.id} userId={userId} setLocal={setNotes} />}
       {tab === "activity" && <Activity items={activity} />}
     </div>
@@ -512,6 +654,20 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
           <WaterfallLine label="NET PROFIT" value={netProfit} bold huge />
           {strategy === "wholesale" && <div style={{ fontSize: 11, color: "#78716c", marginTop: 10, fontStyle: "italic" }}>Wholesale view skips retail closing costs — assumes assignment or double-close.</div>}
+        </Card>
+        <Card title="Timing & Source" style={{ marginTop: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            <Field label="Closing / Target Date"><input type="date" value={deal.deadline || ""} onChange={e => onUpdateDeal({ deadline: e.target.value || null })} style={inputStyle} /></Field>
+            <Field label="Lead Source">
+              <select value={deal.lead_source || ""} onChange={e => onUpdateDeal({ lead_source: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
+                <option value="">—</option>
+                {["MLS","Direct Mail","Tax Sale List","Auction","Referral","Cold Call","Online Lead","Drive-by","Other"].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
+            {deal.status === "closed" && (
+              <Field label="Actual Net Profit"><input type="number" value={deal.actual_net || ""} onChange={e => onUpdateDeal({ actual_net: e.target.value ? parseFloat(e.target.value) : null, closed_at: deal.closed_at || new Date().toISOString() })} style={inputStyle} placeholder="Final P&L" /></Field>
+            )}
+          </div>
         </Card>
         <Card title="Deal Parameters" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
@@ -574,6 +730,22 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
           <WaterfallLine label="NET TO US" value={projectedFee - totalExpenses} bold huge />
+        </Card>
+        <Card title="Timing & Source" style={{ marginTop: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <Field label="Filed Date"><input type="date" value={deal.filed_at || ""} onChange={e => onUpdateDeal({ filed_at: e.target.value || null })} style={inputStyle} /></Field>
+            <Field label="Deadline (statutory)"><input type="date" value={deal.deadline || ""} onChange={e => onUpdateDeal({ deadline: e.target.value || null })} style={inputStyle} /></Field>
+            <Field label="Lead Source">
+              <select value={deal.lead_source || ""} onChange={e => onUpdateDeal({ lead_source: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
+                <option value="">—</option>
+                {["MLS","Direct Mail","Tax Sale List","Auction","Referral","Cold Call","Online Lead","Drive-by","Other"].map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </Field>
+            {deal.status === "recovered" && (
+              <Field label="Actual Fee Received"><input type="number" value={deal.actual_net || ""} onChange={e => onUpdateDeal({ actual_net: e.target.value ? parseFloat(e.target.value) : null, closed_at: deal.closed_at || new Date().toISOString() })} style={inputStyle} placeholder="Final fee $" /></Field>
+            )}
+          </div>
+          {deal.filed_at && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(deal.filed_at)} days ago{deal.deadline && ` · ${deadlineInfo(deal.deadline).label || 'on track'}`}</div>}
         </Card>
       </div>
       <div>
@@ -831,6 +1003,67 @@ function Vendors({ items, dealId, logAct, reload }) {
           </div>
         ))}
       </div>
+    </Card>
+  );
+}
+
+// ─── Documents Tab ───────────────────────────────────────────────────
+function Documents({ items, dealId, userId, logAct, reload }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const fileRef = useRef(null);
+
+  const upload = async (file) => {
+    if (!file) return;
+    setBusy(true); setErr("");
+    const path = `${dealId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
+    const up = await sb.storage.from('deal-docs').upload(path, file);
+    if (up.error) { setErr(up.error.message); setBusy(false); return; }
+    const { error } = await sb.from('documents').insert({ deal_id: dealId, name: file.name, path, size: file.size, uploaded_by: userId });
+    if (error) { setErr(error.message); setBusy(false); return; }
+    await logAct(`Uploaded document: ${file.name}`);
+    await reload();
+    setBusy(false);
+    if (fileRef.current) fileRef.current.value = "";
+  };
+
+  const openDoc = async (doc) => {
+    const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
+    if (error) { alert(error.message); return; }
+    window.open(data.signedUrl, '_blank');
+  };
+
+  const removeDoc = async (doc) => {
+    if (!confirm(`Delete "${doc.name}"? This cannot be undone.`)) return;
+    await sb.storage.from('deal-docs').remove([doc.path]);
+    await sb.from('documents').delete().eq('id', doc.id);
+    await logAct(`Removed document: ${doc.name}`);
+    await reload();
+  };
+
+  const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1024*1024 ? `${(b/1024).toFixed(1)} KB` : `${(b/1024/1024).toFixed(1)} MB`;
+
+  return (
+    <Card title={`Documents (${items.length})`} action={
+      <label style={{ ...btnPrimary, cursor: "pointer", display: "inline-block", opacity: busy ? 0.5 : 1 }}>
+        {busy ? "Uploading..." : "+ Upload File"}
+        <input ref={fileRef} type="file" style={{ display: "none" }} disabled={busy} onChange={e => upload(e.target.files[0])} />
+      </label>
+    }>
+      {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
+      {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload contracts, deeds, probate filings, scope of work, photos, etc.</div>}
+      {items.map(doc => (
+        <div key={doc.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #292524" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#d97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => openDoc(doc)}>{doc.name}</div>
+            <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>{fmtSize(doc.size || 0)} · {new Date(doc.created_at).toLocaleDateString()}</div>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => openDoc(doc)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>Open</button>
+            <button onClick={() => removeDoc(doc)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5", borderColor: "#7f1d1d" }}>Delete</button>
+          </div>
+        </div>
+      ))}
     </Card>
   );
 }
