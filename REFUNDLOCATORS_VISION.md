@@ -52,7 +52,7 @@ Imagine Lisa, whose foreclosed home sold at auction in Hamilton County six weeks
 2. **Enter address.** AI pulls the county docket in real time. Finds her case. Pulls Street View imagery of her former home.
 3. **Sees her house.** Full width. No words yet. Just the house she lost. Ten seconds of silence, but the page is doing work.
 4. **AI reveals the amount.** "We found your case. You are owed **$41,287.42** from the sale of 1247 Elm Street."
-5. **AI tells her how to DIY.** "You can file this claim yourself at the Hamilton County Court of Common Pleas. Here's the form. Here's the filing fee. It typically takes 6–9 months."
+5. **AI is honest that DIY is an option.** "You can absolutely file this claim yourself at the Hamilton County Court of Common Pleas — it's not a secret. The reason most people have us do it is that there are a few procedural steps where Ohio trips people up and a filed claim on the wrong form gets kicked back. If you want the DIY instructions, I'd love to walk you through them on a quick call so they make sense — it's the part that's hard to text." (The AI does NOT paste the form, filing fee, or procedural steps into the chat. The walk-through happens on a call. DIY exists; the blueprint is not handed over in a text thread.)
 6. **AI offers the service transparently.** "Or we can file it for you. Our fee is **30% ($12,386.23)**. You would receive **$28,901.19**. We can have a DocuSign agreement to you by text in 60 seconds."
 7. **Lisa asks the AI a question.** The AI answers. It knows ORC §2329. It knows the Hamilton County local rule on cashier's-check disbursement. It knows the last 40 cases by case number.
 8. **She chats for 12 minutes.** The AI answers every question. It gently asks, *"Were you the only person on the deed when the property sold? Are you still in the house? Are you okay? Do you have food?"* Not as a qualification funnel — as a human being noticing another human being.
@@ -75,8 +75,12 @@ Every competitor says "you MAY have surplus funds." We say "You have **$41,287.4
 ### 5.2 Street View as the first image
 The homeowner sees their former house — full-bleed, silent, immediate. It's emotional. It's proof we did the work. No incumbent does this because their sales model doesn't need to.
 
-### 5.3 The AI openly tells users how to DIY
-Counterintuitive. But it is the single biggest trust signal we can send. The homeowner thinks: "They just told me I don't need them. So if I hire them anyway, it's because I genuinely want to." That is the moment the relationship flips from "sold to" → "chose us."
+### 5.3 The AI is honest that DIY exists — without handing over the blueprint
+Every incumbent hides that the homeowner could file the claim themselves. We don't. **The AI confirms the DIY path is real and legal, and offers to walk through it on a phone call.** What the AI does NOT do: paste the form, the filing fee schedule, and the procedural instructions into a text thread.
+
+The reason is practical, not deceptive. DIY is real but non-trivial. Ohio has procedural landmines by county — correct caption, proof of service, affidavit format, cashier's-check disbursement rules — that cause self-filed claims to get kicked back. A 10-minute phone walk-through saves people weeks. We tell homeowners honestly that they *can* file it themselves, and we offer to walk them through it on a call whether or not they ultimately hire us.
+
+This is still the single biggest trust signal we can send. The homeowner thinks: "They told me I don't have to hire them, and they're still offering to help me do it myself. So if I hire them anyway, it's because I genuinely want to." That is the moment the relationship flips from "sold to" → "chose us."
 
 ### 5.4 Fee transparency to the penny
 Not "our competitive rates." **"Our fee is 30%. On your $41,287.42, that is $12,386.23. You keep $28,901.19."** Written on the landing page. Written in the chat. Written in the DocuSign. If we ever negotiate, it's documented in writing before signing.
@@ -160,9 +164,37 @@ The AI is the product. It deserves more architectural attention than anything el
 ### 6.4 Guardrails
 - **No legal advice.** The AI can explain procedure, cite statute, share filing instructions. It does not say "you should" or "I recommend" on legal questions. When pressed, it escalates.
 - **AI disclosure.** First message in every conversation: *"I'm RefundLocators' AI assistant. A real human (Nathan) can jump in anytime — just ask."* If the user asks "are you a bot?" answer yes immediately.
-- **Bankruptcy pause.** If the user mentions active bankruptcy, the AI pauses the sales flow and suggests attorney review before signing. Flagged in DCC.
+- **Bankruptcy — qualify, tag, nurture; don't slam the door.** When the homeowner mentions bankruptcy, the AI does NOT immediately shut down the conversation. Instead it gathers four data points conversationally (see §6.4.1), tags the GHL contact with the appropriate `BK-*` tag, and routes active-stay homeowners into a monthly BK nurture flow instead of weekly cadence. Aggressive outreach still pauses during an active stay; the conversation stays warm and useful. Nathan is notified on the tag so he's aware. Full script in §6.4.1.
 - **Self-harm protocols.** If the user expresses suicidal ideation or extreme distress, AI stops the business conversation entirely and provides crisis line information. Escalates to Nathan for a human follow-up call (never a text).
 - **Cross-brand suppression.** Anyone who says STOP is globally suppressed across refundlocators, fundlocators, and defenderha immediately.
+
+### 6.4.1 Bankruptcy conversation flow
+
+When the homeowner mentions bankruptcy (either unprompted — "I filed BK last year" — or in response to a question), the AI does NOT go silent. It asks these four questions in order, conversationally, one at a time, letting the homeowner's answer guide the next ask:
+
+1. *"Appreciate you mentioning that — did you actually file, or were you considering it?"*
+2. *(If filed)* *"Was it a Chapter 7 or a Chapter 13?"*
+   *(Ch 7 = liquidation — trustee may have had a claim on the surplus. Ch 13 = repayment plan — surplus may have been part of the plan distribution. Both change how we approach the case.)*
+3. *"When did you file — roughly what month and year?"*
+   *(Recency matters. A filing from last month vs. three years ago is a different conversation.)*
+4. *"Has it been discharged or dismissed yet, or is it still open?"*
+   *(Discharge = case closed, debtor got their fresh start. Dismissed = case thrown out. Still open = active automatic stay in force.)*
+
+Based on the answers, the AI routes the homeowner into one of four buckets via GHL tags. Nathan is notified on every BK tag so he has awareness of the pipeline.
+
+| Situation | GHL tag | Outreach cadence | What the AI says |
+|---|---|---|---|
+| Filed, still open (active stay) | `BK-active` | **Monthly nurture only** — no weekly drip, no aggressive cadence | *"Got it. While your case is open, we don't want to step on your bankruptcy attorney's work. We'll check in once a month — when it's discharged we can pick up the surplus conversation. Hang in there."* |
+| Filed, discharged or dismissed | `BK-cleared` | Normal flow — surplus recovery is typically the homeowner's again post-discharge | *"Good — since it's behind you, the surplus piece is usually yours again to recover. I'd still mention this to your attorney if you're in touch. Do you want to walk through what we found?"* |
+| Considered but didn't file | `BK-considered` | Normal flow, flagged as financially stressed — extra care on fee framing | *"Understood. That's a tough spot. Let me walk you through what the surplus recovery looks like — there's no cost to you upfront either way."* |
+| Homeowner refused to answer | `BK-unknown` | Soft nurture only — no pressure | *"No problem, you don't have to tell me anything you don't want to. We can pick it up whenever works for you."* |
+
+The monthly BK nurture flow (for `BK-active`) is a single warm check-in per month with one of these variants, rotated:
+- *"Hey [name], just checking in. How's everything going with your case? We're here whenever the time is right."*
+- *"Thinking of you this month. If anything changes with your bankruptcy status, let me know and we'll pick up where we left off."*
+- *"Quick check-in — no pressure, no sales talk. Just wanted to make sure you're doing okay."*
+
+**This replaces the older "pause and attorney-refer" policy.** Pausing aggressive outreach during active stay is still the rule. The difference is that the AI stays a warm, monthly presence instead of going silent. Silence signals "you lost your chance." Warmth signals "we'll be here when the time is right" — which is the brand promise.
 
 ### 6.5 The empathy question set *(post-submission, pre-legal-discussion)*
 
@@ -323,12 +355,12 @@ Every single thing on this site, in the AI, in the dashboard, in the contract �
 
 - Fees: disclosed in plain English, to the penny, before signing.
 - AI: disclosed on first message, every time.
-- DIY alternative: offered proactively, in writing, every time.
+- DIY alternative: acknowledged proactively, in every conversation. Detailed procedural walk-through happens on a phone call, not in a text thread — because Ohio procedure is where people get kicked back, and a 10-minute call saves real time.
 - Suppression: instant and cross-brand.
 - Empathy flow: never used as a qualification trick. If someone says they don't have food, the sale stops, period.
 - Gift program (iPad): tied to the signed agreement, not to outcomes, not to virality. No gotchas.
 - Success stories: anonymized and opt-in only.
-- Bankruptcy: paused and attorney-referred, never pressured through.
+- Bankruptcy: qualified conversationally (filed? Ch 7 or 13? when? discharged?), tagged, and routed to a monthly nurture cadence during active stay. Never cut off, never pressured through, never ghosted.
 
 This is not a constraint on the business. **This is the business.** Every category-killer move in section 5 depends on this being true. The moment we cheat, all ten moves collapse.
 
