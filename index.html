@@ -353,14 +353,14 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
         <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
         <PortfolioStat label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all caught up"} color={overdue.length ? "#ef4444" : "#78716c"} />
-        <PortfolioStat label="Archived" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
+        <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
       </div>
 
       <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
-          {viewBtn("archive", "Archive", archivedDeals.length)}
+          {viewBtn("archive", "Closed Deals", archivedDeals.length)}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
@@ -404,27 +404,27 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               )}
               {visible.length === 0 && (
                 <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
-                  {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals." : "No archived deals yet."}
+                  {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals." : "No closed deals yet."}
                 </div>
               )}
             </div>
           ) : (
             <div>
               {flips.length > 0 && (<>
-                <SectionLabel icon="🏠" label={view === "archive" ? "Archived Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
+                <SectionLabel icon="🏠" label={view === "archive" ? "Closed Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
                   {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {surplus.length > 0 && (<>
-                <SectionLabel icon="💰" label={view === "archive" ? "Archived Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
+                <SectionLabel icon="💰" label={view === "archive" ? "Closed Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
                   {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
                 <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
-                  {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals. Click the ⚑ icon on a deal card to flag it for review." : "No archived deals yet. Closed, recovered, and dead deals appear here."}
+                  {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals. Click the ⚑ icon on a deal card to flag it for review." : "No closed deals yet. Closed, recovered, and dead deals appear here."}
                 </div>
               )}
             </div>
@@ -530,8 +530,12 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
   const m = deal.meta || {};
   const dl = deadlineInfo(deal.deadline);
   const flagged = m.flagged;
+  const isClosed = ["closed", "recovered", "dead"].includes(deal.status);
   return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, paddingTop: 40, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+      <div style={{ position: "absolute", top: 10, left: 18, right: 70, display: "flex", gap: 6, alignItems: "center" }}>
+        <StatusBadge status={deal.status} />
+      </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
@@ -540,16 +544,21 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
-        <StatusBadge status={deal.status} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-        <MiniStat label="List Price" value={fmt(m.listPrice)} />
-        <MiniStat label="Lien Payoff" value={fmt(m.lienPayoff)} />
-      </div>
+      {isClosed ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+          <MiniStat label="Net Profit" value={deal.actual_net != null ? fmt(deal.actual_net) : "—"} />
+          <MiniStat label="Closed Date" value={deal.closed_at ? new Date(deal.closed_at).toLocaleDateString() : "—"} />
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+          <MiniStat label="List Price" value={fmt(m.listPrice)} />
+          <MiniStat label="Lien Payoff" value={fmt(m.lienPayoff)} />
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
-        {deal.status === "closed" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>NET {fmt(deal.actual_net)}</span>}
         {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
@@ -566,8 +575,12 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
   const dl = deadlineInfo(deal.deadline);
   const filedDays = daysSince(deal.filed_at);
   const flagged = m.flagged;
+  const isClosed = ["closed", "recovered", "dead"].includes(deal.status);
   return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, paddingTop: 40, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+      <div style={{ position: "absolute", top: 10, left: 18, right: 70, display: "flex", gap: 6, alignItems: "center" }}>
+        <StatusBadge status={deal.status} />
+      </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
@@ -576,19 +589,24 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
-        <StatusBadge status={deal.status} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-        {m.estimatedSurplus > 0 && <MiniStat label="Est. Surplus" value={fmt(m.estimatedSurplus)} />}
-        {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
-        {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
-        {m.county && <MiniStat label="County" value={m.county} />}
-        {filedDays != null && <MiniStat label="Days Since Filed" value={filedDays + "d"} />}
-      </div>
+      {isClosed ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+          <MiniStat label={deal.status === "recovered" ? "Our Fee" : "Net Profit"} value={deal.actual_net != null ? fmt(deal.actual_net) : "—"} />
+          <MiniStat label="Closed Date" value={deal.closed_at ? new Date(deal.closed_at).toLocaleDateString() : "—"} />
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+          {m.estimatedSurplus > 0 && <MiniStat label="Est. Surplus" value={fmt(m.estimatedSurplus)} />}
+          {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
+          {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
+          {m.county && <MiniStat label="County" value={m.county} />}
+          {filedDays != null && <MiniStat label="Days Since Filed" value={filedDays + "d"} />}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
-        {deal.status === "recovered" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>FEE {fmt(deal.actual_net)}</span>}
         {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
