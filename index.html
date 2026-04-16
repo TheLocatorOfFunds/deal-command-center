@@ -946,6 +946,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
             <Field label="Estimated Surplus"><input type="number" value={m.estimatedSurplus || ""} onChange={e => updateMeta({ estimatedSurplus: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
             <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
             <Field label="Attorney"><input value={m.attorney || ""} onChange={e => updateMeta({ attorney: e.target.value })} style={inputStyle} /></Field>
+            <Field label="Attorney Fee"><input type="number" value={m.attorneyFee || ""} onChange={e => updateMeta({ attorneyFee: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="$" /></Field>
             <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
             <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
           </div>
@@ -953,9 +954,10 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
         <Card title="Financial Summary" style={{ marginTop: 16 }}>
           <WaterfallLine label="Estimated Surplus" value={m.estimatedSurplus || 0} positive bold />
           <WaterfallLine label={`Our fee (${m.feePct || 0}%)`} value={projectedFee} positive />
+          {(m.attorneyFee || 0) > 0 && <WaterfallLine label={`Attorney fee${m.attorney ? ` (${m.attorney})` : ""}`} value={-(m.attorneyFee || 0)} />}
           {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
-          <WaterfallLine label="NET TO US" value={projectedFee - totalExpenses} bold huge />
+          <WaterfallLine label="NET TO US" value={projectedFee - (m.attorneyFee || 0) - totalExpenses} bold huge />
         </Card>
         <Card title="Timing & Source" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
