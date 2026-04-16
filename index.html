@@ -173,6 +173,7 @@ function DealCommandCenter({ session, profile }) {
   const [teamMembers, setTeamMembers] = useState([profile.name]);
   const [recentActivity, setRecentActivity] = useState([]);
   const [showLog, setShowLog] = useState(false);
+  const [view, setView] = useState("active"); // "active" | "archive" | "flagged"
 
   const userName = profile.name;
 
@@ -258,7 +259,12 @@ function DealCommandCenter({ session, profile }) {
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} />
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} onToggleFlag={(id) => {
+          const d = deals.find(x => x.id === id);
+          if (!d) return;
+          const m = d.meta || {};
+          updateDealMeta(id, { meta: { ...m, flagged: !m.flagged } });
+        }} />
       ) : (
         <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
       )}
@@ -267,40 +273,63 @@ function DealCommandCenter({ session, profile }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog }) {
-  const flips = deals.filter(d => d.type === "flip");
-  const surplus = deals.filter(d => d.type === "surplus");
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag }) {
+  const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
+  const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
+  const archivedDeals = deals.filter(d => ARCHIVE_STATUSES.includes(d.status));
+  const flaggedDeals = deals.filter(d => d.meta?.flagged);
+
+  const visible = view === "archive" ? archivedDeals : view === "flagged" ? flaggedDeals : activeDeals;
+  const flips = visible.filter(d => d.type === "flip");
+  const surplus = visible.filter(d => d.type === "surplus");
+
   const year = new Date().getFullYear();
   const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && d.actual_net != null && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
   const ytdProfit = closedYtd.reduce((s, d) => s + (parseFloat(d.actual_net) || 0), 0);
-  const pipeline = deals.filter(d => !["closed", "recovered", "dead"].includes(d.status));
+  const pipeline = activeDeals;
   const overdue = deals.filter(d => deadlineInfo(d.deadline).overdue);
+  const stale = activeDeals.filter(d => {
+    const last = d.updated_at || d.created;
+    return last && daysSince(last) > 14;
+  });
 
   const exportCSV = () => {
-    const rows = deals.map(d => ({
+    const rows = visible.map(d => ({
       id: d.id, type: d.type, name: d.name, address: d.address || "",
-      status: d.status, lead_source: d.lead_source || "", deadline: d.deadline || "",
+      status: d.status, flagged: d.meta?.flagged ? "Y" : "", lead_source: d.lead_source || "", deadline: d.deadline || "",
       filed_at: d.filed_at || "", actual_net: d.actual_net || "",
       list_price: d.meta?.listPrice || "", contract_price: d.meta?.contractPrice || "",
       estimated_surplus: d.meta?.estimatedSurplus || "", county: d.meta?.county || "",
       created: d.created || "",
     }));
-    downloadCSV(rows, `deals-${new Date().toISOString().slice(0,10)}.csv`);
+    downloadCSV(rows, `deals-${view}-${new Date().toISOString().slice(0,10)}.csv`);
   };
+
+  const viewBtn = (id, label, count) => (
+    <button key={id} onClick={() => setView(id)} style={{
+      background: view === id ? "#292524" : "transparent",
+      color: view === id ? "#fafaf9" : "#78716c",
+      border: view === id ? "1px solid #44403c" : "1px solid transparent",
+      padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: view === id ? 700 : 500, cursor: "pointer",
+    }}>{label}{count > 0 ? ` (${count})` : ""}</button>
+  );
 
   return (
     <div>
       {/* Portfolio summary */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />
-        <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${flips.filter(d=>!["closed","dead"].includes(d.status)).length} flips · ${surplus.filter(d=>!["recovered","dead"].includes(d.status)).length} surplus`} color="#3b82f6" />
+        <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
+        <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
         <PortfolioStat label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all caught up"} color={overdue.length ? "#ef4444" : "#78716c"} />
-        <PortfolioStat label="Total Deals" value={deals.length} sub={`${flips.length} flips · ${surplus.length} surplus`} color="#a8a29e" />
+        <PortfolioStat label="Archived" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
-          <span style={{ fontSize: 13, color: "#a8a29e" }}>{deals.length} deals</span>
+        <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
+          {viewBtn("active", "Active", activeDeals.length)}
+          {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
+          {viewBtn("archive", "Archive", archivedDeals.length)}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
@@ -311,20 +340,20 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
         <div>
           {flips.length > 0 && (<>
-            <SectionLabel icon="🏠" label="Real Estate Flips" />
+            <SectionLabel icon="🏠" label={view === "archive" ? "Archived Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
-              {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+              {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
             </div>
           </>)}
           {surplus.length > 0 && (<>
-            <SectionLabel icon="💰" label="Surplus Fund Cases" />
+            <SectionLabel icon="💰" label={view === "archive" ? "Archived Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-              {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} />)}
+              {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
             </div>
           </>)}
-          {deals.length === 0 && (
+          {visible.length === 0 && (
             <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
-              No deals yet. Click <b>+ New Deal</b> to add one.
+              {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals. Click the ⚑ icon on a deal card to flag it for review." : "No archived deals yet. Closed, recovered, and dead deals appear here."}
             </div>
           )}
         </div>
@@ -341,7 +370,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog }) {
               return (
                 <div key={a.id} onClick={() => a.deal_id && onSelect(a.deal_id)} style={{ padding: "8px 0", borderBottom: "1px solid #292524", fontSize: 11, cursor: a.deal_id ? "pointer" : "default" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
-                    <span style={{ color: personColor(who), fontWeight: 700, background: personColor(who), padding: "1px 6px", borderRadius: 3, fontSize: 10, color: "#fafaf9" }}>{who}</span>
+                    <span style={{ fontWeight: 700, background: personColor(who), padding: "1px 6px", borderRadius: 3, fontSize: 10, color: "#fafaf9" }}>{who}</span>
                     <span style={{ color: "#78716c" }}>{new Date(a.created_at).toLocaleDateString()} {new Date(a.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                   </div>
                   <div style={{ color: "#a8a29e", marginTop: 3 }}>{a.action}</div>
@@ -350,6 +379,17 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog }) {
               );
             })}
           </div>
+          {stale.length > 0 && view === "active" && (
+            <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16, marginTop: 16 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#ef4444", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>Stale Deals (14+ days)</div>
+              {stale.map(d => (
+                <div key={d.id} onClick={() => onSelect(d.id)} style={{ padding: "6px 0", borderBottom: "1px solid #292524", fontSize: 11, cursor: "pointer" }}>
+                  <span style={{ color: "#fafaf9", fontWeight: 600 }}>{d.name}</span>
+                  <span style={{ color: "#78716c", marginLeft: 8 }}>{daysSince(d.updated_at || d.created)}d ago</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -370,16 +410,20 @@ function SectionLabel({ icon, label }) {
   return <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><span>{icon}</span>{label}</div>;
 }
 
-function DealCard({ deal, onClick, onDelete }) {
+function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const dl = deadlineInfo(deal.deadline);
+  const flagged = m.flagged;
   return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
-          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+            <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+          </div>
         </div>
         <StatusBadge status={deal.status} />
       </div>
@@ -392,22 +436,29 @@ function DealCard({ deal, onClick, onDelete }) {
         {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
         {deal.status === "closed" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>NET {fmt(deal.actual_net)}</span>}
       </div>
-      <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
+      <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+        <button onClick={e => { e.stopPropagation(); onToggleFlag(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: flagged ? 1 : 0.4, color: flagged ? "#f59e0b" : "#78716c" }} title={flagged ? "Remove flag" : "Flag for review"}>⚑</button>
+        <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
+      </div>
     </div>
   );
 }
 
-function SurplusCard({ deal, onClick, onDelete }) {
+function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const dl = deadlineInfo(deal.deadline);
   const filedDays = daysSince(deal.filed_at);
+  const flagged = m.flagged;
   return (
-    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+    <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
-          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+            <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+          </div>
         </div>
         <StatusBadge status={deal.status} />
       </div>
@@ -423,7 +474,10 @@ function SurplusCard({ deal, onClick, onDelete }) {
         {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
         {deal.status === "recovered" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>FEE {fmt(deal.actual_net)}</span>}
       </div>
-      <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
+      <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+        <button onClick={e => { e.stopPropagation(); onToggleFlag(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: flagged ? 1 : 0.4, color: flagged ? "#f59e0b" : "#78716c" }} title={flagged ? "Remove flag" : "Flag for review"}>⚑</button>
+        <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
+      </div>
     </div>
   );
 }
@@ -537,7 +591,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
     setTasks(t.data || []);
     setVendors(v.data || []);
     setNotes(n.data?.content || `# ${deal.name}\n\n`);
-    setActivity((a.data || []).map(r => ({ ts: r.created_at, who: r.profiles?.name || '?', msg: r.action })));
+    setActivity(a.data || []);
     setDocuments(d.data || []);
     setLoaded(true);
   };
@@ -589,9 +643,20 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
     <div>
       <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
         <span style={{ fontSize: 11, color: "#78716c" }}>Status:</span>
-        <select value={deal.status} onChange={e => onUpdateDeal({ status: e.target.value })} style={{ ...selectStyle, fontSize: 11 }}>
+        <select value={deal.status} onChange={e => {
+          const prev = deal.status;
+          const next = e.target.value;
+          onUpdateDeal({ status: next });
+          logAct(`Status changed: ${prev.replace(/-/g," ")} → ${next.replace(/-/g," ")}`);
+        }} style={{ ...selectStyle, fontSize: 11 }}>
           {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
         </select>
+        <button onClick={() => {
+          const m = deal.meta || {};
+          onUpdateDeal({ meta: { ...m, flagged: !m.flagged } });
+        }} style={{ background: "transparent", border: `1px solid ${deal.meta?.flagged ? "#d97706" : "#44403c"}`, color: deal.meta?.flagged ? "#f59e0b" : "#78716c", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          ⚑ {deal.meta?.flagged ? "Flagged" : "Flag for Review"}
+        </button>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
