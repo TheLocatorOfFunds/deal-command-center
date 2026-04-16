@@ -19,6 +19,25 @@
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #44403c; border-radius: 3px; }
+
+  /* ─── Mobile Layout ─────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .portfolio-stats { grid-template-columns: 1fr 1fr !important; }
+    .deal-grid { grid-template-columns: 1fr !important; }
+    .main-grid { grid-template-columns: 1fr !important; }
+    .kanban-board { overflow-x: auto; }
+    .kanban-columns { min-width: 600px; }
+    .detail-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .detail-tabs button { padding: 8px 10px !important; font-size: 12px !important; }
+    .expense-add-form { grid-template-columns: 1fr !important; }
+    .modal-inner { max-width: 100% !important; padding: 16px !important; margin: 8px !important; }
+    .metric-grid-4 { grid-template-columns: 1fr 1fr !important; }
+    .metric-grid-3 { grid-template-columns: 1fr !important; }
+    .overview-grid { grid-template-columns: 1fr !important; }
+    .header-bar { flex-direction: column; align-items: flex-start !important; gap: 12px !important; }
+    .header-right { align-self: flex-end; }
+    .view-controls { flex-direction: column; align-items: stretch !important; gap: 10px !important; }
+  }
 </style>
 </head>
 <body>
@@ -231,7 +250,7 @@ function DealCommandCenter({ session, profile }) {
   return (
     <Shell>
       {/* Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
+      <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           {activeDeal && (
             <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
@@ -248,18 +267,18 @@ function DealCommandCenter({ session, profile }) {
             {activeDeal && <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>{activeDeal.address}</div>}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+        <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
           <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
       </div>
 
-      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} />}
+      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -273,13 +292,25 @@ function DealCommandCenter({ session, profile }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal }) {
+  const [searchQ, setSearchQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
+
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
   const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
   const archivedDeals = deals.filter(d => ARCHIVE_STATUSES.includes(d.status));
   const flaggedDeals = deals.filter(d => d.meta?.flagged);
 
-  const visible = view === "archive" ? archivedDeals : view === "flagged" ? flaggedDeals : activeDeals;
+  const allStatuses = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
+
+  const preFiltered = view === "archive" ? archivedDeals : view === "flagged" ? flaggedDeals : activeDeals;
+  const visible = preFiltered.filter(d => {
+    const q = searchQ.toLowerCase();
+    if (q && !(d.name || "").toLowerCase().includes(q) && !(d.address || "").toLowerCase().includes(q)) return false;
+    if (statusFilter !== "all" && d.status !== statusFilter) return false;
+    return true;
+  });
   const flips = visible.filter(d => d.type === "flip");
   const surplus = visible.filter(d => d.type === "surplus");
 
@@ -317,7 +348,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   return (
     <div>
       {/* Portfolio summary */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+      <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
         <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />
         <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
         <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
@@ -325,7 +356,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <PortfolioStat label="Archived" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+      <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
@@ -337,23 +368,65 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
+      {/* Search / Filter / Layout toggle bar */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
+        <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
+          <option value="all">All Statuses</option>
+          <optgroup label="Flip Statuses">
+            {DEAL_STATUSES.flip.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
+          </optgroup>
+          <optgroup label="Surplus Statuses">
+            {DEAL_STATUSES.surplus.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
+          </optgroup>
+        </select>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#1c1917", borderRadius: 6, padding: 2, border: "1px solid #292524" }}>
+          <button onClick={() => setLayoutMode("cards")} style={{ background: layoutMode === "cards" ? "#292524" : "transparent", color: layoutMode === "cards" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Cards</button>
+          <button onClick={() => setLayoutMode("kanban")} style={{ background: layoutMode === "kanban" ? "#292524" : "transparent", color: layoutMode === "kanban" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Kanban</button>
+        </div>
+      </div>
+
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
         <div>
-          {flips.length > 0 && (<>
-            <SectionLabel icon="🏠" label={view === "archive" ? "Archived Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
-              {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+          {layoutMode === "kanban" ? (
+            <div>
+              {flips.length > 0 && (
+                <div style={{ marginBottom: 28 }}>
+                  <SectionLabel icon="🏠" label="Flips — Kanban" />
+                  <KanbanBoard deals={flips} statuses={DEAL_STATUSES.flip} onSelect={onSelect} type="flip" />
+                </div>
+              )}
+              {surplus.length > 0 && (
+                <div>
+                  <SectionLabel icon="💰" label="Surplus — Kanban" />
+                  <KanbanBoard deals={surplus} statuses={DEAL_STATUSES.surplus} onSelect={onSelect} type="surplus" />
+                </div>
+              )}
+              {visible.length === 0 && (
+                <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
+                  {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals." : "No archived deals yet."}
+                </div>
+              )}
             </div>
-          </>)}
-          {surplus.length > 0 && (<>
-            <SectionLabel icon="💰" label={view === "archive" ? "Archived Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-              {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
-            </div>
-          </>)}
-          {visible.length === 0 && (
-            <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
-              {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals. Click the ⚑ icon on a deal card to flag it for review." : "No archived deals yet. Closed, recovered, and dead deals appear here."}
+          ) : (
+            <div>
+              {flips.length > 0 && (<>
+                <SectionLabel icon="🏠" label={view === "archive" ? "Archived Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
+                <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
+                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                </div>
+              </>)}
+              {surplus.length > 0 && (<>
+                <SectionLabel icon="💰" label={view === "archive" ? "Archived Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
+                <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                </div>
+              </>)}
+              {visible.length === 0 && (
+                <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
+                  {view === "active" ? <>No active deals. Click <b>+ New Deal</b> to add one.</> : view === "flagged" ? "No flagged deals. Click the ⚑ icon on a deal card to flag it for review." : "No archived deals yet. Closed, recovered, and dead deals appear here."}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -396,6 +469,48 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   );
 }
 
+function KanbanBoard({ deals, statuses, onSelect, type }) {
+  return (
+    <div className="kanban-board" style={{ overflowX: "auto", paddingBottom: 8 }}>
+      <div className="kanban-columns" style={{ display: "grid", gridTemplateColumns: `repeat(${statuses.length}, minmax(180px, 1fr))`, gap: 10 }}>
+        {statuses.map(status => {
+          const col = STATUS_COLORS[status] || "#78716c";
+          const cards = deals.filter(d => d.status === status);
+          return (
+            <div key={status} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 10, borderTop: `3px solid ${col}`, minHeight: 120 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: col, letterSpacing: "0.08em", textTransform: "uppercase" }}>{status.replace(/-/g, " ")}</span>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "#78716c", background: "#292524", padding: "2px 7px", borderRadius: 8, minWidth: 20, textAlign: "center" }}>{cards.length}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {cards.map(d => {
+                  const m = d.meta || {};
+                  const assignee = d.assigned_to || m.assigned_to;
+                  return (
+                    <div key={d.id} onClick={() => onSelect(d.id)} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 10, cursor: "pointer", transition: "border-color 0.15s" }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = "#44403c"}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = "#292524"}>
+                      <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, lineHeight: 1.3 }}>{d.name}</div>
+                      {d.address && <div style={{ fontSize: 10, color: "#78716c", marginBottom: 6 }}>{d.address}</div>}
+                      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+                        {d.meta?.flagged && <span style={{ fontSize: 10, color: "#f59e0b" }}>⚑</span>}
+                        {type === "flip" && m.listPrice > 0 && <span style={{ fontSize: 9, fontWeight: 600, color: "#a8a29e", fontFamily: "'DM Mono', monospace" }}>{fmt(m.listPrice)}</span>}
+                        {type === "surplus" && m.estimatedSurplus > 0 && <span style={{ fontSize: 9, fontWeight: 600, color: "#a8a29e", fontFamily: "'DM Mono', monospace" }}>{fmt(m.estimatedSurplus)}</span>}
+                        {assignee && <span style={{ fontSize: 8, fontWeight: 700, padding: "2px 6px", borderRadius: 3, background: personColor(assignee), color: "#fafaf9", marginLeft: "auto" }}>{assignee}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {cards.length === 0 && <div style={{ fontSize: 10, color: "#57534e", textAlign: "center", padding: "12px 0", fontStyle: "italic" }}>No deals</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function PortfolioStat({ label, value, sub, color }) {
   return (
     <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14, borderTop: `2px solid ${color}` }}>
@@ -431,10 +546,11 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
         <MiniStat label="List Price" value={fmt(m.listPrice)} />
         <MiniStat label="Lien Payoff" value={fmt(m.lienPayoff)} />
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
         {deal.status === "closed" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>NET {fmt(deal.actual_net)}</span>}
+        {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
         <button onClick={e => { e.stopPropagation(); onToggleFlag(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: flagged ? 1 : 0.4, color: flagged ? "#f59e0b" : "#78716c" }} title={flagged ? "Remove flag" : "Flag for review"}>⚑</button>
@@ -469,10 +585,11 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
         {m.county && <MiniStat label="County" value={m.county} />}
         {filedDays != null && <MiniStat label="Days Since Filed" value={filedDays + "d"} />}
       </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {deal.lead_source && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{deal.lead_source}</span>}
         {deal.status === "recovered" && deal.actual_net != null && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #047857", letterSpacing: "0.06em" }}>FEE {fmt(deal.actual_net)}</span>}
+        {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
         <button onClick={e => { e.stopPropagation(); onToggleFlag(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: flagged ? 1 : 0.4, color: flagged ? "#f59e0b" : "#78716c" }} title={flagged ? "Remove flag" : "Flag for review"}>⚑</button>
@@ -497,21 +614,22 @@ function MiniStat({ label, value }) {
 }
 
 // ─── New Deal Modal ──────────────────────────────────────────────────
-function NewDealModal({ onAdd, onClose }) {
+function NewDealModal({ onAdd, onClose, teamMembers }) {
   const [type, setType] = useState("flip");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
   const [leadSource, setLeadSource] = useState("");
   const [deadline, setDeadline] = useState("");
   const [filedAt, setFiledAt] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
 
   const create = () => {
     if (!name) return;
     const id = type + "-" + uid();
     const meta = type === "flip"
-      ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [] }
-      : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "" };
-    const deal = { id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta };
+      ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [], assigned_to: assignedTo || "" }
+      : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "", assigned_to: assignedTo || "" };
+    const deal = { id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta, assigned_to: assignedTo || null };
     if (leadSource) deal.lead_source = leadSource;
     if (deadline) deal.deadline = deadline;
     if (type === "surplus" && filedAt) deal.filed_at = filedAt;
@@ -544,6 +662,12 @@ function NewDealModal({ onAdd, onClose }) {
           <input type="date" value={filedAt} onChange={e => setFiledAt(e.target.value)} style={inputStyle} />
         </Field>
       )}
+      <Field label="Assigned To" style={{ marginTop: 12 }}>
+        <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
+          <option value="">Unassigned</option>
+          {(teamMembers || []).map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
+      </Field>
       <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
         <button onClick={onClose} style={btnGhost}>Cancel</button>
         <button onClick={create} style={btnPrimary}>Create Deal</button>
@@ -555,7 +679,7 @@ function NewDealModal({ onAdd, onClose }) {
 function Modal({ onClose, title, children }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
+      <div className="modal-inner" onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
           <button onClick={onClose} style={{ ...btnGhost, fontSize: 16, padding: "2px 10px" }}>×</button>
@@ -651,6 +775,16 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
         }} style={{ ...selectStyle, fontSize: 11 }}>
           {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
         </select>
+        <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
+        <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
+          const val = e.target.value || null;
+          const m = deal.meta || {};
+          onUpdateDeal({ assigned_to: val, meta: { ...m, assigned_to: val || "" } });
+          logAct(`Assigned to ${val || "nobody"}`);
+        }} style={{ ...selectStyle, fontSize: 11 }}>
+          <option value="">Unassigned</option>
+          {teamMembers.map(m => <option key={m} value={m}>{m}</option>)}
+        </select>
         <button onClick={() => {
           const m = deal.meta || {};
           onUpdateDeal({ meta: { ...m, flagged: !m.flagged } });
@@ -659,7 +793,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
         </button>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+      <div className={isFlip ? "metric-grid-4" : "metric-grid-3"} style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
         {isFlip ? (<>
           <Metric label="Contract Price" value={fmt(m.contractPrice)} sub="What we pay" color="#f59e0b" />
           <Metric label="Cash Deployed" value={fmt(totalExpenses)} sub="Expenses to date" color="#a8a29e" />
@@ -672,7 +806,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
         </>)}
       </div>
 
-      <div style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
+      <div className="detail-tabs" style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
         {tabs.map(id => (
           <button key={id} onClick={() => setTab(id)} style={{
             background: "transparent", border: "none", color: tab === id ? "#fafaf9" : "#78716c",
@@ -708,7 +842,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
   const maxCat = cats[0]?.[1] || 1;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+    <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Live P&L Waterfall">
           <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
@@ -787,7 +921,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
+    <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Case Details">
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -928,7 +1062,7 @@ function Expenses({ items, dealId, userId, logAct, reload }) {
   return (
     <Card title={`Expenses (${items.length} items · ${fmt(total)} total)`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
       {adding && (
-        <div style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
+        <div className="expense-add-form" style={{ padding: 14, background: "#0c0a09", borderRadius: 8, border: "1px solid #44403c", marginBottom: 14, display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr auto", gap: 8, alignItems: "end" }}>
           <Field label="Payee"><input value={draft.payee} onChange={e => setDraft({ ...draft, payee: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
           <Field label="Amount"><input type="number" value={draft.amount} onChange={e => setDraft({ ...draft, amount: e.target.value })} style={inputStyle} placeholder="0" /></Field>
           <Field label="Date"><input type="date" value={draft.date} onChange={e => setDraft({ ...draft, date: e.target.value })} style={inputStyle} /></Field>
