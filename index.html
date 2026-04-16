@@ -318,7 +318,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && d.actual_net != null && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
   const ytdProfit = closedYtd.reduce((s, d) => s + (parseFloat(d.actual_net) || 0), 0);
   const pipeline = activeDeals;
-  const overdue = deals.filter(d => deadlineInfo(d.deadline).overdue);
+  const overdue = deals.filter(d => deadlineInfo(d.meta?.deadline || d.deadline).overdue);
   const stale = activeDeals.filter(d => {
     const last = d.updated_at || d.created;
     return last && daysSince(last) > 14;
@@ -327,8 +327,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const exportCSV = () => {
     const rows = visible.map(d => ({
       id: d.id, type: d.type, name: d.name, address: d.address || "",
-      status: d.status, flagged: d.meta?.flagged ? "Y" : "", lead_source: d.lead_source || "", deadline: d.deadline || "",
-      filed_at: d.filed_at || "", actual_net: d.actual_net || "",
+      status: d.status, flagged: d.meta?.flagged ? "Y" : "", lead_source: d.lead_source || "", deadline: d.meta?.deadline || d.deadline || "",
+      filed_at: d.meta?.filed_at || d.filed_at || "", actual_net: d.actual_net || "",
       list_price: d.meta?.listPrice || "", contract_price: d.meta?.contractPrice || "",
       estimated_surplus: d.meta?.estimatedSurplus || "", county: d.meta?.county || "",
       created: d.created || "",
@@ -528,7 +528,7 @@ function SectionLabel({ icon, label }) {
 function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
-  const dl = deadlineInfo(deal.deadline);
+  const dl = deadlineInfo(m.deadline || deal.deadline);
   const flagged = m.flagged;
   const isClosed = ["closed", "recovered", "dead"].includes(deal.status);
   return (
@@ -572,8 +572,8 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
 function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
-  const dl = deadlineInfo(deal.deadline);
-  const filedDays = daysSince(deal.filed_at);
+  const dl = deadlineInfo(m.deadline || deal.deadline);
+  const filedDays = daysSince(m.filed_at || deal.filed_at);
   const flagged = m.flagged;
   const isClosed = ["closed", "recovered", "dead"].includes(deal.status);
   return (
@@ -649,8 +649,8 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
       : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "", assigned_to: assignedTo || "" };
     const deal = { id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta, assigned_to: assignedTo || null };
     if (leadSource) deal.lead_source = leadSource;
-    if (deadline) deal.deadline = deadline;
-    if (type === "surplus" && filedAt) deal.filed_at = filedAt;
+    if (deadline) deal.meta.deadline = deadline;
+    if (type === "surplus" && filedAt) deal.meta.filed_at = filedAt;
     onAdd(deal);
   };
 
@@ -883,7 +883,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
         </Card>
         <Card title="Timing & Source" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
-            <Field label="Closing / Target Date"><input type="date" value={deal.deadline || ""} onChange={e => onUpdateDeal({ deadline: e.target.value || null })} style={inputStyle} /></Field>
+            <Field label="Closing / Target Date"><input type="date" value={m.deadline || deal.deadline || ""} onChange={e => updateMeta({ deadline: e.target.value || null })} style={inputStyle} /></Field>
             <Field label="Lead Source">
               <select value={deal.lead_source || ""} onChange={e => onUpdateDeal({ lead_source: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
                 <option value="">—</option>
@@ -959,8 +959,8 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
         </Card>
         <Card title="Timing & Source" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Filed Date"><input type="date" value={deal.filed_at || ""} onChange={e => onUpdateDeal({ filed_at: e.target.value || null })} style={inputStyle} /></Field>
-            <Field label="Deadline (statutory)"><input type="date" value={deal.deadline || ""} onChange={e => onUpdateDeal({ deadline: e.target.value || null })} style={inputStyle} /></Field>
+            <Field label="Filed Date"><input type="date" value={m.filed_at || deal.filed_at || ""} onChange={e => updateMeta({ filed_at: e.target.value || null })} style={inputStyle} /></Field>
+            <Field label="Deadline (statutory)"><input type="date" value={m.deadline || deal.deadline || ""} onChange={e => updateMeta({ deadline: e.target.value || null })} style={inputStyle} /></Field>
             <Field label="Lead Source">
               <select value={deal.lead_source || ""} onChange={e => onUpdateDeal({ lead_source: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
                 <option value="">—</option>
@@ -971,7 +971,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               <Field label="Actual Fee Received"><input type="number" value={deal.actual_net || ""} onChange={e => onUpdateDeal({ actual_net: e.target.value ? parseFloat(e.target.value) : null, closed_at: deal.closed_at || new Date().toISOString() })} style={inputStyle} placeholder="Final fee $" /></Field>
             )}
           </div>
-          {deal.filed_at && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(deal.filed_at)} days ago{deal.deadline && ` · ${deadlineInfo(deal.deadline).label || 'on track'}`}</div>}
+          {(m.filed_at || deal.filed_at) && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(m.filed_at || deal.filed_at)} days ago{(m.deadline || deal.deadline) && ` · ${deadlineInfo(m.deadline || deal.deadline).label || 'on track'}`}</div>}
         </Card>
       </div>
       <div>
