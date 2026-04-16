@@ -70,6 +70,25 @@ const deadlineInfo = (dateStr) => {
   if (diff <= 30) return { label: `Due in ${diff}d`, overdue: false, soon: false };
   return { label: "", overdue: false, soon: false };
 };
+// Best-available net profit for a deal without needing per-deal expenses loaded.
+// Prefers actual_net when set (user's source of truth); else computes from meta.
+const computeDealNet = (deal) => {
+  if (deal.actual_net != null && deal.actual_net !== "") {
+    const v = parseFloat(deal.actual_net);
+    if (!isNaN(v)) return v;
+  }
+  const m = deal.meta || {};
+  if (deal.type === "flip") {
+    const strategy = m.strategy || "flip";
+    const salePrice = strategy === "wholesale" ? (m.wholesalePrice || 0) : (m.listPrice || 0);
+    const closingPct = ((m.buyerAgentPct || 0) + (m.closingMiscPct || 0)) / 100;
+    const closingDollars = strategy === "wholesale" ? 0 : salePrice * closingPct + (m.flatFee || 0);
+    return salePrice - (m.contractPrice || 0) - closingDollars;
+  }
+  // surplus / wholesale / rental / other → use projected fee minus attorney fee
+  const projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
+  return projectedFee - (m.attorneyFee || 0);
+};
 const csvEscape = (v) => {
   if (v == null) return "";
   const s = String(v);
@@ -315,8 +334,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const surplus = visible.filter(d => d.type === "surplus");
 
   const year = new Date().getFullYear();
-  const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && d.actual_net != null && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
-  const ytdProfit = closedYtd.reduce((s, d) => s + (parseFloat(d.actual_net) || 0), 0);
+  const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
+  const ytdProfit = closedYtd.reduce((s, d) => s + (computeDealNet(d) || 0), 0);
   const pipeline = activeDeals;
   const overdue = deals.filter(d => deadlineInfo(d.meta?.deadline || d.deadline).overdue);
   const stale = activeDeals.filter(d => {
@@ -547,8 +566,8 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
       </div>
       {isClosed ? (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-          <MiniStat label="Net Profit" value={deal.actual_net != null ? fmt(deal.actual_net) : "—"} />
-          <MiniStat label="Closed Date" value={deal.closed_at ? new Date(deal.closed_at).toLocaleDateString() : "—"} />
+          <MiniStat label={deal.actual_net != null ? "Net Profit" : "Est. Net"} value={fmt(computeDealNet(deal))} />
+          <MiniStat label="Closed Date" value={(deal.closed_at || deal.updated_at) ? new Date(deal.closed_at || deal.updated_at).toLocaleDateString() : "—"} />
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
@@ -592,8 +611,8 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
       </div>
       {isClosed ? (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-          <MiniStat label={deal.status === "recovered" ? "Our Fee" : "Net Profit"} value={deal.actual_net != null ? fmt(deal.actual_net) : "—"} />
-          <MiniStat label="Closed Date" value={deal.closed_at ? new Date(deal.closed_at).toLocaleDateString() : "—"} />
+          <MiniStat label={deal.actual_net != null ? (deal.status === "recovered" ? "Our Fee" : "Net Profit") : (deal.status === "recovered" ? "Est. Fee" : "Est. Net")} value={fmt(computeDealNet(deal))} />
+          <MiniStat label="Closed Date" value={(deal.closed_at || deal.updated_at) ? new Date(deal.closed_at || deal.updated_at).toLocaleDateString() : "—"} />
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
@@ -788,7 +807,11 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
         <select value={deal.status} onChange={e => {
           const prev = deal.status;
           const next = e.target.value;
-          onUpdateDeal({ status: next });
+          const patch = { status: next };
+          const isClosedStatus = (s) => ["closed", "recovered"].includes(s);
+          if (isClosedStatus(next) && !deal.closed_at) patch.closed_at = new Date().toISOString();
+          if (!isClosedStatus(next) && isClosedStatus(prev)) patch.closed_at = null;
+          onUpdateDeal(patch);
           logAct(`Status changed: ${prev.replace(/-/g," ")} → ${next.replace(/-/g," ")}`);
         }} style={{ ...selectStyle, fontSize: 11 }}>
           {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
