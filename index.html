@@ -337,7 +337,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
   const ytdProfit = closedYtd.reduce((s, d) => s + (computeDealNet(d) || 0), 0);
   const pipeline = activeDeals;
-  const overdue = deals.filter(d => deadlineInfo(d.meta?.deadline || d.deadline).overdue);
+  const estFlipProfit = activeDeals.filter(d => d.type === "flip").reduce((s, d) => s + (computeDealNet(d) || 0), 0);
+  const estSurplusProfit = activeDeals.filter(d => d.type === "surplus").reduce((s, d) => s + (computeDealNet(d) || 0), 0);
+  const estProfit = estFlipProfit + estSurplusProfit;
   const stale = activeDeals.filter(d => {
     const last = d.updated_at || d.created;
     return last && daysSince(last) > 14;
@@ -371,7 +373,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />
         <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
         <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
-        <PortfolioStat label="Overdue" value={overdue.length} sub={overdue.length ? "needs attention" : "all caught up"} color={overdue.length ? "#ef4444" : "#78716c"} />
+        <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />
         <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
       </div>
 
