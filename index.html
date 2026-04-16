@@ -580,6 +580,7 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {(m.lead_source || deal.lead_source) && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{m.lead_source || deal.lead_source}</span>}
+        {m.bonus_due && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #10b981", letterSpacing: "0.06em", textTransform: "uppercase" }} title="Bonus due on this deal">$ Bonus Due</span>}
         {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
@@ -628,6 +629,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {(m.lead_source || deal.lead_source) && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{m.lead_source || deal.lead_source}</span>}
+        {m.bonus_due && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: "#064e3b", color: "#6ee7b7", border: "1px solid #10b981", letterSpacing: "0.06em", textTransform: "uppercase" }} title="Bonus due on this deal">$ Bonus Due</span>}
         {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
@@ -833,6 +835,14 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
           onUpdateDeal({ meta: { ...m, flagged: !m.flagged } });
         }} style={{ background: "transparent", border: `1px solid ${deal.meta?.flagged ? "#d97706" : "#44403c"}`, color: deal.meta?.flagged ? "#f59e0b" : "#78716c", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
           ⚑ {deal.meta?.flagged ? "Flagged" : "Flag for Review"}
+        </button>
+        <button onClick={() => {
+          const m = deal.meta || {};
+          const next = !m.bonus_due;
+          onUpdateDeal({ meta: { ...m, bonus_due: next } });
+          logAct(next ? "Bonus marked due" : "Bonus cleared");
+        }} style={{ background: "transparent", border: `1px solid ${deal.meta?.bonus_due ? "#10b981" : "#44403c"}`, color: deal.meta?.bonus_due ? "#10b981" : "#78716c", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+          $ {deal.meta?.bonus_due ? "Bonus Due" : "Mark Bonus Due"}
         </button>
       </div>
 
