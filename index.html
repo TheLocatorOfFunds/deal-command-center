@@ -319,6 +319,18 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
   const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
   const archivedDeals = deals.filter(d => ARCHIVE_STATUSES.includes(d.status));
+
+  // Kanban drag-and-drop: persist the new status (and stamp closed_at
+  // on close/recover, clear it on move-back-to-active).
+  const onMoveDeal = (id, prev, next) => {
+    const patch = { status: next };
+    const d = deals.find(x => x.id === id);
+    const wasClosed = ARCHIVE_STATUSES.includes(prev);
+    const isClosedNow = ARCHIVE_STATUSES.includes(next);
+    if (isClosedNow && !wasClosed && !(d && d.closed_at)) patch.closed_at = new Date().toISOString();
+    if (!isClosedNow && wasClosed) patch.closed_at = null;
+    onUpdateDeal(id, patch);
+  };
   const flaggedDeals = deals.filter(d => d.meta?.flagged);
 
   const allStatuses = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
@@ -419,13 +431,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {flips.length > 0 && (
                 <div style={{ marginBottom: 28 }}>
                   <SectionLabel icon="🏠" label="Flips — Kanban" />
-                  <KanbanBoard deals={flips} statuses={DEAL_STATUSES.flip} onSelect={onSelect} type="flip" />
+                  <KanbanBoard deals={flips} statuses={DEAL_STATUSES.flip} onSelect={onSelect} type="flip" onMoveDeal={onMoveDeal} />
                 </div>
               )}
               {surplus.length > 0 && (
                 <div>
                   <SectionLabel icon="💰" label="Surplus — Kanban" />
-                  <KanbanBoard deals={surplus} statuses={DEAL_STATUSES.surplus} onSelect={onSelect} type="surplus" />
+                  <KanbanBoard deals={surplus} statuses={DEAL_STATUSES.surplus} onSelect={onSelect} type="surplus" onMoveDeal={onMoveDeal} />
                 </div>
               )}
               {visible.length === 0 && (
@@ -495,15 +507,51 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   );
 }
 
-function KanbanBoard({ deals, statuses, onSelect, type }) {
+function KanbanBoard({ deals, statuses, onSelect, type, onMoveDeal }) {
+  const [dragId, setDragId] = useState(null);
+  const [dragOverStatus, setDragOverStatus] = useState(null);
+
+  const handleDragStart = (e, dealId) => {
+    setDragId(dealId);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dealId);
+  };
+  const handleDragEnd = () => {
+    setDragId(null);
+    setDragOverStatus(null);
+  };
+  const handleDragOver = (e, status) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverStatus !== status) setDragOverStatus(status);
+  };
+  const handleDragLeave = (status) => {
+    if (dragOverStatus === status) setDragOverStatus(null);
+  };
+  const handleDrop = (e, status) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData("text/plain") || dragId;
+    setDragId(null);
+    setDragOverStatus(null);
+    if (!id) return;
+    const d = deals.find(x => x.id === id);
+    if (!d || d.status === status) return;
+    onMoveDeal && onMoveDeal(id, d.status, status);
+  };
+
   return (
     <div className="kanban-board" style={{ overflowX: "auto", paddingBottom: 8 }}>
       <div className="kanban-columns" style={{ display: "grid", gridTemplateColumns: `repeat(${statuses.length}, minmax(180px, 1fr))`, gap: 10 }}>
         {statuses.map(status => {
           const col = STATUS_COLORS[status] || "#78716c";
           const cards = deals.filter(d => d.status === status);
+          const isOver = dragOverStatus === status;
           return (
-            <div key={status} style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 10, borderTop: `3px solid ${col}`, minHeight: 120 }}>
+            <div key={status}
+              onDragOver={e => handleDragOver(e, status)}
+              onDragLeave={() => handleDragLeave(status)}
+              onDrop={e => handleDrop(e, status)}
+              style={{ background: isOver ? "#1f1c19" : "#1c1917", border: `1px ${isOver ? "dashed" : "solid"} ${isOver ? col : "#292524"}`, borderRadius: 10, padding: 10, borderTop: `3px solid ${col}`, minHeight: 120, transition: "background 0.1s, border-color 0.1s" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, padding: "0 4px" }}>
                 <span style={{ fontSize: 10, fontWeight: 700, color: col, letterSpacing: "0.08em", textTransform: "uppercase" }}>{status.replace(/-/g, " ")}</span>
                 <span style={{ fontSize: 10, fontWeight: 700, color: "#78716c", background: "#292524", padding: "2px 7px", borderRadius: 8, minWidth: 20, textAlign: "center" }}>{cards.length}</span>
@@ -512,8 +560,14 @@ function KanbanBoard({ deals, statuses, onSelect, type }) {
                 {cards.map(d => {
                   const m = d.meta || {};
                   const assignee = d.assigned_to || m.assigned_to;
+                  const dragging = dragId === d.id;
                   return (
-                    <div key={d.id} onClick={() => onSelect(d.id)} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 10, cursor: "pointer", transition: "border-color 0.15s" }}
+                    <div key={d.id}
+                      draggable
+                      onDragStart={e => handleDragStart(e, d.id)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => onSelect(d.id)}
+                      style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 10, cursor: "grab", opacity: dragging ? 0.4 : 1, transition: "border-color 0.15s, opacity 0.1s" }}
                       onMouseEnter={e => e.currentTarget.style.borderColor = "#44403c"}
                       onMouseLeave={e => e.currentTarget.style.borderColor = "#292524"}>
                       <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4, lineHeight: 1.3 }}>{d.name}</div>
@@ -527,7 +581,7 @@ function KanbanBoard({ deals, statuses, onSelect, type }) {
                     </div>
                   );
                 })}
-                {cards.length === 0 && <div style={{ fontSize: 10, color: "#57534e", textAlign: "center", padding: "12px 0", fontStyle: "italic" }}>No deals</div>}
+                {cards.length === 0 && <div style={{ fontSize: 10, color: "#57534e", textAlign: "center", padding: "12px 0", fontStyle: "italic" }}>{isOver ? "Drop to move here" : "No deals"}</div>}
               </div>
             </div>
           );
