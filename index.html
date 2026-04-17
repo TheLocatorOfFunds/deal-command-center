@@ -881,7 +881,7 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
     onAdd(deal);
   };
 
-  const LEAD_SOURCES = ["MLS", "Direct Mail", "Tax Sale List", "Auction", "Referral", "Cold Call", "Online Lead", "Drive-by", "Other"];
+  const LEAD_SOURCES = ["MLS", "Direct Mail", "Tax Sale List", "Auction", "Referral", "Cold Call", "Online Lead", "Drive-by", "Castle", "Other"];
 
   return (
     <Modal onClose={onClose} title="Add New Deal">
@@ -1126,7 +1126,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
             <Field label="Lead Source">
               <select value={m.lead_source || deal.lead_source || ""} onChange={e => updateMeta({ lead_source: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
                 <option value="">—</option>
-                {["MLS","Direct Mail","Tax Sale List","Auction","Referral","Cold Call","Online Lead","Drive-by","Other"].map(s => <option key={s} value={s}>{s}</option>)}
+                {["MLS","Direct Mail","Tax Sale List","Auction","Referral","Cold Call","Online Lead","Drive-by","Castle","Other"].map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
             {deal.status === "closed" && (
@@ -1205,7 +1205,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
             <Field label="Lead Source">
               <select value={m.lead_source || deal.lead_source || ""} onChange={e => updateMeta({ lead_source: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
                 <option value="">—</option>
-                {["MLS","Direct Mail","Tax Sale List","Auction","Referral","Cold Call","Online Lead","Drive-by","Other"].map(s => <option key={s} value={s}>{s}</option>)}
+                {["MLS","Direct Mail","Tax Sale List","Auction","Referral","Cold Call","Online Lead","Drive-by","Castle","Other"].map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </Field>
             {deal.status === "recovered" && (
