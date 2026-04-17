@@ -211,7 +211,7 @@ function DealCommandCenter({ session, profile }) {
   const [teamMembers, setTeamMembers] = useState([profile.name]);
   const [recentActivity, setRecentActivity] = useState([]);
   const [showLog, setShowLog] = useState(false);
-  const [view, setView] = useState("active"); // "active" | "archive" | "flagged"
+  const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
 
@@ -379,6 +379,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
       <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
+          {viewBtn("today", "📌 Today", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
           {viewBtn("archive", "Closed Deals", archivedDeals.length)}
@@ -389,27 +390,31 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar */}
-      <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
-        <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
-        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
-          <option value="all">All Statuses</option>
-          <optgroup label="Flip Statuses">
-            {DEAL_STATUSES.flip.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
-          </optgroup>
-          <optgroup label="Surplus Statuses">
-            {DEAL_STATUSES.surplus.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
-          </optgroup>
-        </select>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#1c1917", borderRadius: 6, padding: 2, border: "1px solid #292524" }}>
-          <button onClick={() => setLayoutMode("cards")} style={{ background: layoutMode === "cards" ? "#292524" : "transparent", color: layoutMode === "cards" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Cards</button>
-          <button onClick={() => setLayoutMode("kanban")} style={{ background: layoutMode === "kanban" ? "#292524" : "transparent", color: layoutMode === "kanban" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Kanban</button>
+      {/* Search / Filter / Layout toggle bar (hidden on Today view) */}
+      {view !== "today" && (
+        <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
+          <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
+          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
+            <option value="all">All Statuses</option>
+            <optgroup label="Flip Statuses">
+              {DEAL_STATUSES.flip.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
+            </optgroup>
+            <optgroup label="Surplus Statuses">
+              {DEAL_STATUSES.surplus.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
+            </optgroup>
+          </select>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#1c1917", borderRadius: 6, padding: 2, border: "1px solid #292524" }}>
+            <button onClick={() => setLayoutMode("cards")} style={{ background: layoutMode === "cards" ? "#292524" : "transparent", color: layoutMode === "cards" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Cards</button>
+            <button onClick={() => setLayoutMode("kanban")} style={{ background: layoutMode === "kanban" ? "#292524" : "transparent", color: layoutMode === "kanban" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Kanban</button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
         <div>
-          {layoutMode === "kanban" ? (
+          {view === "today" ? (
+            <TodayView deals={deals} onSelect={onSelect} />
+          ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
                 <div style={{ marginBottom: 28 }}>
@@ -544,6 +549,151 @@ function PortfolioStat({ label, value, sub, color }) {
 
 function SectionLabel({ icon, label }) {
   return <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12, display: "flex", alignItems: "center", gap: 8 }}><span>{icon}</span>{label}</div>;
+}
+
+// ─── Today View ──────────────────────────────────────────────────────
+// Best-effort expected payout date for a deal.
+// Prefers explicit meta.expected_payout, falls back to deadline, then
+// filed_at + 120 days (Ohio surplus typical recovery timeline).
+const expectedPayoutDate = (deal) => {
+  const m = deal.meta || {};
+  if (m.expected_payout) { const d = new Date(m.expected_payout); if (!isNaN(d)) return d; }
+  const dl = m.deadline || deal.deadline;
+  if (dl) { const d = new Date(dl); if (!isNaN(d)) return d; }
+  const filed = m.filed_at || deal.filed_at;
+  if (filed) { const d = new Date(filed); if (!isNaN(d)) { d.setDate(d.getDate() + 120); return d; } }
+  return null;
+};
+
+function TodayView({ deals, onSelect }) {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59);
+  const monthName = now.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const isActive = (d) => !["closed", "recovered", "dead"].includes(d.status);
+  const active = deals.filter(isActive);
+
+  // Monthly stats
+  const addedThisMonth = deals.filter(d => {
+    if (!d.created) return false;
+    const c = new Date(d.created);
+    return !isNaN(c) && c >= monthStart && c <= monthEnd;
+  });
+  const payingThisMonth = active.filter(d => {
+    const date = expectedPayoutDate(d);
+    return date && date >= monthStart && date <= monthEnd;
+  });
+  const projectedRevenue = payingThisMonth.reduce((s, d) => s + (computeDealNet(d) || 0), 0);
+
+  // Priority sections
+  const urgent = active.filter(d => {
+    const dl = d.meta?.deadline || d.deadline;
+    if (!dl) return false;
+    const info = deadlineInfo(dl);
+    return info.overdue || info.soon;
+  }).sort((a, b) => {
+    const da = new Date(a.meta?.deadline || a.deadline).getTime();
+    const db = new Date(b.meta?.deadline || b.deadline).getTime();
+    return da - db;
+  });
+
+  const stale = active.filter(d => {
+    const last = d.updated_at || d.created;
+    return last && daysSince(last) > 14;
+  }).sort((a, b) => {
+    const la = a.updated_at || a.created;
+    const lb = b.updated_at || b.created;
+    return new Date(la).getTime() - new Date(lb).getTime();
+  });
+
+  const bonusesOwed = deals.filter(d => d.meta?.bonus_due);
+
+  const unfiledSurplus = active.filter(d => {
+    if (d.type !== "surplus") return false;
+    if (d.status !== "new-lead") return false;
+    const last = d.updated_at || d.created;
+    return last && daysSince(last) > 5;
+  });
+
+  const hasAny = urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
+
+  const Row = ({ deal, right, tone }) => {
+    const m = deal.meta || {};
+    const typeIcon = deal.type === "flip" ? "🏠" : "💰";
+    const rightColor = tone === "red" ? "#fca5a5" : tone === "amber" ? "#fbbf24" : tone === "green" ? "#6ee7b7" : "#a8a29e";
+    return (
+      <div onClick={() => onSelect(deal.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: "#1c1917", border: "1px solid #292524", borderRadius: 8, marginBottom: 6, cursor: "pointer" }}>
+        <span style={{ fontSize: 14 }}>{typeIcon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{deal.name}</div>
+          <div style={{ fontSize: 11, color: "#78716c", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {deal.address || "—"}{m.county ? ` · ${m.county}` : ""}{(m.attorney) ? ` · ${m.attorney}` : ""}
+          </div>
+        </div>
+        <div style={{ fontSize: 10, fontWeight: 700, color: rightColor, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{right}</div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {/* Monthly stats strip */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+        <PortfolioStat label={`Deals Added · ${monthName}`} value={addedThisMonth.length} sub={addedThisMonth.length === 1 ? "1 new deal this month" : `${addedThisMonth.length} new deals this month`} color="#3b82f6" />
+        <PortfolioStat label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />
+        <PortfolioStat label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
+      </div>
+
+      {/* Priority queue */}
+      {!hasAny && (
+        <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
+          Nothing urgent. Go make some money.
+        </div>
+      )}
+
+      {urgent.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <SectionLabel icon="🔥" label={`Urgent (${urgent.length})`} />
+          {urgent.map(d => {
+            const dl = d.meta?.deadline || d.deadline;
+            const info = deadlineInfo(dl);
+            return <Row key={d.id} deal={d} right={info.label} tone={info.overdue ? "red" : "amber"} />;
+          })}
+        </div>
+      )}
+
+      {stale.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <SectionLabel icon="⏳" label={`Stale · no update in 14+ days (${stale.length})`} />
+          {stale.map(d => {
+            const last = d.updated_at || d.created;
+            const days = daysSince(last);
+            return <Row key={d.id} deal={d} right={`${days}d idle`} tone={days > 30 ? "red" : "amber"} />;
+          })}
+        </div>
+      )}
+
+      {bonusesOwed.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <SectionLabel icon="💰" label={`Bonuses Owed (${bonusesOwed.length})`} />
+          {bonusesOwed.map(d => <Row key={d.id} deal={d} right="Bonus due" tone="green" />)}
+        </div>
+      )}
+
+      {unfiledSurplus.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <SectionLabel icon="📋" label={`Unfiled Surplus · new-lead > 5 days (${unfiledSurplus.length})`} />
+          {unfiledSurplus.map(d => {
+            const last = d.updated_at || d.created;
+            return <Row key={d.id} deal={d} right={`${daysSince(last)}d in new-lead`} tone="amber" />;
+          })}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
