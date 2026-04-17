@@ -6,7 +6,7 @@ This repo is a lead/deal tracker for **FundLocators** (flips + surplus fund case
 
 - **One file**: `index.html` is the entire app (~52KB). No build step, no bundler, no package.json.
 - **Runtime**: React 18 + Babel Standalone + `@supabase/supabase-js@2`, all loaded from CDN inside the HTML. JSX is transpiled in the browser via `<script type="text/babel">`.
-- **Backend**: Supabase project `fmrtiaszjfoaeghboycn` — Postgres + Auth + Realtime.
+- **Backend**: Supabase project `rcfaashkfpurkvtmsmeb` — Postgres + Auth + Realtime.
 - **Hosting**: GitHub Pages on `main` branch root. Any commit to `main` rebuilds in ~30s. URL: https://thelocatoroffunds.github.io/deal-command-center/
 - **Auth**: Magic-link (`signInWithOtp`). Users auto-create on first sign-in. Profiles auto-populate via `handle_new_user` trigger.
 
@@ -15,7 +15,7 @@ This repo is a lead/deal tracker for **FundLocators** (flips + surplus fund case
 Supabase URL + **publishable** (anon) key are hardcoded near the top of `index.html`:
 
 ```js
-const SUPABASE_URL = 'https://fmrtiaszjfoaeghboycn.supabase.co';
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_...';
 ```
 
