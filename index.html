@@ -211,9 +211,11 @@ function DealCommandCenter({ session, profile }) {
   const [teamMembers, setTeamMembers] = useState([profile.name]);
   const [recentActivity, setRecentActivity] = useState([]);
   const [showLog, setShowLog] = useState(false);
+  const [showTeam, setShowTeam] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
+  const isAdmin = profile.role === 'admin' || profile.role === 'user';
 
   const loadDeals = async () => {
     const { data } = await sb.from('deals').select('*').order('created_at', { ascending: false });
@@ -289,12 +291,14 @@ function DealCommandCenter({ session, profile }) {
         <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
           <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
+          {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
       </div>
 
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
+      {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} onToggleFlag={(id) => {
@@ -921,10 +925,10 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
   );
 }
 
-function Modal({ onClose, title, children }) {
+function Modal({ onClose, title, children, wide }) {
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div className="modal-inner" onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: 480, maxHeight: "90vh", overflowY: "auto" }}>
+      <div className="modal-inner" onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: wide ? 720 : 480, maxHeight: "90vh", overflowY: "auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
           <button onClick={onClose} style={{ ...btnGhost, fontSize: 16, padding: "2px 10px" }}>×</button>
@@ -1181,7 +1185,7 @@ const portalUrl = () => {
 };
 
 function ClientPortalCard({ deal, logAct }) {
-  const [access, setAccess] = useState(null);
+  const [accessList, setAccessList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1189,8 +1193,8 @@ function ClientPortalCard({ deal, logAct }) {
 
   const load = async () => {
     setLoading(true);
-    const { data } = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
-    setAccess(data || null);
+    const { data } = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true });
+    setAccessList(data || []);
     setLoading(false);
   };
 
@@ -1201,10 +1205,8 @@ function ClientPortalCard({ deal, logAct }) {
     setBusy(true); setMsg(null);
     try {
       const addr = email.trim().toLowerCase();
-      // Upsert pending invite
       const { error: insErr } = await sb.from('client_access').insert({ deal_id: deal.id, email: addr, enabled: true });
       if (insErr && !String(insErr.message).includes('duplicate')) throw insErr;
-      // Fire magic link
       const { error: otpErr } = await sb.auth.signInWithOtp({ email: addr, options: { emailRedirectTo: portalUrl() } });
       if (otpErr) throw otpErr;
       if (logAct) await logAct(`Client portal invited: ${addr}`);
@@ -1218,17 +1220,17 @@ function ClientPortalCard({ deal, logAct }) {
     }
   };
 
-  const resend = async () => {
-    if (!access?.email) {
-      setMsg({ type: 'error', text: "Can't resend — client has already signed in once. Share the portal URL below directly." });
+  const resend = async (row) => {
+    if (!row.email) {
+      setMsg({ type: 'error', text: "This claimant has already signed in. Share the portal URL directly." });
       return;
     }
     setBusy(true); setMsg(null);
     try {
-      const { error } = await sb.auth.signInWithOtp({ email: access.email, options: { emailRedirectTo: portalUrl() } });
+      const { error } = await sb.auth.signInWithOtp({ email: row.email, options: { emailRedirectTo: portalUrl() } });
       if (error) throw error;
-      if (logAct) await logAct(`Client portal link resent: ${access.email}`);
-      setMsg({ type: 'success', text: 'Magic link resent.' });
+      if (logAct) await logAct(`Client portal link resent: ${row.email}`);
+      setMsg({ type: 'success', text: `Magic link resent to ${row.email}` });
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     } finally {
@@ -1236,21 +1238,19 @@ function ClientPortalCard({ deal, logAct }) {
     }
   };
 
-  const setEnabled = async (v) => {
-    if (!access) return;
+  const toggleEnabled = async (row) => {
     setBusy(true); setMsg(null);
-    await sb.from('client_access').update({ enabled: v }).eq('id', access.id);
-    if (logAct) await logAct(`Client portal ${v ? 'enabled' : 'disabled'}`);
+    await sb.from('client_access').update({ enabled: !row.enabled }).eq('id', row.id);
+    if (logAct) await logAct(`Client portal ${!row.enabled ? 'enabled' : 'disabled'} for ${row.email || 'claimant'}`);
     await load();
     setBusy(false);
   };
 
-  const remove = async () => {
-    if (!access) return;
-    if (!window.confirm("Remove client portal access for this deal? The client will no longer be able to sign in.")) return;
+  const remove = async (row) => {
+    if (!window.confirm(`Remove portal access for ${row.email || 'this claimant'}?`)) return;
     setBusy(true); setMsg(null);
-    await sb.from('client_access').delete().eq('id', access.id);
-    if (logAct) await logAct(`Client portal access removed`);
+    await sb.from('client_access').delete().eq('id', row.id);
+    if (logAct) await logAct(`Client portal access removed for ${row.email || 'claimant'}`);
     await load();
     setBusy(false);
   };
@@ -1262,51 +1262,57 @@ function ClientPortalCard({ deal, logAct }) {
 
   if (loading) return (<Card title="Client Portal" style={{ marginTop: 16 }}><div style={{ fontSize: 12, color: "#78716c" }}>Checking…</div></Card>);
 
+  const titleSuffix = accessList.length > 1 ? ` · ${accessList.length} claimants` : '';
+
   return (
-    <Card title="Client Portal" style={{ marginTop: 16 }}>
-      {!access && (
-        <>
-          <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 12, lineHeight: 1.5 }}>
-            Invite the client to a read-only portal where they can see case status, attorney info, timeline, and documents. They'll never see internal expenses, notes, or other deals.
-          </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="client@email.com" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter' && email) invite(); }} />
-            <button onClick={invite} disabled={busy || !email} style={btnPrimary}>{busy ? 'Sending…' : 'Invite'}</button>
-          </div>
-        </>
+    <Card title={"Client Portal" + titleSuffix} style={{ marginTop: 16 }}>
+      {accessList.length === 0 && (
+        <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 12, lineHeight: 1.5 }}>
+          Invite one or more claimants to a read-only portal where they can see case status, attorney info, timeline, and documents. They'll never see internal expenses, notes, or other deals. For joint heirs or co-owners, invite each one separately.
+        </div>
       )}
 
-      {access && !access.enabled && (
-        <>
-          <div style={{ fontSize: 13, color: "#a8a29e" }}>Portal access is currently <b style={{ color: "#78716c" }}>disabled</b>.</div>
-          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-            <button onClick={() => setEnabled(true)} disabled={busy} style={btnPrimary}>Re-enable</button>
-            <button onClick={remove} disabled={busy} style={btnGhost}>Remove</button>
-          </div>
-        </>
+      {accessList.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+          {accessList.map(row => {
+            const label = row.email || (row.user_id ? (row.last_seen_at ? `Active · last seen ${daysSince(row.last_seen_at)}d ago` : 'Active · not yet signed in') : 'Unknown');
+            const statusColor = !row.enabled ? "#78716c" : (row.user_id ? "#10b981" : "#f59e0b");
+            const statusText = !row.enabled ? "Disabled" : (row.user_id ? "Active" : "Invite pending");
+            return (
+              <div key={row.id} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                      <span style={{ width: 7, height: 7, borderRadius: "50%", background: statusColor, display: "inline-block", flexShrink: 0 }}></span>
+                      <span style={{ fontWeight: 700, color: statusColor }}>{statusText}</span>
+                      <span style={{ color: "#78716c" }}>·</span>
+                      <span style={{ color: "#d6d3d1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.email || 'Client'}</span>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {row.enabled && row.email && <button onClick={() => resend(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>Resend link</button>}
+                  <button onClick={() => toggleEnabled(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{row.enabled ? 'Disable' : 'Enable'}</button>
+                  <button onClick={() => remove(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#ef4444" }}>Remove</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
 
-      {access && access.enabled && (
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: access.user_id ? "#10b981" : "#f59e0b" }}>
-            <span style={{ width: 8, height: 8, borderRadius: "50%", background: access.user_id ? "#10b981" : "#f59e0b", display: "inline-block" }}></span>
-            {access.user_id ? "Active" : "Invite pending"}
-          </div>
-          <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4 }}>
-            {access.user_id
-              ? (access.last_seen_at
-                ? `Client last signed in ${daysSince(access.last_seen_at)} day${daysSince(access.last_seen_at) === 1 ? '' : 's'} ago`
-                : 'Client has not signed in yet')
-              : `Invited: ${access.email || '—'}. Click "Resend" if they haven't received the link.`}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-            {access.email && <button onClick={resend} disabled={busy} style={btnPrimary}>{busy ? 'Working…' : 'Resend link'}</button>}
-            <button onClick={copyUrl} disabled={busy} style={btnGhost}>Copy portal URL</button>
-            <button onClick={() => setEnabled(false)} disabled={busy} style={btnGhost}>Disable</button>
-            <button onClick={remove} disabled={busy} style={{ ...btnGhost, color: "#ef4444" }}>Remove</button>
-          </div>
-          <div style={{ fontSize: 10, color: "#57534e", marginTop: 12, wordBreak: "break-all", padding: "8px 10px", background: "#0c0a09", borderRadius: 4, border: "1px solid #292524", fontFamily: "'DM Mono', monospace" }}>{portalUrl()}</div>
-        </>
+      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+        {accessList.length === 0 ? 'Invite client' : 'Add another claimant'}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="client@email.com" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter' && email) invite(); }} />
+        <button onClick={invite} disabled={busy || !email} style={btnPrimary}>{busy ? 'Sending…' : 'Invite'}</button>
+      </div>
+
+      {accessList.length > 0 && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={copyUrl} style={{ ...btnGhost, fontSize: 12 }}>Copy portal URL</button>
+        </div>
       )}
 
       {msg && (
@@ -1731,6 +1737,133 @@ function Activity({ items }) {
 }
 
 // ─── Full Activity Log Modal ─────────────────────────────────────────
+// ─── Team Management Modal (admin only) ─────────────
+function TeamModal({ onClose, currentUserId }) {
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("va");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('profiles').select('*').order('role').order('name');
+    setMembers(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const updateRole = async (id, role) => {
+    setBusy(true); setMsg(null);
+    const { error } = await sb.from('profiles').update({ role }).eq('id', id);
+    if (error) setMsg({ type: 'error', text: error.message });
+    else setMsg({ type: 'success', text: `Role updated.` });
+    await load();
+    setBusy(false);
+  };
+
+  const invite = async () => {
+    if (!inviteEmail) return;
+    setBusy(true); setMsg(null);
+    try {
+      const addr = inviteEmail.trim().toLowerCase();
+      const appUrl = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+      const { error } = await sb.auth.signInWithOtp({ email: addr, options: { emailRedirectTo: appUrl } });
+      if (error) throw error;
+      setMsg({ type: 'success', text: `Magic link sent to ${addr}. When they sign in, their profile will appear below — set their role to "${inviteRole}" then.` });
+      setInviteEmail("");
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const roleLabel = (r) => {
+    return ({
+      admin: 'Admin',
+      user: 'Admin (legacy)',
+      va: 'Virtual Assistant',
+      attorney: 'Attorney',
+      client: 'Client',
+    })[r] || r;
+  };
+  const roleDesc = (r) => ({
+    admin: 'Full access to everything.',
+    user: 'Full access (same as Admin). Promote to "admin" to make it explicit.',
+    va: 'Can manage deals, tasks, vendors, clients, documents. Cannot see financial data (expenses, fees, profit).',
+    attorney: 'Scoped read-only access to cases they\'re assigned to. Cannot see other deals or financials.',
+    client: 'Portal-only access to their own case. Cannot access DCC.',
+  })[r] || '';
+
+  return (
+    <Modal onClose={onClose} title="Team Management" wide>
+      <div style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Invite new team member</div>
+        <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 10, lineHeight: 1.5 }}>
+          Sends a sign-in link via email. When the person signs in, a new profile appears below — you then set their role. New profiles default to "Admin" (full access) so promote or demote immediately.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="teammate@fundlocators.com" style={{ ...inputStyle, flex: 1, minWidth: 220 }} onKeyDown={e => { if (e.key === 'Enter' && inviteEmail) invite(); }} />
+          <select value={inviteRole} onChange={e => setInviteRole(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
+            <option value="va">Virtual Assistant</option>
+            <option value="admin">Admin</option>
+            <option value="attorney">Attorney</option>
+          </select>
+          <button onClick={invite} disabled={busy || !inviteEmail} style={btnPrimary}>{busy ? 'Sending…' : 'Send magic link'}</button>
+        </div>
+      </div>
+
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Current members ({members.length})</div>
+
+      {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
+
+      {!loading && members.length === 0 && <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic" }}>No team members yet.</div>}
+
+      {!loading && members.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {members.map(m => (
+            <div key={m.id} style={{ padding: "14px 16px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>
+                    {m.name} {m.id === currentUserId && <span style={{ fontSize: 10, color: "#10b981", marginLeft: 6 }}>(you)</span>}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, fontFamily: "'DM Mono', monospace" }}>{m.id.slice(0, 8)}…</div>
+                  <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 6, lineHeight: 1.4 }}>{roleDesc(m.role)}</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select
+                    value={m.role || 'user'}
+                    onChange={e => updateRole(m.id, e.target.value)}
+                    disabled={busy || m.id === currentUserId}
+                    style={{ ...selectStyle, fontSize: 12, minWidth: 140 }}
+                    title={m.id === currentUserId ? "You can't change your own role" : undefined}
+                  >
+                    <option value="admin">Admin</option>
+                    <option value="user">Admin (legacy)</option>
+                    <option value="va">Virtual Assistant</option>
+                    <option value="attorney">Attorney</option>
+                    <option value="client">Client</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {msg && (
+        <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+          {msg.text}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function ActivityLogModal({ onClose, onJumpToDeal }) {
   const [items, setItems] = useState([]);
   const [filter, setFilter] = useState("all");

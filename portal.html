@@ -446,12 +446,16 @@ function PortalBody({ session }) {
         .eq('deal_id', access.deal_id)
         .order('created_at', { ascending: false });
 
+      // 6. Count co-claimants (privacy-safe RPC)
+      const { data: claimantCount } = await sb.rpc('my_case_claimant_count');
+
       setState({
         loading: false,
         access,
         deal,
         activity: (activity || []).filter(a => isClientFacing(a.action)),
         documents: documents || [],
+        claimantCount: claimantCount || 1,
       });
     })();
   }, [session]);
@@ -460,7 +464,7 @@ function PortalBody({ session }) {
   if (state.error === 'no_access') return <NoAccess session={session} />;
   if (state.error === 'deal_missing') return <GenericError />;
 
-  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} onSignOut={() => sb.auth.signOut()} />;
+  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} claimantCount={state.claimantCount} onSignOut={() => sb.auth.signOut()} />;
 }
 
 // ─── What's Happening Now ─────────────────────────────
@@ -586,18 +590,20 @@ function StickyCallButton() {
 }
 
 // ─── Case View ─────────────────────────────────────────
-function CaseView({ deal, access, activity, documents, onSignOut }) {
+function CaseView({ deal, access, activity, documents, claimantCount, onSignOut }) {
   const m = deal.meta || {};
   const estimatedSurplus = Number(m.estimatedSurplus) || 0;
   const feePct = Number(m.feePct) || 0;
   const ourFee = estimatedSurplus * feePct / 100;
   const clientShare = estimatedSurplus - ourFee;
+  const perClaimantShare = claimantCount > 1 ? clientShare / claimantCount : clientShare;
   const attorney = m.attorney;
   const courtCase = m.courtCase;
   const county = m.county;
   const filedAt = m.filed_at || deal.filed_at;
   const statusCls = "status-" + (deal.status || "default");
   const isRecovered = deal.status === 'recovered';
+  const isJointCase = claimantCount > 1;
 
   return (
     <div className="container">
@@ -611,7 +617,14 @@ function CaseView({ deal, access, activity, documents, onSignOut }) {
       </header>
 
       <h1 className="deal-name">{deal.name}</h1>
-      <div className="deal-sub">{county ? `${county} County, Ohio` : (deal.address || '')}</div>
+      <div className="deal-sub">
+        {county ? `${county} County, Ohio` : (deal.address || '')}
+        {isJointCase && (
+          <span style={{ marginLeft: 8, padding: '2px 8px', fontSize: 11, background: 'var(--gold-soft)', color: 'var(--amber)', borderRadius: 10, fontWeight: 600 }}>
+            Joint case · {claimantCount} claimants
+          </span>
+        )}
+      </div>
 
       <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
 
@@ -621,11 +634,11 @@ function CaseView({ deal, access, activity, documents, onSignOut }) {
         <>
           {estimatedSurplus > 0 && (
             <div className="payout-hero" style={{ marginTop: 18 }}>
-              <div className="payout-label">Your Estimated Share</div>
+              <div className="payout-label">{isJointCase ? 'Total Estimated Share (All Claimants)' : 'Your Estimated Share'}</div>
               <div className="payout-amount">{fmt$2(clientShare)}</div>
               <div className="payout-sub">
                 Based on an estimated surplus of {fmt$(estimatedSurplus)} with our {feePct}% contingency fee.
-                The final amount will be confirmed by the court's distribution order.
+                {isJointCase ? ` This case has ${claimantCount} claimants — the court's distribution order will allocate shares, which often means each claimant receives approximately ${fmt$2(perClaimantShare)} after our fee (subject to the final court order and any differing ownership percentages).` : ` The final amount will be confirmed by the court's distribution order.`}
               </div>
             </div>
           )}

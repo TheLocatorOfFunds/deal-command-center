@@ -23,11 +23,11 @@ This is safe — the publishable key is designed for client-side use. RLS is wha
 
 ## Database schema
 
-9 tables, all in `public` schema:
+10 tables, all in `public` schema:
 
 | Table | Purpose | Key columns |
 |---|---|---|
-| `profiles` | 1:1 with `auth.users` | `id` (uuid, FK to auth.users), `name`, `role` (`'user'` for team, `'client'` for portal clients) |
+| `profiles` | 1:1 with `auth.users` | `id` (uuid, FK to auth.users), `name`, `role` — one of `admin`, `user` (legacy admin), `va`, `attorney`, `client` |
 | `deals` | The core entity | `id` (text PK), `type` ('flip' / 'surplus' / 'wholesale' / 'rental' / 'other'), `status`, `name`, `address`, `meta` (jsonb for flexible per-type fields), `owner_id` |
 | `expenses` | Per-deal line items | `deal_id` FK, `category`, `amount`, `date`, `vendor`, `notes` |
 | `tasks` | Per-deal todos | `deal_id` FK, `title`, `done`, `assigned_to`, `due_date` |
@@ -35,28 +35,40 @@ This is safe — the publishable key is designed for client-side use. RLS is wha
 | `deal_notes` | Per-deal markdown | `deal_id` FK (unique), `body` |
 | `activity` | Audit log | `deal_id` FK, `user_id`, `action`, `created_at` |
 | `documents` | Per-deal file metadata | `deal_id` FK, `name`, `path`, `size`, `uploaded_by` — actual files in `deal-docs` storage bucket |
-| `client_access` | Links auth users to deals for the Client Portal | `user_id` (nullable until client signs up), `deal_id`, `email`, `enabled`, `last_seen_at` |
+| `client_access` | Links auth users to deals for the Client Portal | `user_id` (nullable until client signs up), `deal_id`, `email`, `enabled`, `last_seen_at`, `prefs` jsonb |
+| `attorney_assignments` | Links auth users to deals for Attorney scoped access | same shape as `client_access` |
 
 All child tables cascade-delete when the parent deal is deleted.
 
 ## RLS model (important — read before modifying)
 
-Two-tier model driven by `profiles.role`:
+Four-tier model driven by `profiles.role`:
 
-- **Team** (`role != 'client'`, i.e. `'user'` for Nathan/Justin): full access via `team_all_*` policies on every table.
-- **Client** (`role = 'client'`): scoped access via `client_*` policies. A client can only SELECT rows whose `deal_id` is linked to their `auth.uid()` through `public.client_access`. They can INSERT into `documents` (for their deal) but CANNOT access `expenses`, `tasks`, `vendors`, `deal_notes`, or other deals at all.
+- **Admin** (`role IN ('admin', 'user')`, Nathan/Justin): full access via `admin_all_*` policies on every table.
+- **Virtual Assistant** (`role = 'va'`): access to deals, tasks, vendors, activity, deal_notes, documents, client_access. **No access to `expenses`.** UI also hides financial fields in `deals.meta` (trust-based for jsonb keys).
+- **Attorney** (`role = 'attorney'`): scoped read-only access to deals they're assigned to via `attorney_assignments`. Can add activity rows and upload documents on their assigned deals. Cannot see other deals or financials.
+- **Client** (`role = 'client'`): portal-only. Scoped access via `client_*` policies to rows linked to them through `public.client_access`. Cannot access `expenses`, `tasks`, `vendors`, `deal_notes`.
 
-Helper: `public.is_client()` returns boolean by reading `profiles.role`. Used in all policies. `SECURITY DEFINER` so it bypasses profile RLS (no infinite recursion).
+Helpers (all `SECURITY DEFINER` so they bypass profile RLS):
+- `public.is_admin()` — true when role is `'admin'` or `'user'`
+- `public.is_va()` — true when role is `'va'`
+- `public.is_attorney()` — true when role is `'attorney'`
+- `public.is_client()` — true when role is `'client'`
+- `public.my_case_claimant_count()` — lets a client see how many claimants share their case (for multi-claimant portal context)
 
-The `handle_new_user` trigger auto-assigns `role`:
-- If the new email matches a pending `client_access` row (user_id IS NULL, enabled) → role = `'client'` and the client_access row's user_id is populated.
-- Otherwise → role = `'user'` (treated as team). Today this defaults random signups to team level; future tightening: only promote to `'user'` after admin approval.
+The `handle_new_user` trigger auto-assigns `role` at signup:
+1. Email matches pending `client_access` → role = `'client'`, links user_id
+2. Else email matches pending `attorney_assignments` → role = `'attorney'`, links user_id
+3. Else → role = `'user'` (admin). Future tightening: require admin approval before granting team access.
 
-If you need to further scope (e.g., add a read-only VA role), add a new role value and new `va_*` policies.
+The three apps:
+- **DCC** (`index.html`) — team app. Admins get everything; VAs get everything but expenses + financial fields hidden at UI level; admin can manage team via Team modal.
+- **Client portal** (`portal.html`) — clients sign in here. UI only queries `deals`, `activity`, `documents`, `client_access` (all scoped by RLS). Multi-claimant aware.
+- **Attorney portal** — TODO, scaffolding in place via `attorney_assignments` + policies.
 
-The two apps:
-- **DCC** (`index.html`) — team app. Assumes team-level access.
-- **Client portal** (`portal.html`) — clients sign in here. UI only queries `deals`, `activity`, `documents`, and `client_access` (all scoped by RLS).
+## Automation
+
+- **Daily digest**: `public.send_daily_digest()` runs at 12:00 UTC (8am EDT / 7am EST) via pg_cron job `daily-digest-nathan`. Queries stale deals, urgent deadlines, unfiled surplus, bonuses owed, portal activity, monthly metrics — builds an HTML email and sends via Resend. API key stored in Supabase Vault under `resend_api_key`.
 
 ## Realtime
 
