@@ -1077,7 +1077,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
 
       {tab === "overview" && (isFlip
         ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />
-        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />)}
+        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} />)}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
@@ -1174,7 +1174,151 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
 }
 
 // ─── Surplus Overview ────────────────────────────────────────────────
-function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal }) {
+// ─── Client Portal card (surplus deals) ─────────────────────────────
+const portalUrl = () => {
+  const base = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+  return base + 'portal.html';
+};
+
+function ClientPortalCard({ deal, logAct }) {
+  const [access, setAccess] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(1).maybeSingle();
+    setAccess(data || null);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [deal.id]);
+
+  const invite = async () => {
+    if (!email) return;
+    setBusy(true); setMsg(null);
+    try {
+      const addr = email.trim().toLowerCase();
+      // Upsert pending invite
+      const { error: insErr } = await sb.from('client_access').insert({ deal_id: deal.id, email: addr, enabled: true });
+      if (insErr && !String(insErr.message).includes('duplicate')) throw insErr;
+      // Fire magic link
+      const { error: otpErr } = await sb.auth.signInWithOtp({ email: addr, options: { emailRedirectTo: portalUrl() } });
+      if (otpErr) throw otpErr;
+      if (logAct) await logAct(`Client portal invited: ${addr}`);
+      setMsg({ type: 'success', text: `Magic link sent to ${addr}` });
+      setEmail("");
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resend = async () => {
+    if (!access?.email) {
+      setMsg({ type: 'error', text: "Can't resend — client has already signed in once. Share the portal URL below directly." });
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const { error } = await sb.auth.signInWithOtp({ email: access.email, options: { emailRedirectTo: portalUrl() } });
+      if (error) throw error;
+      if (logAct) await logAct(`Client portal link resent: ${access.email}`);
+      setMsg({ type: 'success', text: 'Magic link resent.' });
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setEnabled = async (v) => {
+    if (!access) return;
+    setBusy(true); setMsg(null);
+    await sb.from('client_access').update({ enabled: v }).eq('id', access.id);
+    if (logAct) await logAct(`Client portal ${v ? 'enabled' : 'disabled'}`);
+    await load();
+    setBusy(false);
+  };
+
+  const remove = async () => {
+    if (!access) return;
+    if (!window.confirm("Remove client portal access for this deal? The client will no longer be able to sign in.")) return;
+    setBusy(true); setMsg(null);
+    await sb.from('client_access').delete().eq('id', access.id);
+    if (logAct) await logAct(`Client portal access removed`);
+    await load();
+    setBusy(false);
+  };
+
+  const copyUrl = () => {
+    navigator.clipboard.writeText(portalUrl());
+    setMsg({ type: 'success', text: 'Portal URL copied.' });
+  };
+
+  if (loading) return (<Card title="Client Portal" style={{ marginTop: 16 }}><div style={{ fontSize: 12, color: "#78716c" }}>Checking…</div></Card>);
+
+  return (
+    <Card title="Client Portal" style={{ marginTop: 16 }}>
+      {!access && (
+        <>
+          <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 12, lineHeight: 1.5 }}>
+            Invite the client to a read-only portal where they can see case status, attorney info, timeline, and documents. They'll never see internal expenses, notes, or other deals.
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="client@email.com" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter' && email) invite(); }} />
+            <button onClick={invite} disabled={busy || !email} style={btnPrimary}>{busy ? 'Sending…' : 'Invite'}</button>
+          </div>
+        </>
+      )}
+
+      {access && !access.enabled && (
+        <>
+          <div style={{ fontSize: 13, color: "#a8a29e" }}>Portal access is currently <b style={{ color: "#78716c" }}>disabled</b>.</div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={() => setEnabled(true)} disabled={busy} style={btnPrimary}>Re-enable</button>
+            <button onClick={remove} disabled={busy} style={btnGhost}>Remove</button>
+          </div>
+        </>
+      )}
+
+      {access && access.enabled && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: access.user_id ? "#10b981" : "#f59e0b" }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: access.user_id ? "#10b981" : "#f59e0b", display: "inline-block" }}></span>
+            {access.user_id ? "Active" : "Invite pending"}
+          </div>
+          <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4 }}>
+            {access.user_id
+              ? (access.last_seen_at
+                ? `Client last signed in ${daysSince(access.last_seen_at)} day${daysSince(access.last_seen_at) === 1 ? '' : 's'} ago`
+                : 'Client has not signed in yet')
+              : `Invited: ${access.email || '—'}. Click "Resend" if they haven't received the link.`}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            {access.email && <button onClick={resend} disabled={busy} style={btnPrimary}>{busy ? 'Working…' : 'Resend link'}</button>}
+            <button onClick={copyUrl} disabled={busy} style={btnGhost}>Copy portal URL</button>
+            <button onClick={() => setEnabled(false)} disabled={busy} style={btnGhost}>Disable</button>
+            <button onClick={remove} disabled={busy} style={{ ...btnGhost, color: "#ef4444" }}>Remove</button>
+          </div>
+          <div style={{ fontSize: 10, color: "#57534e", marginTop: 12, wordBreak: "break-all", padding: "8px 10px", background: "#0c0a09", borderRadius: 4, border: "1px solid #292524", fontFamily: "'DM Mono', monospace" }}>{portalUrl()}</div>
+        </>
+      )}
+
+      {msg && (
+        <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+          {msg.text}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
@@ -1214,6 +1358,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           </div>
           {(m.filed_at || deal.filed_at) && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(m.filed_at || deal.filed_at)} days ago{(m.deadline || deal.deadline) && ` · ${deadlineInfo(m.deadline || deal.deadline).label || 'on track'}`}</div>}
         </Card>
+        <ClientPortalCard deal={deal} logAct={logAct} />
       </div>
       <div>
         <Card title="Progress">

@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="theme-color" content="#0b1f3a">
+<title>FundLocators Case Portal</title>
+<link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbf8f1;
+    --bg-card: #ffffff;
+    --bg-card-alt: #f4ecdc;
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --navy-soft: #4a6fa5;
+    --gold: #c9a24a;
+    --gold-light: #d8b560;
+    --gold-soft: #ede5cf;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
+    --border: #e5dfd0;
+    --border-strong: #c9bea3;
+    --green: #2d7a4f;
+    --green-soft: #e4f1e9;
+    --amber: #a5731c;
+    --amber-soft: #f6ecd4;
+    --red: #a83232;
+    --shadow: 0 1px 2px rgba(11, 31, 58, 0.06), 0 8px 24px rgba(11, 31, 58, 0.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .serif { font-family: 'Fraunces', Georgia, serif; font-weight: 500; letter-spacing: -0.01em; }
+  .container { max-width: 780px; margin: 0 auto; padding: 24px 20px 80px; }
+  .centered-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 18px; }
+  .card-title { font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 18px; }
+  header.portal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; padding-top: 8px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: 'Fraunces', serif; font-weight: 700; font-size: 20px; color: var(--navy); letter-spacing: -0.01em; }
+  .brand-dot { width: 9px; height: 9px; background: var(--gold); border-radius: 50%; }
+  .brand-tag { font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--text-muted); text-transform: uppercase; margin-left: 6px; padding-top: 3px; }
+  .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text-muted); padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.12s; }
+  .btn-ghost:hover { border-color: var(--navy); color: var(--navy); }
+  h1.deal-name { font-family: 'Fraunces', serif; font-weight: 500; font-size: 28px; line-height: 1.2; color: var(--navy); margin: 0 0 6px; letter-spacing: -0.015em; }
+  .deal-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 18px; }
+  .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .status-new-lead     { background: #fef3c7; color: #78350f; }
+  .status-contacted    { background: #dbeafe; color: #1e40af; }
+  .status-signed       { background: #e0e7ff; color: #4338ca; }
+  .status-probate      { background: #fde68a; color: #713f12; }
+  .status-filed        { background: #d1fae5; color: #065f46; }
+  .status-awaiting-distribution { background: #fef3c7; color: #78350f; }
+  .status-hearing-set  { background: #e0e7ff; color: #4338ca; }
+  .status-recovered    { background: #d1fae5; color: #065f46; }
+  .status-dead         { background: #fee2e2; color: #7f1d1d; }
+  .status-default      { background: var(--gold-soft); color: var(--amber); }
+  .payout-hero { background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 100%); color: #fffcf5; border-radius: 14px; padding: 32px 28px; margin-bottom: 18px; position: relative; overflow: hidden; }
+  .payout-hero::before { content: ''; position: absolute; top: -40px; right: -40px; width: 140px; height: 140px; background: var(--gold); opacity: 0.08; border-radius: 50%; }
+  .payout-label { font-size: 11px; font-weight: 700; color: var(--gold-light); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 8px; position: relative; }
+  .payout-amount { font-family: 'Fraunces', serif; font-weight: 500; font-size: 42px; line-height: 1; letter-spacing: -0.02em; margin-bottom: 8px; position: relative; }
+  .payout-sub { font-size: 13px; color: rgba(255, 252, 245, 0.75); position: relative; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+  .stat { background: var(--bg-card-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .stat-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
+  .stat-value { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); letter-spacing: -0.01em; line-height: 1.2; }
+  .stat-sub { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .fee-breakdown { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 13px; }
+  .fee-line { display: flex; justify-content: space-between; padding: 6px 0; color: var(--text); }
+  .fee-line.sub { color: var(--text-muted); padding-left: 12px; }
+  .fee-line.total { font-weight: 600; color: var(--navy); border-top: 1px solid var(--border); padding-top: 10px; margin-top: 6px; }
+  .fee-line .amt { font-family: 'Fraunces', serif; font-variant-numeric: tabular-nums; }
+  .team-row { display: flex; align-items: center; gap: 14px; padding: 12px 0; }
+  .team-row + .team-row { border-top: 1px solid var(--border); }
+  .team-avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--gold-soft); color: var(--amber); display: flex; align-items: center; justify-content: center; font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; flex-shrink: 0; }
+  .team-info { flex: 1; min-width: 0; }
+  .team-name { font-weight: 600; color: var(--navy); font-size: 15px; }
+  .team-role { font-size: 12px; color: var(--text-muted); }
+  .team-contact a { color: var(--navy-mid); font-size: 13px; text-decoration: none; font-weight: 500; }
+  .team-contact a:hover { color: var(--gold); }
+  .timeline-item { display: grid; grid-template-columns: 12px 1fr auto; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); align-items: start; }
+  .timeline-item:last-child { border-bottom: none; }
+  .timeline-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--gold); margin-top: 6px; box-shadow: 0 0 0 4px rgba(201, 162, 74, 0.15); }
+  .timeline-action { font-size: 14px; color: var(--text); font-weight: 500; }
+  .timeline-date { font-size: 11px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .doc-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .doc-row:last-child { border-bottom: none; }
+  .doc-icon { width: 36px; height: 36px; background: var(--gold-soft); color: var(--amber); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .doc-name { flex: 1; font-size: 14px; color: var(--navy); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .doc-size { font-size: 11px; color: var(--text-muted); }
+  .doc-action { background: transparent; border: 1px solid var(--border-strong); color: var(--navy); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .doc-action:hover { background: var(--navy); color: #fffcf5; border-color: var(--navy); }
+  .empty { padding: 24px 0; text-align: center; color: var(--text-subtle); font-size: 13px; font-style: italic; }
+  input[type=email] { width: 100%; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 15px; font-family: inherit; color: var(--text); background: var(--bg-card); }
+  input[type=email]:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(11, 31, 58, 0.1); }
+  .btn-primary { width: 100%; background: var(--navy); color: #fffcf5; border: none; padding: 12px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: background 0.12s; margin-top: 12px; }
+  .btn-primary:hover:not(:disabled) { background: var(--navy-mid); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .error { color: var(--red); font-size: 13px; margin-top: 10px; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; }
+  .fineprint { color: var(--text-muted); font-size: 12px; margin-top: 18px; line-height: 1.55; }
+  .signin-card { max-width: 440px; width: 100%; padding: 40px 32px; }
+  .signin-card h1 { font-family: 'Fraunces', serif; font-weight: 500; font-size: 26px; color: var(--navy); margin: 0 0 8px; letter-spacing: -0.015em; }
+  .signin-card p.lead { color: var(--text-muted); font-size: 15px; margin: 0 0 24px; }
+  .success-check { display: flex; width: 56px; height: 56px; background: var(--green-soft); color: var(--green); border-radius: 50%; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 18px; }
+  .loader { display: flex; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px; }
+  a { color: var(--navy-mid); }
+  a:hover { color: var(--gold); }
+  @media (max-width: 500px) {
+    .container { padding: 16px 14px 60px; }
+    .card { padding: 20px 16px; }
+    .payout-hero { padding: 24px 20px; }
+    .payout-amount { font-size: 34px; }
+    h1.deal-name { font-size: 24px; }
+    .stat-grid { grid-template-columns: 1fr; }
+    .signin-card { padding: 32px 24px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ─── Helpers ───────────────────────────────────────────
+const fmt$ = (n) => {
+  if (n == null || isNaN(n)) return "—";
+  return "$" + Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+};
+const fmt$2 = (n) => {
+  if (n == null || isNaN(n)) return "—";
+  return "$" + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+const fmtDate = (s) => {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (isNaN(d)) return "—";
+  return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+};
+const fmtDateShort = (s) => {
+  if (!s) return "—";
+  const d = new Date(s);
+  if (isNaN(d)) return "—";
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+const statusLabel = (s) => (s || "").replace(/-/g, ' ').toUpperCase();
+
+// Filter activity to the events a client should see.
+// Deliberately excludes expense/bonus/internal-task noise.
+const CLIENT_ACTIVITY_PATTERNS = [
+  /^status changed/i,
+  /filed/i,
+  /hearing/i,
+  /court/i,
+  /distribut/i,
+  /payout/i,
+  /recovered/i,
+  /check /i,
+  /signed/i,
+  /motion/i,
+  /order/i,
+];
+const isClientFacing = (action) => {
+  if (!action) return false;
+  return CLIENT_ACTIVITY_PATTERNS.some(r => r.test(action));
+};
+
+// ─── App ───────────────────────────────────────────────
+function App() {
+  const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    sb.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setChecking(false);
+    });
+    const { data: sub } = sb.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (checking) return <LoaderFull />;
+  if (!session) return <SignIn />;
+  return <PortalBody session={session} />;
+}
+
+// ─── Sign-in ───────────────────────────────────────────
+function SignIn() {
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+
+  const send = async () => {
+    setError(null);
+    setSending(true);
+    const { error } = await sb.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { emailRedirectTo: window.location.href.split('#')[0] }
+    });
+    setSending(false);
+    if (error) setError(error.message);
+    else setSent(true);
+  };
+
+  return (
+    <div className="centered-shell">
+      <div className="card signin-card">
+        <div className="brand" style={{ marginBottom: 24 }}>
+          <span className="brand-dot"></span>
+          FundLocators
+          <span className="brand-tag">Case Portal</span>
+        </div>
+        {sent ? (
+          <div>
+            <div className="success-check">✓</div>
+            <h1 className="serif">Check your email</h1>
+            <p className="lead">We sent a secure sign-in link to <b>{email}</b>. Open the email and tap the button to access your case.</p>
+            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email within a minute, check your spam folder or contact Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.</p>
+          </div>
+        ) : (
+          <div>
+            <h1>Welcome back.</h1>
+            <p className="lead">Sign in to view the status of your surplus recovery case.</p>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="you@email.com"
+              autoFocus
+              onKeyDown={e => { if (e.key === 'Enter' && email) send(); }}
+            />
+            <button className="btn-primary" onClick={send} disabled={!email || sending}>
+              {sending ? "Sending…" : "Email me a sign-in link"}
+            </button>
+            {error && <div className="error">{error}</div>}
+            <p className="fineprint">
+              This portal is invite-only. Please use the email address you provided when you signed your engagement agreement.
+              If you believe you should have access but can't sign in, contact Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Portal (authenticated) ─────────────────────────────
+function PortalBody({ session }) {
+  const [state, setState] = useState({ loading: true });
+
+  useEffect(() => {
+    (async () => {
+      // 1. Confirm client has access and which deal
+      const { data: access, error: accessErr } = await sb
+        .from('client_access')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .eq('enabled', true)
+        .maybeSingle();
+
+      if (accessErr || !access) {
+        setState({ loading: false, error: 'no_access' });
+        return;
+      }
+
+      // 2. Mark last seen (best-effort, don't block UI)
+      sb.from('client_access').update({ last_seen_at: new Date().toISOString() }).eq('id', access.id);
+
+      // 3. Fetch deal
+      const { data: deal, error: dealErr } = await sb
+        .from('deals')
+        .select('*')
+        .eq('id', access.deal_id)
+        .maybeSingle();
+
+      if (dealErr || !deal) {
+        setState({ loading: false, error: 'deal_missing' });
+        return;
+      }
+
+      // 4. Fetch activity (RLS will scope automatically)
+      const { data: activity } = await sb
+        .from('activity')
+        .select('*')
+        .eq('deal_id', access.deal_id)
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      // 5. Fetch documents
+      const { data: documents } = await sb
+        .from('documents')
+        .select('*')
+        .eq('deal_id', access.deal_id)
+        .order('created_at', { ascending: false });
+
+      setState({
+        loading: false,
+        access,
+        deal,
+        activity: (activity || []).filter(a => isClientFacing(a.action)),
+        documents: documents || [],
+      });
+    })();
+  }, [session]);
+
+  if (state.loading) return <LoaderFull />;
+  if (state.error === 'no_access') return <NoAccess session={session} />;
+  if (state.error === 'deal_missing') return <GenericError />;
+
+  return <CaseView deal={state.deal} activity={state.activity} documents={state.documents} onSignOut={() => sb.auth.signOut()} />;
+}
+
+// ─── Case View ─────────────────────────────────────────
+function CaseView({ deal, activity, documents, onSignOut }) {
+  const m = deal.meta || {};
+  const estimatedSurplus = Number(m.estimatedSurplus) || 0;
+  const feePct = Number(m.feePct) || 0;
+  const ourFee = estimatedSurplus * feePct / 100;
+  const clientShare = estimatedSurplus - ourFee;
+  const attorney = m.attorney;
+  const courtCase = m.courtCase;
+  const county = m.county;
+  const filedAt = m.filed_at || deal.filed_at;
+  const statusCls = "status-" + (deal.status || "default");
+
+  return (
+    <div className="container">
+      <header className="portal-header">
+        <div className="brand">
+          <span className="brand-dot"></span>
+          FundLocators
+          <span className="brand-tag">Case Portal</span>
+        </div>
+        <button className="btn-ghost" onClick={onSignOut}>Sign out</button>
+      </header>
+
+      <h1 className="deal-name">{deal.name}</h1>
+      <div className="deal-sub">{county ? `${county} County, Ohio` : (deal.address || '')}</div>
+
+      <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
+
+      {estimatedSurplus > 0 && (
+        <div className="payout-hero" style={{ marginTop: 18 }}>
+          <div className="payout-label">Your Estimated Share</div>
+          <div className="payout-amount">{fmt$2(clientShare)}</div>
+          <div className="payout-sub">
+            Based on an estimated surplus of {fmt$(estimatedSurplus)} with our {feePct}% contingency fee.
+            The final amount will be confirmed by the court's distribution order.
+          </div>
+        </div>
+      )}
+
+      {/* Case details */}
+      <div className="card">
+        <p className="card-title">Case Details</p>
+        <div className="stat-grid">
+          <div className="stat">
+            <div className="stat-label">Case Number</div>
+            <div className="stat-value">{courtCase || 'Pending assignment'}</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">Filed Date</div>
+            <div className="stat-value">{filedAt ? fmtDateShort(filedAt) : 'Not yet filed'}</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">County</div>
+            <div className="stat-value">{county || '—'}</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">Current Status</div>
+            <div className="stat-value">{statusLabel(deal.status)}</div>
+          </div>
+        </div>
+
+        {estimatedSurplus > 0 && (
+          <div className="fee-breakdown">
+            <div className="fee-line"><span>Estimated surplus funds</span><span className="amt">{fmt$2(estimatedSurplus)}</span></div>
+            <div className="fee-line sub"><span>Our contingency fee ({feePct}%)</span><span className="amt">−{fmt$2(ourFee)}</span></div>
+            <div className="fee-line total"><span>Your estimated share</span><span className="amt">{fmt$2(clientShare)}</span></div>
+          </div>
+        )}
+      </div>
+
+      {/* Your case team */}
+      <div className="card">
+        <p className="card-title">Your Case Team</p>
+        {attorney && (
+          <div className="team-row">
+            <div className="team-avatar">{(attorney[0] || '?').toUpperCase()}</div>
+            <div className="team-info">
+              <div className="team-name">{attorney}</div>
+              <div className="team-role">Attorney of record</div>
+            </div>
+          </div>
+        )}
+        <div className="team-row">
+          <div className="team-avatar">N</div>
+          <div className="team-info">
+            <div className="team-name">Nathan Johnson</div>
+            <div className="team-role">Principal, FundLocators</div>
+            <div className="team-contact">
+              <a href="tel:+15135162306">(513) 516-2306</a> &middot;{' '}
+              <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Timeline */}
+      <div className="card">
+        <p className="card-title">Case Timeline</p>
+        {activity.length === 0 ? (
+          <div className="empty">No case updates yet. We'll post updates here as your case progresses.</div>
+        ) : (
+          activity.map((a, i) => (
+            <div className="timeline-item" key={a.id || i}>
+              <div className="timeline-dot"></div>
+              <div className="timeline-action">{a.action}</div>
+              <div className="timeline-date">{fmtDateShort(a.created_at)}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Documents */}
+      <div className="card">
+        <p className="card-title">Documents</p>
+        {documents.length === 0 ? (
+          <div className="empty">No documents on file yet. Your signed engagement agreement and any court filings will appear here as they're recorded.</div>
+        ) : (
+          documents.map(d => (
+            <div className="doc-row" key={d.id}>
+              <div className="doc-icon">📄</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="doc-name">{d.name}</div>
+                <div className="doc-size">{d.size ? Math.round(d.size / 1024) + ' KB' : ''} · Added {fmtDateShort(d.created_at)}</div>
+              </div>
+              <button className="doc-action" onClick={() => openDocument(d.path)}>View</button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
+        Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
+        This portal updates in real time as your case progresses.
+      </p>
+    </div>
+  );
+}
+
+async function openDocument(path) {
+  if (!path) return;
+  const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(path, 300);
+  if (error || !data?.signedUrl) {
+    alert("We couldn't open that document. Please call Nathan at (513) 516-2306 and we'll send it over directly.");
+    return;
+  }
+  window.open(data.signedUrl, '_blank');
+}
+
+// ─── Error / empty states ──────────────────────────────
+function NoAccess({ session }) {
+  return (
+    <div className="centered-shell">
+      <div className="card signin-card">
+        <div className="brand" style={{ marginBottom: 24 }}>
+          <span className="brand-dot"></span>
+          FundLocators
+          <span className="brand-tag">Case Portal</span>
+        </div>
+        <h1 className="serif">We couldn't find your case</h1>
+        <p className="lead">You're signed in as <b>{session.user.email}</b>, but we don't have a case linked to this email address.</p>
+        <p className="fineprint">
+          If you believe this is an error, please contact Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a> or <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>. We'll verify and get you access within the business day.
+        </p>
+        <button className="btn-primary" onClick={() => sb.auth.signOut()} style={{ marginTop: 24 }}>
+          Sign out and try a different email
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function GenericError() {
+  return (
+    <div className="centered-shell">
+      <div className="card signin-card">
+        <div className="brand" style={{ marginBottom: 24 }}>
+          <span className="brand-dot"></span>
+          FundLocators
+          <span className="brand-tag">Case Portal</span>
+        </div>
+        <h1 className="serif">Something went wrong</h1>
+        <p className="lead">We couldn't load your case right now. Please try refreshing the page.</p>
+        <p className="fineprint">
+          If the problem continues, call Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
+        </p>
+        <button className="btn-primary" onClick={() => window.location.reload()} style={{ marginTop: 24 }}>
+          Refresh
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LoaderFull() {
+  return <div className="loader">Loading your case…</div>;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

@@ -23,34 +23,40 @@ This is safe — the publishable key is designed for client-side use. RLS is wha
 
 ## Database schema
 
-7 tables, all in `public` schema:
+9 tables, all in `public` schema:
 
 | Table | Purpose | Key columns |
 |---|---|---|
-| `profiles` | 1:1 with `auth.users` | `id` (uuid, FK to auth.users), `name`, `role` |
+| `profiles` | 1:1 with `auth.users` | `id` (uuid, FK to auth.users), `name`, `role` (`'user'` for team, `'client'` for portal clients) |
 | `deals` | The core entity | `id` (text PK), `type` ('flip' / 'surplus' / 'wholesale' / 'rental' / 'other'), `status`, `name`, `address`, `meta` (jsonb for flexible per-type fields), `owner_id` |
 | `expenses` | Per-deal line items | `deal_id` FK, `category`, `amount`, `date`, `vendor`, `notes` |
 | `tasks` | Per-deal todos | `deal_id` FK, `title`, `done`, `assigned_to`, `due_date` |
 | `vendors` | Per-deal contractors/contacts | `deal_id` FK, `name`, `role`, `phone`, `email` |
 | `deal_notes` | Per-deal markdown | `deal_id` FK (unique), `body` |
 | `activity` | Audit log | `deal_id` FK, `user_id`, `action`, `created_at` |
+| `documents` | Per-deal file metadata | `deal_id` FK, `name`, `path`, `size`, `uploaded_by` — actual files in `deal-docs` storage bucket |
+| `client_access` | Links auth users to deals for the Client Portal | `user_id` (nullable until client signs up), `deal_id`, `email`, `enabled`, `last_seen_at` |
 
 All child tables cascade-delete when the parent deal is deleted.
 
-## RLS model (important — read before tightening)
+## RLS model (important — read before modifying)
 
-Every table has RLS enabled with a single permissive policy: **any authenticated user can do anything**. This is the "small trusted team" model.
+Two-tier model driven by `profiles.role`:
 
-```sql
-create policy auth_all_deals on deals for all to authenticated using (true) with check (true);
-```
+- **Team** (`role != 'client'`, i.e. `'user'` for Nathan/Justin): full access via `team_all_*` policies on every table.
+- **Client** (`role = 'client'`): scoped access via `client_*` policies. A client can only SELECT rows whose `deal_id` is linked to their `auth.uid()` through `public.client_access`. They can INSERT into `documents` (for their deal) but CANNOT access `expenses`, `tasks`, `vendors`, `deal_notes`, or other deals at all.
 
-If/when the team grows (VAs, external contractors), tighten per-table. Common patterns:
-- Restrict deletes to `owner_id = auth.uid()`
-- Hide `activity` or financial columns from certain roles
-- Check `profiles.role` in policy predicates
+Helper: `public.is_client()` returns boolean by reading `profiles.role`. Used in all policies. `SECURITY DEFINER` so it bypasses profile RLS (no infinite recursion).
 
-Don't tighten RLS without also testing that the app still works — the UI assumes it can read/write everything.
+The `handle_new_user` trigger auto-assigns `role`:
+- If the new email matches a pending `client_access` row (user_id IS NULL, enabled) → role = `'client'` and the client_access row's user_id is populated.
+- Otherwise → role = `'user'` (treated as team). Today this defaults random signups to team level; future tightening: only promote to `'user'` after admin approval.
+
+If you need to further scope (e.g., add a read-only VA role), add a new role value and new `va_*` policies.
+
+The two apps:
+- **DCC** (`index.html`) — team app. Assumes team-level access.
+- **Client portal** (`portal.html`) — clients sign in here. UI only queries `deals`, `activity`, `documents`, and `client_access` (all scoped by RLS).
 
 ## Realtime
 
