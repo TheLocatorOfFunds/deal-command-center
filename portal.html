@@ -117,14 +117,59 @@
   .loader { display: flex; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px; }
   a { color: var(--navy-mid); }
   a:hover { color: var(--gold); }
+  /* Status Intel Card */
+  .intel-card { display: flex; gap: 16px; align-items: flex-start; padding: 22px; border-radius: 12px; border: 1px solid; background: var(--bg-card); box-shadow: var(--shadow); margin-top: 18px; }
+  .intel-card.intel-info       { border-color: #cfd9ea; background: linear-gradient(180deg, #f5f9ff 0%, var(--bg-card) 40%); }
+  .intel-card.intel-progress   { border-color: var(--gold-soft); background: linear-gradient(180deg, #fcf7e8 0%, var(--bg-card) 40%); }
+  .intel-card.intel-success    { border-color: #c3e6d1; background: linear-gradient(180deg, #ecf8f1 0%, var(--bg-card) 40%); }
+  .intel-card.intel-celebration { border-color: var(--gold); background: linear-gradient(180deg, #fef5dc 0%, var(--bg-card) 80%); }
+  .intel-card.intel-error      { border-color: #f3c6c6; background: linear-gradient(180deg, #fef4f4 0%, var(--bg-card) 40%); }
+  .intel-icon { font-size: 28px; line-height: 1; flex-shrink: 0; margin-top: 2px; }
+  .intel-body { flex: 1; min-width: 0; }
+  .intel-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 18px; color: var(--navy); margin-bottom: 6px; letter-spacing: -0.005em; line-height: 1.3; }
+  .intel-text { font-size: 14px; color: var(--text); line-height: 1.6; }
+  .intel-cta { font-size: 13px; color: var(--navy-mid); margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); font-weight: 500; }
+  .intel-cta a { text-decoration: none; font-weight: 600; }
+  /* Timeline Expectation */
+  .timeline-estimate { margin-top: 14px; padding: 14px 16px; background: var(--bg-card-alt); border-radius: 10px; border: 1px dashed var(--border-strong); }
+  .estimate-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
+  .estimate-range { font-family: 'Fraunces', serif; font-weight: 500; font-size: 16px; color: var(--navy); margin-bottom: 4px; }
+  .estimate-note { font-size: 12px; color: var(--text-muted); line-height: 1.55; }
+  /* Celebration (recovered) */
+  .celebration { background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 50%, #e8c878 100%); color: var(--navy); border-radius: 14px; padding: 36px 28px; text-align: center; margin-top: 18px; position: relative; overflow: hidden; }
+  .celebration-confetti { font-size: 56px; line-height: 1; margin-bottom: 14px; }
+  .celebration-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 28px; letter-spacing: -0.015em; margin: 0 0 8px; }
+  .celebration-amount { font-family: 'Fraunces', serif; font-weight: 500; font-size: 44px; color: var(--navy); letter-spacing: -0.02em; margin: 8px 0; line-height: 1.1; }
+  .celebration-sub { font-size: 14px; color: var(--navy-mid); max-width: 440px; margin: 0 auto; }
+  .testimonial-card { background: var(--bg-card); border: 1px solid var(--gold-soft); border-radius: 12px; padding: 22px; margin-top: 18px; }
+  .testimonial-card h3 { font-family: 'Fraunces', serif; font-weight: 500; font-size: 18px; color: var(--navy); margin: 0 0 8px; letter-spacing: -0.005em; }
+  .testimonial-card p { font-size: 14px; color: var(--text); line-height: 1.6; margin: 0 0 14px; }
+  .testimonial-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn-secondary { background: transparent; color: var(--navy); border: 1px solid var(--border-strong); padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.12s; }
+  .btn-secondary:hover { border-color: var(--navy); background: var(--bg-card-alt); }
+  .testimonial-confirmed { display: flex; align-items: center; gap: 8px; padding: 12px; background: var(--green-soft); color: var(--green); border-radius: 8px; font-size: 13px; font-weight: 500; }
+  /* Sticky Call Nathan button */
+  .sticky-call { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom)); background: linear-gradient(180deg, rgba(251, 248, 241, 0) 0%, rgba(251, 248, 241, 0.95) 30%, rgba(251, 248, 241, 1) 60%); z-index: 100; display: none; }
+  .sticky-call a { display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--navy); color: #fffcf5; padding: 14px 20px; border-radius: 999px; font-weight: 600; font-size: 15px; text-decoration: none; box-shadow: 0 6px 20px rgba(11, 31, 58, 0.3); max-width: 440px; margin: 0 auto; }
+  .sticky-call a:active { background: var(--navy-mid); }
+  .sticky-call .call-icon { font-size: 18px; }
+  @media (max-width: 720px) {
+    .sticky-call { display: block; }
+    .container { padding-bottom: 100px; }
+  }
   @media (max-width: 500px) {
-    .container { padding: 16px 14px 60px; }
+    .container { padding: 16px 14px 100px; }
     .card { padding: 20px 16px; }
     .payout-hero { padding: 24px 20px; }
     .payout-amount { font-size: 34px; }
+    .celebration { padding: 28px 20px; }
+    .celebration-amount { font-size: 36px; }
     h1.deal-name { font-size: 24px; }
     .stat-grid { grid-template-columns: 1fr; }
     .signin-card { padding: 32px 24px; }
+    .intel-card { padding: 18px; gap: 12px; }
+    .intel-icon { font-size: 24px; }
+    .intel-headline { font-size: 16px; }
   }
 </style>
 </head>
@@ -183,6 +228,94 @@ const isClientFacing = (action) => {
   if (!action) return false;
   return CLIENT_ACTIVITY_PATTERNS.some(r => r.test(action));
 };
+
+// ─── Status Intelligence ─────────────────────────────
+// Every status gets a plain-English explanation of "what's happening now"
+// plus a typical timeline and whether the client needs to take action.
+function statusIntel(status, filedAt) {
+  const filedDays = filedAt ? Math.floor((Date.now() - new Date(filedAt).getTime()) / 86400000) : 0;
+  const filedPhrase = filedDays > 0 ? `${filedDays} days ago` : "recently";
+
+  const messages = {
+    'new-lead': {
+      icon: '📋', tone: 'info',
+      headline: "We've received your information",
+      body: "Our team is reviewing your case to confirm the surplus amount and determine the fastest path to recovery. This typically takes one to three business days. You'll see the next update here as soon as the review is complete.",
+      cta: null,
+    },
+    'contacted': {
+      icon: '📞', tone: 'info',
+      headline: "Our team has reached out to you",
+      body: "A FundLocators specialist has contacted you to discuss your case. Please respond when you can — the sooner we can talk, the sooner we can begin your recovery.",
+      cta: "If you haven't heard from us, call Nathan at (513) 516-2306.",
+    },
+    'awaiting-docs': {
+      icon: '📄', tone: 'info',
+      headline: "Waiting on a few documents",
+      body: "We need a small set of documents from you to move forward (typically ID, proof of address, and any estate paperwork). Check your email for the specific list. As soon as we receive them, we'll prepare your claim for filing.",
+      cta: "Questions about what to send? Call Nathan at (513) 516-2306.",
+    },
+    'signed': {
+      icon: '✍️', tone: 'progress',
+      headline: "Preparing your court filing",
+      body: "Your engagement agreement is signed. Our team is drafting your formal surplus claim and preparing it for the court. Typical turnaround to filing: five to ten business days.",
+      cta: null,
+    },
+    'probate': {
+      icon: '⚖️', tone: 'progress',
+      headline: "In probate proceedings",
+      body: "The court is verifying rightful claimants through probate. This phase adds four to eight weeks and is a necessary step when estate matters are involved. Your case is on the standard Ohio track — not delayed.",
+      cta: null,
+    },
+    'filed': {
+      icon: '📎', tone: 'progress',
+      headline: "Your claim is filed with the court",
+      body: `Your formal claim was filed ${filedPhrase}. The case is active on the court's docket and we are now awaiting a scheduling order. Typical time from filing to payout in Ohio: three to six months.`,
+      cta: null,
+    },
+    'hearing-set': {
+      icon: '📅', tone: 'progress',
+      headline: "A hearing has been scheduled",
+      body: "The court has set a hearing date for your case. Your attorney will appear on your behalf — you do not need to attend. You'll see an update here the same day the hearing occurs.",
+      cta: null,
+    },
+    'awaiting-distribution': {
+      icon: '💰', tone: 'success',
+      headline: "Distribution approved — funds are coming",
+      body: "The court has approved the distribution of your surplus funds. The clerk's office will issue the check to us within two to four weeks. We'll transfer your share to you within twenty-four hours of receipt.",
+      cta: "Nathan will call to confirm how you'd like to receive your funds — direct deposit, cashier's check, or wire.",
+    },
+    'recovered': {
+      icon: '🎉', tone: 'celebration',
+      headline: "Your funds have been recovered",
+      body: "Congratulations. Nathan will reach out within twenty-four hours to confirm how you'd like to receive your share.",
+      cta: null,
+    },
+    'dead': {
+      icon: '⚠️', tone: 'error',
+      headline: "Case has been closed without recovery",
+      body: "We were unable to complete the recovery of surplus funds for your case. This is uncommon. Please call Nathan directly to discuss what happened and whether there is anything further we can explore.",
+      cta: "Call Nathan at (513) 516-2306 to talk this through.",
+    },
+  };
+
+  return messages[status] || {
+    icon: '📁', tone: 'info',
+    headline: "Your case is active",
+    body: "Nathan and the team are moving your case forward. You'll see every meaningful update posted here. If anything about your circumstances changes, give Nathan a call.",
+    cta: null,
+  };
+}
+
+// Typical Ohio surplus case: 3-6 months from filing.
+function payoutWindow(filedAt) {
+  if (!filedAt) return null;
+  const filed = new Date(filedAt);
+  if (isNaN(filed)) return null;
+  const earliest = new Date(filed); earliest.setDate(earliest.getDate() + 90);
+  const latest = new Date(filed); latest.setDate(latest.getDate() + 180);
+  return { earliest, latest, filed };
+}
 
 // ─── App ───────────────────────────────────────────────
 function App() {
@@ -327,11 +460,133 @@ function PortalBody({ session }) {
   if (state.error === 'no_access') return <NoAccess session={session} />;
   if (state.error === 'deal_missing') return <GenericError />;
 
-  return <CaseView deal={state.deal} activity={state.activity} documents={state.documents} onSignOut={() => sb.auth.signOut()} />;
+  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} onSignOut={() => sb.auth.signOut()} />;
+}
+
+// ─── What's Happening Now ─────────────────────────────
+function StatusIntel({ status, filedAt }) {
+  const info = statusIntel(status, filedAt);
+  return (
+    <div className={"intel-card intel-" + info.tone}>
+      <div className="intel-icon">{info.icon}</div>
+      <div className="intel-body">
+        <div className="intel-headline">{info.headline}</div>
+        <div className="intel-text">{info.body}</div>
+        {info.cta && <div className="intel-cta">{info.cta}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Expected Payout Window ───────────────────────────
+function TimelineExpectation({ filedAt, status }) {
+  if (!filedAt) return null;
+  if (['recovered', 'dead'].includes(status)) return null;
+  const w = payoutWindow(filedAt);
+  if (!w) return null;
+  const daysSinceFiling = Math.floor((Date.now() - w.filed.getTime()) / 86400000);
+  const daysToEarliest = Math.max(0, Math.floor((w.earliest.getTime() - Date.now()) / 86400000));
+  const withinWindow = Date.now() >= w.earliest.getTime() && Date.now() <= w.latest.getTime();
+  const pastWindow = Date.now() > w.latest.getTime();
+
+  let note;
+  if (pastWindow) {
+    note = `Your case has been filed for ${daysSinceFiling} days — slightly longer than the typical range. This can happen when the court's docket is busy or if probate is involved. Nathan is monitoring it closely.`;
+  } else if (withinWindow) {
+    note = `You're now in the typical payout window. Most Ohio surplus cases resolve during this period.`;
+  } else {
+    note = `Filed ${daysSinceFiling} days ago. Typical Ohio surplus cases resolve 90 to 180 days after filing.`;
+  }
+
+  return (
+    <div className="timeline-estimate">
+      <div className="estimate-label">Expected Payout Window</div>
+      <div className="estimate-range">{fmtDateShort(w.earliest)} — {fmtDateShort(w.latest)}</div>
+      <div className="estimate-note">{note}</div>
+    </div>
+  );
+}
+
+// ─── Celebration Hero (status = recovered) ────────────
+function CelebrationHero({ clientShare, address }) {
+  return (
+    <div className="celebration">
+      <div className="celebration-confetti">🎉</div>
+      <h1 className="celebration-title">Your funds have been recovered</h1>
+      <div className="celebration-amount">{fmt$2(clientShare)}</div>
+      <div className="celebration-sub">
+        The court has released the surplus from your case{address ? ` at ${address}` : ''}.
+        Nathan will reach out within twenty-four hours to confirm how you'd like to receive your share — direct deposit, cashier's check, or wire.
+      </div>
+    </div>
+  );
+}
+
+// ─── Testimonial Opt-In (anonymous, shown after recovery) ───
+function TestimonialOptIn({ accessId, initialPrefs }) {
+  const [prefs, setPrefs] = useState(initialPrefs || {});
+  const [saving, setSaving] = useState(false);
+
+  const consent = async (value) => {
+    setSaving(true);
+    const newPrefs = {
+      ...prefs,
+      public_story_consent: value,
+      public_story_consent_at: new Date().toISOString(),
+    };
+    const { error } = await sb.from('client_access').update({ prefs: newPrefs }).eq('id', accessId);
+    if (!error) setPrefs(newPrefs);
+    setSaving(false);
+  };
+
+  if (prefs.public_story_consent === true) {
+    return (
+      <div className="testimonial-card">
+        <div className="testimonial-confirmed">
+          <span>✓</span>
+          Thank you. Your story will help the next family find us.
+        </div>
+      </div>
+    );
+  }
+
+  if (prefs.public_story_consent === false) {
+    return null;
+  }
+
+  return (
+    <div className="testimonial-card">
+      <h3>Would you share your story — anonymously?</h3>
+      <p>
+        Only the county, the amount, and the timeline. No name, no address, no identifying details.
+        Stories like yours help the next homeowner in the same situation trust us enough to reach out.
+      </p>
+      <div className="testimonial-actions">
+        <button className="btn-secondary" style={{ background: 'var(--navy)', color: '#fffcf5', borderColor: 'var(--navy)' }} onClick={() => consent(true)} disabled={saving}>
+          Yes, share anonymously
+        </button>
+        <button className="btn-secondary" onClick={() => consent(false)} disabled={saving}>
+          Not this time
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sticky Call Nathan Button (mobile only) ──────────
+function StickyCallButton() {
+  return (
+    <div className="sticky-call">
+      <a href="tel:+15135162306">
+        <span className="call-icon">📞</span>
+        Call Nathan directly
+      </a>
+    </div>
+  );
 }
 
 // ─── Case View ─────────────────────────────────────────
-function CaseView({ deal, activity, documents, onSignOut }) {
+function CaseView({ deal, access, activity, documents, onSignOut }) {
   const m = deal.meta || {};
   const estimatedSurplus = Number(m.estimatedSurplus) || 0;
   const feePct = Number(m.feePct) || 0;
@@ -342,6 +597,7 @@ function CaseView({ deal, activity, documents, onSignOut }) {
   const county = m.county;
   const filedAt = m.filed_at || deal.filed_at;
   const statusCls = "status-" + (deal.status || "default");
+  const isRecovered = deal.status === 'recovered';
 
   return (
     <div className="container">
@@ -359,15 +615,23 @@ function CaseView({ deal, activity, documents, onSignOut }) {
 
       <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
 
-      {estimatedSurplus > 0 && (
-        <div className="payout-hero" style={{ marginTop: 18 }}>
-          <div className="payout-label">Your Estimated Share</div>
-          <div className="payout-amount">{fmt$2(clientShare)}</div>
-          <div className="payout-sub">
-            Based on an estimated surplus of {fmt$(estimatedSurplus)} with our {feePct}% contingency fee.
-            The final amount will be confirmed by the court's distribution order.
-          </div>
-        </div>
+      {isRecovered ? (
+        <CelebrationHero clientShare={clientShare} address={deal.address} />
+      ) : (
+        <>
+          {estimatedSurplus > 0 && (
+            <div className="payout-hero" style={{ marginTop: 18 }}>
+              <div className="payout-label">Your Estimated Share</div>
+              <div className="payout-amount">{fmt$2(clientShare)}</div>
+              <div className="payout-sub">
+                Based on an estimated surplus of {fmt$(estimatedSurplus)} with our {feePct}% contingency fee.
+                The final amount will be confirmed by the court's distribution order.
+              </div>
+            </div>
+          )}
+          <StatusIntel status={deal.status} filedAt={filedAt} />
+          <TimelineExpectation filedAt={filedAt} status={deal.status} />
+        </>
       )}
 
       {/* Case details */}
@@ -461,10 +725,14 @@ function CaseView({ deal, activity, documents, onSignOut }) {
         )}
       </div>
 
+      {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
+
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your case progresses.
       </p>
+
+      <StickyCallButton />
     </div>
   );
 }
