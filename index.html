@@ -301,7 +301,7 @@ function DealCommandCenter({ session, profile }) {
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -315,7 +315,7 @@ function DealCommandCenter({ session, profile }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
@@ -399,6 +399,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
           {viewBtn("archive", "Closed Deals", archivedDeals.length)}
+          {isAdmin && viewBtn("analytics", "📊 Analytics", 0)}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
@@ -407,7 +408,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       </div>
 
       {/* Search / Filter / Layout toggle bar (hidden on Today view) */}
-      {view !== "today" && (
+      {view !== "today" && view !== "analytics" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -426,10 +427,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: view === "analytics" ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} />
+          ) : view === "analytics" ? (
+            <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -472,7 +475,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        <div>
+        {view !== "analytics" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -505,7 +508,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               ))}
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </div>
   );
@@ -622,6 +625,263 @@ const expectedPayoutDate = (deal) => {
   if (filed) { const d = new Date(filed); if (!isNaN(d)) { d.setDate(d.getDate() + 120); return d; } }
   return null;
 };
+
+// ─── Analytics View ─────────────────────────────────────────────
+function AnalyticsView({ deals, onSelect }) {
+  const now = new Date();
+  const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
+  const active = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
+  const closed = deals.filter(d => d.status === "closed" || d.status === "recovered");
+
+  // ── Monthly trend: last 6 months ──
+  const months = [];
+  for (let i = 5; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const next = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+    const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    const added = deals.filter(x => {
+      if (!x.created) return false;
+      const c = new Date(x.created);
+      return c >= d && c < next;
+    });
+    const closedThisMonth = closed.filter(x => {
+      const ts = x.closed_at ? new Date(x.closed_at) : null;
+      return ts && ts >= d && ts < next;
+    });
+    const booked = closedThisMonth.reduce((s, x) => s + (computeDealNet(x) || 0), 0);
+    months.push({ label, added: added.length, closed: closedThisMonth.length, booked });
+  }
+  const maxMonthValue = Math.max(1, ...months.map(m => Math.max(m.added * 1000, m.booked)));
+  const maxMonthAdded = Math.max(1, ...months.map(m => m.added));
+  const maxMonthBooked = Math.max(1, ...months.map(m => m.booked));
+
+  // ── Lead Source ROI ──
+  const bySource = {};
+  deals.forEach(d => {
+    const src = (d.meta?.lead_source || d.lead_source || "Unspecified");
+    if (!bySource[src]) bySource[src] = { source: src, deals: 0, closed: 0, netTotal: 0 };
+    bySource[src].deals += 1;
+    if (d.status === "closed" || d.status === "recovered") {
+      bySource[src].closed += 1;
+      bySource[src].netTotal += (computeDealNet(d) || 0);
+    }
+  });
+  const leadRows = Object.values(bySource)
+    .map(r => ({ ...r, closeRate: r.deals > 0 ? Math.round((r.closed / r.deals) * 100) : 0, avgNet: r.closed > 0 ? r.netTotal / r.closed : 0 }))
+    .sort((a, b) => b.netTotal - a.netTotal);
+
+  // ── Attorney Performance (surplus only) ──
+  const surplusDeals = deals.filter(d => d.type === "surplus");
+  const byAttorney = {};
+  surplusDeals.forEach(d => {
+    const a = d.meta?.attorney;
+    if (!a) return;
+    if (!byAttorney[a]) byAttorney[a] = { attorney: a, deals: 0, recovered: 0, netTotal: 0, daysTotal: 0, daysCount: 0 };
+    byAttorney[a].deals += 1;
+    if (d.status === "recovered") {
+      byAttorney[a].recovered += 1;
+      byAttorney[a].netTotal += (computeDealNet(d) || 0);
+      // Days from filed to closed
+      const filed = d.meta?.filed_at || d.filed_at;
+      const closedAt = d.closed_at;
+      if (filed && closedAt) {
+        const days = Math.floor((new Date(closedAt).getTime() - new Date(filed).getTime()) / 86400000);
+        if (days > 0 && days < 730) {
+          byAttorney[a].daysTotal += days;
+          byAttorney[a].daysCount += 1;
+        }
+      }
+    }
+  });
+  const attorneyRows = Object.values(byAttorney)
+    .map(r => ({ ...r,
+      recoveryRate: r.deals > 0 ? Math.round((r.recovered / r.deals) * 100) : 0,
+      avgDays: r.daysCount > 0 ? Math.round(r.daysTotal / r.daysCount) : null,
+      avgFee: r.recovered > 0 ? r.netTotal / r.recovered : 0,
+    }))
+    .sort((a, b) => b.deals - a.deals);
+
+  // ── Per-County performance (surplus only) ──
+  const byCounty = {};
+  surplusDeals.forEach(d => {
+    const c = d.meta?.county || "Unspecified";
+    if (!byCounty[c]) byCounty[c] = { county: c, deals: 0, recovered: 0, netTotal: 0, daysTotal: 0, daysCount: 0 };
+    byCounty[c].deals += 1;
+    if (d.status === "recovered") {
+      byCounty[c].recovered += 1;
+      byCounty[c].netTotal += (computeDealNet(d) || 0);
+      const filed = d.meta?.filed_at || d.filed_at;
+      const closedAt = d.closed_at;
+      if (filed && closedAt) {
+        const days = Math.floor((new Date(closedAt).getTime() - new Date(filed).getTime()) / 86400000);
+        if (days > 0 && days < 730) {
+          byCounty[c].daysTotal += days;
+          byCounty[c].daysCount += 1;
+        }
+      }
+    }
+  });
+  const countyRows = Object.values(byCounty)
+    .map(r => ({ ...r,
+      recoveryRate: r.deals > 0 ? Math.round((r.recovered / r.deals) * 100) : 0,
+      avgDays: r.daysCount > 0 ? Math.round(r.daysTotal / r.daysCount) : null,
+    }))
+    .sort((a, b) => b.deals - a.deals);
+
+  // ── Pipeline distribution ──
+  const byStatus = {};
+  active.forEach(d => {
+    byStatus[d.status] = (byStatus[d.status] || 0) + 1;
+  });
+  const statusRows = Object.entries(byStatus).sort((a, b) => b[1] - a[1]);
+  const maxStatus = Math.max(1, ...Object.values(byStatus));
+
+  // Styles
+  const th = { textAlign: "left", fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", padding: "10px 12px", borderBottom: "1px solid #292524" };
+  const td = { fontSize: 13, padding: "10px 12px", borderBottom: "1px solid #1c1917", color: "#d6d3d1" };
+  const tdNum = { ...td, fontFamily: "'DM Mono', monospace", textAlign: "right", fontVariantNumeric: "tabular-nums" };
+
+  const SectionHeader = ({ icon, label, sub }) => (
+    <div style={{ marginBottom: 12, marginTop: 24 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8 }}>
+        <span>{icon}</span>{label}
+      </div>
+      {sub && <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <SectionHeader icon="📈" label="Monthly Trend" sub="Deals added and revenue booked, last 6 months" />
+      <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10 }}>
+          {months.map((m, i) => (
+            <div key={i} style={{ textAlign: "center" }}>
+              <div style={{ fontSize: 10, color: "#78716c", marginBottom: 4 }}>{m.label}</div>
+              <div style={{ height: 80, display: "flex", alignItems: "flex-end", justifyContent: "center", gap: 3, marginBottom: 6 }}>
+                <div title={`${m.added} added`} style={{ width: 12, height: `${(m.added / maxMonthAdded) * 100}%`, background: "#3b82f6", borderRadius: "2px 2px 0 0", minHeight: m.added > 0 ? 3 : 0 }}></div>
+                <div title={`${fmt(m.booked)} booked`} style={{ width: 12, height: `${(m.booked / maxMonthBooked) * 100}%`, background: "#10b981", borderRadius: "2px 2px 0 0", minHeight: m.booked > 0 ? 3 : 0 }}></div>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#d6d3d1" }}>{m.added}</div>
+              <div style={{ fontSize: 10, color: "#10b981", fontFamily: "'DM Mono', monospace" }}>{m.booked > 0 ? fmt(m.booked) : '—'}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 20, marginTop: 12, fontSize: 10, color: "#78716c" }}>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#3b82f6", borderRadius: 2, verticalAlign: "middle", marginRight: 4 }}></span> Deals added</span>
+          <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#10b981", borderRadius: 2, verticalAlign: "middle", marginRight: 4 }}></span> Revenue booked</span>
+        </div>
+      </div>
+
+      <SectionHeader icon="🧲" label="Lead Source ROI" sub={`Where your revenue actually comes from (${leadRows.length} source${leadRows.length === 1 ? '' : 's'})`} />
+      {leadRows.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#78716c", fontSize: 13, border: "1px dashed #292524", borderRadius: 10 }}>No lead source data yet.</div>
+      ) : (
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr><th style={th}>Source</th><th style={{ ...th, textAlign: "right" }}>Deals</th><th style={{ ...th, textAlign: "right" }}>Closed</th><th style={{ ...th, textAlign: "right" }}>Close Rate</th><th style={{ ...th, textAlign: "right" }}>Avg Net</th><th style={{ ...th, textAlign: "right" }}>Total Booked</th></tr>
+            </thead>
+            <tbody>
+              {leadRows.map(r => (
+                <tr key={r.source}>
+                  <td style={{ ...td, fontWeight: 600, color: "#fafaf9" }}>{r.source}</td>
+                  <td style={tdNum}>{r.deals}</td>
+                  <td style={tdNum}>{r.closed}</td>
+                  <td style={tdNum}>{r.closeRate}%</td>
+                  <td style={tdNum}>{r.closed > 0 ? fmt(r.avgNet) : '—'}</td>
+                  <td style={{ ...tdNum, color: "#10b981", fontWeight: 700 }}>{r.netTotal > 0 ? fmt(r.netTotal) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <SectionHeader icon="⚖️" label="Attorney Performance" sub={`Surplus recoveries only — ranked by volume (${attorneyRows.length} attorney${attorneyRows.length === 1 ? '' : 's'})`} />
+      {attorneyRows.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#78716c", fontSize: 13, border: "1px dashed #292524", borderRadius: 10 }}>No attorney data yet. Add attorneys to surplus deals to populate this table.</div>
+      ) : (
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr><th style={th}>Attorney</th><th style={{ ...th, textAlign: "right" }}>Cases</th><th style={{ ...th, textAlign: "right" }}>Recovered</th><th style={{ ...th, textAlign: "right" }}>Win Rate</th><th style={{ ...th, textAlign: "right" }}>Avg Days*</th><th style={{ ...th, textAlign: "right" }}>Avg Fee</th><th style={{ ...th, textAlign: "right" }}>Total Fee</th></tr>
+            </thead>
+            <tbody>
+              {attorneyRows.map(r => (
+                <tr key={r.attorney}>
+                  <td style={{ ...td, fontWeight: 600, color: "#fafaf9" }}>{r.attorney}</td>
+                  <td style={tdNum}>{r.deals}</td>
+                  <td style={tdNum}>{r.recovered}</td>
+                  <td style={tdNum}>{r.recoveryRate}%</td>
+                  <td style={tdNum}>{r.avgDays != null ? r.avgDays + 'd' : '—'}</td>
+                  <td style={tdNum}>{r.recovered > 0 ? fmt(r.avgFee) : '—'}</td>
+                  <td style={{ ...tdNum, color: "#10b981", fontWeight: 700 }}>{r.netTotal > 0 ? fmt(r.netTotal) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ fontSize: 10, color: "#57534e", marginTop: 6, fontStyle: "italic" }}>
+        * Average days from filed date to closed date for recovered cases. Requires both filed_at and closed_at to be set.
+      </div>
+
+      <SectionHeader icon="📍" label="Per-County Performance" sub={`Surplus cases only, ranked by volume (${countyRows.length} ${countyRows.length === 1 ? 'county' : 'counties'})`} />
+      {countyRows.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#78716c", fontSize: 13, border: "1px dashed #292524", borderRadius: 10 }}>No county data yet.</div>
+      ) : (
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr><th style={th}>County</th><th style={{ ...th, textAlign: "right" }}>Cases</th><th style={{ ...th, textAlign: "right" }}>Recovered</th><th style={{ ...th, textAlign: "right" }}>Win Rate</th><th style={{ ...th, textAlign: "right" }}>Median Days</th><th style={{ ...th, textAlign: "right" }}>Total Fee</th></tr>
+            </thead>
+            <tbody>
+              {countyRows.map(r => (
+                <tr key={r.county}>
+                  <td style={{ ...td, fontWeight: 600, color: "#fafaf9" }}>{r.county}</td>
+                  <td style={tdNum}>{r.deals}</td>
+                  <td style={tdNum}>{r.recovered}</td>
+                  <td style={tdNum}>{r.recoveryRate}%</td>
+                  <td style={tdNum}>{r.avgDays != null ? r.avgDays + 'd' : '—'}</td>
+                  <td style={{ ...tdNum, color: "#10b981", fontWeight: 700 }}>{r.netTotal > 0 ? fmt(r.netTotal) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <SectionHeader icon="📊" label="Pipeline Distribution" sub={`Where your ${active.length} active deal${active.length === 1 ? ' is' : 's are'} right now`} />
+      {statusRows.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#78716c", fontSize: 13, border: "1px dashed #292524", borderRadius: 10 }}>No active deals.</div>
+      ) : (
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+          {statusRows.map(([status, count]) => {
+            const pct = Math.round((count / maxStatus) * 100);
+            const color = STATUS_COLORS[status] || "#78716c";
+            return (
+              <div key={status} style={{ marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                  <span style={{ color: "#d6d3d1", textTransform: "capitalize" }}>{status.replace(/-/g, ' ')}</span>
+                  <span style={{ color: "#a8a29e", fontFamily: "'DM Mono', monospace" }}>{count}</span>
+                </div>
+                <div style={{ height: 6, background: "#0c0a09", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3 }}></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 32, padding: 16, background: "#0c0a09", border: "1px dashed #292524", borderRadius: 10, fontSize: 12, color: "#78716c", lineHeight: 1.55 }}>
+        <b style={{ color: "#a8a29e" }}>About this data</b><br/>
+        Analytics are computed live from your deal data. As you close more deals and populate filed/closed dates, the timelines get more accurate. The more cases we process through each attorney and county, the more reliable the averages become as forecasting tools.
+      </div>
+    </div>
+  );
+}
 
 function TodayView({ deals, onSelect }) {
   const now = new Date();
@@ -1831,7 +2091,6 @@ function TeamModal({ onClose, currentUserId }) {
                   <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>
                     {m.name} {m.id === currentUserId && <span style={{ fontSize: 10, color: "#10b981", marginLeft: 6 }}>(you)</span>}
                   </div>
-                  <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, fontFamily: "'DM Mono', monospace" }}>{m.id.slice(0, 8)}…</div>
                   <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 6, lineHeight: 1.4 }}>{roleDesc(m.role)}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
