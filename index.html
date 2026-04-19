@@ -219,10 +219,31 @@ function DealCommandCenter({ session, profile }) {
   const [recentActivity, setRecentActivity] = useState([]);
   const [showLog, setShowLog] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
+  const [showLeads, setShowLeads] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [newLeadCount, setNewLeadCount] = useState(0);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
+  const isTeam = isAdmin || profile.role === 'va';
+
+  const loadLeadCount = async () => {
+    const { count } = await sb.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new');
+    setNewLeadCount(count || 0);
+  };
+
+  // Cmd+K / Ctrl+K → open search
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        setShowSearch(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const loadDeals = async () => {
     const { data } = await sb.from('deals').select('*').order('created_at', { ascending: false });
@@ -238,13 +259,14 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); }, []);
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
     const ch = sb.channel('deals-ch')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, loadDeals)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -298,6 +320,12 @@ function DealCommandCenter({ session, profile }) {
         <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
           <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
+          <button onClick={() => setShowSearch(true)} title="Search (⌘K)" style={{ ...btnGhost, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
+            🔍 <span style={{ fontSize: 9, color: "#78716c", fontFamily: "'DM Mono', monospace", padding: "1px 5px", background: "#292524", borderRadius: 3 }}>⌘K</span>
+          </button>
+          {isTeam && <button onClick={() => setShowLeads(true)} style={{ ...btnGhost, fontSize: 11, position: "relative" }}>
+            Leads {newLeadCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{newLeadCount}</span>}
+          </button>}
           {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
@@ -306,6 +334,8 @@ function DealCommandCenter({ session, profile }) {
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
+      {showLeads && <LeadsModal onClose={() => { setShowLeads(false); loadLeadCount(); }} userName={userName} onConverted={() => { loadDeals(); loadLeadCount(); }} />}
+      {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} onToggleFlag={(id) => {
@@ -2506,6 +2536,246 @@ function Activity({ items }) {
 }
 
 // ─── Full Activity Log Modal ─────────────────────────────────────────
+// ─── Leads Modal (admin + VA) ──────────────────────────
+function LeadsModal({ onClose, userName, onConverted }) {
+  const [leads, setLeads] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('new');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    let q = sb.from('leads').select('*').order('created_at', { ascending: false });
+    if (filter !== 'all') q = q.eq('status', filter);
+    const { data } = await q;
+    setLeads(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [filter]);
+
+  const updateStatus = async (lead, newStatus) => {
+    setBusy(true); setMsg(null);
+    const patch = { status: newStatus };
+    if (newStatus === 'contacted' && !lead.contacted_at) patch.contacted_at = new Date().toISOString();
+    const { error } = await sb.from('leads').update(patch).eq('id', lead.id);
+    if (error) setMsg({ type: 'error', text: error.message });
+    else setMsg({ type: 'success', text: `Lead moved to ${newStatus}` });
+    await load();
+    setBusy(false);
+  };
+
+  const convertToDeal = async (lead) => {
+    if (!window.confirm(`Create a new surplus deal for "${lead.name}"? Lead status will change to 'signed'.`)) return;
+    setBusy(true); setMsg(null);
+    try {
+      const id = 'sf-' + lead.name.toLowerCase().split(' ').join('-').replace(/[^a-z0-9-]/g, '').slice(0, 30) + '-' + Date.now().toString(36);
+      const { error: dealErr } = await sb.from('deals').insert({
+        id,
+        type: 'surplus',
+        status: 'new-lead',
+        name: lead.name,
+        address: lead.address || '',
+        lead_source: lead.source || 'refundlocators-web',
+        meta: {
+          county: lead.county || '',
+          courtCase: lead.case_number || '',
+          phone: lead.phone || '',
+          email: lead.email,
+          from_lead_id: lead.id,
+          intake_notes: lead.notes || '',
+        },
+      });
+      if (dealErr) throw dealErr;
+      await sb.from('leads').update({ status: 'signed', converted_to_deal_id: id }).eq('id', lead.id);
+      setMsg({ type: 'success', text: `Created deal ${id}` });
+      await load();
+      onConverted?.();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const statusCounts = {};
+  leads.forEach(l => { statusCounts[l.status] = (statusCounts[l.status] || 0) + 1; });
+
+  return (
+    <Modal onClose={onClose} title="Leads — Intake Pipeline" wide>
+      <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
+        {['new', 'contacted', 'qualified', 'signed', 'rejected', 'spam', 'all'].map(s => (
+          <button key={s} onClick={() => setFilter(s)} style={{
+            padding: "5px 12px",
+            borderRadius: 6,
+            border: "1px solid " + (filter === s ? "#44403c" : "transparent"),
+            background: filter === s ? "#292524" : "transparent",
+            color: filter === s ? "#fafaf9" : "#78716c",
+            fontSize: 12,
+            fontWeight: filter === s ? 700 : 500,
+            cursor: "pointer",
+            fontFamily: "inherit",
+          }}>
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
+
+      {!loading && leads.length === 0 && (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8 }}>
+          No {filter === 'all' ? '' : filter + ' '}leads yet. When someone fills out the form at <code style={{ background: "#0c0a09", padding: "2px 6px", borderRadius: 3, fontSize: 11 }}>/lead-intake.html</code>, they show up here.
+        </div>
+      )}
+
+      {!loading && leads.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {leads.map(l => (
+            <div key={l.id} style={{ padding: "14px 16px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>
+                    {l.name}
+                    <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: statusBg(l.status), color: statusFg(l.status), letterSpacing: "0.06em", textTransform: "uppercase" }}>{l.status}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4, lineHeight: 1.5 }}>
+                    {l.email}{l.phone && ` · ${l.phone}`}<br/>
+                    {l.address && <>{l.address}<br/></>}
+                    {l.county && <>{l.county} County</>}{l.case_number && ` · Case ${l.case_number}`}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#57534e", marginTop: 6 }}>
+                    {new Date(l.created_at).toLocaleString()} · from {l.source}{l.converted_to_deal_id && ` · → deal ${l.converted_to_deal_id}`}
+                  </div>
+                </div>
+              </div>
+              {!l.converted_to_deal_id && l.status !== 'rejected' && l.status !== 'spam' && (
+                <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                  {l.status !== 'contacted' && <button onClick={() => updateStatus(l, 'contacted')} disabled={busy} style={{ ...btnGhost, fontSize: 11 }}>Mark contacted</button>}
+                  {l.status !== 'qualified' && <button onClick={() => updateStatus(l, 'qualified')} disabled={busy} style={{ ...btnGhost, fontSize: 11 }}>Qualified</button>}
+                  <button onClick={() => convertToDeal(l)} disabled={busy} style={{ ...btnPrimary, fontSize: 11, padding: "5px 12px" }}>Convert to deal</button>
+                  <button onClick={() => updateStatus(l, 'rejected')} disabled={busy} style={{ ...btnGhost, fontSize: 11, color: "#f59e0b" }}>Reject</button>
+                  <button onClick={() => updateStatus(l, 'spam')} disabled={busy} style={{ ...btnGhost, fontSize: 11, color: "#ef4444" }}>Spam</button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {msg && (
+        <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, padding: "10px 12px", background: "#0c0a09", borderRadius: 6, fontSize: 11, color: "#78716c", lineHeight: 1.5 }}>
+        Public intake form: <code style={{ color: "#d6d3d1" }}>{window.location.origin + window.location.pathname.replace(/[^/]*$/, '') + 'lead-intake.html'}</code>
+      </div>
+    </Modal>
+  );
+}
+const statusBg = (s) => ({ new: '#78350f', contacted: '#1e3a5f', qualified: '#4c1d95', signed: '#064e3b', rejected: '#292524', spam: '#7f1d1d' })[s] || '#292524';
+const statusFg = (s) => ({ new: '#fbbf24', contacted: '#93c5fd', qualified: '#c4b5fd', signed: '#6ee7b7', rejected: '#a8a29e', spam: '#fca5a5' })[s] || '#d6d3d1';
+
+// ─── Global Search Modal (⌘K) ─────────────────────────
+function SearchModal({ deals, onClose, onSelect }) {
+  const [q, setQ] = useState("");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (inputRef.current) inputRef.current.focus();
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const query = q.trim().toLowerCase();
+  const results = query.length === 0 ? [] : deals.filter(d => {
+    const m = d.meta || {};
+    const hay = [
+      d.name, d.address, d.status,
+      m.attorney, m.county, m.courtCase, m.phone, m.email,
+      d.lead_source || m.lead_source,
+    ].filter(Boolean).map(s => String(s).toLowerCase()).join(' ');
+    return hay.includes(query);
+  }).slice(0, 30);
+
+  const matchSpan = (text) => {
+    if (!query || !text) return text;
+    const idx = String(text).toLowerCase().indexOf(query);
+    if (idx === -1) return text;
+    return <>
+      {String(text).slice(0, idx)}
+      <span style={{ background: "#fef3c7", color: "#78350f", padding: "0 2px", borderRadius: 2 }}>{String(text).slice(idx, idx + query.length)}</span>
+      {String(text).slice(idx + query.length)}
+    </>;
+  };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "80px 20px 20px" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, width: "100%", maxWidth: 640, maxHeight: "70vh", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid #292524" }}>
+          <span style={{ fontSize: 16 }}>🔍</span>
+          <input
+            ref={inputRef}
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && results.length > 0) onSelect(results[0].id); }}
+            placeholder="Search deals by name, address, attorney, case number, county…"
+            style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#fafaf9", fontSize: 15, fontFamily: "inherit" }}
+          />
+          <span style={{ fontSize: 10, color: "#78716c", fontFamily: "'DM Mono', monospace" }}>ESC to close</span>
+        </div>
+        <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
+          {query.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "#78716c", fontSize: 13 }}>
+              Start typing to search across every deal.
+              <div style={{ marginTop: 12, fontSize: 11 }}>
+                Tip: you can search by name, address, attorney name, county, case number, or lead source.
+              </div>
+            </div>
+          ) : results.length === 0 ? (
+            <div style={{ padding: 32, textAlign: "center", color: "#78716c", fontSize: 13 }}>
+              No matches for <b style={{ color: "#a8a29e" }}>{q}</b>
+            </div>
+          ) : (
+            results.map((d, i) => {
+              const m = d.meta || {};
+              const typeIcon = d.type === 'flip' ? '🏠' : '💰';
+              return (
+                <div key={d.id} onClick={() => onSelect(d.id)} style={{
+                  display: "flex", alignItems: "center", gap: 12,
+                  padding: "12px 18px",
+                  borderBottom: "1px solid #1c1917",
+                  cursor: "pointer",
+                  background: i === 0 ? "#0c0a09" : "transparent",
+                }}
+                  onMouseEnter={e => e.currentTarget.style.background = "#0c0a09"}
+                  onMouseLeave={e => { if (i !== 0) e.currentTarget.style.background = "transparent"; }}
+                >
+                  <span style={{ fontSize: 18 }}>{typeIcon}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#fafaf9" }}>{matchSpan(d.name)}</div>
+                    <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+                      {matchSpan(d.address || '—')}
+                      {m.county && <> · {matchSpan(m.county)}</>}
+                      {m.attorney && <> · {matchSpan(m.attorney)}</>}
+                      {m.courtCase && <> · {matchSpan(m.courtCase)}</>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#292524", color: "#a8a29e", letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{d.status.replace(/-/g, ' ')}</span>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Team Management Modal (admin only) ─────────────
 function TeamModal({ onClose, currentUserId }) {
   const [members, setMembers] = useState([]);

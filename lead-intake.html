@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1f3a">
+<title>Search for surplus funds — FundLocators</title>
+<link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbf8f1;
+    --bg-card: #ffffff;
+    --bg-card-alt: #f4ecdc;
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --gold: #c9a24a;
+    --gold-light: #d8b560;
+    --gold-soft: #ede5cf;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --border: #e5dfd0;
+    --border-strong: #c9bea3;
+    --green: #2d7a4f;
+    --green-soft: #e4f1e9;
+    --red: #a83232;
+    --shadow: 0 1px 2px rgba(11, 31, 58, 0.06), 0 12px 32px rgba(11, 31, 58, 0.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .serif { font-family: 'Fraunces', Georgia, serif; font-weight: 500; letter-spacing: -0.015em; }
+  .hero { background: linear-gradient(180deg, var(--navy) 0%, var(--navy-mid) 100%); color: #fffcf5; padding: 60px 24px 80px; text-align: center; position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 600px 300px at 50% -20%, rgba(201, 162, 74, 0.2) 0%, transparent 60%); pointer-events: none; }
+  .brand { display: inline-flex; align-items: baseline; gap: 10px; font-family: 'Fraunces', serif; font-weight: 700; font-size: 22px; letter-spacing: -0.015em; position: relative; margin-bottom: 32px; }
+  .brand-dot { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; display: inline-block; transform: translateY(-3px); }
+  h1.hero-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 42px; letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 16px; position: relative; max-width: 760px; margin-left: auto; margin-right: auto; }
+  .hero-sub { font-size: 18px; color: rgba(255, 252, 245, 0.82); max-width: 640px; margin: 0 auto; line-height: 1.55; position: relative; }
+  .hero-pills { display: flex; justify-content: center; gap: 10px; margin-top: 28px; flex-wrap: wrap; position: relative; }
+  .pill { background: rgba(255, 252, 245, 0.1); color: rgba(255, 252, 245, 0.9); padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid rgba(255, 252, 245, 0.15); }
+  .pill-icon { margin-right: 6px; }
+
+  .form-shell { max-width: 640px; margin: -40px auto 60px; padding: 0 20px; position: relative; z-index: 2; }
+  .form-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 36px 32px; box-shadow: var(--shadow); }
+  .form-intro { font-size: 14px; color: var(--text-muted); margin: 0 0 24px; line-height: 1.6; }
+  .form-intro strong { color: var(--text); font-weight: 600; }
+
+  .field { margin-bottom: 16px; }
+  .field-label { display: block; font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .field-optional { color: var(--text-muted); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; margin-left: 4px; }
+  .field input, .field textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    font-size: 15px;
+    font-family: inherit;
+    color: var(--text);
+    background: var(--bg-card);
+    transition: border-color 0.12s, box-shadow 0.12s;
+  }
+  .field input:focus, .field textarea:focus {
+    outline: none;
+    border-color: var(--navy);
+    box-shadow: 0 0 0 3px rgba(11, 31, 58, 0.1);
+  }
+  .field textarea { resize: vertical; min-height: 72px; line-height: 1.5; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 560px) { .field-row { grid-template-columns: 1fr; gap: 0; } }
+
+  button.submit {
+    width: 100%;
+    background: var(--navy);
+    color: #fffcf5;
+    border: none;
+    padding: 16px 20px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.12s, transform 0.08s;
+    margin-top: 8px;
+  }
+  button.submit:hover:not(:disabled) { background: var(--navy-mid); }
+  button.submit:active:not(:disabled) { transform: translateY(1px); }
+  button.submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .error { color: var(--red); font-size: 13px; margin-top: 12px; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; }
+  .privacy { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 18px; line-height: 1.55; }
+  .privacy a { color: var(--navy-mid); }
+
+  .success-shell { text-align: center; padding: 50px 32px 40px; }
+  .success-icon { display: inline-flex; width: 72px; height: 72px; background: var(--green-soft); color: var(--green); border-radius: 50%; align-items: center; justify-content: center; font-size: 36px; margin-bottom: 20px; }
+  .success-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 28px; color: var(--navy); margin: 0 0 12px; letter-spacing: -0.015em; }
+  .success-body { font-size: 15px; color: var(--text); line-height: 1.65; max-width: 440px; margin: 0 auto 28px; }
+  .success-meta { display: inline-block; padding: 10px 16px; background: var(--gold-soft); color: var(--navy); border-radius: 999px; font-size: 13px; font-weight: 500; }
+
+  .trust { text-align: center; max-width: 640px; margin: 0 auto; padding: 0 20px 80px; color: var(--text-muted); font-size: 14px; line-height: 1.7; }
+  .trust h3 { font-family: 'Fraunces', serif; font-weight: 500; color: var(--navy); font-size: 20px; margin: 0 0 12px; letter-spacing: -0.01em; }
+  .trust p { margin: 0 0 12px; }
+  .trust a { color: var(--navy-mid); font-weight: 600; }
+
+  footer { text-align: center; padding: 30px 20px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); margin-top: 40px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="env,react">
+const { useState } = React;
+
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const OHIO_COUNTIES = [
+  "Adams","Allen","Ashland","Ashtabula","Athens","Auglaize","Belmont","Brown","Butler","Carroll","Champaign","Clark","Clermont","Clinton","Columbiana","Coshocton","Crawford","Cuyahoga","Darke","Defiance","Delaware","Erie","Fairfield","Fayette","Franklin","Fulton","Gallia","Geauga","Greene","Guernsey","Hamilton","Hancock","Hardin","Harrison","Henry","Highland","Hocking","Holmes","Huron","Jackson","Jefferson","Knox","Lake","Lawrence","Licking","Logan","Lorain","Lucas","Madison","Mahoning","Marion","Medina","Meigs","Mercer","Miami","Monroe","Montgomery","Morgan","Morrow","Muskingum","Noble","Ottawa","Paulding","Perry","Pickaway","Pike","Portage","Preble","Putnam","Richland","Ross","Sandusky","Scioto","Seneca","Shelby","Stark","Summit","Trumbull","Tuscarawas","Union","Van Wert","Vinton","Warren","Washington","Wayne","Williams","Wood","Wyandot"
+];
+
+function App() {
+  const [form, setForm] = useState({
+    name: "", phone: "", email: "", address: "", county: "", case_number: "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState(null);
+
+  const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError(null);
+
+    const payload = {
+      name: form.name.trim(),
+      phone: form.phone.trim() || null,
+      email: form.email.trim().toLowerCase(),
+      address: form.address.trim() || null,
+      county: form.county || null,
+      case_number: form.case_number.trim() || null,
+      source: 'refundlocators-web',
+      user_agent: navigator.userAgent.slice(0, 500),
+      metadata: {
+        referrer: document.referrer || null,
+        submitted_from: window.location.href,
+      },
+    };
+
+    if (!payload.name || !payload.email) {
+      setError('Name and email are required.');
+      return;
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(payload.email)) {
+      setError('Please enter a valid email address.');
+      return;
+    }
+
+    setSubmitting(true);
+    const { error } = await sb.from('leads').insert(payload);
+    setSubmitting(false);
+
+    if (error) {
+      setError('We had trouble saving your request — please try again or call Nathan directly at (513) 516-2306.');
+      return;
+    }
+    setSubmitted(true);
+  };
+
+  if (submitted) {
+    return (
+      <>
+        <div className="hero">
+          <div className="brand">
+            <span className="brand-dot"></span>
+            FundLocators
+          </div>
+          <h1 className="hero-title">We got your request.</h1>
+          <p className="hero-sub">Our team is already pulling the public court records for your case. You'll hear from us within one business day.</p>
+        </div>
+        <div className="form-shell">
+          <div className="form-card success-shell">
+            <div className="success-icon">✓</div>
+            <h2 className="success-title">Thank you, {form.name.split(' ')[0]}.</h2>
+            <p className="success-body">
+              We just received your request for <b>{form.address || 'the property you entered'}</b>{form.county ? ` in ${form.county} County` : ''}. A specialist will contact you at <b>{form.email}</b>{form.phone ? ` or ${form.phone}` : ''} within the next business day.
+            </p>
+            <p className="success-body" style={{ fontSize: 14, color: 'var(--text-muted)' }}>
+              If you'd like to reach us sooner — or you have documents to send — call Nathan directly at <a href="tel:+15135162306" style={{ color: 'var(--navy-mid)', fontWeight: 600 }}>(513) 516-2306</a>.
+            </p>
+            <div className="success-meta">Reference: {new Date().toLocaleDateString()} · {form.email}</div>
+          </div>
+        </div>
+        <footer>
+          © FundLocators · Ohio surplus fund recovery
+        </footer>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <div className="hero">
+        <div className="brand">
+          <span className="brand-dot"></span>
+          FundLocators
+        </div>
+        <h1 className="hero-title">Your foreclosure sale may have left money behind.</h1>
+        <p className="hero-sub">
+          When an Ohio home is sold at a foreclosure auction for more than what was owed, the surplus belongs to the former owner — not the bank. We help you recover it.
+        </p>
+        <div className="hero-pills">
+          <span className="pill"><span className="pill-icon">✓</span>No upfront cost</span>
+          <span className="pill"><span className="pill-icon">✓</span>Licensed Ohio attorneys</span>
+          <span className="pill"><span className="pill-icon">✓</span>Transparent fee disclosed before you sign</span>
+        </div>
+      </div>
+
+      <div className="form-shell">
+        <form className="form-card" onSubmit={submit}>
+          <p className="form-intro">
+            Tell us about the property and we'll check the public records for a surplus. <strong>Takes 60 seconds.</strong> Response within one business day. No phone spam — just one call from Nathan, our principal.
+          </p>
+
+          <div className="field-row">
+            <div className="field">
+              <label className="field-label">Your name</label>
+              <input type="text" required value={form.name} onChange={update('name')} placeholder="First and last" autoComplete="name" />
+            </div>
+            <div className="field">
+              <label className="field-label">Phone <span className="field-optional">(optional)</span></label>
+              <input type="tel" value={form.phone} onChange={update('phone')} placeholder="(555) 555-5555" autoComplete="tel" />
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="field-label">Email</label>
+            <input type="email" required value={form.email} onChange={update('email')} placeholder="you@email.com" autoComplete="email" />
+          </div>
+
+          <div className="field">
+            <label className="field-label">Property address</label>
+            <input type="text" value={form.address} onChange={update('address')} placeholder="123 Main St, Cincinnati, OH 45202" autoComplete="street-address" />
+          </div>
+
+          <div className="field-row">
+            <div className="field">
+              <label className="field-label">County <span className="field-optional">(Ohio)</span></label>
+              <input list="counties" value={form.county} onChange={update('county')} placeholder="Start typing…" />
+              <datalist id="counties">
+                {OHIO_COUNTIES.map(c => <option key={c} value={c} />)}
+              </datalist>
+            </div>
+            <div className="field">
+              <label className="field-label">Case number <span className="field-optional">(if you have it)</span></label>
+              <input type="text" value={form.case_number} onChange={update('case_number')} placeholder="e.g. 2024-CV-12345" />
+            </div>
+          </div>
+
+          {error && <div className="error">{error}</div>}
+
+          <button type="submit" className="submit" disabled={submitting || !form.name || !form.email}>
+            {submitting ? 'Sending…' : 'Check my property'}
+          </button>
+
+          <p className="privacy">
+            We only use your information to research your case and reach out. We don't sell lists, run spam campaigns, or share your info with anyone outside our team and your attorney.
+          </p>
+        </form>
+      </div>
+
+      <div className="trust">
+        <h3 className="serif">Why FundLocators</h3>
+        <p>Most surplus fund recovery firms cold-call post-foreclosure homeowners and pressure them into signing. We do the opposite. You find us, we look up your case in the public records, and if there's money on the table we tell you exactly how much and exactly what our fee would be — in writing, before you sign anything.</p>
+        <p>If you'd rather file the claim yourself, Nathan will walk you through how — for free. We only charge if you retain us and we recover funds.</p>
+        <p>Questions? <a href="tel:+15135162306">(513) 516-2306</a> rings Nathan's cell.</p>
+      </div>
+
+      <footer>© FundLocators · Ohio surplus fund recovery</footer>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
