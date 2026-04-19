@@ -123,6 +123,32 @@
   .loader { display: flex; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px; }
   a { color: var(--navy-mid); }
   a:hover { color: var(--gold); }
+  /* Empathy Check-in */
+  .empathy-card { background: var(--bg-card); border: 1px solid var(--gold-soft); border-radius: 14px; padding: 22px; margin: 18px 0; box-shadow: var(--shadow); }
+  .empathy-card h3 { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); margin: 0 0 6px; letter-spacing: -0.01em; }
+  .empathy-sub { font-size: 13px; color: var(--text-muted); margin: 0 0 16px; line-height: 1.6; }
+  .empathy-moods { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+  .empathy-mood { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 8px; background: var(--bg-card); border: 2px solid var(--border); border-radius: 10px; cursor: pointer; transition: all 0.15s; font-family: inherit; color: var(--text); }
+  .empathy-mood:hover { border-color: var(--gold); background: var(--bg-card-alt); }
+  .empathy-mood.selected { border-color: var(--gold); background: var(--gold-soft); }
+  .mood-emoji { font-size: 28px; line-height: 1; }
+  .mood-label { font-size: 12px; font-weight: 600; color: var(--navy); }
+  .empathy-text { width: 100%; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg-card); resize: vertical; margin-bottom: 12px; }
+  .empathy-text:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(11, 31, 58, 0.1); }
+  .empathy-submit { width: 100%; background: var(--navy); color: #fffcf5; border: none; padding: 12px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; transition: background 0.12s; }
+  .empathy-submit:hover:not(:disabled) { background: var(--navy-mid); }
+  .empathy-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+  .empathy-error { color: var(--red); font-size: 13px; margin-bottom: 10px; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; }
+  .empathy-done { text-align: center; padding: 28px 22px; }
+  .empathy-done h3 { margin-bottom: 8px; }
+  .empathy-done p { margin: 0; font-size: 14px; color: var(--text-muted); }
+  /* Welcome Video */
+  .welcome-video-card { background: var(--bg-card); border: 1px solid var(--gold-soft); border-radius: 14px; padding: 14px; margin: 18px 0; box-shadow: var(--shadow); }
+  .welcome-video-label { font-size: 10px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+  .welcome-video-label::before { content: "●"; color: var(--gold); }
+  .welcome-video-player { width: 100%; border-radius: 10px; background: #000; display: block; max-height: 360px; }
+  .welcome-video-caption { font-size: 12px; color: var(--text-muted); margin-top: 10px; line-height: 1.5; text-align: center; }
+  .welcome-video-caption a { color: var(--navy-mid); font-weight: 600; text-decoration: none; }
   /* Status Intel Card */
   .intel-card { display: flex; gap: 16px; align-items: flex-start; padding: 22px; border-radius: 12px; border: 1px solid; background: var(--bg-card); box-shadow: var(--shadow); margin-top: 18px; }
   .intel-card.intel-info       { border-color: #cfd9ea; background: linear-gradient(180deg, #f5f9ff 0%, var(--bg-card) 40%); }
@@ -455,6 +481,14 @@ function PortalBody({ session }) {
       // 6. Count co-claimants (privacy-safe RPC)
       const { data: claimantCount } = await sb.rpc('my_case_claimant_count');
 
+      // 7. Welcome video signed URL (if present)
+      let welcomeVideoUrl = null;
+      const wvPath = deal.meta?.welcome_video?.path;
+      if (wvPath) {
+        const { data: urlData } = await sb.storage.from('deal-docs').createSignedUrl(wvPath, 3600);
+        if (urlData?.signedUrl) welcomeVideoUrl = urlData.signedUrl;
+      }
+
       setState({
         loading: false,
         access,
@@ -462,6 +496,7 @@ function PortalBody({ session }) {
         activity: (activity || []).filter(a => isClientFacing(a.action)),
         documents: documents || [],
         claimantCount: claimantCount || 1,
+        welcomeVideoUrl,
       });
     })();
   }, [session]);
@@ -470,7 +505,7 @@ function PortalBody({ session }) {
   if (state.error === 'no_access') return <NoAccess session={session} />;
   if (state.error === 'deal_missing') return <GenericError />;
 
-  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} claimantCount={state.claimantCount} onSignOut={() => sb.auth.signOut()} />;
+  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} claimantCount={state.claimantCount} welcomeVideoUrl={state.welcomeVideoUrl} onSignOut={() => sb.auth.signOut()} />;
 }
 
 // ─── What's Happening Now ─────────────────────────────
@@ -583,6 +618,115 @@ function TestimonialOptIn({ accessId, initialPrefs }) {
   );
 }
 
+// ─── Weekly Empathy Check-in ───────────────────────────
+function EmpathyCheckin({ prefs, dealStatus }) {
+  const lastAt = prefs?.last_empathy_at;
+  const daysSinceLast = lastAt ? Math.floor((Date.now() - new Date(lastAt).getTime()) / 86400000) : 999;
+  const shouldShow = daysSinceLast >= 7 && !['recovered', 'dead'].includes(dealStatus);
+
+  const [mood, setMood] = useState(null);
+  const [response, setResponse] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState(null);
+
+  if (!shouldShow) return null;
+
+  const submit = async () => {
+    if (!mood) return;
+    setSubmitting(true); setErr(null);
+    const { error } = await sb.rpc('client_empathy_checkin', {
+      p_mood: mood,
+      p_response: response.trim() || null,
+    });
+    setSubmitting(false);
+    if (error) { setErr(error.message); return; }
+    setDone(true);
+  };
+
+  if (done) {
+    return (
+      <div className="empathy-card empathy-done">
+        <div style={{ fontSize: 24, marginBottom: 8 }}>💌</div>
+        <h3>Thank you.</h3>
+        <p>We read every check-in. {mood !== 'good' ? 'Nathan will reach out to you personally within one business day.' : 'Reach out anytime — (513) 516-2306.'}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="empathy-card">
+      <h3>How are you doing?</h3>
+      <p className="empathy-sub">We check in every week. Anything you tell us here goes only to Nathan and the team — never to the court, never to anyone else. If you need help beyond the case, we'll reach out.</p>
+      <div className="empathy-moods">
+        <button
+          type="button"
+          className={"empathy-mood" + (mood === 'good' ? ' selected' : '')}
+          onClick={() => setMood('good')}
+        >
+          <span className="mood-emoji">😊</span>
+          <span className="mood-label">Doing okay</span>
+        </button>
+        <button
+          type="button"
+          className={"empathy-mood" + (mood === 'struggling' ? ' selected' : '')}
+          onClick={() => setMood('struggling')}
+        >
+          <span className="mood-emoji">😔</span>
+          <span className="mood-label">Struggling</span>
+        </button>
+        <button
+          type="button"
+          className={"empathy-mood" + (mood === 'need_help' ? ' selected' : '')}
+          onClick={() => setMood('need_help')}
+        >
+          <span className="mood-emoji">🆘</span>
+          <span className="mood-label">Need help</span>
+        </button>
+      </div>
+      <textarea
+        className="empathy-text"
+        placeholder="Anything you'd like us to know? (optional)"
+        value={response}
+        onChange={e => setResponse(e.target.value)}
+        maxLength={1000}
+        rows={3}
+      />
+      {err && <div className="empathy-error">{err}</div>}
+      <button
+        type="button"
+        className="empathy-submit"
+        onClick={submit}
+        disabled={!mood || submitting}
+      >
+        {submitting ? 'Sending…' : 'Send to Nathan'}
+      </button>
+    </div>
+  );
+}
+
+// ─── Welcome Video Block ──────────────────────────────
+function WelcomeVideoBlock({ url }) {
+  if (!url) return null;
+  return (
+    <div className="welcome-video-card">
+      <div className="welcome-video-label">A message from Nathan</div>
+      <video
+        src={url}
+        controls
+        playsInline
+        preload="metadata"
+        className="welcome-video-player"
+      >
+        Your browser cannot play this video. <a href={url}>Download it instead.</a>
+      </video>
+      <div className="welcome-video-caption">
+        Nathan recorded this for you personally when your case came in. Questions anytime — <a href="tel:+15135162306">(513) 516-2306</a>.
+      </div>
+    </div>
+  );
+}
+
 // ─── Sticky Call Nathan Button (mobile only) ──────────
 function StickyCallButton() {
   return (
@@ -596,7 +740,7 @@ function StickyCallButton() {
 }
 
 // ─── Case View ─────────────────────────────────────────
-function CaseView({ deal, access, activity, documents, claimantCount, onSignOut }) {
+function CaseView({ deal, access, activity, documents, claimantCount, welcomeVideoUrl, onSignOut }) {
   const m = deal.meta || {};
   const estimatedSurplus = Number(m.estimatedSurplus) || 0;
   const feePct = Number(m.feePct) || 0;
@@ -632,6 +776,8 @@ function CaseView({ deal, access, activity, documents, claimantCount, onSignOut 
         )}
       </div>
 
+      <WelcomeVideoBlock url={welcomeVideoUrl} />
+
       <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
 
       {isRecovered ? (
@@ -650,6 +796,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, onSignOut 
           )}
           <StatusIntel status={deal.status} filedAt={filedAt} />
           <TimelineExpectation filedAt={filedAt} status={deal.status} />
+          <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} />
         </>
       )}
 

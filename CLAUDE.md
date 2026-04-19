@@ -69,6 +69,16 @@ The three apps:
 ## Automation
 
 - **Daily digest**: `public.send_daily_digest()` runs at 12:00 UTC (8am EDT / 7am EST) via pg_cron job `daily-digest-nathan`. Queries stale deals, urgent deadlines, unfiled surplus, bonuses owed, portal activity, monthly metrics — builds an HTML email and sends via Resend. API key stored in Supabase Vault under `resend_api_key`.
+- **Document OCR**: Supabase Edge Function `extract-document` reads uploaded files (images + PDFs) and sends them to Claude Vision (claude-sonnet-4-5). Returns structured JSON: `document_type`, `confidence`, `fields` (type-specific extraction), `summary`, `notes`. Stored on `documents.extracted` jsonb + `extraction_status`. Requires `ANTHROPIC_API_KEY` env var in Edge Function secrets. Auto-fires on upload; manual retry via UI.
+- **Weekly empathy check-in**: clients can call `public.client_empathy_checkin(p_mood, p_response)` once per week. Mood is one of `good`, `struggling`, `need_help`. Logs an activity row on the deal (so Nathan sees it) and appends to `client_access.prefs.empathy_checkins` history. Portal shows the prompt when last check-in was >7 days ago or never.
+- **Welcome video**: stored per deal at `deals.meta.welcome_video.path` (pointing to the `deal-docs` bucket). Portal fetches a signed URL on load and embeds above the case status.
+
+## Role-based UI gating
+
+The UI visibility of financial data is driven by `profile.role`:
+- **Admin** (`user` | `admin`): sees everything — dashboard $ tiles, Projected Revenue, deal detail metric strip, Live P&L Waterfall, Deal Parameters card, Financial Summary card, Case Details financial fields (estimatedSurplus, feePct, attorneyFee), the Expenses tab, Analytics view.
+- **VA** (`va`): everything EXCEPT the above financials. Dashboard shows 3 tiles instead of 5. Deal detail metric strip shows Type/County/Attorney instead of dollar metrics. Expenses tab is hidden (RLS also blocks data access). Case Details hides financial inputs but keeps attorney/case number/county.
+- **Attorney** / **Client**: no DCC access; they use their own portal pages.
 
 ## Realtime
 

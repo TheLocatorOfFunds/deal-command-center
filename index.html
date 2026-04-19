@@ -315,7 +315,7 @@ function DealCommandCenter({ session, profile }) {
           updateDealMeta(id, { meta: { ...m, flagged: !m.flagged } });
         }} />
       ) : (
-        <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
+        <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
       )}
     </Shell>
   );
@@ -392,11 +392,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   return (
     <div>
       {/* Portfolio summary */}
-      <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
-        <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />
+      <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+        {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
         <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
         <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
-        <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />
+        {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
         <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
       </div>
 
@@ -437,7 +437,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: view === "analytics" ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
-            <TodayView deals={deals} onSelect={onSelect} />
+            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} />
           ) : view === "analytics" ? (
             <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : layoutMode === "kanban" ? (
@@ -890,7 +890,7 @@ function AnalyticsView({ deals, onSelect }) {
   );
 }
 
-function TodayView({ deals, onSelect }) {
+function TodayView({ deals, onSelect, isAdmin }) {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -966,9 +966,9 @@ function TodayView({ deals, onSelect }) {
   return (
     <div>
       {/* Monthly stats strip */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(3, 1fr)" : "repeat(2, 1fr)", gap: 12, marginBottom: 20 }}>
         <PortfolioStat label={`Deals Added · ${monthName}`} value={addedThisMonth.length} sub={addedThisMonth.length === 1 ? "1 new deal this month" : `${addedThisMonth.length} new deals this month`} color="#3b82f6" />
-        <PortfolioStat label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />
+        {isAdmin && <PortfolioStat label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />}
         <PortfolioStat label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
       </div>
 
@@ -1207,7 +1207,7 @@ function Modal({ onClose, title, children, wide }) {
 }
 
 // ─── Deal Detail ─────────────────────────────────────────────────────
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin }) {
   const [tab, setTab] = useState("overview");
   const [expenses, setExpenses] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -1277,7 +1277,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
 
   if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
 
-  const tabs = ["overview", "expenses", "tasks", "vendors", "documents", "notes", "activity"];
+  const tabs = isAdmin
+    ? ["overview", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
+    : ["overview", "tasks", "vendors", "documents", "notes", "activity"];
 
   return (
     <div>
@@ -1321,18 +1323,26 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
         </button>
       </div>
 
-      <div className={isFlip ? "metric-grid-4" : "metric-grid-3"} style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {isFlip ? (<>
-          <Metric label="Contract Price" value={fmt(m.contractPrice)} sub="What we pay" color="#f59e0b" />
-          <Metric label="Cash Deployed" value={fmt(totalExpenses)} sub="Expenses to date" color="#a8a29e" />
-          <Metric label={strategy === "wholesale" ? "Wholesale Price" : "List Price"} value={fmt(salePrice)} sub={strategy === "wholesale" ? "Assignment exit" : (deal.status === "listing" ? "Active listing" : "Target")} color="#3b82f6" />
-          <Metric label="Projected Net" value={fmt(netProfit)} sub={strategy === "wholesale" ? "As wholesale" : (netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative")} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
-        </>) : (<>
-          <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? m.county + " County" : "—"} color="#3b82f6" />
-          <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
-          <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
-        </>)}
-      </div>
+      {isAdmin ? (
+        <div className={isFlip ? "metric-grid-4" : "metric-grid-3"} style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+          {isFlip ? (<>
+            <Metric label="Contract Price" value={fmt(m.contractPrice)} sub="What we pay" color="#f59e0b" />
+            <Metric label="Cash Deployed" value={fmt(totalExpenses)} sub="Expenses to date" color="#a8a29e" />
+            <Metric label={strategy === "wholesale" ? "Wholesale Price" : "List Price"} value={fmt(salePrice)} sub={strategy === "wholesale" ? "Assignment exit" : (deal.status === "listing" ? "Active listing" : "Target")} color="#3b82f6" />
+            <Metric label="Projected Net" value={fmt(netProfit)} sub={strategy === "wholesale" ? "As wholesale" : (netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative")} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
+          </>) : (<>
+            <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? m.county + " County" : "—"} color="#3b82f6" />
+            <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
+            <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
+          </>)}
+        </div>
+      ) : (
+        <div className="metric-grid-3" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+          <Metric label="Type" value={deal.type === "flip" ? "Real Estate Flip" : "Surplus Recovery"} sub={deal.status.replace(/-/g, ' ')} color="#3b82f6" />
+          <Metric label="County" value={m.county || "—"} sub={m.courtCase || (deal.address || '')} color="#8b5cf6" />
+          <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.filed_at || deal.filed_at ? `Filed ${daysSince(m.filed_at || deal.filed_at)}d ago` : "Not yet filed"} color="#f59e0b" />
+        </div>
+      )}
 
       <div className="detail-tabs" style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
         {tabs.map(id => (
@@ -1347,8 +1357,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
       </div>
 
       {tab === "overview" && (isFlip
-        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} />
-        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} />)}
+        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} />
+        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} />)}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
@@ -1360,7 +1370,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal }) {
 }
 
 // ─── Flip Overview ───────────────────────────────────────────────────
-function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal }) {
+function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   const setStrategy = (s) => updateMeta({ strategy: s });
@@ -1372,7 +1382,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
   return (
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
-        <Card title="Live P&L Waterfall">
+        {isAdmin && <Card title="Live P&L Waterfall">
           <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
             {["flip", "wholesale"].map(s => (
               <button key={s} onClick={() => setStrategy(s)} style={{
@@ -1390,7 +1400,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
           <WaterfallLine label="NET PROFIT" value={netProfit} bold huge />
           {strategy === "wholesale" && <div style={{ fontSize: 11, color: "#78716c", marginTop: 10, fontStyle: "italic" }}>Wholesale view skips retail closing costs — assumes assignment or double-close.</div>}
-        </Card>
+        </Card>}
         <Card title="Timing & Source" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Closing / Target Date"><input type="date" value={m.deadline || deal.deadline || ""} onChange={e => updateMeta({ deadline: e.target.value || null })} style={inputStyle} /></Field>
@@ -1405,7 +1415,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
             )}
           </div>
         </Card>
-        <Card title="Deal Parameters" style={{ marginTop: 16 }}>
+        {isAdmin && <Card title="Deal Parameters" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
             <Field label="Contract Price"><input type="number" value={m.contractPrice || ""} onChange={e => updateMeta({ contractPrice: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
             <Field label="List Price (retail)"><input type="number" value={m.listPrice || ""} onChange={e => updateMeta({ listPrice: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
@@ -1415,7 +1425,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
             <Field label="Buyer Agent %"><input type="number" step="0.5" value={m.buyerAgentPct || ""} onChange={e => updateMeta({ buyerAgentPct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
             <Field label="Misc Closing %"><input type="number" step="0.5" value={m.closingMiscPct || ""} onChange={e => updateMeta({ closingMiscPct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
           </div>
-        </Card>
+        </Card>}
       </div>
       <div>
         <Card title="Progress">
@@ -1591,7 +1601,96 @@ function ClientPortalCard({ deal, logAct }) {
   );
 }
 
-function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct }) {
+// ─── Welcome Video Card (DCC side) ──────────────────
+function WelcomeVideoCard({ deal, logAct, onUpdateDeal }) {
+  const m = deal.meta || {};
+  const wv = m.welcome_video;
+  const [uploading, setUploading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [err, setErr] = useState(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    if (!wv?.path) { setPreviewUrl(null); return; }
+    (async () => {
+      const { data } = await sb.storage.from('deal-docs').createSignedUrl(wv.path, 3600);
+      if (data?.signedUrl) setPreviewUrl(data.signedUrl);
+    })();
+  }, [wv?.path]);
+
+  const upload = async (file) => {
+    if (!file) return;
+    if (!file.type.startsWith('video/')) { setErr('That file is not a video.'); return; }
+    if (file.size > 100 * 1024 * 1024) { setErr('Video must be under 100MB. Trim it shorter or lower quality.'); return; }
+    setUploading(true); setErr(null);
+    try {
+      // Delete old if exists
+      if (wv?.path) {
+        await sb.storage.from('deal-docs').remove([wv.path]);
+      }
+      const ext = file.name.split('.').pop().toLowerCase();
+      const path = `${deal.id}/welcome-video-${Date.now()}.${ext}`;
+      const up = await sb.storage.from('deal-docs').upload(path, file, { contentType: file.type });
+      if (up.error) throw up.error;
+      await onUpdateDeal({
+        meta: {
+          ...m,
+          welcome_video: {
+            path,
+            uploaded_at: new Date().toISOString(),
+            size: file.size,
+            content_type: file.type,
+            original_name: file.name,
+          }
+        }
+      });
+      if (logAct) await logAct(`Welcome video uploaded`);
+    } catch (e) {
+      setErr(e.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const remove = async () => {
+    if (!wv?.path) return;
+    if (!window.confirm('Remove the welcome video from this deal? It will disappear from the client portal.')) return;
+    await sb.storage.from('deal-docs').remove([wv.path]);
+    const { welcome_video, ...rest } = m;
+    await onUpdateDeal({ meta: rest });
+    if (logAct) await logAct(`Welcome video removed`);
+  };
+
+  return (
+    <Card title="Welcome Video" style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 12, lineHeight: 1.5 }}>
+        Record a 60-second video on your phone — just "Hi [client name], I'm Nathan. I saw your case come in. Here's what's next. Call me anytime." Upload it and it appears at the top of their portal as the very first thing they see. This is the single highest-trust moment you can give a client.
+      </div>
+      {wv?.path && previewUrl && (
+        <div style={{ marginBottom: 12, padding: 10, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+          <video controls src={previewUrl} style={{ width: "100%", borderRadius: 4, maxHeight: 280, background: "#000" }} preload="metadata" />
+          <div style={{ fontSize: 10, color: "#78716c", marginTop: 8 }}>
+            Uploaded {new Date(wv.uploaded_at).toLocaleDateString()} · {(wv.size / 1024 / 1024).toFixed(1)}MB · {wv.original_name || 'welcome-video'}
+          </div>
+        </div>
+      )}
+      {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <label style={{ ...btnPrimary, cursor: uploading ? "wait" : "pointer", display: "inline-block", opacity: uploading ? 0.5 : 1 }}>
+          {uploading ? 'Uploading…' : (wv?.path ? 'Replace video' : '+ Upload video')}
+          <input ref={fileRef} type="file" accept="video/*" style={{ display: "none" }} disabled={uploading} onChange={e => upload(e.target.files[0])} />
+        </label>
+        {wv?.path && <button onClick={remove} disabled={uploading} style={btnGhost}>Remove</button>}
+      </div>
+      <div style={{ fontSize: 10, color: "#57534e", marginTop: 10, lineHeight: 1.5 }}>
+        Supported: any video your phone records (mp4, mov, webm). Max 100MB. Keep it under 90 seconds — it plays better and clients are more likely to watch the whole thing.
+      </div>
+    </Card>
+  );
+}
+
+function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
@@ -1599,22 +1698,22 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
       <div>
         <Card title="Case Details">
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Estimated Surplus"><input type="number" value={m.estimatedSurplus || ""} onChange={e => updateMeta({ estimatedSurplus: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
-            <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>
+            {isAdmin && <Field label="Estimated Surplus"><input type="number" value={m.estimatedSurplus || ""} onChange={e => updateMeta({ estimatedSurplus: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>}
+            {isAdmin && <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>}
             <Field label="Attorney"><input value={m.attorney || ""} onChange={e => updateMeta({ attorney: e.target.value })} style={inputStyle} /></Field>
-            <Field label="Attorney Fee"><input type="number" value={m.attorneyFee || ""} onChange={e => updateMeta({ attorneyFee: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="$" /></Field>
+            {isAdmin && <Field label="Attorney Fee"><input type="number" value={m.attorneyFee || ""} onChange={e => updateMeta({ attorneyFee: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="$" /></Field>}
             <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
             <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
           </div>
         </Card>
-        <Card title="Financial Summary" style={{ marginTop: 16 }}>
+        {isAdmin && <Card title="Financial Summary" style={{ marginTop: 16 }}>
           <WaterfallLine label="Estimated Surplus" value={m.estimatedSurplus || 0} positive bold />
           <WaterfallLine label={`Our fee (${m.feePct || 0}%)`} value={projectedFee} positive />
           {(m.attorneyFee || 0) > 0 && <WaterfallLine label={`Attorney fee${m.attorney ? ` (${m.attorney})` : ""}`} value={-(m.attorneyFee || 0)} />}
           {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
           <WaterfallLine label="NET TO US" value={projectedFee - (m.attorneyFee || 0) - totalExpenses} bold huge />
-        </Card>
+        </Card>}
         <Card title="Timing & Source" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <Field label="Filed Date"><input type="date" value={m.filed_at || deal.filed_at || ""} onChange={e => updateMeta({ filed_at: e.target.value || null })} style={inputStyle} /></Field>
@@ -1632,6 +1731,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           {(m.filed_at || deal.filed_at) && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(m.filed_at || deal.filed_at)} days ago{(m.deadline || deal.deadline) && ` · ${deadlineInfo(m.deadline || deal.deadline).label || 'on track'}`}</div>}
         </Card>
         <ClientPortalCard deal={deal} logAct={logAct} />
+        <WelcomeVideoCard deal={deal} logAct={logAct} onUpdateDeal={onUpdateDeal} />
       </div>
       <div>
         <Card title="Progress">
