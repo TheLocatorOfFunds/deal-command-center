@@ -1460,6 +1460,146 @@ const portalUrl = () => {
   const base = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
   return base + 'portal.html';
 };
+const attorneyPortalUrl = () => {
+  const base = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+  return base + 'attorney-portal.html';
+};
+
+function AttorneyAssignmentCard({ deal, logAct }) {
+  const [assignments, setAssignments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('attorney_assignments').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true });
+    setAssignments(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [deal.id]);
+
+  const invite = async () => {
+    if (!email) return;
+    setBusy(true); setMsg(null);
+    try {
+      const addr = email.trim().toLowerCase();
+      const { error: insErr } = await sb.from('attorney_assignments').insert({ deal_id: deal.id, email: addr, enabled: true });
+      if (insErr && !String(insErr.message).includes('duplicate')) throw insErr;
+      const { error: otpErr } = await sb.auth.signInWithOtp({ email: addr, options: { emailRedirectTo: attorneyPortalUrl() } });
+      if (otpErr) throw otpErr;
+      if (logAct) await logAct(`Attorney invited to counsel portal: ${addr}`);
+      setMsg({ type: 'success', text: `Magic link sent to ${addr}` });
+      setEmail("");
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resend = async (row) => {
+    if (!row.email) {
+      setMsg({ type: 'error', text: "This attorney has already signed in. Share the portal URL directly." });
+      return;
+    }
+    setBusy(true); setMsg(null);
+    try {
+      const { error } = await sb.auth.signInWithOtp({ email: row.email, options: { emailRedirectTo: attorneyPortalUrl() } });
+      if (error) throw error;
+      if (logAct) await logAct(`Counsel portal link resent: ${row.email}`);
+      setMsg({ type: 'success', text: `Magic link resent to ${row.email}` });
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleEnabled = async (row) => {
+    setBusy(true); setMsg(null);
+    await sb.from('attorney_assignments').update({ enabled: !row.enabled }).eq('id', row.id);
+    if (logAct) await logAct(`Counsel portal ${!row.enabled ? 'enabled' : 'disabled'} for ${row.email || 'attorney'}`);
+    await load();
+    setBusy(false);
+  };
+
+  const remove = async (row) => {
+    if (!window.confirm(`Remove counsel portal access for ${row.email || 'this attorney'}?`)) return;
+    setBusy(true); setMsg(null);
+    await sb.from('attorney_assignments').delete().eq('id', row.id);
+    if (logAct) await logAct(`Counsel portal access removed for ${row.email || 'attorney'}`);
+    await load();
+    setBusy(false);
+  };
+
+  const copyUrl = () => {
+    navigator.clipboard.writeText(attorneyPortalUrl());
+    setMsg({ type: 'success', text: 'Counsel portal URL copied.' });
+  };
+
+  if (loading) return (<Card title="Counsel Portal" style={{ marginTop: 16 }}><div style={{ fontSize: 12, color: "#78716c" }}>Checking…</div></Card>);
+
+  const titleSuffix = assignments.length > 0 ? ` · ${assignments.length} attorney${assignments.length === 1 ? '' : 's'}` : '';
+
+  return (
+    <Card title={"Counsel Portal" + titleSuffix} style={{ marginTop: 16 }}>
+      {assignments.length === 0 && (
+        <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 12, lineHeight: 1.5 }}>
+          Invite an attorney to a scoped view of just this case. They can see status, timeline, documents, and case notes, and can post updates or upload filings. They will never see financials, other cases, or anything internal.
+        </div>
+      )}
+
+      {assignments.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+          {assignments.map(row => {
+            const statusColor = !row.enabled ? "#78716c" : (row.user_id ? "#10b981" : "#f59e0b");
+            const statusText = !row.enabled ? "Disabled" : (row.user_id ? "Active" : "Invite pending");
+            return (
+              <div key={row.id} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: statusColor, display: "inline-block", flexShrink: 0 }}></span>
+                  <span style={{ fontWeight: 700, color: statusColor }}>{statusText}</span>
+                  <span style={{ color: "#78716c" }}>·</span>
+                  <span style={{ color: "#d6d3d1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.email || 'Attorney'}</span>
+                  {row.last_seen_at && <span style={{ marginLeft: "auto", fontSize: 10, color: "#78716c" }}>seen {daysSince(row.last_seen_at)}d ago</span>}
+                </div>
+                <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                  {row.enabled && row.email && <button onClick={() => resend(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>Resend link</button>}
+                  <button onClick={() => toggleEnabled(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{row.enabled ? 'Disable' : 'Enable'}</button>
+                  <button onClick={() => remove(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#ef4444" }}>Remove</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.08em", fontWeight: 700 }}>
+        {assignments.length === 0 ? 'Invite attorney' : 'Add another attorney'}
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="counsel@firm.com" style={{ ...inputStyle, flex: 1 }} onKeyDown={e => { if (e.key === 'Enter' && email) invite(); }} />
+        <button onClick={invite} disabled={busy || !email} style={btnPrimary}>{busy ? 'Sending…' : 'Invite'}</button>
+      </div>
+
+      {assignments.length > 0 && (
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={copyUrl} style={{ ...btnGhost, fontSize: 12 }}>Copy counsel portal URL</button>
+        </div>
+      )}
+
+      {msg && (
+        <div style={{ marginTop: 12, padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+          {msg.text}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 function ClientPortalCard({ deal, logAct }) {
   const [accessList, setAccessList] = useState([]);
@@ -1731,6 +1871,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           {(m.filed_at || deal.filed_at) && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(m.filed_at || deal.filed_at)} days ago{(m.deadline || deal.deadline) && ` · ${deadlineInfo(m.deadline || deal.deadline).label || 'on track'}`}</div>}
         </Card>
         <ClientPortalCard deal={deal} logAct={logAct} />
+        <AttorneyAssignmentCard deal={deal} logAct={logAct} />
         <WelcomeVideoCard deal={deal} logAct={logAct} onUpdateDeal={onUpdateDeal} />
       </div>
       <div>

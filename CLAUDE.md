@@ -63,8 +63,8 @@ The `handle_new_user` trigger auto-assigns `role` at signup:
 
 The three apps:
 - **DCC** (`index.html`) — team app. Admins get everything; VAs get everything but expenses + financial fields hidden at UI level; admin can manage team via Team modal.
-- **Client portal** (`portal.html`) — clients sign in here. UI only queries `deals`, `activity`, `documents`, `client_access` (all scoped by RLS). Multi-claimant aware.
-- **Attorney portal** — TODO, scaffolding in place via `attorney_assignments` + policies.
+- **Client portal** (`portal.html`) — clients sign in here. UI only queries `deals`, `activity`, `documents`, `client_access` (all scoped by RLS). Multi-claimant aware. Features welcome video, status intel, timeline expectations, empathy check-in, post-recovery celebration.
+- **Counsel/attorney portal** (`attorney-portal.html`) — attorneys sign in, see a list of cases they're assigned to via `attorney_assignments`, can open any case to view status, timeline, documents, and team notes. Can post case updates (RPC `attorney_post_update` → writes to activity feed) and upload documents. Scoped entirely by RLS. Hash-based routing (`#/` for inbox, `#/case/:id` for detail). Admin invites from the deal detail via the Counsel Portal card in SurplusOverview.
 
 ## Automation
 

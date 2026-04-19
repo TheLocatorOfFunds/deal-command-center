@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1f3a">
+<title>FundLocators Attorney Portal</title>
+<link rel="manifest" href="attorney-portal-manifest.json" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="FundLocators Counsel" />
+<link rel="apple-touch-icon" href="icon-attorney.svg" />
+<link rel="icon" type="image/svg+xml" href="icon-attorney.svg" />
+<link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f5f1e8;
+    --bg-card: #ffffff;
+    --bg-card-alt: #ebe3d1;
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --navy-soft: #4a6fa5;
+    --gold: #c9a24a;
+    --gold-light: #d8b560;
+    --gold-soft: #ede5cf;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
+    --border: #dcd3bc;
+    --border-strong: #b9ad8e;
+    --green: #2d7a4f;
+    --green-soft: #e4f1e9;
+    --red: #a83232;
+    --shadow: 0 1px 2px rgba(11, 31, 58, 0.08), 0 8px 24px rgba(11, 31, 58, 0.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+  }
+  .serif { font-family: 'Fraunces', Georgia, serif; font-weight: 500; letter-spacing: -0.01em; }
+  .container { max-width: 920px; margin: 0 auto; padding: 20px 20px 60px; }
+  .centered-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 22px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 16px; }
+  .card-title { font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 14px; }
+
+  header.app-header { display: flex; align-items: center; justify-content: space-between; padding: 8px 0 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+  .brand { display: flex; align-items: baseline; gap: 10px; font-family: 'Fraunces', serif; font-weight: 700; font-size: 22px; color: var(--navy); letter-spacing: -0.015em; }
+  .brand-dot { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; display: inline-block; transform: translateY(-3px); }
+  .brand-tag { font-family: 'Inter', sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.14em; color: var(--text-muted); text-transform: uppercase; }
+  .user-meta { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--text-muted); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text-muted); padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.12s; }
+  .btn-ghost:hover { border-color: var(--navy); color: var(--navy); }
+
+  h1.page-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 32px; color: var(--navy); margin: 0 0 4px; letter-spacing: -0.02em; }
+  .page-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
+
+  /* Inbox rows */
+  .case-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; box-shadow: var(--shadow); cursor: pointer; transition: all 0.12s; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .case-row + .case-row { margin-top: 12px; }
+  .case-row:hover { border-color: var(--gold); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(11, 31, 58, 0.1), 0 12px 30px rgba(11, 31, 58, 0.08); }
+  .case-name { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); margin-bottom: 4px; letter-spacing: -0.015em; line-height: 1.2; }
+  .case-meta { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; }
+  .case-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+  .case-right { text-align: right; font-size: 11px; color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
+
+  /* Status badges */
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; white-space: nowrap; }
+  .b-new-lead     { background: #fef3c7; color: #78350f; }
+  .b-contacted    { background: #dbeafe; color: #1e40af; }
+  .b-signed       { background: #e0e7ff; color: #4338ca; }
+  .b-probate      { background: #fde68a; color: #713f12; }
+  .b-filed        { background: #d1fae5; color: #065f46; }
+  .b-awaiting-distribution { background: #fef3c7; color: #78350f; }
+  .b-hearing-set  { background: #e0e7ff; color: #4338ca; }
+  .b-recovered    { background: #d1fae5; color: #065f46; }
+  .b-dead         { background: #fee2e2; color: #7f1d1d; }
+  .b-default      { background: var(--gold-soft); color: var(--navy); }
+  .b-muted        { background: var(--bg-card-alt); color: var(--text-muted); }
+
+  /* Back link */
+  .back-link { display: inline-flex; align-items: center; gap: 6px; color: var(--navy-mid); font-size: 13px; font-weight: 600; text-decoration: none; margin-bottom: 16px; }
+  .back-link:hover { color: var(--gold); }
+
+  /* Stat grid */
+  .stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
+  @media (max-width: 720px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+  .stat { background: var(--bg-card-alt); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+  .stat-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+  .stat-value { font-family: 'Fraunces', serif; font-weight: 500; font-size: 16px; color: var(--navy); letter-spacing: -0.01em; line-height: 1.2; }
+
+  /* Timeline */
+  .timeline-item { display: grid; grid-template-columns: 12px 1fr auto; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--border); align-items: start; }
+  .timeline-item:last-child { border-bottom: none; }
+  .timeline-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gold); margin-top: 7px; box-shadow: 0 0 0 4px rgba(201, 162, 74, 0.15); }
+  .timeline-action { font-size: 13px; color: var(--text); }
+  .timeline-date { font-size: 11px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+  /* Documents */
+  .doc-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .doc-row:last-child { border-bottom: none; }
+  .doc-icon { width: 36px; height: 36px; background: var(--gold-soft); color: var(--navy); border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .doc-name { flex: 1; font-size: 13px; color: var(--navy); font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .doc-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .doc-action { background: transparent; border: 1px solid var(--border-strong); color: var(--navy); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .doc-action:hover { background: var(--navy); color: #fffcf5; border-color: var(--navy); }
+
+  /* Update form */
+  .update-form { display: flex; flex-direction: column; gap: 10px; }
+  .update-text { width: 100%; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 14px; font-family: inherit; color: var(--text); background: var(--bg-card); resize: vertical; min-height: 80px; }
+  .update-text:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(11, 31, 58, 0.1); }
+  .btn-primary { background: var(--navy); color: #fffcf5; border: none; padding: 11px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; transition: background 0.12s; align-self: flex-start; }
+  .btn-primary:hover:not(:disabled) { background: var(--navy-mid); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .upload-label { display: inline-flex; align-items: center; gap: 8px; background: var(--navy); color: #fffcf5; padding: 9px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .upload-label:hover { background: var(--navy-mid); }
+
+  /* Sign-in */
+  .signin-card { max-width: 440px; width: 100%; padding: 40px 32px; }
+  .signin-card h1 { font-family: 'Fraunces', serif; font-weight: 500; font-size: 26px; color: var(--navy); margin: 0 0 8px; letter-spacing: -0.015em; }
+  .signin-card p.lead { color: var(--text-muted); font-size: 15px; margin: 0 0 24px; }
+  input[type=email] { width: 100%; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 8px; font-size: 15px; font-family: inherit; color: var(--text); background: var(--bg-card); }
+  input[type=email]:focus { outline: none; border-color: var(--navy); box-shadow: 0 0 0 3px rgba(11, 31, 58, 0.1); }
+  .btn-full { width: 100%; background: var(--navy); color: #fffcf5; border: none; padding: 12px 20px; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; font-family: inherit; margin-top: 12px; }
+  .btn-full:hover:not(:disabled) { background: var(--navy-mid); }
+  .btn-full:disabled { opacity: 0.5; cursor: not-allowed; }
+  .fineprint { color: var(--text-muted); font-size: 12px; margin-top: 18px; line-height: 1.55; }
+  .success-check { display: flex; width: 56px; height: 56px; background: var(--green-soft); color: var(--green); border-radius: 50%; align-items: center; justify-content: center; font-size: 28px; margin-bottom: 18px; }
+  .error { color: var(--red); font-size: 13px; margin-top: 10px; padding: 10px 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; }
+  .success { color: var(--green); font-size: 13px; margin-top: 10px; padding: 10px 12px; background: var(--green-soft); border: 1px solid #c3e6d1; border-radius: 6px; }
+  .loader { display: flex; align-items: center; justify-content: center; padding: 60px 20px; color: var(--text-muted); font-size: 14px; }
+  .empty { padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 14px; }
+  a { color: var(--navy-mid); }
+
+  @media (max-width: 600px) {
+    .container { padding: 16px 14px 60px; }
+    .card { padding: 18px; }
+    h1.page-title { font-size: 26px; }
+    .case-row { padding: 16px 18px; flex-direction: column; gap: 10px; }
+    .case-right { text-align: left; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const fmtDate = (s) => {
+  if (!s) return "—";
+  const d = new Date(s); if (isNaN(d)) return "—";
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+const daysSince = (s) => {
+  if (!s) return null;
+  const d = new Date(s); if (isNaN(d)) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+};
+const statusLabel = (s) => (s || "").replace(/-/g, ' ').toUpperCase();
+
+// Hash-based routing
+function useRoute() {
+  const [hash, setHash] = useState(window.location.hash || '#/');
+  useEffect(() => {
+    const onChange = () => setHash(window.location.hash || '#/');
+    window.addEventListener('hashchange', onChange);
+    return () => window.removeEventListener('hashchange', onChange);
+  }, []);
+  const match = hash.match(/^#\/case\/([^/?#]+)/);
+  if (match) return { page: 'case', dealId: decodeURIComponent(match[1]) };
+  return { page: 'inbox' };
+}
+const navigate = (hash) => { window.location.hash = hash; };
+
+// ─── App root ─────────────────────────────────────────
+function App() {
+  const [session, setSession] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    sb.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setChecking(false);
+    });
+    const { data: sub } = sb.auth.onAuthStateChange((_e, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  if (checking) return <div className="loader">Loading…</div>;
+  if (!session) return <SignIn />;
+  return <Authenticated session={session} />;
+}
+
+// ─── Sign-in ───────────────────────────────────────────
+function SignIn() {
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState(null);
+
+  const send = async () => {
+    setError(null); setSending(true);
+    const { error } = await sb.auth.signInWithOtp({
+      email: email.trim().toLowerCase(),
+      options: { emailRedirectTo: window.location.href.split('#')[0] },
+    });
+    setSending(false);
+    if (error) setError(error.message); else setSent(true);
+  };
+
+  return (
+    <div className="centered-shell">
+      <div className="card signin-card">
+        <div className="brand" style={{ marginBottom: 20 }}>
+          <span className="brand-dot"></span>
+          FundLocators
+          <span className="brand-tag">Counsel Portal</span>
+        </div>
+        {sent ? (
+          <div>
+            <div className="success-check">✓</div>
+            <h1 className="serif">Check your email</h1>
+            <p className="lead">We sent a secure sign-in link to <b>{email}</b>.</p>
+            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email, check your spam folder or contact Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.</p>
+          </div>
+        ) : (
+          <div>
+            <h1>Counsel sign-in</h1>
+            <p className="lead">Sign in to view the cases FundLocators has retained you on.</p>
+            <input
+              type="email" value={email} autoFocus
+              onChange={e => setEmail(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && email) send(); }}
+              placeholder="you@yourfirm.com"
+            />
+            <button className="btn-full" onClick={send} disabled={!email || sending}>
+              {sending ? "Sending…" : "Email me a sign-in link"}
+            </button>
+            {error && <div className="error">{error}</div>}
+            <p className="fineprint">
+              Access is by invitation only. Use the email address Nathan provided when setting up your case assignment. If you believe you should have access but can't sign in, call <a href="tel:+15135162306">(513) 516-2306</a>.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Authenticated wrapper ────────────────────────────
+function Authenticated({ session }) {
+  const [profile, setProfile] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    sb.from('profiles').select('*').eq('id', session.user.id).single().then(({ data }) => {
+      setProfile(data || { name: session.user.email.split('@')[0], role: null });
+    });
+    sb.rpc('attorney_mark_seen');
+  }, [session]);
+
+  if (!profile) return <div className="loader">Loading profile…</div>;
+  if (profile.role !== 'attorney') {
+    return (
+      <div className="centered-shell">
+        <div className="card signin-card">
+          <div className="brand" style={{ marginBottom: 20 }}>
+            <span className="brand-dot"></span>
+            FundLocators
+            <span className="brand-tag">Counsel Portal</span>
+          </div>
+          <h1 className="serif">Wrong portal</h1>
+          <p className="lead">You're signed in as <b>{session.user.email}</b>, but this portal is only for attorneys retained by FundLocators.</p>
+          <p className="fineprint">
+            If you're a client, please use <a href="portal.html">the client portal</a> instead.<br/><br/>
+            If you're a team member, go to <a href="/deal-command-center/">DCC</a>.<br/><br/>
+            If you believe this is an error, call Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
+          </p>
+          <button className="btn-full" onClick={() => sb.auth.signOut()} style={{ marginTop: 20 }}>
+            Sign out
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return <Portal session={session} profile={profile} />;
+}
+
+// ─── Portal shell (header + router) ───────────────────
+function Portal({ session, profile }) {
+  const route = useRoute();
+  return (
+    <div className="container">
+      <header className="app-header">
+        <div className="brand">
+          <span className="brand-dot"></span>
+          FundLocators
+          <span className="brand-tag">Counsel Portal</span>
+        </div>
+        <div className="user-meta">
+          <span>{profile.name}</span>
+          <button className="btn-ghost" onClick={() => sb.auth.signOut()}>Sign out</button>
+        </div>
+      </header>
+      {route.page === 'case' ? <CaseDetail dealId={route.dealId} /> : <Inbox />}
+    </div>
+  );
+}
+
+// ─── Inbox: list of assigned cases ────────────────────
+function Inbox() {
+  const [cases, setCases] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      // 1. Get assigned deal ids
+      const { data: assignments, error: aErr } = await sb
+        .from('attorney_assignments')
+        .select('deal_id, last_seen_at')
+        .eq('user_id', (await sb.auth.getUser()).data.user.id)
+        .eq('enabled', true);
+      if (aErr) { setError(aErr.message); return; }
+      if (!assignments || assignments.length === 0) { setCases([]); return; }
+
+      const ids = assignments.map(a => a.deal_id);
+      const { data: deals, error: dErr } = await sb
+        .from('deals')
+        .select('*')
+        .in('id', ids)
+        .order('updated_at', { ascending: false });
+      if (dErr) { setError(dErr.message); return; }
+      setCases(deals || []);
+    })();
+  }, []);
+
+  if (error) return <div className="error">{error}</div>;
+  if (cases === null) return <div className="loader">Loading your cases…</div>;
+
+  const active = cases.filter(c => !['closed', 'recovered', 'dead'].includes(c.status));
+  const closed = cases.filter(c => ['closed', 'recovered', 'dead'].includes(c.status));
+
+  return (
+    <div>
+      <h1 className="page-title">Your cases</h1>
+      <div className="page-sub">
+        {cases.length === 0
+          ? "You have no active case assignments yet."
+          : `${active.length} active · ${closed.length} closed`}
+      </div>
+
+      {cases.length === 0 ? (
+        <div className="card empty">
+          You haven't been assigned to any FundLocators cases yet. When Nathan retains you, this page will show every case you're working on — with filings, documents, and status updates.
+        </div>
+      ) : (
+        <>
+          {active.length > 0 && active.map(d => <CaseRow key={d.id} deal={d} />)}
+          {closed.length > 0 && (
+            <>
+              <div style={{ margin: '24px 0 12px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Closed cases</div>
+              {closed.map(d => <CaseRow key={d.id} deal={d} />)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CaseRow({ deal }) {
+  const m = deal.meta || {};
+  const filedAt = m.filed_at || deal.filed_at;
+  const statusCls = "b-" + (deal.status || "default");
+  return (
+    <div className="case-row" onClick={() => navigate('#/case/' + encodeURIComponent(deal.id))}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="case-name">{deal.name}</div>
+        <div className="case-meta">
+          {m.county ? `${m.county} County` : (deal.address || '')}
+          {m.courtCase && <> &nbsp;·&nbsp; Case {m.courtCase}</>}
+        </div>
+        <div className="case-badges">
+          <span className={"badge " + statusCls}>{statusLabel(deal.status)}</span>
+          {filedAt && <span className="badge b-muted">Filed {fmtDate(filedAt)}</span>}
+        </div>
+      </div>
+      <div className="case-right">
+        {deal.updated_at && <>Updated {daysSince(deal.updated_at)}d ago</>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Case detail ───────────────────────────────────────
+function CaseDetail({ dealId }) {
+  const [state, setState] = useState({ loading: true });
+
+  const reload = async () => {
+    setState(s => ({ ...s, loading: true }));
+    try {
+      const [dealRes, activityRes, docsRes, notesRes] = await Promise.all([
+        sb.from('deals').select('*').eq('id', dealId).single(),
+        sb.from('activity').select('*').eq('deal_id', dealId).order('created_at', { ascending: false }).limit(100),
+        sb.from('documents').select('*').eq('deal_id', dealId).order('created_at', { ascending: false }),
+        sb.from('deal_notes').select('body').eq('deal_id', dealId).maybeSingle(),
+      ]);
+      if (dealRes.error || !dealRes.data) {
+        setState({ loading: false, error: 'Case not found or not assigned to you.' });
+        return;
+      }
+      setState({
+        loading: false,
+        deal: dealRes.data,
+        activity: activityRes.data || [],
+        documents: docsRes.data || [],
+        notes: notesRes.data?.body || null,
+      });
+    } catch (e) {
+      setState({ loading: false, error: e.message });
+    }
+  };
+
+  useEffect(() => { reload(); }, [dealId]);
+
+  if (state.loading) return <div className="loader">Loading case…</div>;
+  if (state.error) return (
+    <div>
+      <a className="back-link" href="#/">← All cases</a>
+      <div className="card empty">{state.error}</div>
+    </div>
+  );
+
+  const { deal, activity, documents, notes } = state;
+  const m = deal.meta || {};
+  const filedAt = m.filed_at || deal.filed_at;
+  const deadline = m.deadline || deal.deadline;
+  const statusCls = "b-" + (deal.status || "default");
+
+  return (
+    <div>
+      <a className="back-link" href="#/">← All cases</a>
+
+      <h1 className="page-title">{deal.name}</h1>
+      <div className="page-sub">
+        {m.county ? `${m.county} County, Ohio` : (deal.address || '')}
+        <span style={{ marginLeft: 12 }}>
+          <span className={"badge " + statusCls}>{statusLabel(deal.status)}</span>
+        </span>
+      </div>
+
+      {/* Case info */}
+      <div className="card">
+        <p className="card-title">Case Details</p>
+        <div className="stat-grid">
+          <div className="stat">
+            <div className="stat-label">Case Number</div>
+            <div className="stat-value">{m.courtCase || 'Pending assignment'}</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">County</div>
+            <div className="stat-value">{m.county || '—'}</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">Filed</div>
+            <div className="stat-value">{filedAt ? fmtDate(filedAt) : 'Not yet filed'}</div>
+          </div>
+          <div className="stat">
+            <div className="stat-label">Statutory Deadline</div>
+            <div className="stat-value">{deadline ? fmtDate(deadline) : '—'}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Post update */}
+      <UpdateForm dealId={deal.id} onPosted={reload} />
+
+      {/* Documents */}
+      <DocumentsSection dealId={deal.id} documents={documents} onChange={reload} />
+
+      {/* Timeline */}
+      <div className="card">
+        <p className="card-title">Case Timeline</p>
+        {activity.length === 0 ? (
+          <div className="empty" style={{ padding: '12px 0' }}>No activity yet.</div>
+        ) : (
+          activity.map(a => (
+            <div className="timeline-item" key={a.id}>
+              <div className="timeline-dot"></div>
+              <div className="timeline-action">{a.action}</div>
+              <div className="timeline-date">{fmtDate(a.created_at)}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      {/* Notes (read-only — admin maintains these) */}
+      {notes && (
+        <div className="card">
+          <p className="card-title">Case Notes (from FundLocators team)</p>
+          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, color: 'var(--text)', margin: 0 }}>{notes}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Update form ──────────────────────────────────────
+function UpdateForm({ dealId, onPosted }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const post = async () => {
+    if (!text.trim()) return;
+    setBusy(true); setMsg(null);
+    const { error } = await sb.rpc('attorney_post_update', { p_deal_id: dealId, p_note: text.trim() });
+    setBusy(false);
+    if (error) { setMsg({ type: 'error', text: error.message }); return; }
+    setText(""); setMsg({ type: 'success', text: 'Update posted.' });
+    onPosted?.();
+  };
+
+  return (
+    <div className="card">
+      <p className="card-title">Post a case update</p>
+      <div className="update-form">
+        <textarea
+          className="update-text"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          placeholder="e.g. Hearing continued to May 15. Filed response to motion to intervene."
+          maxLength={2000}
+        />
+        <button className="btn-primary" onClick={post} disabled={busy || !text.trim()}>
+          {busy ? 'Posting…' : 'Post update'}
+        </button>
+        {msg && <div className={msg.type === 'success' ? 'success' : 'error'}>{msg.text}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Documents section ────────────────────────────────
+function DocumentsSection({ dealId, documents, onChange }) {
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const upload = async (file) => {
+    if (!file) return;
+    setUploading(true); setErr(null);
+    try {
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${dealId}/atty-${Date.now()}-${safe}`;
+      const up = await sb.storage.from('deal-docs').upload(path, file, { contentType: file.type });
+      if (up.error) throw up.error;
+      const { error } = await sb.from('documents').insert({
+        deal_id: dealId,
+        name: file.name,
+        path,
+        size: file.size,
+        uploaded_by: (await sb.auth.getUser()).data.user.id,
+      });
+      if (error) throw error;
+      // Also log an activity note so team sees it
+      await sb.rpc('attorney_post_update', {
+        p_deal_id: dealId,
+        p_note: 'Uploaded document: ' + file.name,
+      });
+      onChange?.();
+    } catch (e) {
+      setErr(e.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const open = async (doc) => {
+    const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 600);
+    if (error || !data?.signedUrl) {
+      alert('Could not open document. Call Nathan at (513) 516-2306.');
+      return;
+    }
+    window.open(data.signedUrl, '_blank');
+  };
+
+  const fmtSize = (b) => !b ? '' : b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(1)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
+
+  return (
+    <div className="card">
+      <p className="card-title">Documents <span style={{ color: 'var(--text-subtle)' }}>({documents.length})</span></p>
+      <div style={{ marginBottom: 14 }}>
+        <label className="upload-label">
+          {uploading ? 'Uploading…' : '+ Upload document'}
+          <input type="file" style={{ display: 'none' }} disabled={uploading} onChange={e => upload(e.target.files[0])} />
+        </label>
+      </div>
+      {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
+      {documents.length === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>No documents yet. Upload filings, court orders, or correspondence here.</div>
+      ) : (
+        documents.map(d => (
+          <div className="doc-row" key={d.id}>
+            <div className="doc-icon">📄</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="doc-name">{d.name}</div>
+              <div className="doc-meta">{fmtSize(d.size)} · Added {fmtDate(d.created_at)}</div>
+            </div>
+            <button className="doc-action" onClick={() => open(d)}>View</button>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

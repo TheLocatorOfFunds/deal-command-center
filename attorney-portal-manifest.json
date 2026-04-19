@@ -1,0 +1,15 @@
+{
+  "name": "FundLocators Counsel Portal",
+  "short_name": "FL Counsel",
+  "description": "Case management for attorneys retained by FundLocators",
+  "start_url": "/deal-command-center/attorney-portal.html",
+  "scope": "/deal-command-center/",
+  "display": "standalone",
+  "background_color": "#f5f1e8",
+  "theme_color": "#0b1f3a",
+  "orientation": "any",
+  "categories": ["business", "productivity"],
+  "icons": [
+    { "src": "icon-attorney.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any maskable" }
+  ]
+}
