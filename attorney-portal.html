@@ -321,7 +321,7 @@ function Portal({ session, profile }) {
           <button className="btn-ghost" onClick={() => sb.auth.signOut()}>Sign out</button>
         </div>
       </header>
-      {route.page === 'case' ? <CaseDetail dealId={route.dealId} /> : <Inbox />}
+      {route.page === 'case' ? <CaseDetail dealId={route.dealId} session={session} profile={profile} /> : <Inbox />}
     </div>
   );
 }
@@ -412,7 +412,7 @@ function CaseRow({ deal }) {
 }
 
 // ─── Case detail ───────────────────────────────────────
-function CaseDetail({ dealId }) {
+function CaseDetail({ dealId, session, profile }) {
   const [state, setState] = useState({ loading: true });
 
   const reload = async () => {
@@ -494,6 +494,9 @@ function CaseDetail({ dealId }) {
       {/* Post update */}
       <UpdateForm dealId={deal.id} onPosted={reload} />
 
+      {/* Messages */}
+      <MessagesThread dealId={deal.id} session={session} senderName={profile?.name} />
+
       {/* Documents */}
       <DocumentsSection dealId={deal.id} documents={documents} onChange={reload} />
 
@@ -520,6 +523,127 @@ function CaseDetail({ dealId }) {
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, color: 'var(--text)', margin: 0 }}>{notes}</pre>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Messages thread ──────────────────────────────────
+function MessagesThread({ dealId, session, senderName }) {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const endRef = React.useRef(null);
+
+  const load = async () => {
+    const { data } = await sb.from('messages').select('*').eq('deal_id', dealId).order('created_at', { ascending: true });
+    setMessages(data || []);
+    setLoading(false);
+    await sb.rpc('mark_messages_read', { p_deal_id: dealId });
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('atty-msgs-' + dealId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `deal_id=eq.${dealId}` }, (payload) => {
+        setMessages(prev => [...prev, payload.new]);
+        if (['admin', 'user', 'va'].includes(payload.new.sender_role)) {
+          sb.rpc('mark_messages_read', { p_deal_id: dealId });
+        }
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  useEffect(() => {
+    if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    const { error } = await sb.from('messages').insert({
+      deal_id: dealId,
+      sender_id: session.user.id,
+      sender_role: 'attorney',
+      sender_name: senderName || session.user.email,
+      body,
+    });
+    setSending(false);
+    if (error) { alert('Could not send: ' + error.message); return; }
+    setText("");
+  };
+
+  return (
+    <div className="card">
+      <p className="card-title">Messages with FundLocators team</p>
+      {loading ? (
+        <div className="empty" style={{ padding: '12px 0' }}>Loading…</div>
+      ) : messages.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, padding: '8px 0 16px' }}>
+          No messages yet. Send the team a message here — separate from formal case updates (those go to the activity feed). Use this for quick questions, clarifications, coordination.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 420, overflowY: 'auto', marginBottom: 12 }}>
+          {messages.map(m => {
+            const fromMe = m.sender_role === 'attorney';
+            const fromClient = m.sender_role === 'client';
+            return (
+              <div key={m.id} style={{ marginBottom: 14, display: 'flex', flexDirection: 'column', alignItems: fromMe ? 'flex-end' : 'flex-start' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                  <b style={{ color: fromMe ? 'var(--navy-mid)' : fromClient ? '#8b5cf6' : 'var(--amber)' }}>
+                    {fromMe ? 'You' : fromClient ? 'Client' : (m.sender_name || 'Team')}
+                  </b>
+                  {' · '}{new Date(m.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </div>
+                <div style={{
+                  maxWidth: '85%',
+                  padding: '10px 14px',
+                  borderRadius: 14,
+                  background: fromMe ? 'var(--navy)' : fromClient ? '#f3e8ff' : 'var(--gold-soft)',
+                  color: fromMe ? '#fffcf5' : 'var(--text)',
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap',
+                }}>
+                  {m.body}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={endRef} />
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) send(); }}
+          placeholder="Quick message to the team…"
+          rows={2}
+          style={{
+            flex: 1,
+            padding: '10px 12px',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 8,
+            fontSize: 14,
+            fontFamily: 'inherit',
+            color: 'var(--text)',
+            background: 'var(--bg-card)',
+            resize: 'vertical',
+            minHeight: 44,
+            lineHeight: 1.5,
+          }}
+        />
+        <button onClick={send} disabled={!text.trim() || sending} className="btn-primary" style={{ flexShrink: 0 }}>
+          {sending ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6 }}>
+        ⌘/Ctrl + Enter to send
+      </div>
     </div>
   );
 }

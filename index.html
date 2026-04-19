@@ -640,6 +640,24 @@ function AnalyticsView({ deals, onSelect }) {
   const active = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
   const closed = deals.filter(d => d.status === "closed" || d.status === "recovered");
 
+  // ── Cash Flow Forecast: next 6 months ──
+  const forecast = [];
+  let forecastTotal = 0;
+  for (let i = 0; i < 6; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const next = new Date(now.getFullYear(), now.getMonth() + i + 1, 1);
+    const label = d.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
+    const paying = active.filter(x => {
+      const payDate = expectedPayoutDate(x);
+      return payDate && payDate >= d && payDate < next;
+    });
+    const revenue = paying.reduce((s, x) => s + (computeDealNet(x) || 0), 0);
+    const isCurrent = i === 0;
+    forecast.push({ label, revenue, dealCount: paying.length, deals: paying, isCurrent });
+    forecastTotal += revenue;
+  }
+  const maxForecast = Math.max(1, ...forecast.map(f => f.revenue));
+
   // ── Monthly trend: last 6 months ──
   const months = [];
   for (let i = 5; i >= 0; i--) {
@@ -759,6 +777,37 @@ function AnalyticsView({ deals, onSelect }) {
 
   return (
     <div>
+      <SectionHeader icon="💰" label="Cash Flow Forecast" sub={`Projected revenue, next 6 months · total ${fmt(forecastTotal)}`} />
+      <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12 }}>
+          {forecast.map((f, i) => (
+            <div key={i} style={{
+              padding: 12,
+              borderRadius: 8,
+              background: f.isCurrent ? "#064e3b" : "#0c0a09",
+              border: f.isCurrent ? "1px solid #10b981" : "1px solid #292524",
+              textAlign: "center",
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: f.isCurrent ? "#6ee7b7" : "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                {f.label}{f.isCurrent ? ' · current' : ''}
+              </div>
+              <div style={{ fontFamily: "'DM Mono', monospace", fontWeight: 700, fontSize: 18, color: f.revenue > 0 ? "#10b981" : "#57534e", marginTop: 6, letterSpacing: "-0.02em" }}>
+                {f.revenue > 0 ? fmt(f.revenue) : '—'}
+              </div>
+              <div style={{ fontSize: 10, color: "#78716c", marginTop: 4 }}>
+                {f.dealCount === 0 ? 'no cases' : f.dealCount === 1 ? '1 case' : `${f.dealCount} cases`}
+              </div>
+              <div style={{ height: 4, background: "#0c0a09", borderRadius: 2, overflow: "hidden", marginTop: 8 }}>
+                <div style={{ height: "100%", width: `${(f.revenue / maxForecast) * 100}%`, background: "#10b981", borderRadius: 2 }}></div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 14, padding: "10px 12px", background: "#0c0a09", borderRadius: 6, fontSize: 11, color: "#78716c", lineHeight: 1.6 }}>
+          Expected payout dates use (in order): <code style={{ color: "#d6d3d1" }}>meta.expected_payout</code> if set, else <code style={{ color: "#d6d3d1" }}>meta.deadline</code>, else <code style={{ color: "#d6d3d1" }}>filed_at + 120 days</code>. Revenue uses <code style={{ color: "#d6d3d1" }}>computeDealNet</code> (estimated surplus × fee % − attorney fee). As you close more cases, the averages tighten and these projections get sharper.
+        </div>
+      </div>
+
       <SectionHeader icon="📈" label="Monthly Trend" sub="Deals added and revenue booked, last 6 months" />
       <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10 }}>
@@ -1278,8 +1327,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
 
   const tabs = isAdmin
-    ? ["overview", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
-    : ["overview", "tasks", "vendors", "documents", "notes", "activity"];
+    ? ["overview", "messages", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
+    : ["overview", "messages", "tasks", "vendors", "documents", "notes", "activity"];
 
   return (
     <div>
@@ -1359,6 +1408,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "overview" && (isFlip
         ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} />
         : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} />)}
+      {tab === "messages" && <MessagesTab dealId={deal.id} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
@@ -2134,6 +2184,130 @@ function Vendors({ items, dealId, logAct, reload }) {
 }
 
 // ─── Documents Tab ───────────────────────────────────────────────────
+// ─── Messages Tab ─────────────────────────────────────────────────
+function MessagesTab({ dealId, userId, userName, userRole }) {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const endRef = useRef(null);
+
+  const load = async () => {
+    const { data } = await sb.from('messages').select('*').eq('deal_id', dealId).order('created_at', { ascending: true });
+    setMessages(data || []);
+    setLoading(false);
+    // Mark unread as read
+    await sb.rpc('mark_messages_read', { p_deal_id: dealId });
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  // Realtime subscription
+  useEffect(() => {
+    const ch = sb.channel('msgs-' + dealId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `deal_id=eq.${dealId}` }, (payload) => {
+        setMessages(prev => [...prev, payload.new]);
+        // auto-mark read if the incoming message is from external
+        if (payload.new.sender_role === 'client' || payload.new.sender_role === 'attorney') {
+          sb.rpc('mark_messages_read', { p_deal_id: dealId });
+        }
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  useEffect(() => {
+    if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    const { error } = await sb.from('messages').insert({
+      deal_id: dealId,
+      sender_id: userId,
+      sender_role: userRole,
+      sender_name: userName,
+      body,
+    });
+    setSending(false);
+    if (error) {
+      alert('Could not send: ' + error.message);
+      return;
+    }
+    setText("");
+  };
+
+  const roleLabel = (r) => ({ admin: 'Team', user: 'Team', va: 'Team', client: 'Client', attorney: 'Counsel' })[r] || r;
+  const roleColor = (r) => {
+    if (r === 'client') return '#3b82f6';
+    if (r === 'attorney') return '#8b5cf6';
+    return '#d97706'; // team
+  };
+
+  return (
+    <Card title="Messages" action={
+      <div style={{ fontSize: 11, color: "#78716c" }}>{messages.length > 0 ? `${messages.length} messages` : ''}</div>
+    }>
+      {loading ? (
+        <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>Loading…</div>
+      ) : messages.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#78716c", padding: 24, textAlign: "center", lineHeight: 1.5 }}>
+          No messages yet. When this deal's client or attorney sends a message, it'll appear here. You can also start the thread below — anything you send is visible only to them (and any co-claimants on this case), not other clients.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 480, overflowY: "auto", padding: "0 4px", marginBottom: 14 }}>
+          {messages.map(m => {
+            const isTeam = ['admin', 'user', 'va'].includes(m.sender_role);
+            return (
+              <div key={m.id} style={{ marginBottom: 14, display: "flex", flexDirection: "column", alignItems: isTeam ? "flex-end" : "flex-start" }}>
+                <div style={{ fontSize: 10, color: "#78716c", marginBottom: 4, display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{ color: roleColor(m.sender_role), fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{roleLabel(m.sender_role)}</span>
+                  <span>·</span>
+                  <span>{m.sender_name || 'Unknown'}</span>
+                  <span>·</span>
+                  <span>{new Date(m.created_at).toLocaleString()}</span>
+                </div>
+                <div style={{
+                  maxWidth: "85%",
+                  padding: "10px 14px",
+                  borderRadius: 12,
+                  background: isTeam ? "#d97706" : "#1c1917",
+                  color: isTeam ? "#0c0a09" : "#fafaf9",
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  whiteSpace: "pre-wrap",
+                  border: isTeam ? "none" : "1px solid #292524",
+                }}>
+                  {m.body}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={endRef} />
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) send(); }}
+          placeholder="Reply to the client or attorney…"
+          rows={2}
+          style={{ ...inputStyle, flex: 1, resize: "vertical", minHeight: 48, fontFamily: "inherit", lineHeight: 1.5 }}
+        />
+        <button onClick={send} disabled={!text.trim() || sending} style={btnPrimary}>
+          {sending ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+      <div style={{ fontSize: 10, color: "#57534e", marginTop: 6 }}>
+        ⌘/Ctrl + Enter to send · Visible to everyone with portal access to this case (client claimants + assigned attorneys)
+      </div>
+    </Card>
+  );
+}
+
 function Documents({ items, dealId, userId, logAct, reload }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");

@@ -505,7 +505,7 @@ function PortalBody({ session }) {
   if (state.error === 'no_access') return <NoAccess session={session} />;
   if (state.error === 'deal_missing') return <GenericError />;
 
-  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} claimantCount={state.claimantCount} welcomeVideoUrl={state.welcomeVideoUrl} onSignOut={() => sb.auth.signOut()} />;
+  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} claimantCount={state.claimantCount} welcomeVideoUrl={state.welcomeVideoUrl} session={session} onSignOut={() => sb.auth.signOut()} />;
 }
 
 // ─── What's Happening Now ─────────────────────────────
@@ -705,6 +705,214 @@ function EmpathyCheckin({ prefs, dealStatus }) {
   );
 }
 
+// ─── Client Documents (with upload) ──────────────────
+function ClientDocumentsSection({ dealId, documents, session, onChange }) {
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const upload = async (file) => {
+    if (!file) return;
+    if (file.size > 25 * 1024 * 1024) { setErr('File must be under 25MB.'); return; }
+    setUploading(true); setErr(null);
+    try {
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${dealId}/client-upload-${Date.now()}-${safe}`;
+      const up = await sb.storage.from('deal-docs').upload(path, file, { contentType: file.type });
+      if (up.error) throw up.error;
+      const { error } = await sb.from('documents').insert({
+        deal_id: dealId,
+        name: file.name,
+        path,
+        size: file.size,
+        uploaded_by: session.user.id,
+      });
+      if (error) throw error;
+      // Post a message so team is notified
+      await sb.from('messages').insert({
+        deal_id: dealId,
+        sender_id: session.user.id,
+        sender_role: 'client',
+        sender_name: session.user.email,
+        body: `Uploaded document: ${file.name}`,
+      });
+      onChange?.();
+    } catch (e) {
+      setErr(e.message || 'Upload failed');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const open = async (doc) => {
+    const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
+    if (error || !data?.signedUrl) {
+      alert("We couldn't open that document. Please call Nathan at (513) 516-2306.");
+      return;
+    }
+    window.open(data.signedUrl, '_blank');
+  };
+
+  return (
+    <div className="card">
+      <p className="card-title">Documents</p>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        Your signed agreement and court filings appear here as we receive them. You can also upload documents we've requested (ID, death certificate, prior correspondence, etc.) — Nathan's team is notified automatically.
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          background: 'var(--navy)', color: '#fffcf5',
+          padding: '10px 16px', borderRadius: 8,
+          fontSize: 13, fontWeight: 600, cursor: uploading ? 'wait' : 'pointer',
+          opacity: uploading ? 0.6 : 1,
+        }}>
+          {uploading ? 'Uploading…' : '+ Upload document'}
+          <input type="file" style={{ display: 'none' }} disabled={uploading} onChange={e => upload(e.target.files[0])} />
+        </label>
+      </div>
+      {err && <div className="empathy-error">{err}</div>}
+      {documents.length === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>No documents on file yet. Upload anything we've requested, or just save it here for your records.</div>
+      ) : (
+        documents.map(d => (
+          <div className="doc-row" key={d.id}>
+            <div className="doc-icon">📄</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="doc-name">{d.name}</div>
+              <div className="doc-size">{d.size ? Math.round(d.size / 1024) + ' KB' : ''} · Added {fmtDateShort(d.created_at)}</div>
+            </div>
+            <button className="doc-action" onClick={() => open(d)}>View</button>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ─── Messages Thread ──────────────────────────────────
+function MessagesThread({ dealId, session, clientName }) {
+  const [messages, setMessages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const endRef = React.useRef(null);
+
+  const load = async () => {
+    const { data } = await sb.from('messages').select('*').eq('deal_id', dealId).order('created_at', { ascending: true });
+    setMessages(data || []);
+    setLoading(false);
+    await sb.rpc('mark_messages_read', { p_deal_id: dealId });
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('client-msgs-' + dealId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `deal_id=eq.${dealId}` }, (payload) => {
+        setMessages(prev => [...prev, payload.new]);
+        if (['admin', 'user', 'va'].includes(payload.new.sender_role)) {
+          sb.rpc('mark_messages_read', { p_deal_id: dealId });
+        }
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  useEffect(() => {
+    if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages]);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    const { error } = await sb.from('messages').insert({
+      deal_id: dealId,
+      sender_id: session.user.id,
+      sender_role: 'client',
+      sender_name: clientName || session.user.email,
+      body,
+    });
+    setSending(false);
+    if (error) {
+      alert('Could not send: ' + error.message);
+      return;
+    }
+    setText("");
+  };
+
+  return (
+    <div className="card">
+      <p className="card-title">Messages with Nathan</p>
+      {loading ? (
+        <div className="empty" style={{ padding: '12px 0' }}>Loading…</div>
+      ) : messages.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, padding: '8px 0 16px' }}>
+          Ask a question, share an update, or just say hi. Nathan reads every message personally — typically responds the same day during business hours.
+        </div>
+      ) : (
+        <div style={{ maxHeight: 420, overflowY: 'auto', marginBottom: 12, padding: '0 2px' }}>
+          {messages.map(m => {
+            const fromClient = m.sender_role === 'client';
+            return (
+              <div key={m.id} style={{ marginBottom: 14, display: 'flex', flexDirection: 'column', alignItems: fromClient ? 'flex-end' : 'flex-start' }}>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                  <b style={{ color: fromClient ? 'var(--navy-mid)' : 'var(--amber)' }}>{fromClient ? 'You' : (m.sender_name || 'Nathan')}</b>
+                  {' · '}{new Date(m.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </div>
+                <div style={{
+                  maxWidth: '85%',
+                  padding: '10px 14px',
+                  borderRadius: 14,
+                  background: fromClient ? 'var(--navy)' : 'var(--gold-soft)',
+                  color: fromClient ? '#fffcf5' : 'var(--text)',
+                  fontSize: 14,
+                  lineHeight: 1.5,
+                  whiteSpace: 'pre-wrap',
+                }}>
+                  {m.body}
+                </div>
+              </div>
+            );
+          })}
+          <div ref={endRef} />
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) send(); }}
+          placeholder="Write a message to Nathan…"
+          rows={2}
+          style={{
+            flex: 1,
+            padding: '10px 12px',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 8,
+            fontSize: 14,
+            fontFamily: 'inherit',
+            color: 'var(--text)',
+            background: 'var(--bg-card)',
+            resize: 'vertical',
+            minHeight: 44,
+            lineHeight: 1.5,
+          }}
+        />
+        <button onClick={send} disabled={!text.trim() || sending} style={{
+          background: 'var(--navy)', color: '#fffcf5', border: 'none', padding: '10px 18px', borderRadius: 8,
+          fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0,
+        }}>
+          {sending ? 'Sending…' : 'Send'}
+        </button>
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6 }}>
+        ⌘/Ctrl + Enter to send
+      </div>
+    </div>
+  );
+}
+
 // ─── Welcome Video Block ──────────────────────────────
 function WelcomeVideoBlock({ url }) {
   if (!url) return null;
@@ -740,7 +948,7 @@ function StickyCallButton() {
 }
 
 // ─── Case View ─────────────────────────────────────────
-function CaseView({ deal, access, activity, documents, claimantCount, welcomeVideoUrl, onSignOut }) {
+function CaseView({ deal, access, activity, documents, claimantCount, welcomeVideoUrl, session, onSignOut }) {
   const m = deal.meta || {};
   const estimatedSurplus = Number(m.estimatedSurplus) || 0;
   const feePct = Number(m.feePct) || 0;
@@ -856,6 +1064,9 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
         </div>
       </div>
 
+      {/* Messages thread */}
+      <MessagesThread dealId={deal.id} session={session} clientName={deal.name} />
+
       {/* Timeline */}
       <div className="card">
         <p className="card-title">Case Timeline</p>
@@ -873,23 +1084,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       </div>
 
       {/* Documents */}
-      <div className="card">
-        <p className="card-title">Documents</p>
-        {documents.length === 0 ? (
-          <div className="empty">No documents on file yet. Your signed engagement agreement and any court filings will appear here as they're recorded.</div>
-        ) : (
-          documents.map(d => (
-            <div className="doc-row" key={d.id}>
-              <div className="doc-icon">📄</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="doc-name">{d.name}</div>
-                <div className="doc-size">{d.size ? Math.round(d.size / 1024) + ' KB' : ''} · Added {fmtDateShort(d.created_at)}</div>
-              </div>
-              <button className="doc-action" onClick={() => openDocument(d.path)}>View</button>
-            </div>
-          ))
-        )}
-      </div>
+      <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} />
 
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
 
