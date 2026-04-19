@@ -4,7 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1f3a">
-<title>Search for surplus funds — FundLocators</title>
+<title>Check if your Ohio foreclosure left surplus funds behind — FundLocators</title>
+<meta name="description" content="When an Ohio home sells at foreclosure for more than what was owed, the surplus belongs to the former owner — not the bank. We'll look up your case for free and tell you exactly what's there.">
+<meta property="og:title" content="Check if your Ohio foreclosure left surplus funds behind">
+<meta property="og:description" content="Free public-records check. Licensed Ohio attorneys. You only pay if we recover funds.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://check.fundlocators.com/">
+<meta property="og:image" content="https://check.fundlocators.com/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="canonical" href="https://check.fundlocators.com/">
 <link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,20 +24,26 @@
     --bg-card-alt: #f4ecdc;
     --navy: #0b1f3a;
     --navy-mid: #17355e;
+    --navy-light: #2b4a7a;
     --gold: #c9a24a;
     --gold-light: #d8b560;
     --gold-soft: #ede5cf;
+    --cream: #fffcf5;
     --text: #1a1a1a;
     --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
     --border: #e5dfd0;
     --border-strong: #c9bea3;
     --green: #2d7a4f;
     --green-soft: #e4f1e9;
     --red: #a83232;
-    --shadow: 0 1px 2px rgba(11, 31, 58, 0.06), 0 12px 32px rgba(11, 31, 58, 0.08);
+    --shadow-sm: 0 1px 2px rgba(11, 31, 58, 0.06);
+    --shadow-md: 0 1px 2px rgba(11, 31, 58, 0.06), 0 12px 32px rgba(11, 31, 58, 0.08);
+    --shadow-lg: 0 4px 8px rgba(11, 31, 58, 0.08), 0 24px 60px rgba(11, 31, 58, 0.12);
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
   body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     background: var(--bg);
@@ -39,24 +53,108 @@
     min-height: 100vh;
   }
   .serif { font-family: 'Fraunces', Georgia, serif; font-weight: 500; letter-spacing: -0.015em; }
-  .hero { background: linear-gradient(180deg, var(--navy) 0%, var(--navy-mid) 100%); color: #fffcf5; padding: 60px 24px 80px; text-align: center; position: relative; overflow: hidden; }
-  .hero::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 600px 300px at 50% -20%, rgba(201, 162, 74, 0.2) 0%, transparent 60%); pointer-events: none; }
-  .brand { display: inline-flex; align-items: baseline; gap: 10px; font-family: 'Fraunces', serif; font-weight: 700; font-size: 22px; letter-spacing: -0.015em; position: relative; margin-bottom: 32px; }
-  .brand-dot { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; display: inline-block; transform: translateY(-3px); }
-  h1.hero-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 42px; letter-spacing: -0.02em; line-height: 1.15; margin: 0 0 16px; position: relative; max-width: 760px; margin-left: auto; margin-right: auto; }
-  .hero-sub { font-size: 18px; color: rgba(255, 252, 245, 0.82); max-width: 640px; margin: 0 auto; line-height: 1.55; position: relative; }
-  .hero-pills { display: flex; justify-content: center; gap: 10px; margin-top: 28px; flex-wrap: wrap; position: relative; }
-  .pill { background: rgba(255, 252, 245, 0.1); color: rgba(255, 252, 245, 0.9); padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid rgba(255, 252, 245, 0.15); }
-  .pill-icon { margin-right: 6px; }
 
-  .form-shell { max-width: 640px; margin: -40px auto 60px; padding: 0 20px; position: relative; z-index: 2; }
-  .form-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 36px 32px; box-shadow: var(--shadow); }
-  .form-intro { font-size: 14px; color: var(--text-muted); margin: 0 0 24px; line-height: 1.6; }
-  .form-intro strong { color: var(--text); font-weight: 600; }
+  /* === NAV === */
+  .nav { position: sticky; top: 0; z-index: 50; background: rgba(251, 248, 241, 0.85); backdrop-filter: saturate(160%) blur(12px); -webkit-backdrop-filter: saturate(160%) blur(12px); border-bottom: 1px solid rgba(229, 223, 208, 0.6); }
+  .nav-inner { max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .brand { display: inline-flex; align-items: baseline; gap: 10px; font-family: 'Fraunces', serif; font-weight: 700; font-size: 20px; letter-spacing: -0.015em; color: var(--navy); text-decoration: none; }
+  .brand-dot { width: 8px; height: 8px; background: var(--gold); border-radius: 50%; display: inline-block; transform: translateY(-2px); }
+  .nav-links { display: flex; gap: 28px; align-items: center; font-size: 14px; }
+  .nav-links a { color: var(--text-muted); text-decoration: none; font-weight: 500; }
+  .nav-links a:hover { color: var(--navy); }
+  .nav-cta { background: var(--navy); color: var(--cream); padding: 9px 16px; border-radius: 8px; text-decoration: none; font-weight: 600; font-size: 14px; }
+  .nav-cta:hover { background: var(--navy-mid); color: var(--cream) !important; }
+  @media (max-width: 720px) {
+    .nav-links a:not(.nav-cta) { display: none; }
+    .nav-inner { padding: 12px 20px; }
+  }
+
+  /* === HERO === */
+  .hero { background: linear-gradient(180deg, var(--navy) 0%, var(--navy-mid) 100%); color: var(--cream); padding: 72px 24px 120px; text-align: center; position: relative; overflow: hidden; }
+  .hero::before { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse 800px 400px at 50% -10%, rgba(201, 162, 74, 0.22) 0%, transparent 60%); pointer-events: none; }
+  .hero-eyebrow { display: inline-flex; align-items: center; gap: 8px; background: rgba(201, 162, 74, 0.15); color: var(--gold-light); padding: 6px 14px; border-radius: 999px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 24px; border: 1px solid rgba(201, 162, 74, 0.25); position: relative; }
+  h1.hero-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 48px; letter-spacing: -0.02em; line-height: 1.1; margin: 0 0 20px; position: relative; max-width: 820px; margin-left: auto; margin-right: auto; }
+  h1.hero-title em { font-style: italic; color: var(--gold-light); font-weight: 500; }
+  .hero-sub { font-size: 19px; color: rgba(255, 252, 245, 0.82); max-width: 640px; margin: 0 auto 32px; line-height: 1.55; position: relative; }
+  .hero-cta-group { display: inline-flex; gap: 12px; position: relative; flex-wrap: wrap; justify-content: center; }
+  .btn-primary { background: var(--gold); color: var(--navy); padding: 15px 28px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; border: none; cursor: pointer; font-family: inherit; transition: transform 0.08s, box-shadow 0.15s; box-shadow: 0 4px 16px rgba(201, 162, 74, 0.25); }
+  .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(201, 162, 74, 0.35); }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-ghost { background: transparent; color: var(--cream); padding: 15px 24px; border-radius: 10px; font-size: 16px; font-weight: 600; text-decoration: none; border: 1px solid rgba(255, 252, 245, 0.25); font-family: inherit; }
+  .btn-ghost:hover { background: rgba(255, 252, 245, 0.08); }
+  .hero-pills { display: flex; justify-content: center; gap: 10px; margin-top: 36px; flex-wrap: wrap; position: relative; }
+  .pill { background: rgba(255, 252, 245, 0.08); color: rgba(255, 252, 245, 0.88); padding: 7px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 500; border: 1px solid rgba(255, 252, 245, 0.12); }
+  .pill-check { color: var(--gold-light); margin-right: 6px; font-weight: 700; }
+  @media (max-width: 640px) {
+    .hero { padding: 48px 20px 96px; }
+    h1.hero-title { font-size: 34px; }
+    .hero-sub { font-size: 16px; }
+  }
+
+  /* === STAT STRIP === */
+  .stat-strip { max-width: 1120px; margin: -72px auto 0; padding: 0 24px; position: relative; z-index: 2; }
+  .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 32px 20px; box-shadow: var(--shadow-md); display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { text-align: center; padding: 0 12px; border-right: 1px solid var(--border); }
+  .stat:last-child { border-right: none; }
+  .stat-value { font-family: 'Fraunces', serif; font-weight: 500; font-size: 30px; color: var(--navy); letter-spacing: -0.02em; line-height: 1.1; margin: 0 0 4px; }
+  .stat-value .unit { font-size: 18px; color: var(--text-muted); margin-left: 2px; }
+  .stat-label { font-size: 12px; color: var(--text-muted); font-weight: 500; letter-spacing: 0.03em; line-height: 1.3; }
+  @media (max-width: 720px) {
+    .stat-card { grid-template-columns: 1fr 1fr; gap: 16px 8px; padding: 24px 16px; }
+    .stat:nth-child(2) { border-right: none; }
+    .stat { padding: 0 8px; }
+    .stat-value { font-size: 24px; }
+  }
+
+  /* === SECTIONS === */
+  .section { max-width: 1120px; margin: 0 auto; padding: 80px 24px; }
+  .section-narrow { max-width: 820px; }
+  .section-tight { padding: 48px 24px; }
+  .section-eyebrow { text-align: center; color: var(--gold); font-size: 12px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 14px; }
+  .section-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 36px; letter-spacing: -0.02em; color: var(--navy); margin: 0 0 16px; text-align: center; line-height: 1.2; }
+  .section-sub { text-align: center; font-size: 17px; color: var(--text-muted); max-width: 640px; margin: 0 auto 56px; line-height: 1.6; }
+  @media (max-width: 640px) {
+    .section { padding: 56px 20px; }
+    .section-title { font-size: 28px; }
+    .section-sub { font-size: 16px; margin-bottom: 40px; }
+  }
+
+  /* === HOW IT WORKS === */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+  .step { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 28px; position: relative; transition: transform 0.2s, box-shadow 0.2s; }
+  .step:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .step-num { font-family: 'Fraunces', serif; font-weight: 500; font-size: 56px; color: var(--gold); line-height: 1; letter-spacing: -0.03em; margin-bottom: 12px; }
+  .step-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 22px; color: var(--navy); margin: 0 0 10px; letter-spacing: -0.01em; }
+  .step-body { font-size: 15px; color: var(--text-muted); line-height: 1.6; margin: 0; }
+  @media (max-width: 780px) { .steps { grid-template-columns: 1fr; } }
+
+  /* === DIFFERENTIATORS === */
+  .differentiators { background: var(--bg-card-alt); padding: 80px 0; position: relative; }
+  .diff-grid { max-width: 980px; margin: 0 auto; padding: 0 24px; display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  .diff-col { }
+  .diff-col-title { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 500; margin: 0 0 20px; letter-spacing: -0.01em; }
+  .diff-them .diff-col-title { color: var(--red); }
+  .diff-us .diff-col-title { color: var(--green); }
+  .diff-item { display: flex; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); font-size: 15px; line-height: 1.55; color: var(--text); }
+  .diff-item:last-child { border-bottom: none; }
+  .diff-mark { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; margin-top: 2px; }
+  .diff-them .diff-mark { background: #fde4e4; color: var(--red); }
+  .diff-us .diff-mark { background: var(--green-soft); color: var(--green); }
+  @media (max-width: 720px) { .diff-grid { grid-template-columns: 1fr; gap: 32px; } }
+
+  /* === FORM SECTION === */
+  .form-section { background: linear-gradient(180deg, var(--bg) 0%, var(--bg-card-alt) 100%); padding: 80px 20px; }
+  .form-shell { max-width: 640px; margin: 0 auto; }
+  .form-header { text-align: center; margin-bottom: 32px; }
+  .form-header h2 { font-family: 'Fraunces', serif; font-weight: 500; font-size: 32px; color: var(--navy); margin: 0 0 10px; letter-spacing: -0.02em; }
+  .form-header p { font-size: 16px; color: var(--text-muted); margin: 0; }
+  .form-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 36px 32px; box-shadow: var(--shadow-lg); }
+  .form-intro { font-size: 14px; color: var(--text-muted); margin: 0 0 24px; line-height: 1.6; padding: 14px 16px; background: var(--gold-soft); border-radius: 10px; border: 1px solid rgba(201, 162, 74, 0.2); }
+  .form-intro strong { color: var(--navy); font-weight: 600; }
 
   .field { margin-bottom: 16px; }
   .field-label { display: block; font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
-  .field-optional { color: var(--text-muted); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; margin-left: 4px; }
+  .field-optional { color: var(--text-subtle); font-weight: 400; text-transform: none; letter-spacing: 0; font-size: 11px; margin-left: 4px; }
   .field input, .field textarea {
     width: 100%;
     padding: 12px 14px;
@@ -80,7 +178,7 @@
   button.submit {
     width: 100%;
     background: var(--navy);
-    color: #fffcf5;
+    color: var(--cream);
     border: none;
     padding: 16px 20px;
     border-radius: 10px;
@@ -104,13 +202,50 @@
   .success-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 28px; color: var(--navy); margin: 0 0 12px; letter-spacing: -0.015em; }
   .success-body { font-size: 15px; color: var(--text); line-height: 1.65; max-width: 440px; margin: 0 auto 28px; }
   .success-meta { display: inline-block; padding: 10px 16px; background: var(--gold-soft); color: var(--navy); border-radius: 999px; font-size: 13px; font-weight: 500; }
+  .success-next { margin-top: 36px; padding-top: 28px; border-top: 1px solid var(--border); }
+  .success-next h4 { font-family: 'Fraunces', serif; font-weight: 500; font-size: 18px; color: var(--navy); margin: 0 0 16px; }
+  .success-next-list { text-align: left; max-width: 440px; margin: 0 auto; padding: 0; list-style: none; }
+  .success-next-list li { padding: 10px 0 10px 32px; position: relative; color: var(--text); font-size: 14px; line-height: 1.6; }
+  .success-next-list li::before { content: ''; position: absolute; left: 0; top: 16px; width: 20px; height: 20px; background: var(--green-soft); border-radius: 50%; }
+  .success-next-list li::after { content: ''; position: absolute; left: 6px; top: 20px; width: 6px; height: 10px; border: solid var(--green); border-width: 0 2px 2px 0; transform: rotate(45deg); }
 
-  .trust { text-align: center; max-width: 640px; margin: 0 auto; padding: 0 20px 80px; color: var(--text-muted); font-size: 14px; line-height: 1.7; }
-  .trust h3 { font-family: 'Fraunces', serif; font-weight: 500; color: var(--navy); font-size: 20px; margin: 0 0 12px; letter-spacing: -0.01em; }
-  .trust p { margin: 0 0 12px; }
-  .trust a { color: var(--navy-mid); font-weight: 600; }
+  /* === FAQ === */
+  .faq-list { max-width: 760px; margin: 0 auto; }
+  .faq-item { border-bottom: 1px solid var(--border); }
+  .faq-item:last-child { border-bottom: none; }
+  .faq-question { width: 100%; text-align: left; background: none; border: none; padding: 22px 0; font-family: inherit; font-size: 17px; font-weight: 500; color: var(--navy); cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 16px; line-height: 1.4; }
+  .faq-question:hover { color: var(--navy-mid); }
+  .faq-toggle { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; background: var(--gold-soft); color: var(--navy); display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 500; transition: transform 0.2s; }
+  .faq-open .faq-toggle { transform: rotate(45deg); }
+  .faq-answer { padding: 0 0 22px; color: var(--text-muted); font-size: 15px; line-height: 1.65; max-width: 640px; }
+  .faq-answer a { color: var(--navy-mid); font-weight: 500; }
 
-  footer { text-align: center; padding: 30px 20px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); margin-top: 40px; }
+  /* === ABOUT === */
+  .about { background: var(--navy); color: var(--cream); padding: 80px 24px; }
+  .about-inner { max-width: 820px; margin: 0 auto; text-align: center; }
+  .about-eyebrow { color: var(--gold-light); font-size: 12px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 14px; }
+  .about-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 34px; letter-spacing: -0.02em; margin: 0 0 20px; line-height: 1.25; }
+  .about-body { font-size: 17px; line-height: 1.7; color: rgba(255, 252, 245, 0.82); margin: 0 auto 20px; max-width: 640px; }
+  .about-sig { font-family: 'Fraunces', serif; font-style: italic; font-size: 18px; color: var(--gold-light); margin-top: 24px; }
+
+  /* === CTA BAND === */
+  .cta-band { background: var(--gold-soft); padding: 56px 24px; text-align: center; }
+  .cta-band-title { font-family: 'Fraunces', serif; font-weight: 500; font-size: 28px; color: var(--navy); margin: 0 0 12px; letter-spacing: -0.02em; }
+  .cta-band-sub { font-size: 16px; color: var(--text-muted); margin: 0 0 24px; }
+
+  /* === FOOTER === */
+  footer.site-footer { background: var(--bg-card-alt); padding: 48px 24px 28px; border-top: 1px solid var(--border); }
+  .footer-inner { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 40px; margin-bottom: 32px; }
+  .footer-brand { font-family: 'Fraunces', serif; font-weight: 700; font-size: 18px; color: var(--navy); margin-bottom: 8px; display: inline-flex; align-items: baseline; gap: 10px; }
+  .footer-desc { font-size: 13px; color: var(--text-muted); line-height: 1.6; margin: 0; max-width: 340px; }
+  .footer-col h5 { font-size: 12px; font-weight: 700; color: var(--navy); letter-spacing: 0.08em; text-transform: uppercase; margin: 0 0 12px; }
+  .footer-col a { display: block; font-size: 14px; color: var(--text-muted); text-decoration: none; padding: 4px 0; }
+  .footer-col a:hover { color: var(--navy); }
+  .footer-bottom { max-width: 1120px; margin: 0 auto; padding-top: 24px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--text-subtle); line-height: 1.6; }
+  .footer-legal { margin-top: 6px; }
+  @media (max-width: 640px) {
+    .footer-inner { grid-template-columns: 1fr; gap: 28px; }
+  }
 </style>
 </head>
 <body>
@@ -120,7 +255,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script type="text/babel" data-presets="env,react">
-const { useState } = React;
+const { useState, useEffect } = React;
 
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
@@ -129,6 +264,67 @@ const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 const OHIO_COUNTIES = [
   "Adams","Allen","Ashland","Ashtabula","Athens","Auglaize","Belmont","Brown","Butler","Carroll","Champaign","Clark","Clermont","Clinton","Columbiana","Coshocton","Crawford","Cuyahoga","Darke","Defiance","Delaware","Erie","Fairfield","Fayette","Franklin","Fulton","Gallia","Geauga","Greene","Guernsey","Hamilton","Hancock","Hardin","Harrison","Henry","Highland","Hocking","Holmes","Huron","Jackson","Jefferson","Knox","Lake","Lawrence","Licking","Logan","Lorain","Lucas","Madison","Mahoning","Marion","Medina","Meigs","Mercer","Miami","Monroe","Montgomery","Morgan","Morrow","Muskingum","Noble","Ottawa","Paulding","Perry","Pickaway","Pike","Portage","Preble","Putnam","Richland","Ross","Sandusky","Scioto","Seneca","Shelby","Stark","Summit","Trumbull","Tuscarawas","Union","Van Wert","Vinton","Warren","Washington","Wayne","Williams","Wood","Wyandot"
 ];
+
+// Capture UTM + attribution params from URL at page load
+function captureAttribution() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const keys = ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','gclid','fbclid','msclkid','ref'];
+    const attribution = {};
+    keys.forEach(k => { const v = params.get(k); if (v) attribution[k] = v.slice(0, 120); });
+    return attribution;
+  } catch (e) { return {}; }
+}
+
+const ATTRIBUTION = captureAttribution();
+
+const FAQS = [
+  {
+    q: "What are surplus funds, exactly?",
+    a: "When a foreclosed Ohio property sells at auction for more than what the bank was owed, the extra money is called surplus funds. Under Ohio law, that money belongs to the former owner — not the bank, not the county, not the buyer. But it doesn't get mailed to you automatically. It sits in the court's hands until somebody files to claim it, and there's a deadline."
+  },
+  {
+    q: "How do you know if there are funds for my property?",
+    a: "Ohio foreclosure records are public. We look up your case in the county court system, pull the confirmation of sale and sheriff's return, and calculate what was bid vs. what was owed. If there's a surplus, we tell you exactly how much — and exactly what our fee would be before you decide anything."
+  },
+  {
+    q: "What does it cost to find out?",
+    a: "Nothing. The initial check is free. We only ever get paid if (1) you decide to retain us and (2) we actually recover funds for you. If we don't recover, you don't pay a dime."
+  },
+  {
+    q: "What's your fee if I retain you?",
+    a: "We disclose the exact flat fee or percentage in writing before you sign anything — no hidden charges, no surprise escrow deductions. Every fee is transparent up front, and you'll see the number in the engagement letter."
+  },
+  {
+    q: "Can I just file the claim myself?",
+    a: "Yes, and Nathan will walk you through it for free if that's what you want. Some claims are straightforward, some are contested by creditors or second-lien holders, and some require a full claimant hearing. We'll tell you honestly which bucket yours falls in — and if you can handle it yourself, we'll point you at the right paperwork at no cost."
+  },
+  {
+    q: "Is there a deadline to claim surplus funds?",
+    a: "Yes. In most Ohio counties, unclaimed surplus funds escheat to the state after five years — meaning they're gone for good. Some counties treat the clock differently. The faster you check, the better."
+  },
+  {
+    q: "Who sees my information?",
+    a: "Only our team and the attorney assigned to your case. We don't sell lists, don't run cold-call campaigns, and don't share your info with anyone outside the people working on your recovery."
+  },
+  {
+    q: "I already got a call from another recovery firm. Should I sign with them?",
+    a: "Read the fine print first. A lot of firms charge 40-50% and bury a non-cancelable clause so you're locked in. Our fee and cancellation terms are plainly written in the engagement letter. If you want a second opinion on a contract you were sent, email it to us and Nathan will read it with you — no obligation."
+  },
+];
+
+function FaqItem({ q, a }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className={"faq-item" + (open ? " faq-open" : "")}>
+      <button className="faq-question" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span>{q}</span>
+        <span className="faq-toggle">+</span>
+      </button>
+      {open && <div className="faq-answer">{a}</div>}
+    </div>
+  );
+}
 
 function App() {
   const [form, setForm] = useState({
@@ -151,11 +347,13 @@ function App() {
       address: form.address.trim() || null,
       county: form.county || null,
       case_number: form.case_number.trim() || null,
-      source: 'refundlocators-web',
+      source: ATTRIBUTION.utm_source ? `${ATTRIBUTION.utm_source}-web` : 'refundlocators-web',
       user_agent: navigator.userAgent.slice(0, 500),
       metadata: {
         referrer: document.referrer || null,
         submitted_from: window.location.href,
+        landing: 'check.fundlocators.com',
+        ...ATTRIBUTION,
       },
     };
 
@@ -173,38 +371,58 @@ function App() {
     setSubmitting(false);
 
     if (error) {
-      setError('We had trouble saving your request — please try again or call Nathan directly at (513) 516-2306.');
+      setError('We had trouble saving your request — please try again or call Nathan directly at ((513) 951-8855.');
       return;
     }
     setSubmitted(true);
+    // Scroll to top so they see the confirmation
+    try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
   };
 
   if (submitted) {
     return (
       <>
-        <div className="hero">
-          <div className="brand">
-            <span className="brand-dot"></span>
-            FundLocators
+        <nav className="nav">
+          <div className="nav-inner">
+            <a href="#" className="brand">
+              <span className="brand-dot"></span>
+              FundLocators
+            </a>
           </div>
+        </nav>
+        <div className="hero" style={{ padding: '56px 24px 100px' }}>
+          <div className="hero-eyebrow">Request received</div>
           <h1 className="hero-title">We got your request.</h1>
           <p className="hero-sub">Our team is already pulling the public court records for your case. You'll hear from us within one business day.</p>
         </div>
-        <div className="form-shell">
+        <div className="form-shell" style={{ margin: '-72px auto 60px', position: 'relative', zIndex: 2 }}>
           <div className="form-card success-shell">
             <div className="success-icon">✓</div>
             <h2 className="success-title">Thank you, {form.name.split(' ')[0]}.</h2>
             <p className="success-body">
               We just received your request for <b>{form.address || 'the property you entered'}</b>{form.county ? ` in ${form.county} County` : ''}. A specialist will contact you at <b>{form.email}</b>{form.phone ? ` or ${form.phone}` : ''} within the next business day.
             </p>
-            <p className="success-body" style={{ fontSize: 14, color: 'var(--text-muted)' }}>
-              If you'd like to reach us sooner — or you have documents to send — call Nathan directly at <a href="tel:+15135162306" style={{ color: 'var(--navy-mid)', fontWeight: 600 }}>(513) 516-2306</a>.
-            </p>
             <div className="success-meta">Reference: {new Date().toLocaleDateString()} · {form.email}</div>
+
+            <div className="success-next">
+              <h4>What happens next</h4>
+              <ul className="success-next-list">
+                <li>We pull the public court records for your case today.</li>
+                <li>If there are surplus funds, we email you the exact amount and our written fee.</li>
+                <li>You decide whether to retain us, file yourself (we'll show you how), or walk away. No pressure.</li>
+              </ul>
+            </div>
+
+            <p className="success-body" style={{ fontSize: 14, color: 'var(--text-muted)', marginTop: 28 }}>
+              If you'd like to reach us sooner — or you have documents to send — call Nathan directly at <a href="tel:+15139518855" style={{ color: 'var(--navy-mid)', fontWeight: 600 }}>((513) 951-8855</a>.
+            </p>
           </div>
         </div>
-        <footer>
-          © FundLocators · Ohio surplus fund recovery
+        <footer className="site-footer">
+          <div className="footer-bottom">
+            © {new Date().getFullYear()} FundLocators LLC · Ohio surplus fund recovery
+            <div className="footer-legal">Not a law firm. Legal services provided through licensed Ohio attorneys.</div>
+          </div>
         </footer>
       </>
     );
@@ -212,83 +430,237 @@ function App() {
 
   return (
     <>
-      <div className="hero">
-        <div className="brand">
-          <span className="brand-dot"></span>
-          FundLocators
+      {/* === NAV === */}
+      <nav className="nav">
+        <div className="nav-inner">
+          <a href="#" className="brand">
+            <span className="brand-dot"></span>
+            FundLocators
+          </a>
+          <div className="nav-links">
+            <a href="#how-it-works">How it works</a>
+            <a href="#different">Why us</a>
+            <a href="#faq">FAQ</a>
+            <a href="#check" className="nav-cta">Check my property</a>
+          </div>
         </div>
-        <h1 className="hero-title">Your foreclosure sale may have left money behind.</h1>
+      </nav>
+
+      {/* === HERO === */}
+      <section className="hero">
+        <div className="hero-eyebrow">Ohio foreclosure surplus recovery</div>
+        <h1 className="hero-title">Your foreclosure sale may have left <em>money behind</em>.</h1>
         <p className="hero-sub">
-          When an Ohio home is sold at a foreclosure auction for more than what was owed, the surplus belongs to the former owner — not the bank. We help you recover it.
+          When an Ohio home is sold at auction for more than what was owed, the surplus belongs to the former owner — not the bank. We'll check your case for free and tell you exactly what's there.
         </p>
-        <div className="hero-pills">
-          <span className="pill"><span className="pill-icon">✓</span>No upfront cost</span>
-          <span className="pill"><span className="pill-icon">✓</span>Licensed Ohio attorneys</span>
-          <span className="pill"><span className="pill-icon">✓</span>Transparent fee disclosed before you sign</span>
+        <div className="hero-cta-group">
+          <a href="#check" className="btn-primary">Check my property — free</a>
+          <a href="#how-it-works" className="btn-ghost">See how it works</a>
         </div>
-      </div>
+        <div className="hero-pills">
+          <span className="pill"><span className="pill-check">✓</span>No upfront cost</span>
+          <span className="pill"><span className="pill-check">✓</span>Licensed Ohio attorneys</span>
+          <span className="pill"><span className="pill-check">✓</span>Fee disclosed in writing first</span>
+          <span className="pill"><span className="pill-check">✓</span>You can file yourself — we'll help</span>
+        </div>
+      </section>
 
-      <div className="form-shell">
-        <form className="form-card" onSubmit={submit}>
-          <p className="form-intro">
-            Tell us about the property and we'll check the public records for a surplus. <strong>Takes 60 seconds.</strong> Response within one business day. No phone spam — just one call from Nathan, our principal.
+      {/* === STAT STRIP === */}
+      <section className="stat-strip">
+        <div className="stat-card">
+          <div className="stat">
+            <div className="stat-value">5<span className="unit">yr</span></div>
+            <div className="stat-label">Before unclaimed funds escheat to the state</div>
+          </div>
+          <div className="stat">
+            <div className="stat-value">$30K+</div>
+            <div className="stat-label">Typical surplus on a mid-market Ohio foreclosure</div>
+          </div>
+          <div className="stat">
+            <div className="stat-value">88</div>
+            <div className="stat-label">Ohio counties covered — every court, every docket</div>
+          </div>
+          <div className="stat">
+            <div className="stat-value">$0</div>
+            <div className="stat-label">To check. You pay only if we recover</div>
+          </div>
+        </div>
+      </section>
+
+      {/* === HOW IT WORKS === */}
+      <section id="how-it-works" className="section">
+        <div className="section-eyebrow">How it works</div>
+        <h2 className="section-title">Three steps. No pressure. No surprises.</h2>
+        <p className="section-sub">You stay in control at every stage. We check the records, show you the math, and you decide what to do.</p>
+        <div className="steps">
+          <div className="step">
+            <div className="step-num">01</div>
+            <div className="step-title">You tell us the address</div>
+            <p className="step-body">Takes 60 seconds. We just need the property address (or case number if you have it) and a way to reach you. That's it.</p>
+          </div>
+          <div className="step">
+            <div className="step-num">02</div>
+            <div className="step-title">We check the records</div>
+            <p className="step-body">We pull the public court documents — confirmation of sale, sheriff's return, payoff — and calculate whether there's a surplus. You get a written summary within one business day.</p>
+          </div>
+          <div className="step">
+            <div className="step-num">03</div>
+            <div className="step-title">You decide</div>
+            <p className="step-body">If there are funds, we show you the exact amount and our fee in writing. Retain us, file yourself (we'll walk you through it for free), or walk away. Your call.</p>
+          </div>
+        </div>
+      </section>
+
+      {/* === DIFFERENTIATORS === */}
+      <section id="different" className="differentiators">
+        <div className="section" style={{ paddingTop: 0, paddingBottom: 0 }}>
+          <div className="section-eyebrow">Why we're different</div>
+          <h2 className="section-title">We do the opposite of the cold-call firms.</h2>
+          <p className="section-sub">Most surplus recovery operators are a phone bank. They pressure former owners into signing 40-50% contingency contracts within minutes. That's not us.</p>
+        </div>
+        <div className="diff-grid">
+          <div className="diff-col diff-them">
+            <h3 className="diff-col-title">The cold-call firms</h3>
+            <div className="diff-item"><span className="diff-mark">✕</span><span>Call you unsolicited, often before you know funds exist</span></div>
+            <div className="diff-item"><span className="diff-mark">✕</span><span>Pressure you to sign 40-50% contingency contracts same-day</span></div>
+            <div className="diff-item"><span className="diff-mark">✕</span><span>Bury non-cancelable clauses in the fine print</span></div>
+            <div className="diff-item"><span className="diff-mark">✕</span><span>Withhold the surplus amount until you sign</span></div>
+            <div className="diff-item"><span className="diff-mark">✕</span><span>Farm your info out to third-party salespeople</span></div>
+          </div>
+          <div className="diff-col diff-us">
+            <h3 className="diff-col-title">FundLocators</h3>
+            <div className="diff-item"><span className="diff-mark">✓</span><span>You find us. We only reach out after you ask.</span></div>
+            <div className="diff-item"><span className="diff-mark">✓</span><span>Written fee disclosed before anything is signed</span></div>
+            <div className="diff-item"><span className="diff-mark">✓</span><span>Transparent engagement letter — cancel anytime before filing</span></div>
+            <div className="diff-item"><span className="diff-mark">✓</span><span>We tell you the surplus amount for free, no strings</span></div>
+            <div className="diff-item"><span className="diff-mark">✓</span><span>Work directly with Nathan and your assigned Ohio attorney</span></div>
+          </div>
+        </div>
+      </section>
+
+      {/* === FORM === */}
+      <section id="check" className="form-section">
+        <div className="form-shell">
+          <div className="form-header">
+            <h2>Check your property — free, 60 seconds</h2>
+            <p>We'll pull the public records and let you know what's there by the next business day.</p>
+          </div>
+          <form className="form-card" onSubmit={submit}>
+            <p className="form-intro">
+              Tell us about the property and we'll check the public records for a surplus. <strong>Takes 60 seconds.</strong> Response within one business day. No phone spam — just one call from Nathan, our principal.
+            </p>
+
+            <div className="field-row">
+              <div className="field">
+                <label className="field-label">Your name</label>
+                <input type="text" required value={form.name} onChange={update('name')} placeholder="First and last" autoComplete="name" />
+              </div>
+              <div className="field">
+                <label className="field-label">Phone <span className="field-optional">(optional)</span></label>
+                <input type="tel" value={form.phone} onChange={update('phone')} placeholder="(555) 555-5555" autoComplete="tel" />
+              </div>
+            </div>
+
+            <div className="field">
+              <label className="field-label">Email</label>
+              <input type="email" required value={form.email} onChange={update('email')} placeholder="you@email.com" autoComplete="email" />
+            </div>
+
+            <div className="field">
+              <label className="field-label">Property address</label>
+              <input type="text" value={form.address} onChange={update('address')} placeholder="123 Main St, Cincinnati, OH 45202" autoComplete="street-address" />
+            </div>
+
+            <div className="field-row">
+              <div className="field">
+                <label className="field-label">County <span className="field-optional">(Ohio)</span></label>
+                <input list="counties" value={form.county} onChange={update('county')} placeholder="Start typing…" />
+                <datalist id="counties">
+                  {OHIO_COUNTIES.map(c => <option key={c} value={c} />)}
+                </datalist>
+              </div>
+              <div className="field">
+                <label className="field-label">Case number <span className="field-optional">(if you have it)</span></label>
+                <input type="text" value={form.case_number} onChange={update('case_number')} placeholder="e.g. 2024-CV-12345" />
+              </div>
+            </div>
+
+            {error && <div className="error">{error}</div>}
+
+            <button type="submit" className="submit" disabled={submitting || !form.name || !form.email}>
+              {submitting ? 'Sending…' : 'Check my property — free'}
+            </button>
+
+            <p className="privacy">
+              We only use your information to research your case and reach out. We don't sell lists, run spam campaigns, or share your info with anyone outside our team and your attorney. <a href="tel:+15139518855">((513) 951-8855</a>
+            </p>
+          </form>
+        </div>
+      </section>
+
+      {/* === ABOUT === */}
+      <section className="about">
+        <div className="about-inner">
+          <div className="about-eyebrow">Meet the team</div>
+          <h2 className="about-title">I built FundLocators because the surplus recovery industry is broken.</h2>
+          <p className="about-body">
+            I've watched Ohio families get cold-called two days after losing their home, pressured into signing 50% contracts before they even understood what surplus funds were, and then stuck with firms that stopped returning calls once the paperwork was filed.
           </p>
-
-          <div className="field-row">
-            <div className="field">
-              <label className="field-label">Your name</label>
-              <input type="text" required value={form.name} onChange={update('name')} placeholder="First and last" autoComplete="name" />
-            </div>
-            <div className="field">
-              <label className="field-label">Phone <span className="field-optional">(optional)</span></label>
-              <input type="tel" value={form.phone} onChange={update('phone')} placeholder="(555) 555-5555" autoComplete="tel" />
-            </div>
-          </div>
-
-          <div className="field">
-            <label className="field-label">Email</label>
-            <input type="email" required value={form.email} onChange={update('email')} placeholder="you@email.com" autoComplete="email" />
-          </div>
-
-          <div className="field">
-            <label className="field-label">Property address</label>
-            <input type="text" value={form.address} onChange={update('address')} placeholder="123 Main St, Cincinnati, OH 45202" autoComplete="street-address" />
-          </div>
-
-          <div className="field-row">
-            <div className="field">
-              <label className="field-label">County <span className="field-optional">(Ohio)</span></label>
-              <input list="counties" value={form.county} onChange={update('county')} placeholder="Start typing…" />
-              <datalist id="counties">
-                {OHIO_COUNTIES.map(c => <option key={c} value={c} />)}
-              </datalist>
-            </div>
-            <div className="field">
-              <label className="field-label">Case number <span className="field-optional">(if you have it)</span></label>
-              <input type="text" value={form.case_number} onChange={update('case_number')} placeholder="e.g. 2024-CV-12345" />
-            </div>
-          </div>
-
-          {error && <div className="error">{error}</div>}
-
-          <button type="submit" className="submit" disabled={submitting || !form.name || !form.email}>
-            {submitting ? 'Sending…' : 'Check my property'}
-          </button>
-
-          <p className="privacy">
-            We only use your information to research your case and reach out. We don't sell lists, run spam campaigns, or share your info with anyone outside our team and your attorney.
+          <p className="about-body">
+            That's not a business model. That's a scam with a license. We built FundLocators to work the other direction — homeowners find us, we show them the math first, and nobody signs anything until they understand every dollar of the fee in writing.
           </p>
-        </form>
-      </div>
+          <p className="about-body">
+            If you want to file yourself, I'll coach you through it for free. If you want us to handle it, you'll know the exact cost before you decide.
+          </p>
+          <div className="about-sig">— Nathan, Founder · FundLocators LLC</div>
+        </div>
+      </section>
 
-      <div className="trust">
-        <h3 className="serif">Why FundLocators</h3>
-        <p>Most surplus fund recovery firms cold-call post-foreclosure homeowners and pressure them into signing. We do the opposite. You find us, we look up your case in the public records, and if there's money on the table we tell you exactly how much and exactly what our fee would be — in writing, before you sign anything.</p>
-        <p>If you'd rather file the claim yourself, Nathan will walk you through how — for free. We only charge if you retain us and we recover funds.</p>
-        <p>Questions? <a href="tel:+15135162306">(513) 516-2306</a> rings Nathan's cell.</p>
-      </div>
+      {/* === FAQ === */}
+      <section id="faq" className="section section-narrow">
+        <div className="section-eyebrow">Questions we hear a lot</div>
+        <h2 className="section-title">Frequently asked</h2>
+        <p className="section-sub">If your question isn't here, call Nathan directly at <a href="tel:+15139518855" style={{ color: 'var(--navy-mid)', fontWeight: 600 }}>((513) 951-8855</a>.</p>
+        <div className="faq-list">
+          {FAQS.map((f, i) => <FaqItem key={i} q={f.q} a={f.a} />)}
+        </div>
+      </section>
 
-      <footer>© FundLocators · Ohio surplus fund recovery</footer>
+      {/* === CTA BAND === */}
+      <section className="cta-band">
+        <h2 className="cta-band-title">Ready to find out if there's money waiting?</h2>
+        <p className="cta-band-sub">It takes 60 seconds and costs nothing.</p>
+        <a href="#check" className="btn-primary">Check my property — free</a>
+      </section>
+
+      {/* === FOOTER === */}
+      <footer className="site-footer">
+        <div className="footer-inner">
+          <div>
+            <div className="footer-brand">
+              <span className="brand-dot"></span>
+              FundLocators
+            </div>
+            <p className="footer-desc">Ohio surplus fund recovery for former homeowners. Licensed attorneys. Transparent fees. No cold calls.</p>
+          </div>
+          <div className="footer-col">
+            <h5>Service</h5>
+            <a href="#how-it-works">How it works</a>
+            <a href="#different">Why us</a>
+            <a href="#faq">FAQ</a>
+            <a href="#check">Check my property</a>
+          </div>
+          <div className="footer-col">
+            <h5>Contact</h5>
+            <a href="tel:+15139518855">((513) 951-8855</a>
+            <a href="mailto:hello@refundlocators.com">hello@refundlocators.com</a>
+          </div>
+        </div>
+        <div className="footer-bottom">
+          © {new Date().getFullYear()} FundLocators LLC · Ohio surplus fund recovery
+          <div className="footer-legal">Not a law firm. Legal services provided through licensed Ohio attorneys. Past results do not guarantee future outcomes.</div>
+        </div>
+      </footer>
     </>
   );
 }

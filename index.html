@@ -2393,11 +2393,44 @@ function Documents({ items, dealId, userId, logAct, reload }) {
   };
 
   const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1024*1024 ? `${(b/1024).toFixed(1)} KB` : `${(b/1024/1024).toFixed(1)} MB`;
-  const humanizeType = (t) => (t || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const fmtFieldValue = (v) => {
-    if (v === null || v === undefined) return <span style={{ color: "#57534e", fontStyle: "italic" }}>not present</span>;
+
+  const DOC_TYPE_META = {
+    // Surplus-specific
+    engagement_agreement:      { label: 'Engagement Agreement', color: '#065f46', bg: '#064e3b', text: '#6ee7b7' },
+    surplus_distribution_order:{ label: 'Distribution Order',   color: '#065f46', bg: '#064e3b', text: '#34d399' },
+    sheriff_sale_confirmation:  { label: 'Sale Confirmation',    color: '#065f46', bg: '#064e3b', text: '#6ee7b7' },
+    notice_of_default:         { label: 'Notice of Default',     color: '#92400e', bg: '#78350f', text: '#fcd34d' },
+    proof_of_claim:            { label: 'Proof of Claim',        color: '#1e3a5f', bg: '#1e3a5f', text: '#93c5fd' },
+    distribution_check:        { label: 'Distribution Check',    color: '#065f46', bg: '#14532d', text: '#86efac' },
+    // General legal
+    death_certificate:         { label: 'Death Certificate',     color: '#4c1d95', bg: '#3b0764', text: '#c4b5fd' },
+    id_document:               { label: 'ID / License',          color: '#374151', bg: '#1f2937', text: '#d1d5db' },
+    deed:                      { label: 'Deed',                  color: '#78350f', bg: '#451a03', text: '#fde68a' },
+    power_of_attorney:         { label: 'Power of Attorney',     color: '#4c1d95', bg: '#3b0764', text: '#c4b5fd' },
+    probate_document:          { label: 'Probate Document',      color: '#4c1d95', bg: '#3b0764', text: '#c4b5fd' },
+    bank_statement:            { label: 'Bank Statement',        color: '#374151', bg: '#1f2937', text: '#d1d5db' },
+    correspondence:            { label: 'Correspondence',        color: '#374151', bg: '#1f2937', text: '#9ca3af' },
+    court_filing:              { label: 'Court Filing',          color: '#1e3a5f', bg: '#1e3a5f', text: '#93c5fd' },
+    other:                     { label: 'Other',                 color: '#292524', bg: '#1c1917', text: '#a8a29e' },
+  };
+  const getTypeMeta = (t) => DOC_TYPE_META[t] || { label: (t||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()), bg: '#292524', text: '#a8a29e' };
+
+  // Fields that represent dollar amounts — formatted with $
+  const MONEY_FIELDS = new Set(['surplus_amount','surplus_amount_estimated','sale_price','minimum_bid',
+    'judgment_amount','amount_claimed','claimant_share','consideration','ending_balance','amount']);
+  const PCT_FIELDS = new Set(['fee_percentage']);
+  // Fields shown as highlighted "key numbers" at the top of the extraction panel
+  const KEY_FIELDS = ['surplus_amount','surplus_amount_estimated','judgment_amount','sale_price',
+    'fee_percentage','amount_claimed','claimant_share','amount'];
+
+  const fmtFieldValue = (key, v) => {
+    if (v === null || v === undefined) return <span style={{ color: "#57534e", fontStyle: "italic" }}>—</span>;
     if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-    if (typeof v === 'number') return v.toLocaleString();
+    if (typeof v === 'number') {
+      if (MONEY_FIELDS.has(key)) return `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      if (PCT_FIELDS.has(key)) return `${v}%`;
+      return v.toLocaleString();
+    }
     return String(v);
   };
 
@@ -2409,7 +2442,7 @@ function Documents({ items, dealId, userId, logAct, reload }) {
       </label>
     }>
       {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
-      {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload contracts, deeds, probate filings, scope of work, photos, etc. Uploaded files are auto-analyzed by Claude Vision to extract key fields (name, dates, case numbers, etc.).</div>}
+      {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload engagement agreements, distribution orders, sale confirmations, NODs, proof of claim, death certificates, IDs, deeds, or any court filing. Claude Vision reads each file and extracts key fields — surplus amounts, case numbers, dates, fee percentages — automatically.</div>}
       {items.map(doc => {
         const status = doc.extraction_status;
         const isExtracting = extracting[doc.id] || status === 'processing';
@@ -2422,9 +2455,10 @@ function Documents({ items, dealId, userId, logAct, reload }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#d97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => openDoc(doc)}>{doc.name}</div>
-                  {status === 'done' && doc.extracted?.document_type && (
-                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#064e3b", color: "#6ee7b7", letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{humanizeType(doc.extracted.document_type)}</span>
-                  )}
+                  {status === 'done' && doc.extracted?.document_type && (() => {
+                    const m = getTypeMeta(doc.extracted.document_type);
+                    return <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: m.bg, color: m.text, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{m.label}</span>;
+                  })()}
                   {status === 'processing' && (
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#1e3a5f", color: "#93c5fd", letterSpacing: "0.06em", textTransform: "uppercase" }}>Analyzing…</span>
                   )}
@@ -2453,26 +2487,43 @@ function Documents({ items, dealId, userId, logAct, reload }) {
                 <button onClick={() => removeDoc(doc)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5", borderColor: "#7f1d1d" }}>Delete</button>
               </div>
             </div>
-            {isExpanded && status === 'done' && (
-              <div style={{ marginTop: 10, padding: 12, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 8 }}>
-                  {Object.entries(extractedFields).map(([key, value]) => (
-                    <div key={key}>
-                      <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>{key.replace(/_/g, ' ')}</div>
-                      <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 2, wordBreak: "break-word" }}>{fmtFieldValue(value)}</div>
+            {isExpanded && status === 'done' && (() => {
+              const keyHighlights = KEY_FIELDS.filter(k => extractedFields[k] != null);
+              const otherFields = Object.entries(extractedFields).filter(([k, v]) => v != null && !KEY_FIELDS.includes(k));
+              const conf = doc.extracted?.confidence;
+              const confColor = conf === 'high' ? '#34d399' : conf === 'medium' ? '#fcd34d' : '#fca5a5';
+              return (
+                <div style={{ marginTop: 10, padding: 12, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+                  {keyHighlights.length > 0 && (
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#0f172a", borderRadius: 5, border: "1px solid #1e3a5f" }}>
+                      {keyHighlights.map(k => (
+                        <div key={k}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>{k.replace(/_/g, ' ')}</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: "#fbbf24", marginTop: 1 }}>{fmtFieldValue(k, extractedFields[k])}</div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-                {doc.extracted?.notes && (
-                  <div style={{ marginTop: 10, padding: "8px 10px", background: "#1c1917", borderRadius: 4, fontSize: 11, color: "#a8a29e", fontStyle: "italic" }}>
-                    Claude's note: {doc.extracted.notes}
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+                    {otherFields.map(([key, value]) => (
+                      <div key={key}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>{key.replace(/_/g, ' ')}</div>
+                        <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 2, wordBreak: "break-word" }}>{fmtFieldValue(key, value)}</div>
+                      </div>
+                    ))}
                   </div>
-                )}
-                <div style={{ fontSize: 10, color: "#57534e", marginTop: 8, textAlign: "right" }}>
-                  Extracted {doc.extracted?.confidence ? `with ${doc.extracted.confidence} confidence` : ''} by Claude Vision · {doc.extracted_at ? new Date(doc.extracted_at).toLocaleString() : ''}
+                  {doc.extracted?.notes && (
+                    <div style={{ marginTop: 10, padding: "8px 10px", background: "#1c1917", borderRadius: 4, fontSize: 11, color: "#a8a29e", fontStyle: "italic" }}>
+                      Note: {doc.extracted.notes}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, color: "#57534e", marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Extracted by Claude Vision · {doc.extracted_at ? new Date(doc.extracted_at).toLocaleString() : ''}</span>
+                    {conf && <span style={{ fontWeight: 700, color: confColor }}>{conf} confidence</span>}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {status === 'failed' && doc.extraction_error && (
               <div style={{ marginTop: 8, padding: "6px 10px", background: "#0c0a09", border: "1px solid #7f1d1d", borderRadius: 4, fontSize: 11, color: "#fca5a5" }}>
                 {doc.extraction_error}
