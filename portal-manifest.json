@@ -1,0 +1,15 @@
+{
+  "name": "FundLocators Case Portal",
+  "short_name": "FundLocators",
+  "description": "Track your surplus fund recovery case",
+  "start_url": "/deal-command-center/portal.html",
+  "scope": "/deal-command-center/",
+  "display": "standalone",
+  "background_color": "#fbf8f1",
+  "theme_color": "#0b1f3a",
+  "orientation": "any",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    { "src": "icon-portal.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any maskable" }
+  ]
+}
