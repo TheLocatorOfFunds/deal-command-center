@@ -1497,8 +1497,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
 
   const tabs = isAdmin
-    ? ["overview", "messages", "docket", "contacts", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
-    : ["overview", "messages", "docket", "contacts", "tasks", "vendors", "documents", "notes", "activity"];
+    ? ["overview", "messages", "docket", "contacts", "expenses", "tasks", "vendors", "documents", "notes", "activity", "sms"]
+    : ["overview", "messages", "docket", "contacts", "tasks", "vendors", "documents", "notes", "activity", "sms"];
 
   return (
     <div>
@@ -1580,7 +1580,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
             borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
           }}>
-            {id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
+            {id === "sms" ? "💬 SMS" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
           </button>
         ))}
       </div>
@@ -1597,6 +1597,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "documents" && <Documents items={documents} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "notes" && <Notes items={notes} dealId={deal.id} userId={userId} userName={userName} reload={loadAll} />}
       {tab === "activity" && <Activity items={activity} />}
+      {tab === "sms" && <OutboundMessages dealId={deal.id} vendors={vendors} />}
     </div>
   );
 }
@@ -3125,6 +3126,166 @@ function Activity({ items }) {
         })}
       </div>
     </Card>
+  );
+}
+
+// ─── SMS Thread ──────────────────────────────────────────────────────
+function OutboundMessages({ dealId, vendors }) {
+  const [msgs, setMsgs] = useState([]);
+  const [phoneNumbers, setPhoneNumbers] = useState([]);
+  const [fromNumber, setFromNumber] = useState('');
+  const [to, setTo] = useState('');
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sendErr, setSendErr] = useState(null);
+  const threadRef = useRef(null);
+
+  const load = async () => {
+    const { data } = await sb.from('messages_outbound')
+      .select('*').eq('deal_id', dealId)
+      .order('created_at', { ascending: true }).limit(100);
+    setMsgs(data || []);
+  };
+
+  useEffect(() => {
+    load();
+    sb.from('phone_numbers').select('*').eq('active', true).order('created_at').then(({ data }) => {
+      const nums = data || [];
+      setPhoneNumbers(nums);
+      if (nums.length > 0 && !fromNumber) setFromNumber(nums[0].number);
+    });
+    const ch = sb.channel(`sms-${dealId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => sb.removeChannel(ch);
+  }, [dealId]);
+
+  useEffect(() => {
+    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
+  }, [msgs]);
+
+  const send = async () => {
+    if (!to.trim() || !body.trim() || sending) return;
+    setSending(true); setSendErr(null);
+    const optimistic = { id: 'opt-' + Date.now(), to_number: to.trim(), from_number: fromNumber || '…', body: body.trim(), status: 'queued', created_at: new Date().toISOString() };
+    setMsgs(prev => [...prev, optimistic]);
+    setBody('');
+    try {
+      const { data, error } = await sb.functions.invoke('send-sms', { body: { to: to.trim(), body: optimistic.body, deal_id: dealId, from_number: fromNumber || undefined } });
+      if (error) throw new Error(error.message);
+      if (data?.status === 'failed') throw new Error(data.error_message || 'Twilio error');
+    } catch (e) { setSendErr(e.message); }
+    setSending(false); load();
+  };
+
+  const handleKeyDown = e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send(); };
+  const phoneSuggestions = (vendors || []).filter(v => v.phone).map(v => ({ label: `${v.name} — ${v.phone}`, value: v.phone }));
+
+  const days = msgs.reduce((acc, m) => {
+    const day = new Date(m.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    if (!acc.length || acc[acc.length - 1].day !== day) acc.push({ day, items: [] });
+    acc[acc.length - 1].items.push(m);
+    return acc;
+  }, []);
+
+  const bubbleBg = s => s === 'failed' ? '#2d0a0a' : s === 'queued' ? '#292524' : '#92400e';
+  const statusIcon = s => s === 'sent' ? '✓' : s === 'failed' ? '✗' : '···';
+  const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: 580, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: phoneSuggestions.length > 0 ? 8 : 0 }}>
+          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#292524', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>💬</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {to || <span style={{ color: '#57534e', fontWeight: 400 }}>No recipient selected</span>}
+            </div>
+            <div style={{ fontSize: 10, color: '#57534e', marginTop: 1 }}>SMS · Twilio</div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
+            <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
+            {phoneNumbers.length === 0
+              ? <span style={{ fontSize: 11, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>No numbers configured</span>
+              : <select value={fromNumber} onChange={e => setFromNumber(e.target.value)}
+                  style={{ background: '#1c1917', border: '1px solid #44403c', color: '#d97706', borderRadius: 6, padding: '3px 8px', fontSize: 12, fontFamily: "'DM Mono', monospace", cursor: 'pointer', outline: 'none' }}>
+                  {phoneNumbers.map(p => <option key={p.id} value={p.number}>{p.label} · {p.number}</option>)}
+                </select>
+            }
+          </div>
+        </div>
+        {phoneSuggestions.length > 0 && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', paddingLeft: 44 }}>
+            <span style={{ fontSize: 10, color: '#57534e', alignSelf: 'center' }}>To:</span>
+            {phoneSuggestions.map(p => (
+              <button key={p.value} onClick={() => setTo(p.value)}
+                style={{ background: to === p.value ? '#44403c' : '#1c1917', border: '1px solid #44403c', color: to === p.value ? '#fafaf9' : '#a8a29e', padding: '2px 8px', borderRadius: 4, fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 0 }}>
+        {msgs.length === 0 && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13, gap: 6, paddingTop: 60 }}>
+            <div style={{ fontSize: 32 }}>💬</div>
+            <div>No messages yet</div>
+            <div style={{ fontSize: 11 }}>Type below and hit Send</div>
+          </div>
+        )}
+        {days.map(({ day, items }) => (
+          <div key={day}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '14px 0 10px' }}>
+              <div style={{ flex: 1, height: 1, background: '#1c1917' }} />
+              <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>{day}</span>
+              <div style={{ flex: 1, height: 1, background: '#1c1917' }} />
+            </div>
+            {items.map((m, i) => {
+              const time = new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+              const showMeta = i === items.length - 1 || items[i + 1]?.to_number !== m.to_number;
+              return (
+                <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
+                  <div style={{ maxWidth: '78%', background: bubbleBg(m.status), borderRadius: i === 0 ? '16px 16px 4px 16px' : showMeta ? '16px 4px 4px 16px' : '16px 4px 4px 16px', padding: '9px 13px' }}>
+                    <div style={{ fontSize: 14, color: '#fafaf9', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.body}</div>
+                  </div>
+                  {showMeta && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingRight: 2 }}>
+                      {m.to_number && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>→ {m.to_number}</span>}
+                      {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>· from {m.from_number}</span>}
+                      <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
+                    </div>
+                  )}
+                  {m.error_message && (
+                    <div style={{ fontSize: 11, color: '#ef4444', marginTop: 2, paddingRight: 2 }}>⚠ {m.error_message}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+      <div style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
+        {!to && (
+          <input value={to} onChange={e => setTo(e.target.value)} placeholder="+1 (555) 000-0000  ·  enter recipient number"
+            style={{ width: '100%', background: 'transparent', border: 'none', borderBottom: '1px solid #292524', color: '#fafaf9', padding: '4px 6px', fontSize: 12, fontFamily: "'DM Mono', monospace", marginBottom: 8, outline: 'none', boxSizing: 'border-box' }} />
+        )}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
+            placeholder="iMessage"
+            rows={2}
+            style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5 }}
+          />
+          <button onClick={send} disabled={!to.trim() || !body.trim() || sending}
+            style={{ width: 34, height: 34, borderRadius: '50%', background: (!to.trim() || !body.trim() || sending) ? '#292524' : '#d97706', border: 'none', color: '#fafaf9', fontSize: 17, cursor: (!to.trim() || !body.trim() || sending) ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
+            ↑
+          </button>
+        </div>
+        {sendErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 5, paddingLeft: 4 }}>⚠ {sendErr}</div>}
+        <div style={{ fontSize: 10, color: '#44403c', marginTop: 4, paddingLeft: 4 }}>⌘↵ to send</div>
+      </div>
+    </div>
   );
 }
 

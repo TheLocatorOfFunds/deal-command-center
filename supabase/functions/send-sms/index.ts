@@ -38,7 +38,7 @@ Deno.serve(async (req) => {
       })
     }
 
-    const { to, body, deal_id } = await req.json()
+    const { to, body, deal_id, from_number } = await req.json()
 
     if (!to || !body) {
       return new Response(JSON.stringify({ error: 'Missing required fields: to, body' }), {
@@ -47,12 +47,24 @@ Deno.serve(async (req) => {
       })
     }
 
+    // Resolve from_number: use client-supplied value if it's in phone_numbers, else fall back to env
+    let resolvedFrom = twilioFromNumber
+    if (from_number) {
+      const { data: phoneRow } = await sb
+        .from('phone_numbers')
+        .select('number')
+        .eq('number', from_number)
+        .eq('active', true)
+        .single()
+      if (phoneRow) resolvedFrom = phoneRow.number
+    }
+
     // Insert queued row immediately so UI can show it
     const { data: msgRow, error: insertError } = await sb
       .from('messages_outbound')
       .insert({
         to_number: to,
-        from_number: twilioFromNumber,
+        from_number: resolvedFrom,
         body,
         status: 'queued',
         sent_by: user.id,
@@ -76,7 +88,7 @@ Deno.serve(async (req) => {
         'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: new URLSearchParams({ To: to, From: twilioFromNumber, Body: body }).toString(),
+      body: new URLSearchParams({ To: to, From: resolvedFrom, Body: body }).toString(),
     })
 
     const twilioData = await twilioRes.json()
