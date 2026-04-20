@@ -1,0 +1,27 @@
+# Local strategy / working notes — NOT for the public DCC repo.
+# These live on Nathan's machine only. Refundlocators-specific docs
+# should move to the refundlocators-pipeline repo when they're ready
+# for real storage.
+
+# Refundlocators-specific (wrong brand boundary for DCC)
+REFUNDLOCATORS_*.md
+LAUREN_PROMPT*.md
+GRAND_SLAM_OFFER.md
+HANDOFF_FROM_DCC_TO_REFUNDLOCATORS.md
+
+# Internal meeting prep & briefings
+JUSTIN_KICKOFF.md
+JUSTIN_CRISTIAN_CALL_AGENDA.md
+OWNER_MEETING_BRIEFING.md
+
+# Internal infrastructure map (names + endpoints — keep local)
+INFRASTRUCTURE_MAP.md
+
+# Legacy custom-domain config (removed from live on 2026-04-20)
+CNAME
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp

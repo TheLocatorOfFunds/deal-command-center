@@ -32,7 +32,7 @@ Core tables, all in `public` schema:
 | `expenses` | Per-deal line items | `deal_id` FK, `category`, `amount`, `date`, `vendor`, `notes` |
 | `tasks` | Per-deal todos | `deal_id` FK, `title`, `done`, `assigned_to`, `due_date` |
 | `vendors` | Per-deal contractors/contacts (deal-scoped, different from `contacts`) | `deal_id` FK, `name`, `role`, `phone`, `email` |
-| `deal_notes` | Per-deal markdown | `deal_id` FK (unique), `body` |
+| `deal_notes` | Per-deal notes (many-per-deal) | `id` (uuid PK), `deal_id` FK, `title` (optional), `body`, `author_id`, `created_at`, `updated_at` |
 | `activity` | Audit log | `deal_id` FK, `user_id`, `action`, `created_at` |
 | `documents` | Per-deal file metadata | `deal_id` FK, `name`, `path`, `size`, `uploaded_by` — actual files in `deal-docs` storage bucket |
 | `client_access` | Links auth users to deals for the Client Portal | `user_id` (nullable until client signs up), `deal_id`, `email`, `enabled`, `last_seen_at`, `prefs` jsonb |

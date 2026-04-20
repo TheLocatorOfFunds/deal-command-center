@@ -1431,7 +1431,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   const [expenses, setExpenses] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [vendors, setVendors] = useState([]);
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState([]);
   const [activity, setActivity] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -1442,14 +1442,14 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       sb.from('expenses').select('*').eq('deal_id', deal.id).order('date', { ascending: false }),
       sb.from('tasks').select('*').eq('deal_id', deal.id).order('done').order('created_at'),
       sb.from('vendors').select('*').eq('deal_id', deal.id).order('created_at'),
-      sb.from('deal_notes').select('*').eq('deal_id', deal.id).maybeSingle(),
+      sb.from('deal_notes').select('*, profiles:author_id(name)').eq('deal_id', deal.id).order('updated_at', { ascending: false }),
       sb.from('activity').select('*, profiles(name)').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(60),
       sb.from('documents').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false }),
     ]);
     setExpenses(e.data || []);
     setTasks(t.data || []);
     setVendors(v.data || []);
-    setNotes(n.data?.content || `# ${deal.name}\n\n`);
+    setNotes(n.data || []);
     setActivity(a.data || []);
     setDocuments(d.data || []);
     setLoaded(true);
@@ -1595,7 +1595,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
       {tab === "documents" && <Documents items={documents} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
-      {tab === "notes" && <Notes value={notes} dealId={deal.id} userId={userId} setLocal={setNotes} />}
+      {tab === "notes" && <Notes items={notes} dealId={deal.id} userId={userId} userName={userName} reload={loadAll} />}
       {tab === "activity" && <Activity items={activity} />}
     </div>
   );
@@ -2969,26 +2969,135 @@ function Documents({ items, dealId, userId, logAct, reload }) {
   );
 }
 
-// ─── Notes Tab ───────────────────────────────────────────────────────
-function Notes({ value, dealId, userId, setLocal }) {
-  const debounce = useRef(null);
-  const [savedAt, setSavedAt] = useState(null);
+// ─── Notes Tab (multi-note per deal) ─────────────────────────────────
+function Notes({ items, dealId, userId, userName, reload }) {
+  // `editing` is one of: null (list only), 'new' (creating), or a row id (editing existing).
+  const [editing, setEditing] = useState(null);
+  const [title, setTitle]     = useState('');
+  const [body, setBody]       = useState('');
+  const [busy, setBusy]       = useState(false);
+  const [err, setErr]         = useState(null);
 
-  const handleChange = (e) => {
-    const v = e.target.value;
-    setLocal(v);
-    if (debounce.current) clearTimeout(debounce.current);
-    debounce.current = setTimeout(async () => {
-      await sb.from('deal_notes').upsert({ deal_id: dealId, content: v, updated_by: userId, updated_at: new Date().toISOString() });
-      setSavedAt(new Date());
-    }, 700);
+  const startNew = () => { setEditing('new'); setTitle(''); setBody(''); setErr(null); };
+  const startEdit = (note) => { setEditing(note.id); setTitle(note.title || ''); setBody(note.body || ''); setErr(null); };
+  const cancel = () => { setEditing(null); setTitle(''); setBody(''); setErr(null); };
+
+  const saveNote = async () => {
+    const hasContent = (title && title.trim()) || (body && body.trim());
+    if (!hasContent) return;
+    setBusy(true); setErr(null);
+    if (editing === 'new') {
+      const { error } = await sb.from('deal_notes').insert({
+        deal_id: dealId,
+        title: (title && title.trim()) || null,
+        body: body || '',
+        author_id: userId,
+      });
+      if (error) { setErr(error.message); setBusy(false); return; }
+    } else {
+      const { error } = await sb.from('deal_notes').update({
+        title: (title && title.trim()) || null,
+        body: body || '',
+      }).eq('id', editing);
+      if (error) { setErr(error.message); setBusy(false); return; }
+    }
+    setBusy(false);
+    cancel();
+    await reload();
   };
 
+  const deleteNote = async (note) => {
+    const label = note.title || (note.body ? note.body.split('\n')[0].slice(0, 40) : 'untitled');
+    if (!window.confirm(`Delete note "${label}"? This can't be undone.`)) return;
+    const { error } = await sb.from('deal_notes').delete().eq('id', note.id);
+    if (error) { setErr(error.message); return; }
+    await reload();
+  };
+
+  const relativeTime = (ts) => {
+    if (!ts) return '—';
+    const diff = Date.now() - new Date(ts).getTime();
+    const mins = Math.floor(diff / (1000 * 60));
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + 'h ago';
+    const days = Math.floor(hrs / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return days + 'd ago';
+    if (days < 30) return Math.floor(days / 7) + 'w ago';
+    return new Date(ts).toLocaleDateString();
+  };
+
+  const isEditing = editing !== null;
+
   return (
-    <Card title="Shared Notes">
-      <textarea value={value} onChange={handleChange} style={{ width: "100%", minHeight: 460, background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, color: "#fafaf9", padding: 14, fontSize: 13, fontFamily: "'DM Mono', monospace", lineHeight: 1.6, resize: "vertical" }} />
-      <div style={{ fontSize: 11, color: "#78716c", marginTop: 8 }}>Auto-saves to Supabase. Shared with all team members.{savedAt && ` · Last saved ${savedAt.toLocaleTimeString()}`}</div>
-    </Card>
+    <div>
+      {err && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, marginBottom: 12, fontSize: 12, background: "#7f1d1d", color: "#fecaca" }}>{err}</div>
+      )}
+
+      {!isEditing && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ fontSize: 12, color: "#78716c" }}>
+            {items.length === 0 ? "No notes yet" : items.length === 1 ? "1 note" : items.length + " notes"} · shared with the team
+          </div>
+          <button onClick={startNew} style={btnPrimary}>+ New note</button>
+        </div>
+      )}
+
+      {isEditing && (
+        <div style={{ marginBottom: 16, padding: 16, background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8 }}>
+          <Field label="Title (optional)">
+            <input value={title} onChange={e => setTitle(e.target.value)}
+              placeholder="e.g. Call with attorney 4/20, Strategy update, TODO list"
+              style={inputStyle} autoFocus={editing === 'new'} />
+          </Field>
+          <Field label="Note" style={{ marginTop: 12 }}>
+            <textarea value={body} onChange={e => setBody(e.target.value)} rows={12}
+              style={{ ...inputStyle, fontFamily: "'DM Mono', monospace", lineHeight: 1.6, resize: "vertical", fontSize: 13 }}
+              placeholder="Markdown-ish. Shared with all team members." />
+          </Field>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+            <button onClick={cancel} disabled={busy} style={btnGhost}>Cancel</button>
+            <button onClick={saveNote} disabled={busy || (!title.trim() && !body.trim())} style={btnPrimary}>
+              {busy ? 'Saving…' : (editing === 'new' ? 'Save new note' : 'Save changes')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {items.length === 0 && !isEditing && (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 40, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8 }}>
+          No notes on this deal yet. Click <b>+ New note</b> above to add the first one — one note per topic, as many as you want.
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {items.map(n => (
+            <div key={n.id} style={{ padding: "14px 16px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {n.title && <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>{n.title}</div>}
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "'DM Mono', monospace", fontSize: 12, color: "#d6d3d1", lineHeight: 1.55 }}>{n.body}</pre>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4, flexShrink: 0 }}>
+                  <button onClick={() => startEdit(n)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Edit</button>
+                  <button onClick={() => deleteNote(n)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px", color: "#ef4444", borderColor: "#7f1d1d" }}>Delete</button>
+                </div>
+              </div>
+              <div style={{ fontSize: 10, color: "#57534e", marginTop: 10, display: "flex", gap: 8, fontFamily: "'DM Mono', monospace", flexWrap: "wrap" }}>
+                <span>{n.profiles?.name || "—"}</span>
+                <span>·</span>
+                <span>{relativeTime(n.updated_at)}</span>
+                {n.updated_at !== n.created_at && <span style={{ opacity: 0.7 }}>(edited)</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

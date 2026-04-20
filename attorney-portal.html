@@ -504,7 +504,7 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
         sb.from('deals').select('*').eq('id', dealId).single(),
         sb.from('activity').select('*').eq('deal_id', dealId).order('created_at', { ascending: false }).limit(100),
         sb.from('documents').select('*').eq('deal_id', dealId).order('created_at', { ascending: false }),
-        sb.from('deal_notes').select('body').eq('deal_id', dealId).maybeSingle(),
+        sb.from('deal_notes').select('id, title, body, updated_at, created_at').eq('deal_id', dealId).order('updated_at', { ascending: false }),
       ]);
       if (dealRes.error || !dealRes.data) {
         setState({ loading: false, error: 'Case not found or not assigned to you.' });
@@ -515,7 +515,7 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
         deal: dealRes.data,
         activity: activityRes.data || [],
         documents: docsRes.data || [],
-        notes: notesRes.data?.body || null,
+        notes: notesRes.data || [],
       });
     } catch (e) {
       setState({ loading: false, error: e.message });
@@ -603,11 +603,21 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
         )}
       </div>
 
-      {/* Notes (read-only — admin maintains these) */}
-      {notes && (
+      {/* Notes (read-only — team maintains these) */}
+      {Array.isArray(notes) && notes.length > 0 && (
         <div className="card">
           <p className="card-title">Case Notes (from FundLocators team)</p>
-          <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, color: 'var(--text)', margin: 0 }}>{notes}</pre>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {notes.map(n => (
+              <div key={n.id} style={{ padding: '10px 12px', border: '1px solid var(--border, #e5e5e5)', borderRadius: 8, background: 'var(--bg-subtle, #fafafa)' }}>
+                {n.title && <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>{n.title}</div>}
+                <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 13, color: 'var(--text)', margin: 0 }}>{n.body}</pre>
+                <div style={{ fontSize: 10, color: 'var(--text-muted, #888)', marginTop: 8 }}>
+                  {n.updated_at ? fmtDate(n.updated_at) : ''}{n.updated_at !== n.created_at ? ' · edited' : ''}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
