@@ -303,6 +303,8 @@ function DealCommandCenter({ session, profile }) {
   const [showLeads, setShowLeads] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
+  const [unackDocketCount, setUnackDocketCount] = useState(0);
+  const [showDocket, setShowDocket] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
@@ -312,6 +314,11 @@ function DealCommandCenter({ session, profile }) {
   const loadLeadCount = async () => {
     const { count } = await sb.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new');
     setNewLeadCount(count || 0);
+  };
+
+  const loadDocketCount = async () => {
+    const { data } = await sb.rpc('docket_unacknowledged_count');
+    setUnackDocketCount(data || 0);
   };
 
   // Cmd+K / Ctrl+K → open search
@@ -340,7 +347,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); }, []);
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
@@ -348,6 +355,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, loadDeals)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -407,6 +415,9 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowLeads(true)} style={{ ...btnGhost, fontSize: 11, position: "relative" }}>
             Leads {newLeadCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{newLeadCount}</span>}
           </button>}
+          {isTeam && <button onClick={() => setShowDocket(true)} title="Docket events + scraper health" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: unackDocketCount > 0 ? "#78350f" : "#44403c", color: unackDocketCount > 0 ? "#fbbf24" : "#78716c" }}>
+            ⚖ Docket {unackDocketCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#f59e0b", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{unackDocketCount}</span>}
+          </button>}
           {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
@@ -417,6 +428,7 @@ function DealCommandCenter({ session, profile }) {
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
       {showLeads && <LeadsModal onClose={() => { setShowLeads(false); loadLeadCount(); }} userName={userName} onConverted={() => { loadDeals(); loadLeadCount(); }} />}
       {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
+      {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} onToggleFlag={(id) => {
@@ -1449,8 +1461,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
 
   const tabs = isAdmin
-    ? ["overview", "messages", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
-    : ["overview", "messages", "tasks", "vendors", "documents", "notes", "activity"];
+    ? ["overview", "messages", "docket", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
+    : ["overview", "messages", "docket", "tasks", "vendors", "documents", "notes", "activity"];
 
   return (
     <div>
@@ -1541,6 +1553,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} />
         : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} />)}
       {tab === "messages" && <MessagesTab dealId={deal.id} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
+      {tab === "docket" && <DocketTab dealId={deal.id} />}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
@@ -2437,6 +2450,287 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
         ⌘/Ctrl + Enter to send · Visible to everyone with portal access to this case (client claimants + assigned attorneys)
       </div>
     </Card>
+  );
+}
+
+// ─── Docket Tab ───────────────────────────────────────────────────
+// Timeline of court events ingested from Castle's docket scrapers.
+// Each event comes with type, date, description, and optionally a
+// document link. Team can acknowledge events to clear the badge.
+const EVENT_TYPE_META = {
+  disbursement_ordered: { label: "Disbursement Ordered", color: "#10b981", icon: "💰", priority: 3, client: true },
+  disbursement_paid:    { label: "Disbursement Paid",    color: "#10b981", icon: "✅", priority: 3, client: true },
+  hearing_scheduled:    { label: "Hearing Scheduled",    color: "#3b82f6", icon: "📅", priority: 2, client: true },
+  hearing_continued:    { label: "Hearing Continued",    color: "#f59e0b", icon: "📅", priority: 2, client: true },
+  judgment_entered:     { label: "Judgment Entered",     color: "#10b981", icon: "⚖",  priority: 2, client: true },
+  order_entered:        { label: "Order Entered",        color: "#8b5cf6", icon: "📜", priority: 2, client: false },
+  motion_filed:         { label: "Motion Filed",         color: "#8b5cf6", icon: "📝", priority: 1, client: false },
+  objection_filed:      { label: "Objection Filed",      color: "#ef4444", icon: "⚠",  priority: 3, client: false },
+  notice_of_claim:      { label: "Notice of Claim",      color: "#ef4444", icon: "👥", priority: 3, client: false },
+  continuance_granted:  { label: "Continuance Granted",  color: "#a8a29e", icon: "⏸",  priority: 1, client: false },
+  answer_filed:         { label: "Answer Filed",         color: "#a8a29e", icon: "📝", priority: 1, client: false },
+  docket_updated:       { label: "Docket Update",        color: "#78716c", icon: "•",  priority: 0, client: false },
+};
+const eventMeta = (t) => EVENT_TYPE_META[t] || { label: t, color: "#78716c", icon: "•", priority: 0, client: false };
+
+function DocketTab({ dealId }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('docket_events')
+      .select('*')
+      .eq('deal_id', dealId)
+      .order('event_date', { ascending: false })
+      .order('received_at', { ascending: false });
+    setEvents(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('docket-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  const acknowledge = async (eventId) => {
+    setBusy(eventId);
+    await sb.rpc('acknowledge_docket_event', { p_event_id: eventId });
+    await load();
+    setBusy(null);
+  };
+
+  const acknowledgeAll = async () => {
+    const unack = events.filter(e => !e.acknowledged_at);
+    if (unack.length === 0) return;
+    if (!confirm(`Acknowledge all ${unack.length} unacknowledged events?`)) return;
+    for (const e of unack) {
+      await sb.rpc('acknowledge_docket_event', { p_event_id: e.id });
+    }
+    await load();
+  };
+
+  const unackCount = events.filter(e => !e.acknowledged_at).length;
+
+  return (
+    <Card>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 12, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.08em", textTransform: "uppercase" }}>Docket Events</div>
+          <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>
+            {events.length === 0 ? "No events yet" : `${events.length} total event${events.length === 1 ? '' : 's'}`}
+            {unackCount > 0 && <> · <span style={{ color: "#f59e0b", fontWeight: 700 }}>{unackCount} unacknowledged</span></>}
+          </div>
+        </div>
+        {unackCount > 0 && (
+          <button onClick={acknowledgeAll} style={{ ...btnGhost, fontSize: 11 }}>Acknowledge all</button>
+        )}
+      </div>
+
+      {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
+
+      {!loading && events.length === 0 && (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8 }}>
+          No docket events yet. Once Castle's scrapers are watching this case, events will appear here as they happen.
+        </div>
+      )}
+
+      {!loading && events.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {events.map(e => {
+            const meta = eventMeta(e.event_type);
+            const isUnack = !e.acknowledged_at;
+            return (
+              <div key={e.id} style={{
+                padding: "14px 16px",
+                background: isUnack ? "#1c1509" : "#0c0a09",
+                border: "1px solid " + (isUnack ? meta.color : "#292524"),
+                borderLeft: `3px solid ${meta.color}`,
+                borderRadius: 8,
+                opacity: e.acknowledged_at ? 0.7 : 1,
+              }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <span style={{ fontSize: 16 }}>{meta.icon}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: "0.08em", textTransform: "uppercase", padding: "2px 8px", background: meta.color + "22", borderRadius: 3 }}>{meta.label}</span>
+                      <span style={{ fontSize: 11, color: "#78716c", fontFamily: "'DM Mono', monospace" }}>{e.event_date}</span>
+                      {isUnack && <span style={{ fontSize: 9, fontWeight: 700, color: "#fbbf24", padding: "2px 7px", border: "1px solid #78350f", borderRadius: 3, letterSpacing: "0.06em" }}>NEW</span>}
+                    </div>
+                    <div style={{ fontSize: 14, color: "#fafaf9", marginTop: 8, lineHeight: 1.5 }}>
+                      {e.description}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 6, display: "flex", gap: 12, flexWrap: "wrap" }}>
+                      {e.court_system && <span>{e.court_system}</span>}
+                      {e.case_number && <span>Case {e.case_number}</span>}
+                      {e.detected_at && <span>Detected {new Date(e.detected_at).toLocaleString()}</span>}
+                    </div>
+                    {e.document_url && (
+                      <div style={{ marginTop: 8 }}>
+                        <a href={e.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#93c5fd", textDecoration: "none", fontWeight: 600 }}>
+                          📄 View court document →
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                  {isUnack && (
+                    <button
+                      onClick={() => acknowledge(e.id)}
+                      disabled={busy === e.id}
+                      style={{ ...btnGhost, fontSize: 11, whiteSpace: "nowrap" }}
+                    >
+                      {busy === e.id ? '…' : 'Acknowledge'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ─── Docket Overview Modal (cross-deal) ──────────────────────────
+// Shows unacknowledged events across ALL deals + a scraper-health panel
+// so admin can spot broken counties at a glance.
+function DocketOverviewModal({ onClose, onJumpToDeal }) {
+  const [tab, setTab] = useState("events");
+  const [events, setEvents] = useState([]);
+  const [health, setHealth] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    const [eventsRes, healthRes] = await Promise.all([
+      sb.from('docket_events')
+        .select('*, deals(name, status)')
+        .is('acknowledged_at', null)
+        .order('event_date', { ascending: false })
+        .limit(100),
+      sb.from('scraper_health').select('*'),
+    ]);
+    setEvents(eventsRes.data || []);
+    setHealth(healthRes.data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const ack = async (eventId) => {
+    await sb.rpc('acknowledge_docket_event', { p_event_id: eventId });
+    await load();
+  };
+
+  const statusColor = (h) => {
+    if (h.last_status === 'running') return "#3b82f6";
+    if (h.failures_24h > 2) return "#ef4444";
+    if (h.last_status === 'failed') return "#f59e0b";
+    return "#10b981";
+  };
+
+  const timeAgo = (iso) => {
+    if (!iso) return "never";
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60) return s + "s ago";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    return Math.floor(s / 86400) + "d ago";
+  };
+
+  return (
+    <Modal onClose={onClose} title="⚖ Docket Center" wide>
+      <div style={{ display: "flex", gap: 2, borderBottom: "1px solid #292524", marginBottom: 16 }}>
+        <button onClick={() => setTab("events")} style={{
+          background: "transparent", border: "none", color: tab === "events" ? "#fafaf9" : "#78716c",
+          padding: "8px 14px", fontSize: 13, fontWeight: tab === "events" ? 700 : 500,
+          borderBottom: tab === "events" ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, cursor: "pointer", fontFamily: "inherit",
+        }}>
+          Unacknowledged {events.length > 0 ? `(${events.length})` : ''}
+        </button>
+        <button onClick={() => setTab("health")} style={{
+          background: "transparent", border: "none", color: tab === "health" ? "#fafaf9" : "#78716c",
+          padding: "8px 14px", fontSize: 13, fontWeight: tab === "health" ? 700 : 500,
+          borderBottom: tab === "health" ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, cursor: "pointer", fontFamily: "inherit",
+        }}>
+          Scraper Health
+        </button>
+      </div>
+
+      {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
+
+      {!loading && tab === "events" && (
+        events.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8 }}>
+            All docket events acknowledged. Great work.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {events.map(e => {
+              const meta = eventMeta(e.event_type);
+              return (
+                <div key={e.id} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderLeft: `3px solid ${meta.color}`, borderRadius: 6 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ flex: 1, minWidth: 220 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 14 }}>{meta.icon}</span>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: "0.08em", textTransform: "uppercase", padding: "2px 7px", background: meta.color + "22", borderRadius: 3 }}>{meta.label}</span>
+                        <span style={{ fontSize: 11, color: "#78716c" }}>{e.event_date}</span>
+                      </div>
+                      <div style={{ fontSize: 13, color: "#fafaf9", marginTop: 6, lineHeight: 1.4 }}>{e.description}</div>
+                      <div style={{ fontSize: 11, color: "#78716c", marginTop: 6 }}>
+                        <button onClick={() => onJumpToDeal(e.deal_id)} style={{ background: "transparent", border: "none", color: "#93c5fd", fontSize: 11, cursor: "pointer", padding: 0, fontWeight: 600, fontFamily: "inherit" }}>
+                          {e.deals?.name || e.deal_id} →
+                        </button>
+                        {e.county && <span> · {e.county}</span>}
+                        {e.case_number && <span> · Case {e.case_number}</span>}
+                      </div>
+                    </div>
+                    <button onClick={() => ack(e.id)} style={{ ...btnGhost, fontSize: 11, whiteSpace: "nowrap" }}>Acknowledge</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+
+      {!loading && tab === "health" && (
+        health.length === 0 ? (
+          <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8 }}>
+            No scraper runs recorded yet. Castle will start writing here once the first monitor run completes.
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {health.map(h => {
+              const color = statusColor(h);
+              return (
+                <div key={h.county} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderLeft: `3px solid ${color}`, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>{h.county}</div>
+                    <div style={{ fontSize: 11, color: "#78716c", marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                      <span>Last run: {timeAgo(h.last_run_started)}</span>
+                      <span>Last success: {timeAgo(h.last_success_at)}</span>
+                      <span>Events 24h: <b style={{ color: "#fafaf9" }}>{h.events_24h || 0}</b></span>
+                      <span>Events 7d: <b style={{ color: "#fafaf9" }}>{h.events_7d || 0}</b></span>
+                      {h.failures_24h > 0 && <span style={{ color: "#ef4444", fontWeight: 700 }}>{h.failures_24h} failures in 24h</span>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 4, background: color + "22", color, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                    {h.last_status}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )
+      )}
+    </Modal>
   );
 }
 

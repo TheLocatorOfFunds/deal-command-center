@@ -584,6 +584,9 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
       {/* Documents */}
       <DocumentsSection dealId={deal.id} documents={documents} onChange={reload} isPreview={isPreview} />
 
+      {/* Docket */}
+      <AttorneyDocketSection dealId={deal.id} />
+
       {/* Timeline */}
       <div className="card">
         <p className="card-title">Case Timeline</p>
@@ -729,6 +732,89 @@ function MessagesThread({ dealId, session, senderName, isPreview }) {
       <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6 }}>
         ⌘/Ctrl + Enter to send
       </div>
+    </div>
+  );
+}
+
+// ─── Docket Section (attorney) ────────────────────────
+// Shows every docket event on this case. RLS limits visibility to
+// the attorney's assigned cases only.
+const ATTORNEY_EVENT_META = {
+  disbursement_ordered: { label: "Disbursement Ordered", color: "#2d7a4f", icon: "💰" },
+  disbursement_paid:    { label: "Disbursement Paid",    color: "#2d7a4f", icon: "✅" },
+  hearing_scheduled:    { label: "Hearing Scheduled",    color: "#1e40af", icon: "📅" },
+  hearing_continued:    { label: "Hearing Continued",    color: "#a5731c", icon: "📅" },
+  judgment_entered:     { label: "Judgment Entered",     color: "#4338ca", icon: "⚖"  },
+  order_entered:        { label: "Order Entered",        color: "#4338ca", icon: "📜" },
+  motion_filed:         { label: "Motion Filed",         color: "#4338ca", icon: "📝" },
+  objection_filed:      { label: "Objection Filed",      color: "#a83232", icon: "⚠"  },
+  notice_of_claim:      { label: "Notice of Claim",      color: "#a83232", icon: "👥" },
+  continuance_granted:  { label: "Continuance Granted",  color: "#6b6b6b", icon: "⏸"  },
+  answer_filed:         { label: "Answer Filed",         color: "#6b6b6b", icon: "📝" },
+  docket_updated:       { label: "Docket Update",        color: "#6b6b6b", icon: "•"  },
+};
+
+function AttorneyDocketSection({ dealId }) {
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    const { data } = await sb.from('docket_events')
+      .select('*')
+      .eq('deal_id', dealId)
+      .order('event_date', { ascending: false })
+      .order('received_at', { ascending: false });
+    setEvents(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('atty-docket-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  if (loading) return null;
+
+  return (
+    <div className="card">
+      <p className="card-title">Docket ({events.length})</p>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        Every event on the court docket for this case, ingested automatically from the county scraper. Complements but doesn't replace your own filings.
+      </div>
+      {events.length === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>No docket events on file yet.</div>
+      ) : (
+        events.map(e => {
+          const meta = ATTORNEY_EVENT_META[e.event_type] || { label: e.event_type, color: '#6b6b6b', icon: '•' };
+          return (
+            <div key={e.id} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center', marginTop: 2 }}>{meta.icon}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', background: meta.color + '1a', borderRadius: 3 }}>{meta.label}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{e.event_date}</span>
+                  </div>
+                  <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>{e.description}</div>
+                  <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {e.court_system && <span>{e.court_system}</span>}
+                    {e.case_number && <span>Case {e.case_number}</span>}
+                  </div>
+                  {e.document_url && (
+                    <a href={e.document_url} target="_blank" rel="noreferrer" style={{ display: 'inline-block', fontSize: 12, color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600, marginTop: 8 }}>
+                      📄 View court document →
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
