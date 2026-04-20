@@ -36,7 +36,7 @@ Core tables, all in `public` schema:
 | `activity` | Audit log | `deal_id` FK, `user_id`, `action`, `created_at` |
 | `documents` | Per-deal file metadata | `deal_id` FK, `name`, `path`, `size`, `uploaded_by` — actual files in `deal-docs` storage bucket |
 | `client_access` | Links auth users to deals for the Client Portal | `user_id` (nullable until client signs up), `deal_id`, `email`, `enabled`, `last_seen_at`, `prefs` jsonb |
-| `attorney_assignments` | Links auth users to deals for Attorney scoped access | same shape as `client_access` |
+| `attorney_assignments` | Auth-scoping table the attorney portal reads. **Auto-synced from `contact_deals`** — when a `contacts.kind='attorney'` row is linked to a deal, a trigger creates/updates the matching `attorney_assignments` row. Nathan edits `contacts` in DCC; access-control stays in lockstep. | same shape as `client_access` |
 | `messages` | Two-way threads team ↔ client ↔ attorney per deal | `deal_id` FK, `sender_role`, `sender_id`, `body`, `created_at` |
 | `leads` | Public intake form submissions | `id`, `name`, `email`, `status`, `metadata` jsonb (UTM + dup detection) |
 | `docket_events` | Matched docket events from Castle | `deal_id` FK, `external_id`, `event_type`, unique(deal_id, external_id) |
@@ -131,6 +131,7 @@ Nothing to do in the dashboard — just share the URL. First sign-in auto-create
 - **The `activity` table is write-heavy.** Every edit logs. If you add a bulk-edit feature, batch the inserts.
 - **`vendors` is per-deal, `contacts` is company-wide.** Don't conflate them. A contractor who does one flip goes in `vendors`. A partner attorney who touches multiple cases goes in `contacts` and gets linked via `contact_deals`.
 - **`contacts.financial_notes` is a column, not jsonb.** UI hides it for VAs, but RLS allows VA reads (same trust-based pattern as `deals.meta` financial fields). If you ever need tighter enforcement, use a column-level privilege or a VIEW.
+- **Attorney portal access flows contacts → attorney_assignments via trigger.** `tg_sync_attorney_assignments_from_contact_deal` fires on `contact_deals` insert/update/delete and keeps `attorney_assignments` aligned whenever an attorney-kind contact is linked to (or unlinked from) a deal. Matching `tg_sync_*_on_contact_update` and `_on_contact_delete` triggers handle edits to the contact row itself. Do NOT manually insert into `attorney_assignments` alongside `contact_deals` — let the trigger do the work, or you'll end up with double rows.
 
 ## Team
 

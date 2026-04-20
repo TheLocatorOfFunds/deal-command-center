@@ -210,6 +210,19 @@ const daysSince = (s) => {
   return Math.floor((Date.now() - d.getTime()) / 86400000);
 };
 const statusLabel = (s) => (s || "").replace(/-/g, ' ').toUpperCase();
+// Traffic-light staleness classifier for "days since last update"
+const staleClass = (days) => {
+  if (days == null) return 'muted';
+  if (days < 3) return 'fresh';
+  if (days < 7) return 'warn';
+  return 'danger';
+};
+const staleColor = (cls) => ({
+  fresh:  'var(--green)',
+  warn:   '#a5731c',
+  danger: 'var(--red)',
+  muted:  'var(--text-muted)',
+}[cls] || 'var(--text-muted)');
 
 // Hash-based routing
 function useRoute() {
@@ -274,7 +287,7 @@ function SignIn() {
             <div className="success-check">✓</div>
             <h1 className="serif">Check your email</h1>
             <p className="lead">We sent a secure sign-in link to <b>{email}</b>.</p>
-            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email, check your spam folder or contact Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.</p>
+            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email, check your spam folder or contact Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.</p>
           </div>
         ) : (
           <div>
@@ -291,7 +304,7 @@ function SignIn() {
             </button>
             {error && <div className="error">{error}</div>}
             <p className="fineprint">
-              Access is by invitation only. Use the email address Nathan provided when setting up your case assignment. If you believe you should have access but can't sign in, call <a href="tel:+15135162306">(513) 516-2306</a>.
+              Access is by invitation only. Use the email address Nathan provided when setting up your case assignment. If you believe you should have access but can't sign in, call <a href="tel:+15139518855">(513) 951-8855</a>.
             </p>
           </div>
         )}
@@ -331,7 +344,7 @@ function Authenticated({ session }) {
           <p className="fineprint">
             If you're a client, please use <a href="portal.html">the client portal</a> instead.<br/><br/>
             If you're a team member, go to <a href="/deal-command-center/">DCC</a>.<br/><br/>
-            If you believe this is an error, call Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
+            If you believe this is an error, call Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.
           </p>
           <button className="btn-full" onClick={() => sb.auth.signOut()} style={{ marginTop: 20 }}>
             Sign out
@@ -397,42 +410,114 @@ function Portal({ session, profile, isPreview }) {
   );
 }
 
-// ─── Inbox: list of assigned cases ────────────────────
+// ─── Inbox: dashboard of assigned cases ────────────────
+// Loads assigned deals + recent activity / docket / messages to compute
+// per-case "last update" (color-coded) and live docket badges. Also shows
+// a combined Recent Docket Activity feed across every case at the bottom.
 function Inbox({ isPreview }) {
   const [cases, setCases] = useState(null);
+  const [recentDocket, setRecentDocket] = useState([]);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    (async () => {
-      // Admin preview: show every deal so we can tour the counsel view
+  const load = async () => {
+    let deals = [];
+    let seenMap = {};
+    try {
       if (isPreview) {
-        const { data: deals, error: dErr } = await sb
-          .from('deals')
-          .select('*')
-          .order('updated_at', { ascending: false });
-        if (dErr) { setError(dErr.message); return; }
-        setCases(deals || []);
-        return;
+        const { data, error } = await sb.from('deals').select('*').order('updated_at', { ascending: false });
+        if (error) throw error;
+        deals = data || [];
+      } else {
+        const { data: u } = await sb.auth.getUser();
+        if (!u?.user) { setError('Not signed in'); return; }
+        const { data: a, error: aErr } = await sb
+          .from('attorney_assignments')
+          .select('deal_id, last_seen_at')
+          .eq('user_id', u.user.id)
+          .eq('enabled', true);
+        if (aErr) throw aErr;
+        if (!a || a.length === 0) { setCases([]); setRecentDocket([]); return; }
+        seenMap = Object.fromEntries(a.map(x => [x.deal_id, x.last_seen_at]));
+        const ids = a.map(x => x.deal_id);
+        const { data: d, error: dErr } = await sb.from('deals').select('*').in('id', ids);
+        if (dErr) throw dErr;
+        deals = d || [];
       }
 
-      // 1. Get assigned deal ids
-      const { data: assignments, error: aErr } = await sb
-        .from('attorney_assignments')
-        .select('deal_id, last_seen_at')
-        .eq('user_id', (await sb.auth.getUser()).data.user.id)
-        .eq('enabled', true);
-      if (aErr) { setError(aErr.message); return; }
-      if (!assignments || assignments.length === 0) { setCases([]); return; }
+      const ids = deals.map(d => d.id);
+      if (ids.length === 0) { setCases([]); setRecentDocket([]); return; }
 
-      const ids = assignments.map(a => a.deal_id);
-      const { data: deals, error: dErr } = await sb
-        .from('deals')
-        .select('*')
-        .in('id', ids)
-        .order('updated_at', { ascending: false });
-      if (dErr) { setError(dErr.message); return; }
-      setCases(deals || []);
-    })();
+      const since30 = new Date(Date.now() - 30 * 86400000).toISOString();
+      const [actRes, dockRes, msgRes] = await Promise.all([
+        sb.from('activity').select('deal_id, created_at').in('deal_id', ids).gte('created_at', since30),
+        sb.from('docket_events').select('*').in('deal_id', ids).order('event_date', { ascending: false }).limit(200),
+        sb.from('messages').select('deal_id, created_at').in('deal_id', ids).gte('created_at', since30),
+      ]);
+
+      // Per-deal aggregates: latest timestamp + docket counts
+      const byDeal = {};
+      for (const d of deals) {
+        byDeal[d.id] = {
+          deal: d,
+          last: d.updated_at ? new Date(d.updated_at) : new Date(0),
+          docket7d: 0,
+          docketUnread: 0,
+        };
+      }
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);
+
+      for (const row of (actRes.data || [])) {
+        const b = byDeal[row.deal_id]; if (!b) continue;
+        const t = new Date(row.created_at);
+        if (t > b.last) b.last = t;
+      }
+      for (const row of (msgRes.data || [])) {
+        const b = byDeal[row.deal_id]; if (!b) continue;
+        const t = new Date(row.created_at);
+        if (t > b.last) b.last = t;
+      }
+      for (const ev of (dockRes.data || [])) {
+        const b = byDeal[ev.deal_id]; if (!b) continue;
+        const evDate = new Date(ev.event_date || ev.created_at);
+        if (evDate > b.last) b.last = evDate;
+        if (evDate > sevenDaysAgo) b.docket7d++;
+        const lastSeen = seenMap[ev.deal_id] ? new Date(seenMap[ev.deal_id]) : null;
+        if (lastSeen && ev.created_at && new Date(ev.created_at) > lastSeen) b.docketUnread++;
+      }
+
+      const enriched = Object.values(byDeal).map(b => ({
+        ...b.deal,
+        _lastActivity: b.last.getTime() > 0 ? b.last.toISOString() : null,
+        _docket7d: b.docket7d,
+        _docketUnread: b.docketUnread,
+      })).sort((a, b) => new Date(b._lastActivity || 0) - new Date(a._lastActivity || 0));
+
+      setCases(enriched);
+
+      // Combined recent docket feed — latest 15 events across all cases
+      const feed = (dockRes.data || []).slice(0, 15).map(ev => ({
+        ...ev,
+        _dealName: byDeal[ev.deal_id]?.deal?.name || ev.deal_id,
+      }));
+      setRecentDocket(feed);
+    } catch (e) {
+      setError(e.message || String(e));
+    }
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [isPreview]);
+
+  // Live updates: refresh the whole inbox if anything relevant to these
+  // cases changes on the server. Cheap because the refresh only hits
+  // ~4 queries and typically <20 cases.
+  useEffect(() => {
+    const ch = sb.channel('attorney-inbox-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
   }, [isPreview]);
 
   if (error) return <div className="error">{error}</div>;
@@ -440,6 +525,12 @@ function Inbox({ isPreview }) {
 
   const active = cases.filter(c => !['closed', 'recovered', 'dead'].includes(c.status));
   const closed = cases.filter(c => ['closed', 'recovered', 'dead'].includes(c.status));
+  const totalDocket7d = cases.reduce((s, c) => s + (c._docket7d || 0), 0);
+  const totalDocketUnread = cases.reduce((s, c) => s + (c._docketUnread || 0), 0);
+  const staleCount = active.filter(c => {
+    const d = c._lastActivity ? daysSince(c._lastActivity) : 999;
+    return d != null && d >= 7;
+  }).length;
 
   return (
     <div>
@@ -447,32 +538,100 @@ function Inbox({ isPreview }) {
       <div className="page-sub">
         {cases.length === 0
           ? "You have no active case assignments yet."
-          : `${active.length} active · ${closed.length} closed`}
+          : (
+            <>
+              {active.length} active · {closed.length} closed
+              {totalDocketUnread > 0 && <> · <b style={{ color: 'var(--green)' }}>{totalDocketUnread} new docket since your last visit</b></>}
+            </>
+          )
+        }
       </div>
 
       {cases.length === 0 ? (
         <div className="card empty">
-          You haven't been assigned to any FundLocators cases yet. When Nathan retains you, this page will show every case you're working on — with filings, documents, and status updates.
+          You haven't been assigned to any FundLocators cases yet. When Nathan retains you, this page will show every case you're working on — with filings, documents, and live docket updates.
         </div>
       ) : (
         <>
-          {active.length > 0 && active.map(d => <CaseRow key={d.id} deal={d} />)}
+          {/* Summary strip */}
+          <div className="stat-grid" style={{ marginBottom: 22 }}>
+            <div className="stat">
+              <div className="stat-label">Active cases</div>
+              <div className="stat-value">{active.length}</div>
+            </div>
+            <div className="stat" style={{ background: totalDocket7d > 0 ? 'var(--green-soft)' : undefined, borderColor: totalDocket7d > 0 ? '#c3e6d1' : undefined }}>
+              <div className="stat-label">Docket · last 7d</div>
+              <div className="stat-value" style={{ color: totalDocket7d > 0 ? 'var(--green)' : undefined }}>{totalDocket7d}</div>
+            </div>
+            <div className="stat" style={{ background: staleCount > 0 ? '#fef3c7' : undefined, borderColor: staleCount > 0 ? '#fcd34d' : undefined }}>
+              <div className="stat-label">Stale · ≥7d</div>
+              <div className="stat-value" style={{ color: staleCount > 0 ? '#a5731c' : undefined }}>{staleCount}</div>
+            </div>
+            <div className="stat">
+              <div className="stat-label">Closed</div>
+              <div className="stat-value">{closed.length}</div>
+            </div>
+          </div>
+
+          {active.length > 0 && active.map(d => <CaseCard key={d.id} deal={d} />)}
+
           {closed.length > 0 && (
             <>
               <div style={{ margin: '24px 0 12px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Closed cases</div>
-              {closed.map(d => <CaseRow key={d.id} deal={d} />)}
+              {closed.map(d => <CaseCard key={d.id} deal={d} closed />)}
             </>
           )}
         </>
+      )}
+
+      {/* Combined recent docket activity across all cases */}
+      {recentDocket.length > 0 && (
+        <div className="card" style={{ marginTop: 28 }}>
+          <p className="card-title">Recent docket activity · all your cases</p>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+            Live feed of every docket event across every case we've retained you on — newest first. Click any entry to jump to that case.
+          </div>
+          {recentDocket.map(ev => {
+            const meta = ATTORNEY_EVENT_META[ev.event_type] || { label: ev.event_type, color: '#6b6b6b', icon: '•' };
+            return (
+              <div
+                key={ev.id}
+                style={{ padding: '14px 0', borderBottom: '1px solid var(--border)', cursor: 'pointer' }}
+                onClick={() => navigate('#/case/' + encodeURIComponent(ev.deal_id))}
+              >
+                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ fontSize: 18, width: 24, textAlign: 'center', flexShrink: 0, marginTop: 2 }}>{meta.icon}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', background: meta.color + '1a', borderRadius: 3 }}>{meta.label}</span>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{ev.event_date}</span>
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{ev.description}</div>
+                    <div style={{ fontSize: 11, color: 'var(--navy-mid)', marginTop: 6, fontWeight: 600 }}>{ev._dealName} →</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
 }
 
-function CaseRow({ deal }) {
+// Per-case card with status + color-coded "days since last update" + live docket badges.
+function CaseCard({ deal, closed }) {
   const m = deal.meta || {};
   const filedAt = m.filed_at || deal.filed_at;
   const statusCls = "b-" + (deal.status || "default");
+  const days = deal._lastActivity ? daysSince(deal._lastActivity) : null;
+  const cls = closed ? 'muted' : staleClass(days);
+  const daysColor = staleColor(cls);
+  const daysText = days == null
+    ? '—'
+    : days === 0 ? 'Updated today'
+    : days === 1 ? 'Updated 1d ago'
+    : `Updated ${days}d ago`;
   return (
     <div className="case-row" onClick={() => navigate('#/case/' + encodeURIComponent(deal.id))}>
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -484,10 +643,18 @@ function CaseRow({ deal }) {
         <div className="case-badges">
           <span className={"badge " + statusCls}>{statusLabel(deal.status)}</span>
           {filedAt && <span className="badge b-muted">Filed {fmtDate(filedAt)}</span>}
+          {deal._docketUnread > 0 && (
+            <span className="badge" style={{ background: '#d1fae5', color: '#065f46' }}>
+              {deal._docketUnread} new docket
+            </span>
+          )}
+          {deal._docket7d > 0 && !deal._docketUnread && (
+            <span className="badge b-muted">{deal._docket7d} docket · 7d</span>
+          )}
         </div>
       </div>
-      <div className="case-right">
-        {deal.updated_at && <>Updated {daysSince(deal.updated_at)}d ago</>}
+      <div className="case-right" style={{ color: daysColor, fontWeight: 600 }}>
+        {daysText}
       </div>
     </div>
   );
@@ -904,7 +1071,7 @@ function DocumentsSection({ dealId, documents, onChange, isPreview }) {
   const open = async (doc) => {
     const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 600);
     if (error || !data?.signedUrl) {
-      alert('Could not open document. Call Nathan at (513) 516-2306.');
+      alert('Could not open document. Call Nathan at (513) 951-8855.');
       return;
     }
     window.open(data.signedUrl, '_blank');
