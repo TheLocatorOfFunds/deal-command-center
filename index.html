@@ -305,6 +305,7 @@ function DealCommandCenter({ session, profile }) {
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [showDocket, setShowDocket] = useState(false);
+  const [showContacts, setShowContacts] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
@@ -433,6 +434,7 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowDocket(true)} title="Docket events + scraper health" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: unackDocketCount > 0 ? "#78350f" : "#44403c", color: unackDocketCount > 0 ? "#fbbf24" : "#78716c" }}>
             ⚖ Docket {unackDocketCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#f59e0b", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{unackDocketCount}</span>}
           </button>}
+          {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
@@ -444,6 +446,7 @@ function DealCommandCenter({ session, profile }) {
       {showLeads && <LeadsModal onClose={() => { setShowLeads(false); loadLeadCount(); }} userName={userName} onConverted={() => { loadDeals(); loadLeadCount(); }} />}
       {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
       {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
+      {showContacts && <ContactsModal onClose={() => setShowContacts(false)} isAdmin={isAdmin} userId={session.user.id} deals={deals} onJumpToDeal={(id) => { setActiveDealId(id); setShowContacts(false); }} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} onToggleFlag={(id) => {
@@ -1494,8 +1497,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   if (!loaded) return <div style={{ textAlign: "center", padding: 60, color: "#78716c" }}>Loading deal data...</div>;
 
   const tabs = isAdmin
-    ? ["overview", "messages", "docket", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
-    : ["overview", "messages", "docket", "tasks", "vendors", "documents", "notes", "activity"];
+    ? ["overview", "messages", "docket", "contacts", "expenses", "tasks", "vendors", "documents", "notes", "activity"]
+    : ["overview", "messages", "docket", "contacts", "tasks", "vendors", "documents", "notes", "activity"];
 
   return (
     <div>
@@ -1587,6 +1590,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} />)}
       {tab === "messages" && <MessagesTab dealId={deal.id} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
       {tab === "docket" && <DocketTab dealId={deal.id} />}
+      {tab === "contacts" && <ContactsTab dealId={deal.id} userId={userId} isAdmin={isAdmin} />}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
@@ -3558,6 +3562,492 @@ function ActivityLogModal({ onClose, onJumpToDeal }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Contacts / CRM (Phase 2) ────────────────────────────────────────
+const CONTACT_KINDS = [
+  { key: 'attorney',        label: 'Attorney',   icon: '⚖' },
+  { key: 'title_company',   label: 'Title Co.',  icon: '🏢' },
+  { key: 'investor',        label: 'Investor',   icon: '💵' },
+  { key: 'referral_source', label: 'Referral',   icon: '🤝' },
+  { key: 'partner',         label: 'Partner',    icon: '🧭' },
+  { key: 'vendor',          label: 'Vendor',     icon: '🔧' },
+  { key: 'competitor',      label: 'Competitor', icon: '🎯' },
+  { key: 'press',           label: 'Press',      icon: '📰' },
+  { key: 'other',           label: 'Other',      icon: '👤' },
+];
+const kindMeta = (k) => CONTACT_KINDS.find(x => x.key === k) || CONTACT_KINDS[CONTACT_KINDS.length - 1];
+const kindLabel = (k) => kindMeta(k).label;
+const kindIcon  = (k) => kindMeta(k).icon;
+
+function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
+  const [contacts, setContacts]   = useState([]);
+  const [loading, setLoading]     = useState(true);
+  const [searchQ, setSearchQ]     = useState('');
+  const [kindFilter, setKindFilter] = useState('all');
+  const [mode, setMode]           = useState('list');   // 'list' | 'edit'
+  const [editing, setEditing]     = useState(null);
+  const [busy, setBusy]           = useState(false);
+  const [msg, setMsg]             = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('contacts').select('*').order('name');
+    setContacts(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  // Realtime so parallel admin edits sync
+  useEffect(() => {
+    const ch = sb.channel('contacts-modal-ch')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'contacts' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const filtered = contacts.filter(c => {
+    if (kindFilter !== 'all' && c.kind !== kindFilter) return false;
+    if (!searchQ) return true;
+    const q = searchQ.toLowerCase();
+    return (c.name || '').toLowerCase().includes(q)
+        || (c.company || '').toLowerCase().includes(q)
+        || (c.email || '').toLowerCase().includes(q)
+        || (c.phone || '').toLowerCase().includes(q)
+        || (c.tags || []).some(t => (t || '').toLowerCase().includes(q));
+  });
+
+  const openNew = () => {
+    setEditing({ id: null, name: '', company: '', email: '', phone: '', kind: 'other', tags: [], notes: '', financial_notes: '' });
+    setMode('edit');
+  };
+  const openEdit = (c) => {
+    setEditing({ ...c, tags: c.tags || [] });
+    setMode('edit');
+  };
+
+  const saveContact = async (c) => {
+    setBusy(true); setMsg(null);
+    const patch = {
+      name: c.name, company: c.company || null, email: c.email || null, phone: c.phone || null,
+      kind: c.kind || 'other', tags: c.tags || [], notes: c.notes || null,
+    };
+    if (isAdmin) patch.financial_notes = c.financial_notes || null;
+    if (c.id) {
+      const { error } = await sb.from('contacts').update(patch).eq('id', c.id);
+      if (error) setMsg({ type: 'error', text: error.message });
+      else setMsg({ type: 'success', text: 'Saved' });
+    } else {
+      patch.owner_id = userId;
+      const { data, error } = await sb.from('contacts').insert(patch).select().single();
+      if (error) setMsg({ type: 'error', text: error.message });
+      else { setEditing({ ...data, tags: data.tags || [] }); setMsg({ type: 'success', text: 'Contact created — now link them to deals below' }); }
+    }
+    await load();
+    setBusy(false);
+  };
+
+  const deleteContact = async (c) => {
+    if (!window.confirm(`Delete ${c.name}? This also removes all deal links.`)) return;
+    setBusy(true); setMsg(null);
+    const { error } = await sb.from('contacts').delete().eq('id', c.id);
+    if (error) setMsg({ type: 'error', text: error.message });
+    else { setMsg({ type: 'success', text: 'Deleted' }); setMode('list'); setEditing(null); }
+    await load();
+    setBusy(false);
+  };
+
+  return (
+    <Modal onClose={onClose} title={mode === 'edit' ? (editing?.id ? 'Edit Contact' : 'New Contact') : 'Contacts · CRM'} wide>
+      {msg && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, marginBottom: 14, fontSize: 12,
+          background: msg.type === 'error' ? "#7f1d1d" : "#14532d",
+          color: msg.type === 'error' ? "#fecaca" : "#bbf7d0" }}>{msg.text}</div>
+      )}
+
+      {mode === 'list' && (
+        <>
+          <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+            <input value={searchQ} onChange={e => setSearchQ(e.target.value)}
+              placeholder="Search name, company, email, tag…"
+              style={{ ...inputStyle, maxWidth: 320, flex: 1, minWidth: 200 }} />
+            <select value={kindFilter} onChange={e => setKindFilter(e.target.value)}
+              style={{ ...selectStyle, minWidth: 150 }}>
+              <option value="all">All types ({contacts.length})</option>
+              {CONTACT_KINDS.map(k => {
+                const n = contacts.filter(c => c.kind === k.key).length;
+                return <option key={k.key} value={k.key}>{k.icon} {k.label} ({n})</option>;
+              })}
+            </select>
+            <button onClick={openNew} style={{ ...btnPrimary, marginLeft: "auto" }}>+ New Contact</button>
+          </div>
+
+          {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
+          {!loading && filtered.length === 0 && (
+            <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8 }}>
+              {contacts.length === 0
+                ? "No contacts yet. Click + New Contact to add your first one — partner attorneys, title companies, investors, referral sources, anyone you'd otherwise track in a spreadsheet."
+                : "No contacts match those filters."}
+            </div>
+          )}
+          {!loading && filtered.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {filtered.map(c => (
+                <div key={c.id} onClick={() => openEdit(c)} style={{
+                  padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524",
+                  borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 12,
+                }}>
+                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(c.kind)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>
+                      {c.name}
+                      {c.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {c.company}</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+                      {c.email || '—'}{c.phone && ` · ${c.phone}`}
+                    </div>
+                    {(c.tags || []).length > 0 && (
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        {c.tags.map(t => <span key={t} style={{ padding: "1px 7px", border: "1px solid #292524", borderRadius: 3 }}>{t}</span>)}
+                      </div>
+                    )}
+                  </div>
+                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(c.kind)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {mode === 'edit' && editing && (
+        <ContactEditor
+          contact={editing}
+          isAdmin={isAdmin}
+          userId={userId}
+          deals={deals}
+          busy={busy}
+          onJumpToDeal={onJumpToDeal}
+          onChange={(patch) => setEditing(prev => ({ ...prev, ...patch }))}
+          onSave={(updated) => saveContact(updated)}
+          onDelete={() => deleteContact(editing)}
+          onBack={() => { setMode('list'); setEditing(null); setMsg(null); }}
+        />
+      )}
+    </Modal>
+  );
+}
+
+function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave, onDelete, onBack, onJumpToDeal }) {
+  const [tagsInput, setTagsInput] = useState((contact.tags || []).join(', '));
+  const [links, setLinks]         = useState([]);
+  const [linkLoading, setLinkLoading] = useState(false);
+  const [linkPicker, setLinkPicker]   = useState('');
+  const [relPicker, setRelPicker]     = useState('');
+
+  const loadLinks = async () => {
+    if (!contact.id) { setLinks([]); return; }
+    setLinkLoading(true);
+    const { data } = await sb.from('contact_deals')
+      .select('id, relationship, deal_id, created_at, deals(id, name, type, status)')
+      .eq('contact_id', contact.id)
+      .order('created_at', { ascending: false });
+    setLinks(data || []);
+    setLinkLoading(false);
+  };
+
+  useEffect(() => { loadLinks(); }, [contact.id]);
+
+  const addLink = async () => {
+    if (!linkPicker || !contact.id) return;
+    await sb.from('contact_deals').insert({
+      contact_id: contact.id, deal_id: linkPicker,
+      relationship: relPicker || null, created_by: userId,
+    });
+    setLinkPicker(''); setRelPicker('');
+    await loadLinks();
+  };
+
+  const removeLink = async (id) => {
+    if (!window.confirm("Unlink this deal from this contact?")) return;
+    await sb.from('contact_deals').delete().eq('id', id);
+    await loadLinks();
+  };
+
+  const handleSave = () => {
+    const finalTags = tagsInput.split(',').map(s => s.trim()).filter(Boolean);
+    onSave({ ...contact, tags: finalTags });
+  };
+
+  const unlinkedDeals = (deals || []).filter(d => !links.some(l => l.deal_id === d.id));
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ ...btnGhost, fontSize: 11 }}>← Back</button>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {contact.id && <button onClick={onDelete} disabled={busy} style={{ ...btnGhost, color: "#ef4444", borderColor: "#7f1d1d", fontSize: 11 }}>Delete</button>}
+          <button onClick={handleSave} disabled={busy || !contact.name} style={btnPrimary}>{busy ? 'Saving…' : (contact.id ? 'Save' : 'Create contact')}</button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <Field label="Name *"><input value={contact.name || ''} onChange={e => onChange({ name: e.target.value })} style={inputStyle} placeholder="Full name" /></Field>
+        <Field label="Company"><input value={contact.company || ''} onChange={e => onChange({ company: e.target.value })} style={inputStyle} /></Field>
+        <Field label="Email"><input type="email" value={contact.email || ''} onChange={e => onChange({ email: e.target.value })} style={inputStyle} /></Field>
+        <Field label="Phone"><input value={contact.phone || ''} onChange={e => onChange({ phone: e.target.value })} style={inputStyle} /></Field>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginTop: 12 }}>
+        <Field label="Type">
+          <select value={contact.kind || 'other'} onChange={e => onChange({ kind: e.target.value })} style={{ ...inputStyle, padding: "8px 10px" }}>
+            {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Tags (comma-separated)">
+          <input value={tagsInput} onChange={e => setTagsInput(e.target.value)}
+            placeholder="e.g. ohio, franklin-county, defender-referral"
+            style={inputStyle} />
+        </Field>
+      </div>
+
+      <Field label="Notes" style={{ marginTop: 12 }}>
+        <textarea value={contact.notes || ''} onChange={e => onChange({ notes: e.target.value })}
+          rows={4} placeholder="How we met, strengths, anything the team should know…"
+          style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }} />
+      </Field>
+
+      {isAdmin && (
+        <Field label="💰 Financial notes (admin-only — commercial terms, splits, referral fees)" style={{ marginTop: 12 }}>
+          <textarea value={contact.financial_notes || ''} onChange={e => onChange({ financial_notes: e.target.value })}
+            rows={3} placeholder="e.g. 70/30 on flips, $2k/referral, paid Q1 2026…"
+            style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical", borderColor: "#78350f", background: "#1f1408" }} />
+        </Field>
+      )}
+
+      {contact.id && (
+        <div style={{ marginTop: 20, paddingTop: 20, borderTop: "1px solid #292524" }}>
+          <div style={{ fontSize: 11, color: "#78716c", fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
+            Linked deals ({links.length})
+          </div>
+
+          {linkLoading ? (
+            <div style={{ fontSize: 12, color: "#78716c" }}>Loading links…</div>
+          ) : links.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic", marginBottom: 10 }}>
+              Not linked to any deal yet.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+              {links.map(l => (
+                <div key={l.id} style={{ padding: "8px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0, cursor: onJumpToDeal ? "pointer" : "default" }} onClick={() => onJumpToDeal && onJumpToDeal(l.deal_id)}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>
+                      {l.deals?.name || l.deal_id}
+                      {onJumpToDeal && <span style={{ marginLeft: 6, fontSize: 10, color: "#78716c" }}>→</span>}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#78716c" }}>
+                      {l.deals?.type} · {(l.deals?.status || '').replace(/-/g, ' ')}
+                      {l.relationship && <> · {l.relationship}</>}
+                    </div>
+                  </div>
+                  <button onClick={() => removeLink(l.id)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Unlink</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <Field label="Link to deal" style={{ flex: 1, minWidth: 220 }}>
+              <select value={linkPicker} onChange={e => setLinkPicker(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
+                <option value="">— pick a deal —</option>
+                {unlinkedDeals.map(d => <option key={d.id} value={d.id}>{d.name} ({d.id})</option>)}
+              </select>
+            </Field>
+            <Field label="Relationship (optional)" style={{ flex: 1, minWidth: 180 }}>
+              <input value={relPicker} onChange={e => setRelPicker(e.target.value)} placeholder="e.g. attorney of record" style={inputStyle} />
+            </Field>
+            <button onClick={addLink} disabled={!linkPicker} style={btnPrimary}>+ Link</button>
+          </div>
+        </div>
+      )}
+
+      {!contact.id && (
+        <div style={{ marginTop: 18, padding: 12, background: "#0c0a09", border: "1px dashed #292524", borderRadius: 6, fontSize: 11, color: "#78716c" }}>
+          Save this contact first, then you can link them to one or more deals below.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContactsTab({ dealId, userId, isAdmin }) {
+  const [links, setLinks]             = useState([]);
+  const [loading, setLoading]         = useState(true);
+  const [allContacts, setAllContacts] = useState([]);
+  const [showAdd, setShowAdd]         = useState(false);
+  const [pick, setPick]               = useState('');
+  const [rel, setRel]                 = useState('');
+  const [showQuickNew, setShowQuickNew] = useState(false);
+  const [quickNew, setQuickNew]       = useState({ name: '', company: '', email: '', phone: '', kind: 'other', notes: '' });
+  const [busy, setBusy]               = useState(false);
+  const [err, setErr]                 = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    const [linksRes, contactsRes] = await Promise.all([
+      sb.from('contact_deals')
+        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, kind, tags)')
+        .eq('deal_id', dealId)
+        .order('created_at', { ascending: false }),
+      sb.from('contacts').select('id, name, company, kind, email').order('name'),
+    ]);
+    setLinks(linksRes.data || []);
+    setAllContacts(contactsRes.data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('contacts-tab-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'contact_deals', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  const addExisting = async () => {
+    if (!pick) return;
+    setBusy(true); setErr(null);
+    const { error } = await sb.from('contact_deals').insert({ contact_id: pick, deal_id: dealId, relationship: rel || null, created_by: userId });
+    if (error) setErr(error.message);
+    setPick(''); setRel(''); setShowAdd(false);
+    await load();
+    setBusy(false);
+  };
+
+  const unlink = async (id) => {
+    if (!window.confirm("Unlink this contact from this deal?")) return;
+    await sb.from('contact_deals').delete().eq('id', id);
+    await load();
+  };
+
+  const createAndLink = async () => {
+    if (!quickNew.name) return;
+    setBusy(true); setErr(null);
+    const { data: c, error } = await sb.from('contacts').insert({
+      name: quickNew.name, company: quickNew.company || null, email: quickNew.email || null,
+      phone: quickNew.phone || null, kind: quickNew.kind || 'other', notes: quickNew.notes || null,
+      owner_id: userId,
+    }).select().single();
+    if (error) { setErr(error.message); setBusy(false); return; }
+    const linkErr = (await sb.from('contact_deals').insert({ contact_id: c.id, deal_id: dealId, relationship: rel || null, created_by: userId })).error;
+    if (linkErr) setErr(linkErr.message);
+    setQuickNew({ name: '', company: '', email: '', phone: '', kind: 'other', notes: '' });
+    setShowQuickNew(false); setRel('');
+    await load();
+    setBusy(false);
+  };
+
+  const linkedIds = new Set(links.map(l => l.contact_id));
+  const unlinkedContacts = allContacts.filter(c => !linkedIds.has(c.id));
+
+  return (
+    <div>
+      {err && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, marginBottom: 14, fontSize: 12, background: "#7f1d1d", color: "#fecaca" }}>{err}</div>
+      )}
+      {loading ? (
+        <div style={{ fontSize: 12, color: "#78716c", padding: 20 }}>Loading contacts…</div>
+      ) : (
+        <>
+          {links.length === 0 ? (
+            <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8, marginBottom: 16 }}>
+              No contacts linked to this deal yet. Link the attorney, title company, referral source, or anyone else tied to this case.
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
+              {links.map(l => (
+                <div key={l.id} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
+                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(l.contacts?.kind)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700 }}>
+                      {l.contacts?.name}
+                      {l.contacts?.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {l.contacts.company}</span>}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+                      {l.contacts?.email || '—'}{l.contacts?.phone && ` · ${l.contacts.phone}`}
+                      {l.relationship && <> · {l.relationship}</>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(l.contacts?.kind)}</span>
+                  <button onClick={() => unlink(l.id)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Unlink</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => { setShowAdd(!showAdd); setShowQuickNew(false); }} style={btnPrimary}>
+              {showAdd ? 'Cancel' : '+ Link existing contact'}
+            </button>
+            <button onClick={() => { setShowQuickNew(!showQuickNew); setShowAdd(false); }} style={btnGhost}>
+              {showQuickNew ? 'Cancel' : '+ New contact'}
+            </button>
+          </div>
+
+          {showAdd && (
+            <div style={{ marginTop: 12, padding: 16, background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+              {unlinkedContacts.length === 0 ? (
+                <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic" }}>No unlinked contacts exist. Use "+ New contact" instead.</div>
+              ) : (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                    <Field label="Contact">
+                      <select value={pick} onChange={e => setPick(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
+                        <option value="">— pick a contact —</option>
+                        {unlinkedContacts.map(c => <option key={c.id} value={c.id}>{c.name}{c.company ? ` · ${c.company}` : ''}</option>)}
+                      </select>
+                    </Field>
+                    <Field label="Relationship (optional)">
+                      <input value={rel} onChange={e => setRel(e.target.value)} placeholder="e.g. attorney of record" style={inputStyle} />
+                    </Field>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                    <button onClick={addExisting} disabled={!pick || busy} style={btnPrimary}>Link contact</button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
+          {showQuickNew && (
+            <div style={{ marginTop: 12, padding: 16, background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <Field label="Name *"><input value={quickNew.name} onChange={e => setQuickNew(q => ({ ...q, name: e.target.value }))} style={inputStyle} /></Field>
+                <Field label="Company"><input value={quickNew.company} onChange={e => setQuickNew(q => ({ ...q, company: e.target.value }))} style={inputStyle} /></Field>
+                <Field label="Email"><input type="email" value={quickNew.email} onChange={e => setQuickNew(q => ({ ...q, email: e.target.value }))} style={inputStyle} /></Field>
+                <Field label="Phone"><input value={quickNew.phone} onChange={e => setQuickNew(q => ({ ...q, phone: e.target.value }))} style={inputStyle} /></Field>
+                <Field label="Type">
+                  <select value={quickNew.kind} onChange={e => setQuickNew(q => ({ ...q, kind: e.target.value }))} style={{ ...inputStyle, padding: "8px 10px" }}>
+                    {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
+                  </select>
+                </Field>
+                <Field label="Relationship on this deal"><input value={rel} onChange={e => setRel(e.target.value)} placeholder="e.g. attorney of record" style={inputStyle} /></Field>
+              </div>
+              <Field label="Notes" style={{ marginTop: 12 }}>
+                <textarea value={quickNew.notes} onChange={e => setQuickNew(q => ({ ...q, notes: e.target.value }))} rows={2} style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }} />
+              </Field>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                <button onClick={createAndLink} disabled={!quickNew.name || busy} style={btnPrimary}>Create + link</button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

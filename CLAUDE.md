@@ -23,7 +23,7 @@ This is safe — the publishable key is designed for client-side use. RLS is wha
 
 ## Database schema
 
-10 tables, all in `public` schema:
+Core tables, all in `public` schema:
 
 | Table | Purpose | Key columns |
 |---|---|---|
@@ -31,21 +31,28 @@ This is safe — the publishable key is designed for client-side use. RLS is wha
 | `deals` | The core entity | `id` (text PK), `type` ('flip' / 'surplus' / 'wholesale' / 'rental' / 'other'), `status`, `name`, `address`, `meta` (jsonb for flexible per-type fields), `owner_id` |
 | `expenses` | Per-deal line items | `deal_id` FK, `category`, `amount`, `date`, `vendor`, `notes` |
 | `tasks` | Per-deal todos | `deal_id` FK, `title`, `done`, `assigned_to`, `due_date` |
-| `vendors` | Per-deal contractors/contacts | `deal_id` FK, `name`, `role`, `phone`, `email` |
+| `vendors` | Per-deal contractors/contacts (deal-scoped, different from `contacts`) | `deal_id` FK, `name`, `role`, `phone`, `email` |
 | `deal_notes` | Per-deal markdown | `deal_id` FK (unique), `body` |
 | `activity` | Audit log | `deal_id` FK, `user_id`, `action`, `created_at` |
 | `documents` | Per-deal file metadata | `deal_id` FK, `name`, `path`, `size`, `uploaded_by` — actual files in `deal-docs` storage bucket |
 | `client_access` | Links auth users to deals for the Client Portal | `user_id` (nullable until client signs up), `deal_id`, `email`, `enabled`, `last_seen_at`, `prefs` jsonb |
 | `attorney_assignments` | Links auth users to deals for Attorney scoped access | same shape as `client_access` |
+| `messages` | Two-way threads team ↔ client ↔ attorney per deal | `deal_id` FK, `sender_role`, `sender_id`, `body`, `created_at` |
+| `leads` | Public intake form submissions | `id`, `name`, `email`, `status`, `metadata` jsonb (UTM + dup detection) |
+| `docket_events` | Matched docket events from Castle | `deal_id` FK, `external_id`, `event_type`, unique(deal_id, external_id) |
+| `docket_events_unmatched` | Staged events Castle sent before DCC had a matching deal | — |
+| `scrape_runs` | Castle heartbeats (one row per county per monitor run) | — |
+| **`contacts`** | **Company-wide CRM entities** (partner attorneys, title companies, investors, referral sources, partners, vendors at company level, press, competitors) — intentionally separate from `vendors` (per-deal) and `leads` (intake) | `id` (uuid PK), `name`, `company`, `email`, `phone`, `kind`, `tags` text[], `notes`, `financial_notes` (admin-only UI), `owner_id` |
+| **`contact_deals`** | **Many-to-many** between `contacts` and `deals` | `contact_id` FK, `deal_id` FK, `relationship`, unique(contact_id, deal_id) |
 
-All child tables cascade-delete when the parent deal is deleted.
+All child tables cascade-delete when the parent deal is deleted. `contact_deals` cascades when either the contact or the deal is deleted.
 
 ## RLS model (important — read before modifying)
 
 Four-tier model driven by `profiles.role`:
 
 - **Admin** (`role IN ('admin', 'user')`, Nathan/Justin): full access via `admin_all_*` policies on every table.
-- **Virtual Assistant** (`role = 'va'`): access to deals, tasks, vendors, activity, deal_notes, documents, client_access. **No access to `expenses`.** UI also hides financial fields in `deals.meta` (trust-based for jsonb keys).
+- **Virtual Assistant** (`role = 'va'`): access to deals, tasks, vendors, activity, deal_notes, documents, client_access, contacts, contact_deals. **No access to `expenses`.** UI also hides financial fields in `deals.meta` AND `contacts.financial_notes` (trust-based — same pattern applies to both jsonb keys and the `financial_notes` column).
 - **Attorney** (`role = 'attorney'`): scoped read-only access to deals they're assigned to via `attorney_assignments`. Can add activity rows and upload documents on their assigned deals. Cannot see other deals or financials.
 - **Client** (`role = 'client'`): portal-only. Scoped access via `client_*` policies to rows linked to them through `public.client_access`. Cannot access `expenses`, `tasks`, `vendors`, `deal_notes`.
 
@@ -122,6 +129,8 @@ Nothing to do in the dashboard — just share the URL. First sign-in auto-create
 - **Status strings are lowercase with hyphens** (`under-contract`, `new-lead`). Don't change the casing without updating `STATUS_COLORS` and seed data.
 - **Deal IDs are text, not uuid.** Existing ones: `flip-2533`, `sf-sizemore`, `sf-caldwell`, `sf-creech`, `sf-depew`. Pattern for new flips: `flip-<streetnumber>`. For surplus cases: `sf-<lastname>`.
 - **The `activity` table is write-heavy.** Every edit logs. If you add a bulk-edit feature, batch the inserts.
+- **`vendors` is per-deal, `contacts` is company-wide.** Don't conflate them. A contractor who does one flip goes in `vendors`. A partner attorney who touches multiple cases goes in `contacts` and gets linked via `contact_deals`.
+- **`contacts.financial_notes` is a column, not jsonb.** UI hides it for VAs, but RLS allows VA reads (same trust-based pattern as `deals.meta` financial fields). If you ever need tighter enforcement, use a column-level privilege or a VIEW.
 
 ## Team
 
