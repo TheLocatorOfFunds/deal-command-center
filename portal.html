@@ -63,6 +63,58 @@
   h1.deal-name { font-family: 'Fraunces', serif; font-weight: 500; font-size: 28px; line-height: 1.2; color: var(--navy); margin: 0 0 6px; letter-spacing: -0.015em; }
   .deal-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 18px; }
   .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  /* ═══ Surplus Tracker (Domino's-style progress bar) ═══ */
+  .tracker-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 24px 20px 20px; box-shadow: var(--shadow); margin: 18px 0; }
+  .tracker-title { font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 18px; text-align: center; }
+  .tracker { display: flex; align-items: flex-start; gap: 0; position: relative; padding: 0 4px; }
+  .tracker-step { flex: 1; display: flex; flex-direction: column; align-items: center; text-align: center; position: relative; padding: 0 4px; min-width: 0; }
+  .tracker-step:not(:last-child)::after {
+    content: ''; position: absolute; top: 19px; left: calc(50% + 22px); right: calc(-50% + 22px);
+    height: 3px; background: var(--border); z-index: 0; transition: background 0.4s;
+  }
+  .tracker-step.done::after { background: var(--gold); }
+  .tracker-dot {
+    width: 40px; height: 40px; border-radius: 50%; background: var(--bg-card); border: 3px solid var(--border);
+    display: inline-flex; align-items: center; justify-content: center; font-size: 18px; font-weight: 700;
+    z-index: 1; position: relative; color: var(--text-muted); transition: all 0.3s; flex-shrink: 0;
+  }
+  .tracker-step.done .tracker-dot { background: var(--gold); color: var(--navy); border-color: var(--gold); }
+  .tracker-step.current .tracker-dot {
+    background: var(--navy); color: #fffcf5; border-color: var(--gold);
+    box-shadow: 0 0 0 5px rgba(201, 162, 74, 0.22); animation: tracker-pulse 2s ease-in-out infinite;
+  }
+  @keyframes tracker-pulse {
+    0%, 100% { box-shadow: 0 0 0 5px rgba(201, 162, 74, 0.22); }
+    50%      { box-shadow: 0 0 0 10px rgba(201, 162, 74, 0.08); }
+  }
+  .tracker-label { font-size: 11px; margin-top: 10px; font-weight: 600; color: var(--text-muted); line-height: 1.25; word-break: break-word; hyphens: auto; }
+  .tracker-step.done .tracker-label, .tracker-step.current .tracker-label { color: var(--navy); }
+  .tracker-step.current .tracker-label { font-weight: 700; }
+  .tracker-sub { font-size: 10px; color: var(--text-subtle); margin-top: 2px; font-style: italic; }
+  .tracker-dead { background: #fee2e2; color: #7f1d1d; border-color: #fca5a5; }
+
+  /* Next Milestone card */
+  .next-milestone { background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%); border: 1px solid var(--gold); border-radius: 14px; padding: 22px 24px; box-shadow: var(--shadow); margin-bottom: 18px; }
+  .next-label { font-size: 11px; font-weight: 700; color: var(--amber, #a5731c); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 8px; display: inline-flex; align-items: center; gap: 6px; }
+  .next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 22px; letter-spacing: -0.015em; color: var(--navy); margin: 0 0 8px; line-height: 1.25; }
+  .next-estimate { font-size: 13px; font-weight: 600; color: var(--navy-mid); margin: 0 0 10px; font-variant-numeric: tabular-nums; }
+  .next-body { font-size: 14px; color: var(--text); line-height: 1.55; margin: 0; }
+
+  @media (max-width: 600px) {
+    .tracker-card { padding: 20px 12px 16px; }
+    .tracker-dot { width: 32px; height: 32px; font-size: 14px; border-width: 2.5px; }
+    .tracker-step:not(:last-child)::after { top: 15px; left: calc(50% + 18px); right: calc(-50% + 18px); height: 2.5px; }
+    .tracker-label { font-size: 10px; margin-top: 8px; }
+    .tracker-sub { display: none; }
+    .next-milestone { padding: 18px 16px; }
+    .next-headline { font-size: 19px; }
+  }
+  @media (max-width: 380px) {
+    .tracker-dot { width: 28px; height: 28px; font-size: 12px; }
+    .tracker-step:not(:last-child)::after { top: 13px; left: calc(50% + 16px); right: calc(-50% + 16px); }
+    .tracker-label { font-size: 9px; }
+  }
   .status-new-lead     { background: #fef3c7; color: #78350f; }
   .status-contacted    { background: #dbeafe; color: #1e40af; }
   .status-signed       { background: #e0e7ff; color: #4338ca; }
@@ -326,13 +378,13 @@ function statusIntel(status, filedAt) {
       icon: '📞', tone: 'info',
       headline: "Our team has reached out to you",
       body: "A FundLocators specialist has contacted you to discuss your case. Please respond when you can — the sooner we can talk, the sooner we can begin your recovery.",
-      cta: "If you haven't heard from us, call Nathan at (513) 516-2306.",
+      cta: "If you haven't heard from us, call Nathan at (513) 951-8855.",
     },
     'awaiting-docs': {
       icon: '📄', tone: 'info',
       headline: "Waiting on a few documents",
       body: "We need a small set of documents from you to move forward (typically ID, proof of address, and any estate paperwork). Check your email for the specific list. As soon as we receive them, we'll prepare your claim for filing.",
-      cta: "Questions about what to send? Call Nathan at (513) 516-2306.",
+      cta: "Questions about what to send? Call Nathan at (513) 951-8855.",
     },
     'signed': {
       icon: '✍️', tone: 'progress',
@@ -374,7 +426,7 @@ function statusIntel(status, filedAt) {
       icon: '⚠️', tone: 'error',
       headline: "Case has been closed without recovery",
       body: "We were unable to complete the recovery of surplus funds for your case. This is uncommon. Please call Nathan directly to discuss what happened and whether there is anything further we can explore.",
-      cta: "Call Nathan at (513) 516-2306 to talk this through.",
+      cta: "Call Nathan at (513) 951-8855 to talk this through.",
     },
   };
 
@@ -394,6 +446,139 @@ function payoutWindow(filedAt) {
   const earliest = new Date(filed); earliest.setDate(earliest.getDate() + 90);
   const latest = new Date(filed); latest.setDate(latest.getDate() + 180);
   return { earliest, latest, filed };
+}
+
+// ─── Surplus Tracker (Domino's-pizza-style 5-step progress) ─────────
+// Maps a deal.status to which step is "done" vs "current" on a 5-step
+// journey every homeowner walks: Signed → Filed → Review → Approved → Paid.
+const TRACKER_STEPS = [
+  { key: 'signed',    label: 'Engaged',        sub: 'Engagement signed',      icon: '✍' },
+  { key: 'filed',     label: 'Filed',          sub: 'Claim on the docket',    icon: '📎' },
+  { key: 'review',    label: 'Court Review',   sub: 'Probate / hearing',      icon: '⚖' },
+  { key: 'approved',  label: 'Approved',       sub: 'Distribution ordered',   icon: '✓' },
+  { key: 'paid',      label: 'Paid',           sub: 'Funds delivered',        icon: '💰' },
+];
+// Returns the zero-based index of the current step. -1 = pre-portal.
+function trackerIndexForStatus(status) {
+  switch (status) {
+    case 'signed':                return 0; // working toward Filed
+    case 'probate':               return 1; // probate is mid-filing — same visual bucket as Filed in progress
+    case 'filed':                 return 2; // working toward Court Review done
+    case 'hearing-set':           return 2; // hearing scheduled — still Court Review phase
+    case 'awaiting-distribution': return 3; // court ordered, waiting on check
+    case 'recovered':             return 5; // all steps done
+    case 'dead':                  return -2; // special error state
+    default:                      return 0;
+  }
+}
+
+function SurplusTracker({ status, filedAt }) {
+  const currentIdx = trackerIndexForStatus(status);
+  const isDead = currentIdx === -2;
+  return (
+    <div className="tracker-card">
+      <p className="tracker-title">Your surplus recovery · step by step</p>
+      <div className="tracker">
+        {TRACKER_STEPS.map((step, idx) => {
+          let cls = 'tracker-step';
+          if (!isDead) {
+            if (idx < currentIdx) cls += ' done';
+            else if (idx === currentIdx) cls += ' current';
+          }
+          const isCurrent = !isDead && idx === currentIdx;
+          const isDone = !isDead && idx < currentIdx;
+          return (
+            <div key={step.key} className={cls}>
+              <div className={"tracker-dot" + (isDead ? " tracker-dead" : "")}>
+                {isDead ? '⚠' : isDone ? '✓' : step.icon}
+              </div>
+              <div className="tracker-label">{step.label}</div>
+              {isCurrent && <div className="tracker-sub">{step.sub}</div>}
+            </div>
+          );
+        })}
+      </div>
+      {isDead && (
+        <p style={{ fontSize: 12, color: 'var(--red)', textAlign: 'center', marginTop: 14, marginBottom: 0 }}>
+          Case closed without recovery — please call Nathan directly at (513) 951-8855.
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─── "What's next" one-card callout ────────────────────
+// Picks the nearest upcoming milestone + an estimated window, based on status
+// and filed_at when available. Complements StatusIntel (which is narrative)
+// with a specific expectation.
+function getNextMilestone(status, filedAt) {
+  const filed = filedAt ? new Date(filedAt) : null;
+  const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+  switch (status) {
+    case 'new-lead':
+    case 'contacted':
+    case 'awaiting-docs':
+      return {
+        title: 'Reviewing your case',
+        estimate: 'Within 1–3 business days',
+        body: 'Our team is confirming the surplus and the fastest path to recovery. You\'ll see the next update here as soon as review is complete.',
+      };
+    case 'signed':
+      return {
+        title: 'Filing your claim with the court',
+        estimate: 'Within the next 1–2 weeks',
+        body: 'Our team is drafting your formal surplus claim. You don\'t need to do anything — we\'ll post here the moment it\'s filed.',
+      };
+    case 'probate':
+      return {
+        title: 'Completing probate, then filing',
+        estimate: 'Probate typically adds 4–8 weeks',
+        body: 'The court is verifying rightful claimants. Once probate clears, your claim is filed immediately.',
+      };
+    case 'filed': {
+      if (filed && !isNaN(filed)) {
+        const earliest = addDays(filed, 42);
+        const latest = addDays(filed, 84);
+        return {
+          title: 'Court to schedule your hearing',
+          estimate: `Expected ${fmtDateShort(earliest)} – ${fmtDateShort(latest)}`,
+          body: 'Your claim is on the docket. The court will set a hearing date in the next 6–12 weeks. You will not need to attend.',
+        };
+      }
+      return {
+        title: 'Court to schedule your hearing',
+        estimate: '6–12 weeks after filing',
+        body: 'Your claim is on the docket. The court will set a hearing date. You will not need to attend.',
+      };
+    }
+    case 'hearing-set':
+      return {
+        title: 'Hearing occurs, then distribution order',
+        estimate: 'Order typically within 2–4 weeks of the hearing',
+        body: 'Your attorney appears on your behalf. Once the court rules, the distribution order is typically issued within 2–4 weeks.',
+      };
+    case 'awaiting-distribution':
+      return {
+        title: 'Clerk\'s office issues your check',
+        estimate: '2–4 weeks from the distribution order',
+        body: 'The court has approved. Funds will be released within 2–4 weeks. We\'ll transfer your share to you within 24 hours of receiving them.',
+      };
+    default:
+      return null;
+  }
+}
+
+function NextMilestoneCard({ status, filedAt }) {
+  const next = getNextMilestone(status, filedAt);
+  if (!next) return null;
+  return (
+    <div className="next-milestone">
+      <div className="next-label">⏭ What&rsquo;s next</div>
+      <h3 className="next-headline">{next.title}</h3>
+      {next.estimate && <div className="next-estimate">{next.estimate}</div>}
+      <p className="next-body">{next.body}</p>
+    </div>
+  );
 }
 
 // ─── App ───────────────────────────────────────────────
@@ -447,7 +632,7 @@ function SignIn() {
             <div className="success-check">✓</div>
             <h1 className="serif">Check your email</h1>
             <p className="lead">We sent a secure sign-in link to <b>{email}</b>. Open the email and tap the button to access your case.</p>
-            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email within a minute, check your spam folder or contact Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.</p>
+            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email within a minute, check your spam folder or contact Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.</p>
           </div>
         ) : (
           <div>
@@ -467,7 +652,7 @@ function SignIn() {
             {error && <div className="error">{error}</div>}
             <p className="fineprint">
               This portal is invite-only. Please use the email address you provided when you signed your engagement agreement.
-              If you believe you should have access but can't sign in, contact Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
+              If you believe you should have access but can't sign in, contact Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.
             </p>
           </div>
         )}
@@ -996,7 +1181,7 @@ function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
       <div className="empathy-card empathy-done">
         <div style={{ fontSize: 24, marginBottom: 8 }}>💌</div>
         <h3>Thank you.</h3>
-        <p>We read every check-in. {mood !== 'good' ? 'Nathan will reach out to you personally within one business day.' : 'Reach out anytime — (513) 516-2306.'}</p>
+        <p>We read every check-in. {mood !== 'good' ? 'Nathan will reach out to you personally within one business day.' : 'Reach out anytime — (513) 951-8855.'}</p>
       </div>
     );
   }
@@ -1094,7 +1279,7 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
   const open = async (doc) => {
     const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
     if (error || !data?.signedUrl) {
-      alert("We couldn't open that document. Please call Nathan at (513) 516-2306.");
+      alert("We couldn't open that document. Please call Nathan at (513) 951-8855.");
       return;
     }
     window.open(data.signedUrl, '_blank');
@@ -1278,7 +1463,7 @@ function WelcomeVideoBlock({ url }) {
         Your browser cannot play this video. <a href={url}>Download it instead.</a>
       </video>
       <div className="welcome-video-caption">
-        Nathan recorded this for you personally when your case came in. Questions anytime — <a href="tel:+15135162306">(513) 516-2306</a>.
+        Nathan recorded this for you personally when your case came in. Questions anytime — <a href="tel:+15139518855">(513) 951-8855</a>.
       </div>
     </div>
   );
@@ -1288,7 +1473,7 @@ function WelcomeVideoBlock({ url }) {
 function StickyCallButton() {
   return (
     <div className="sticky-call">
-      <a href="tel:+15135162306">
+      <a href="tel:+15139518855">
         <span className="call-icon">📞</span>
         Call Nathan directly
       </a>
@@ -1337,10 +1522,13 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
 
+      <SurplusTracker status={deal.status} filedAt={filedAt} />
+
       {isRecovered ? (
         <CelebrationHero clientShare={clientShare} address={deal.address} />
       ) : (
         <>
+          <NextMilestoneCard status={deal.status} filedAt={filedAt} />
           {estimatedSurplus > 0 && (
             <div className="payout-hero" style={{ marginTop: 18 }}>
               <div className="payout-label">{isJointCase ? 'Total Estimated Share (All Claimants)' : 'Your Estimated Share'}</div>
@@ -1407,7 +1595,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
             <div className="team-name">Nathan Johnson</div>
             <div className="team-role">Principal, FundLocators</div>
             <div className="team-contact">
-              <a href="tel:+15135162306">(513) 516-2306</a> &middot;{' '}
+              <a href="tel:+15139518855">(513) 951-8855</a> &middot;{' '}
               <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>
             </div>
           </div>
@@ -1439,7 +1627,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
 
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
-        Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
+        Questions about your case? Call Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.<br/>
         This portal updates in real time as your case progresses.
       </p>
 
@@ -1452,7 +1640,7 @@ async function openDocument(path) {
   if (!path) return;
   const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(path, 300);
   if (error || !data?.signedUrl) {
-    alert("We couldn't open that document. Please call Nathan at (513) 516-2306 and we'll send it over directly.");
+    alert("We couldn't open that document. Please call Nathan at (513) 951-8855 and we'll send it over directly.");
     return;
   }
   window.open(data.signedUrl, '_blank');
@@ -1471,7 +1659,7 @@ function NoAccess({ session }) {
         <h1 className="serif">We couldn't find your case</h1>
         <p className="lead">You're signed in as <b>{session.user.email}</b>, but we don't have a case linked to this email address.</p>
         <p className="fineprint">
-          If you believe this is an error, please contact Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a> or <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>. We'll verify and get you access within the business day.
+          If you believe this is an error, please contact Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a> or <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>. We'll verify and get you access within the business day.
         </p>
         <button className="btn-primary" onClick={() => sb.auth.signOut()} style={{ marginTop: 24 }}>
           Sign out and try a different email
@@ -1493,7 +1681,7 @@ function GenericError() {
         <h1 className="serif">Something went wrong</h1>
         <p className="lead">We couldn't load your case right now. Please try refreshing the page.</p>
         <p className="fineprint">
-          If the problem continues, call Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
+          If the problem continues, call Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.
         </p>
         <button className="btn-primary" onClick={() => window.location.reload()} style={{ marginTop: 24 }}>
           Refresh
