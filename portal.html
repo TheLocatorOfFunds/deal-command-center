@@ -714,9 +714,10 @@ const CLIENT_EVENT_META = {
   judgment_entered:     { label: "Court judgment entered",      icon: "⚖",  tone: "info" },
 };
 
-function ClientDocketCard({ dealId }) {
+function ClientDocketCard({ dealId, access, isPreview }) {
   const [events, setEvents] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+  const [prefsOpen, setPrefsOpen] = React.useState(false);
 
   const load = async () => {
     const { data } = await sb.from('docket_events')
@@ -738,34 +739,161 @@ function ClientDocketCard({ dealId }) {
   }, [dealId]);
 
   if (loading) return null;
-  if (events.length === 0) return null;
 
   return (
     <div className="card" style={{ marginTop: 18, borderLeft: '4px solid var(--gold)' }}>
-      <p className="card-title">Court activity</p>
-      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-        Live updates from the court record, straight from the docket. When anything happens on your case, you'll see it here within minutes.
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, flexWrap: 'wrap', gap: 8 }}>
+        <p className="card-title" style={{ margin: 0 }}>Court activity</p>
+        <button
+          type="button"
+          onClick={() => setPrefsOpen(!prefsOpen)}
+          style={{ background: 'transparent', border: '1px solid var(--border-strong)', color: 'var(--navy-mid)', fontSize: 12, fontWeight: 600, padding: '6px 12px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit' }}
+        >
+          {prefsOpen ? 'Hide notifications' : '🔔 Notifications'}
+        </button>
       </div>
-      {events.map(e => {
-        const meta = CLIENT_EVENT_META[e.event_type] || { label: e.event_type, icon: '📋', tone: 'info' };
-        return (
-          <div key={e.id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: '1px solid var(--border)', alignItems: 'flex-start' }}>
-            <div style={{ fontSize: 22, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center' }}>{meta.icon}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500, fontSize: 16, color: 'var(--navy)', letterSpacing: '-0.005em', lineHeight: 1.3 }}>
-                {meta.label}
-              </div>
-              <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 4, lineHeight: 1.5 }}>
-                {e.description}
-              </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
-                {e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                {e.court_system && <> · {e.court_system}</>}
-              </div>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        Live updates from the court record, straight from the docket. Anything that happens on your case shows up here within minutes — and we'll send it to you too if you want.
+      </div>
+
+      {prefsOpen && <NotificationPreferences access={access} isPreview={isPreview} />}
+
+      {events.length === 0 ? (
+        <div style={{ padding: '18px 16px', background: 'var(--bg-card-alt)', borderRadius: 10, border: '1px dashed var(--border-strong)', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ fontSize: 22, flexShrink: 0 }}>👀</div>
+          <div>
+            <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500, fontSize: 15, color: 'var(--navy)', lineHeight: 1.3 }}>
+              We're watching the docket
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>
+              No court activity to report yet. As soon as something happens, you'll see it here — and if you've turned notifications on, we'll email or text you.
             </div>
           </div>
-        );
-      })}
+        </div>
+      ) : (
+        events.map(e => {
+          const meta = CLIENT_EVENT_META[e.event_type] || { label: e.event_type, icon: '📋', tone: 'info' };
+          return (
+            <div key={e.id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: '1px solid var(--border)', alignItems: 'flex-start' }}>
+              <div style={{ fontSize: 22, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center' }}>{meta.icon}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500, fontSize: 16, color: 'var(--navy)', letterSpacing: '-0.005em', lineHeight: 1.3 }}>
+                  {meta.label}
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 4, lineHeight: 1.5 }}>
+                  {e.description}
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
+                  {e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                  {e.court_system && <> · {e.court_system}</>}
+                </div>
+              </div>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ─── Notification Preferences (inline in ClientDocketCard) ───
+function NotificationPreferences({ access, isPreview }) {
+  const current = access?.prefs || {};
+  const [notifyEmail, setNotifyEmail] = React.useState(current.notify_email !== false);
+  const [notifySms, setNotifySms] = React.useState(!!current.notify_sms);
+  const [notifyPhone, setNotifyPhone] = React.useState(current.notify_phone || '');
+  const [saving, setSaving] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+
+  const save = async () => {
+    if (isPreview) { setMsg({ type: 'error', text: 'Preview mode — preferences not saved.' }); return; }
+    setSaving(true); setMsg(null);
+    const { error } = await sb.rpc('update_client_notify_prefs', {
+      p_notify_email: notifyEmail,
+      p_notify_sms: notifySms,
+      p_notify_phone: notifyPhone || null,
+    });
+    setSaving(false);
+    if (error) { setMsg({ type: 'error', text: error.message }); return; }
+    setMsg({ type: 'success', text: 'Saved.' });
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const toggleStyle = (on) => ({
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'space-between',
+    width: '100%', padding: '12px 14px',
+    background: on ? 'var(--gold-soft)' : 'var(--bg-card)',
+    border: '1px solid ' + (on ? 'var(--gold)' : 'var(--border-strong)'),
+    borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+    fontSize: 14, color: 'var(--navy)', fontWeight: 500, textAlign: 'left',
+    transition: 'all 0.12s',
+  });
+
+  const pipStyle = (on) => ({
+    width: 36, height: 20, borderRadius: 10,
+    background: on ? 'var(--navy)' : 'var(--border-strong)',
+    position: 'relative', transition: 'background 0.12s', flexShrink: 0,
+  });
+  const pipDot = (on) => ({
+    position: 'absolute', top: 2, left: on ? 18 : 2,
+    width: 16, height: 16, borderRadius: '50%',
+    background: '#fff', transition: 'left 0.12s',
+  });
+
+  return (
+    <div style={{ padding: '16px', background: 'var(--bg-card-alt)', borderRadius: 10, border: '1px solid var(--border)', marginBottom: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
+        How do you want us to let you know?
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <button type="button" onClick={() => setNotifyEmail(!notifyEmail)} style={toggleStyle(notifyEmail)}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 18 }}>📧</span>
+            <span>Email me{access?.email ? ` at ${access.email}` : ''}</span>
+          </span>
+          <span style={pipStyle(notifyEmail)}><span style={pipDot(notifyEmail)}></span></span>
+        </button>
+
+        <button type="button" onClick={() => setNotifySms(!notifySms)} style={toggleStyle(notifySms)}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 18 }}>💬</span>
+            <span>Also text me</span>
+          </span>
+          <span style={pipStyle(notifySms)}><span style={pipDot(notifySms)}></span></span>
+        </button>
+
+        {notifySms && (
+          <input
+            type="tel"
+            value={notifyPhone}
+            onChange={e => setNotifyPhone(e.target.value)}
+            placeholder="Phone number for texts (e.g. 513-555-1234)"
+            autoComplete="tel"
+            style={{ width: '100%', padding: '12px 14px', border: '1px solid var(--border-strong)', borderRadius: 8, fontSize: 15, fontFamily: 'inherit', color: 'var(--text)', background: 'var(--bg-card)' }}
+          />
+        )}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14 }}>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving}
+          style={{ background: 'var(--navy)', color: '#fffcf5', border: 'none', padding: '10px 18px', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+        >
+          {saving ? 'Saving…' : 'Save preferences'}
+        </button>
+        {msg && (
+          <span style={{ fontSize: 13, fontWeight: 500, color: msg.type === 'success' ? 'var(--green)' : 'var(--red)' }}>
+            {msg.text}
+          </span>
+        )}
+      </div>
+
+      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.55 }}>
+        We'll only reach out about your case — never marketing. Turn either off anytime.
+      </div>
     </div>
   );
 }
@@ -1225,7 +1353,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
           )}
           <StatusIntel status={deal.status} filedAt={filedAt} />
           <TimelineExpectation filedAt={filedAt} status={deal.status} />
-          <ClientDocketCard dealId={deal.id} />
+          <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} />
           <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} isPreview={isPreview} />
         </>
       )}
