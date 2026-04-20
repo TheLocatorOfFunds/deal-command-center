@@ -2460,17 +2460,17 @@ function Vendors({ items, dealId, logAct, reload }) {
       )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
         {items.map(v => (
-          <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14, position: "relative" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-              <div>
+          <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14 }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</div>
                 <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{v.role}</div>
               </div>
-              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em" }}>{(v.status || "").toUpperCase()}</span>
+              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em", flexShrink: 0, alignSelf: "center" }}>{(v.status || "").toUpperCase()}</span>
+              <button onClick={() => del(v.id)} style={{ ...btnGhost, flexShrink: 0, padding: "2px 6px", lineHeight: 1, fontSize: 16 }}>×</button>
             </div>
             {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}>{v.phone}</div>}
             {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
-            <button onClick={() => del(v.id)} style={{ ...btnGhost, position: "absolute", top: 8, right: 8 }}>×</button>
           </div>
         ))}
       </div>
