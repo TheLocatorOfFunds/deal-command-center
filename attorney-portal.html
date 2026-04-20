@@ -313,7 +313,11 @@ function Authenticated({ session }) {
   }, [session]);
 
   if (!profile) return <div className="loader">Loading profile…</div>;
-  if (profile.role !== 'attorney') {
+
+  const isAttorney = profile.role === 'attorney';
+  const isAdminPreview = profile.role === 'admin' || profile.role === 'user' || profile.role === 'va';
+
+  if (!isAttorney && !isAdminPreview) {
     return (
       <div className="centered-shell">
         <div className="card signin-card">
@@ -337,37 +341,80 @@ function Authenticated({ session }) {
     );
   }
 
-  return <Portal session={session} profile={profile} />;
+  return <Portal session={session} profile={profile} isPreview={isAdminPreview} />;
 }
 
-// ─── Portal shell (header + router) ───────────────────
-function Portal({ session, profile }) {
-  const route = useRoute();
+// ─── Admin preview banner ─────────────────────────────
+function PreviewBanner({ role }) {
   return (
-    <div className="container">
-      <header className="app-header">
-        <div className="brand">
-          <span className="brand-dot"></span>
-          FundLocators
-          <span className="brand-tag">Counsel Portal</span>
-        </div>
-        <div className="user-meta">
-          <span>{profile.name}</span>
-          <button className="btn-ghost" onClick={() => sb.auth.signOut()}>Sign out</button>
-        </div>
-      </header>
-      {route.page === 'case' ? <CaseDetail dealId={route.dealId} session={session} profile={profile} /> : <Inbox />}
+    <div style={{
+      background: '#0b1f3a',
+      color: '#fffcf5',
+      padding: 'calc(10px + env(safe-area-inset-top)) 14px 10px',
+      position: 'sticky',
+      top: 0,
+      zIndex: 50,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      fontSize: 13,
+      boxShadow: '0 2px 12px rgba(11, 31, 58, 0.2)',
+      justifyContent: 'space-between',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', padding: '3px 8px', background: '#c9a24a', color: '#0b1f3a', borderRadius: 4, whiteSpace: 'nowrap' }}>ADMIN PREVIEW</span>
+        <span style={{ opacity: 0.9, whiteSpace: 'nowrap' }}>Viewing as <b>{role}</b> · reads all cases</span>
+      </div>
+      <a href="/deal-command-center/" style={{ color: '#d8b560', textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap', fontSize: 13 }}>← DCC</a>
     </div>
   );
 }
 
+// ─── Portal shell (header + router) ───────────────────
+function Portal({ session, profile, isPreview }) {
+  const route = useRoute();
+  return (
+    <>
+      {isPreview && <PreviewBanner role="Counsel" />}
+      <div className="container">
+        <header className="app-header">
+          <div className="brand">
+            <span className="brand-dot"></span>
+            FundLocators
+            <span className="brand-tag">Counsel Portal</span>
+          </div>
+          <div className="user-meta">
+            <span>{profile.name}</span>
+            <button className="btn-ghost" onClick={() => sb.auth.signOut()}>Sign out</button>
+          </div>
+        </header>
+        {route.page === 'case'
+          ? <CaseDetail dealId={route.dealId} session={session} profile={profile} isPreview={isPreview} />
+          : <Inbox isPreview={isPreview} />}
+      </div>
+    </>
+  );
+}
+
 // ─── Inbox: list of assigned cases ────────────────────
-function Inbox() {
+function Inbox({ isPreview }) {
   const [cases, setCases] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     (async () => {
+      // Admin preview: show every deal so we can tour the counsel view
+      if (isPreview) {
+        const { data: deals, error: dErr } = await sb
+          .from('deals')
+          .select('*')
+          .order('updated_at', { ascending: false });
+        if (dErr) { setError(dErr.message); return; }
+        setCases(deals || []);
+        return;
+      }
+
       // 1. Get assigned deal ids
       const { data: assignments, error: aErr } = await sb
         .from('attorney_assignments')
@@ -386,7 +433,7 @@ function Inbox() {
       if (dErr) { setError(dErr.message); return; }
       setCases(deals || []);
     })();
-  }, []);
+  }, [isPreview]);
 
   if (error) return <div className="error">{error}</div>;
   if (cases === null) return <div className="loader">Loading your cases…</div>;
@@ -447,7 +494,7 @@ function CaseRow({ deal }) {
 }
 
 // ─── Case detail ───────────────────────────────────────
-function CaseDetail({ dealId, session, profile }) {
+function CaseDetail({ dealId, session, profile, isPreview }) {
   const [state, setState] = useState({ loading: true });
 
   const reload = async () => {
@@ -529,13 +576,13 @@ function CaseDetail({ dealId, session, profile }) {
       </div>
 
       {/* Post update */}
-      <UpdateForm dealId={deal.id} onPosted={reload} />
+      <UpdateForm dealId={deal.id} onPosted={reload} isPreview={isPreview} />
 
       {/* Messages */}
-      <MessagesThread dealId={deal.id} session={session} senderName={profile?.name} />
+      <MessagesThread dealId={deal.id} session={session} senderName={profile?.name} isPreview={isPreview} />
 
       {/* Documents */}
-      <DocumentsSection dealId={deal.id} documents={documents} onChange={reload} />
+      <DocumentsSection dealId={deal.id} documents={documents} onChange={reload} isPreview={isPreview} />
 
       {/* Timeline */}
       <div className="card">
@@ -565,7 +612,7 @@ function CaseDetail({ dealId, session, profile }) {
 }
 
 // ─── Messages thread ──────────────────────────────────
-function MessagesThread({ dealId, session, senderName }) {
+function MessagesThread({ dealId, session, senderName, isPreview }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
@@ -600,6 +647,7 @@ function MessagesThread({ dealId, session, senderName }) {
   const send = async () => {
     const body = text.trim();
     if (!body || sending) return;
+    if (isPreview) { alert('Preview mode — message not sent.'); return; }
     setSending(true);
     const { error } = await sb.from('messages').insert({
       deal_id: dealId,
@@ -686,13 +734,14 @@ function MessagesThread({ dealId, session, senderName }) {
 }
 
 // ─── Update form ──────────────────────────────────────
-function UpdateForm({ dealId, onPosted }) {
+function UpdateForm({ dealId, onPosted, isPreview }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
   const post = async () => {
     if (!text.trim()) return;
+    if (isPreview) { setMsg({ type: 'error', text: 'Preview mode — update not posted.' }); return; }
     setBusy(true); setMsg(null);
     const { error } = await sb.rpc('attorney_post_update', { p_deal_id: dealId, p_note: text.trim() });
     setBusy(false);
@@ -722,12 +771,13 @@ function UpdateForm({ dealId, onPosted }) {
 }
 
 // ─── Documents section ────────────────────────────────
-function DocumentsSection({ dealId, documents, onChange }) {
+function DocumentsSection({ dealId, documents, onChange, isPreview }) {
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState(null);
 
   const upload = async (file) => {
     if (!file) return;
+    if (isPreview) { setErr('Preview mode — upload disabled.'); return; }
     setUploading(true); setErr(null);
     try {
       const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');

@@ -478,11 +478,71 @@ function SignIn() {
 
 // ─── Portal (authenticated) ─────────────────────────────
 function PortalBody({ session }) {
+  const [profile, setProfile] = useState(null);
   const [state, setState] = useState({ loading: true });
+  const [allDeals, setAllDeals] = useState([]);
+  const [previewDealId, setPreviewDealId] = useState(null);
 
+  // 1. Fetch profile once so we know if this is an admin preview
   useEffect(() => {
+    sb.from('profiles').select('*').eq('id', session.user.id).single().then(({ data }) => {
+      setProfile(data || { name: session.user.email.split('@')[0], role: null });
+    });
+  }, [session]);
+
+  const isAdminPreview = profile && (profile.role === 'admin' || profile.role === 'user' || profile.role === 'va');
+
+  // 2a. Admin preview path: load all deals, pick one
+  useEffect(() => {
+    if (!profile || !isAdminPreview) return;
     (async () => {
-      // 1. Confirm client has access and which deal
+      const { data: deals } = await sb.from('deals').select('*').order('updated_at', { ascending: false });
+      setAllDeals(deals || []);
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = params.get('preview') || params.get('deal');
+      const pickId = fromUrl || (deals && deals[0] && deals[0].id);
+      if (pickId) setPreviewDealId(pickId);
+      else setState({ loading: false, error: 'deal_missing' });
+    })();
+  }, [profile]);
+
+  // 2b. Admin preview: load the selected deal's data
+  useEffect(() => {
+    if (!isAdminPreview || !previewDealId) return;
+    (async () => {
+      setState(s => ({ ...s, loading: true }));
+      const [dealRes, activityRes, documentsRes] = await Promise.all([
+        sb.from('deals').select('*').eq('id', previewDealId).maybeSingle(),
+        sb.from('activity').select('*').eq('deal_id', previewDealId).order('created_at', { ascending: false }).limit(100),
+        sb.from('documents').select('*').eq('deal_id', previewDealId).order('created_at', { ascending: false }),
+      ]);
+
+      if (!dealRes.data) { setState({ loading: false, error: 'deal_missing' }); return; }
+
+      let welcomeVideoUrl = null;
+      const wvPath = dealRes.data.meta?.welcome_video?.path;
+      if (wvPath) {
+        const { data: urlData } = await sb.storage.from('deal-docs').createSignedUrl(wvPath, 3600);
+        if (urlData?.signedUrl) welcomeVideoUrl = urlData.signedUrl;
+      }
+
+      setState({
+        loading: false,
+        access: { id: null, deal_id: previewDealId, prefs: {}, user_id: session.user.id },
+        deal: dealRes.data,
+        activity: (activityRes.data || []).filter(a => isClientFacing(a.action)),
+        documents: documentsRes.data || [],
+        claimantCount: 1,
+        welcomeVideoUrl,
+        isPreview: true,
+      });
+    })();
+  }, [previewDealId, isAdminPreview]);
+
+  // 3. Normal client path (only runs when not admin)
+  useEffect(() => {
+    if (!profile || isAdminPreview) return;
+    (async () => {
       const { data: access, error: accessErr } = await sb
         .from('client_access')
         .select('*')
@@ -495,10 +555,8 @@ function PortalBody({ session }) {
         return;
       }
 
-      // 2. Mark last seen (best-effort, don't block UI)
       sb.from('client_access').update({ last_seen_at: new Date().toISOString() }).eq('id', access.id);
 
-      // 3. Fetch deal
       const { data: deal, error: dealErr } = await sb
         .from('deals')
         .select('*')
@@ -510,7 +568,6 @@ function PortalBody({ session }) {
         return;
       }
 
-      // 4. Fetch activity (RLS will scope automatically)
       const { data: activity } = await sb
         .from('activity')
         .select('*')
@@ -518,17 +575,14 @@ function PortalBody({ session }) {
         .order('created_at', { ascending: false })
         .limit(100);
 
-      // 5. Fetch documents
       const { data: documents } = await sb
         .from('documents')
         .select('*')
         .eq('deal_id', access.deal_id)
         .order('created_at', { ascending: false });
 
-      // 6. Count co-claimants (privacy-safe RPC)
       const { data: claimantCount } = await sb.rpc('my_case_claimant_count');
 
-      // 7. Welcome video signed URL (if present)
       let welcomeVideoUrl = null;
       const wvPath = deal.meta?.welcome_video?.path;
       if (wvPath) {
@@ -544,15 +598,65 @@ function PortalBody({ session }) {
         documents: documents || [],
         claimantCount: claimantCount || 1,
         welcomeVideoUrl,
+        isPreview: false,
       });
     })();
-  }, [session]);
+  }, [profile]);
 
   if (state.loading) return <LoaderFull />;
   if (state.error === 'no_access') return <NoAccess session={session} />;
   if (state.error === 'deal_missing') return <GenericError />;
 
-  return <CaseView deal={state.deal} access={state.access} activity={state.activity} documents={state.documents} claimantCount={state.claimantCount} welcomeVideoUrl={state.welcomeVideoUrl} session={session} onSignOut={() => sb.auth.signOut()} />;
+  return (
+    <>
+      {state.isPreview && (
+        <PreviewBanner role="Client" deals={allDeals} currentId={previewDealId} onChange={setPreviewDealId} />
+      )}
+      <CaseView
+        deal={state.deal}
+        access={state.access}
+        activity={state.activity}
+        documents={state.documents}
+        claimantCount={state.claimantCount}
+        welcomeVideoUrl={state.welcomeVideoUrl}
+        session={session}
+        isPreview={state.isPreview}
+        onSignOut={() => sb.auth.signOut()}
+      />
+    </>
+  );
+}
+
+// ─── Admin preview banner ─────────────────────────────
+function PreviewBanner({ role, deals, currentId, onChange }) {
+  return (
+    <div style={{
+      background: '#0b1f3a',
+      color: '#fffcf5',
+      padding: 'calc(10px + env(safe-area-inset-top)) 14px 10px',
+      position: 'sticky',
+      top: 0,
+      zIndex: 50,
+      display: 'flex',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      gap: 10,
+      flexWrap: 'wrap',
+      fontSize: 13,
+      boxShadow: '0 2px 12px rgba(11, 31, 58, 0.2)',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', padding: '3px 8px', background: '#c9a24a', color: '#0b1f3a', borderRadius: 4, whiteSpace: 'nowrap' }}>ADMIN PREVIEW</span>
+        <span style={{ opacity: 0.9, whiteSpace: 'nowrap' }}>Viewing as <b>{role}</b></span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={currentId || ''} onChange={e => onChange(e.target.value)} style={{ background: '#17355e', color: '#fffcf5', border: '1px solid rgba(255,252,245,0.2)', padding: '8px 10px', borderRadius: 6, fontSize: 14, fontFamily: 'inherit', maxWidth: 220 }}>
+          {(deals || []).map(d => <option key={d.id} value={d.id}>{d.name}{d.address ? ` · ${d.address.slice(0, 28)}` : ''}</option>)}
+        </select>
+        <a href="/deal-command-center/" style={{ color: '#d8b560', textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap', fontSize: 13 }}>← DCC</a>
+      </div>
+    </div>
+  );
 }
 
 // ─── What's Happening Now ─────────────────────────────
@@ -666,7 +770,7 @@ function TestimonialOptIn({ accessId, initialPrefs }) {
 }
 
 // ─── Weekly Empathy Check-in ───────────────────────────
-function EmpathyCheckin({ prefs, dealStatus }) {
+function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
   const lastAt = prefs?.last_empathy_at;
   const daysSinceLast = lastAt ? Math.floor((Date.now() - new Date(lastAt).getTime()) / 86400000) : 999;
   const shouldShow = daysSinceLast >= 7 && !['recovered', 'dead'].includes(dealStatus);
@@ -681,6 +785,7 @@ function EmpathyCheckin({ prefs, dealStatus }) {
 
   const submit = async () => {
     if (!mood) return;
+    if (isPreview) { setErr('Preview mode — check-in not submitted.'); return; }
     setSubmitting(true); setErr(null);
     const { error } = await sb.rpc('client_empathy_checkin', {
       p_mood: mood,
@@ -753,12 +858,13 @@ function EmpathyCheckin({ prefs, dealStatus }) {
 }
 
 // ─── Client Documents (with upload) ──────────────────
-function ClientDocumentsSection({ dealId, documents, session, onChange }) {
+function ClientDocumentsSection({ dealId, documents, session, onChange, isPreview }) {
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState(null);
 
   const upload = async (file) => {
     if (!file) return;
+    if (isPreview) { setErr('Preview mode — upload disabled.'); return; }
     if (file.size > 25 * 1024 * 1024) { setErr('File must be under 25MB.'); return; }
     setUploading(true); setErr(null);
     try {
@@ -837,7 +943,7 @@ function ClientDocumentsSection({ dealId, documents, session, onChange }) {
 }
 
 // ─── Messages Thread ──────────────────────────────────
-function MessagesThread({ dealId, session, clientName }) {
+function MessagesThread({ dealId, session, clientName, isPreview }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
@@ -872,6 +978,7 @@ function MessagesThread({ dealId, session, clientName }) {
   const send = async () => {
     const body = text.trim();
     if (!body || sending) return;
+    if (isPreview) { alert('Preview mode — message not sent.'); return; }
     setSending(true);
     const { error } = await sb.from('messages').insert({
       deal_id: dealId,
@@ -995,7 +1102,7 @@ function StickyCallButton() {
 }
 
 // ─── Case View ─────────────────────────────────────────
-function CaseView({ deal, access, activity, documents, claimantCount, welcomeVideoUrl, session, onSignOut }) {
+function CaseView({ deal, access, activity, documents, claimantCount, welcomeVideoUrl, session, onSignOut, isPreview }) {
   const m = deal.meta || {};
   const estimatedSurplus = Number(m.estimatedSurplus) || 0;
   const feePct = Number(m.feePct) || 0;
@@ -1051,7 +1158,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
           )}
           <StatusIntel status={deal.status} filedAt={filedAt} />
           <TimelineExpectation filedAt={filedAt} status={deal.status} />
-          <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} />
+          <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} isPreview={isPreview} />
         </>
       )}
 
@@ -1112,7 +1219,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       </div>
 
       {/* Messages thread */}
-      <MessagesThread dealId={deal.id} session={session} clientName={deal.name} />
+      <MessagesThread dealId={deal.id} session={session} clientName={deal.name} isPreview={isPreview} />
 
       {/* Timeline */}
       <div className="card">
@@ -1131,7 +1238,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       </div>
 
       {/* Documents */}
-      <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} />
+      <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} isPreview={isPreview} />
 
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
 

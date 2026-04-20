@@ -1492,6 +1492,16 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         }} style={{ background: "transparent", border: `1px solid ${deal.meta?.bonus_due ? "#10b981" : "#44403c"}`, color: deal.meta?.bonus_due ? "#10b981" : "#78716c", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
           $ {deal.meta?.bonus_due ? "Bonus Due" : "Mark Bonus Due"}
         </button>
+        {isAdmin && (
+          <>
+            <a href={`portal.html?preview=${deal.id}`} target="_blank" rel="noreferrer" title="Open this deal in the client portal preview" style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              👤 Client view
+            </a>
+            <a href={`attorney-portal.html#/case/${deal.id}`} target="_blank" rel="noreferrer" title="Open this deal in the counsel portal preview" style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              ⚖ Counsel view
+            </a>
+          </>
+        )}
       </div>
 
       {isAdmin ? (
