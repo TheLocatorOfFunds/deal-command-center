@@ -9,11 +9,31 @@
 
 ## TL;DR for the Castle Claude session
 
-DCC needs a webhook event stream of docket updates, scoped to the Ohio surplus cases FundLocators is actively working. For each case we send you (case_number + county), Castle should monitor the docket and POST events to our Supabase Edge Function as they happen.
+DCC needs a webhook event stream of docket updates, scoped to the Ohio surplus cases FundLocators is actively working. Castle reads DCC's `deals` table directly to know which cases to monitor. When an event occurs, Castle POSTs it to DCC's Supabase Edge Function.
 
-Event shape, auth, taxonomy, and case-matching contract are all below. At the bottom is a checklist of what to send back so DCC can wire up the receiving side.
+Event shape, auth, taxonomy, case-matching, and scraper-health contract are all below.
 
-**If you can't do webhooks**, a polling endpoint `GET /docket/events?since=<ts>` works too — section "Polling fallback" below.
+## Status — decisions locked in (Apr 20, 2026)
+
+- ✅ **Delivery**: webhook (not polling)
+- ✅ **Watchlist**: Castle reads `public.deals` directly via Supabase service key — no HTTP API on Castle side
+- ✅ **Scraper health**: Castle writes to `public.scrape_runs` — no HTTP health endpoint
+- ✅ **Backfill**: Castle CLI command (`--backfill-days N --deal-id X`), not an endpoint
+- ✅ **Event type support**: all 12 taxonomy values — Castle ships all of them
+- ✅ **external_id format**: Castle's native scheme (must be stable + unique, format doesn't matter to DCC)
+- ✅ **Test events**: Castle runs `--dry-run` + `--send-canned` against prod webhook. DCC filters events where `external_id` starts with `test-` out of production UI.
+- ⏳ **HMAC secret**: generated, needs to be set in Supabase Edge Function env var + shared with Castle out-of-band
+
+## What's live on DCC right now
+
+- ✅ Supabase tables: `docket_events`, `docket_events_unmatched`, `scrape_runs`
+- ✅ RLS policies (admin / VA / attorney / client appropriately scoped)
+- ✅ RPCs: `acknowledge_docket_event`, `reconcile_docket_event`, `docket_unacknowledged_count`
+- ✅ View: `scraper_health` (per-county dashboard snapshot)
+- ✅ Edge Function: `/functions/v1/docket-webhook` (HMAC-validated, dedup-safe, auto-matches deals, stages unmatched)
+- ✅ Realtime publication on all three tables
+- ⏳ UI: deal detail Docket tab, client portal timeline additions, attorney portal docket tab, scraper-health admin page — all pending Castle delivering real events to test against.
+- ⏳ Automation triggers on `disbursement_ordered` / `notice_of_claim` / `objection_filed` — same.
 
 ---
 
@@ -198,125 +218,81 @@ For 400 / 401: stop retrying (bad data or auth), log + alert.
 
 ---
 
-## DCC → Castle: outbound API Castle must expose
+## DCC → Castle: no HTTP API — Castle reads DCC directly
 
-For DCC to tell Castle which cases to monitor, Castle needs to expose an HTTP API. This is the reverse direction from the webhook above.
+Castle pushed back on the original "Castle exposes HTTP endpoints" design. They're right — it was over-engineered. Castle is a Python CLI/cron tool, not a distributed system, and building FastAPI + auth + deployment for what amounts to a `SELECT` against our deals table added ~3 days of work for no functional gain.
 
-**Base URL**: Castle team provides (e.g. `https://castle.example.com/api/v1`).
-**Auth**: `Authorization: Bearer <DCC_CASTLE_TOKEN>` — Castle generates a token for DCC, shared out-of-band.
+**Revised model**: Castle reads DCC's `public.deals` table directly using the Supabase service key they already have in their config. Every monitor run:
 
-### Required endpoints
-
-#### `POST /cases` — register a case for monitoring
-
-When FundLocators signs a new client and creates a deal, DCC calls this to tell Castle "watch this case."
-
-```
-POST /cases
-Content-Type: application/json
-Authorization: Bearer <DCC_CASTLE_TOKEN>
-
-{
-  "case_number": "2024CV12345",
-  "county": "Hamilton",
-  "dcc_deal_id": "sf-smith-lkm3a",
-  "client_name": "Jane Smith",
-  "filed_at": "2026-02-14",
-  "priority": "normal"
-}
+```sql
+select
+  id          as dcc_deal_id,
+  meta->>'courtCase' as case_number,
+  meta->>'county'    as county,
+  name        as client_name,
+  filed_at
+from public.deals
+where status not in ('paid-out', 'closed', 'dead', 'recovered');
 ```
 
-Response 200:
-```json
-{ "castle_case_id": "cl_abc123", "status": "monitoring", "registered_at": "2026-04-20T14:23:00Z" }
-```
+That result set IS Castle's watchlist. No registration API, no handshake, no token rotation, no drift risk — the deals table IS the source of truth.
 
-DCC stores `castle_case_id` in `castle_case_registrations.castle_case_id`.
+### Implications
 
-#### `DELETE /cases/{castle_case_id}` — stop monitoring
+| Was | Is |
+|---|---|
+| DCC calls `POST /cases` when a deal is created | Castle picks up new deals on next cron run (max 1h delay — fine at case-lifecycle timescales) |
+| DCC calls `DELETE /cases/:id` when a deal closes | Castle drops the case next run when status transitions to closed |
+| Separate `castle_case_registrations` table on DCC | Removed — obsolete. `deals` is the truth. |
+| DCC_CASTLE_TOKEN generation/rotation | None. Castle uses the existing Supabase service key. |
+| `GET /cases` for reconciliation | Not needed — DCC queries its own deals table. |
+| `GET /health` HTTP endpoint on Castle | Replaced by Castle writing to DCC's `scrape_runs` table (see below) |
 
-When a deal closes (recovered / dead / closed), DCC tells Castle to stop watching.
+### Backfill path
 
-Response 204.
-
-#### `GET /cases` — list everything Castle is currently monitoring
-
-Used for nightly reconciliation (DCC confirms Castle's list matches DCC's open deals).
-
-Response:
-```json
-{
-  "cases": [
-    { "castle_case_id": "cl_abc123", "case_number": "2024CV12345", "county": "Hamilton",
-      "registered_at": "2026-04-20T14:23:00Z", "last_event_at": "2026-04-19T10:15:00Z",
-      "health": "healthy" }
-  ]
-}
-```
-
-#### `POST /cases/{castle_case_id}/backfill` — one-time historical sync
-
-When a new case is added mid-lifecycle and DCC wants all historical docket entries.
+Castle exposes no HTTP endpoint for backfill. Instead, Nathan (or a DCC Edge Function in the future) triggers via Castle's CLI:
 
 ```
-POST /cases/cl_abc123/backfill
-{ "since": "2025-01-01" }
+python main.py --step monitor --backfill-days 90 --deal-id sf-smith-lkm3a
 ```
 
-Castle POSTs each historical event to the webhook as if it just happened. Response 202 Accepted.
+Castle walks the docket history for that deal and POSTs each event to our webhook as if just discovered. Idempotent via `external_id`.
 
-#### `GET /health` — per-county status
+### scraper_health via scrape_runs table
 
-For DCC's scraper-health dashboard.
+Castle writes scraper heartbeats directly to DCC's `public.scrape_runs` table after each monitor run. DCC's UI reads from this table for its scraper-health dashboard.
 
-```json
-{
-  "status": "ok",
-  "counties": {
-    "Hamilton":   { "last_successful_scrape": "2026-04-20T13:45:00Z", "healthy": true },
-    "Franklin":   { "last_successful_scrape": "2026-04-20T13:40:00Z", "healthy": true },
-    "Cuyahoga":   { "last_successful_scrape": "2026-04-18T09:00:00Z", "healthy": false, "error": "captcha_required" }
-  }
-}
+Schema:
+
+```sql
+create table public.scrape_runs (
+  id uuid primary key default gen_random_uuid(),
+  started_at timestamptz not null default now(),
+  completed_at timestamptz,
+  county text,
+  deals_checked int default 0,
+  events_found int default 0,
+  events_new int default 0,
+  status text default 'running',  -- running | success | failed | partial
+  errors jsonb default '[]',      -- array of { deal_id?, county?, message, stack? }
+  notes text,
+  scraper_version text
+);
 ```
 
-### Error shapes
+Castle writes one row per monitor run per county. Example:
 
-All non-2xx responses should return:
-```json
-{ "error": "case_not_found" | "county_unsupported" | "duplicate_registration" | "rate_limited" | "internal",
-  "message": "human-readable detail" }
+```sql
+insert into public.scrape_runs
+  (started_at, completed_at, county, deals_checked, events_found, events_new, status, scraper_version)
+values
+  (now() - interval '45 seconds', now(), 'Franklin', 12, 3, 2, 'success', 'castle-0.8.1');
 ```
 
-### Who builds what
-
-- **Castle**: the HTTP endpoints above + the docket webhook integration.
-- **DCC**: a small Supabase Edge Function `castle-client` that wraps these endpoints, called whenever DCC creates/closes a deal. DCC will not build this until Castle confirms the API shape + shares `<DCC_CASTLE_TOKEN>`.
+DCC has a view `public.scraper_health` that gives a per-county snapshot (last run, last success, failures in last 24h, events in last 7d) for the admin dashboard.
 
 ---
 
-## Polling fallback (if webhooks are slow to set up)
-
-Castle exposes:
-
-```
-GET https://castle.example.com/api/v1/docket/events?since=<ISO timestamp>&cases=<comma-list>
-Authorization: Bearer <DCC_CASTLE_TOKEN>
-```
-
-Response:
-```json
-{
-  "events": [ { ...event shape above... }, ... ],
-  "cursor": "2026-04-19T15:00:00Z"
-}
-```
-
-DCC polls every 15 minutes with `since=<last cursor>` and processes the returned events identically to webhook POSTs.
-
-Either webhook OR polling is fine — pick whichever Castle can build faster. Webhook is preferred for latency (the `disbursement_ordered` event is time-sensitive).
-
----
 
 ## What Castle needs to know about DCC downstream
 
@@ -336,39 +312,42 @@ Castle doesn't need to wait for any of this. Fire-and-forget once you get a 200.
 
 ---
 
-## Delivery checklist — what Castle must provide
+## Delivery checklist
 
-To turn this on, Castle team needs to deliver:
+### Castle's side
+- [x] Webhook implementation — half-day build
+- [x] Watchlist — query DCC `deals` directly
+- [x] Event type support — 8/12 today, remaining 4 (hearing_continued, continuance_granted, answer_filed, judgment_entered) ~30 min
+- [x] Rate estimate — 10-20/day steady, 30/hr peak
+- [x] County coverage — Franklin live; Butler / Warren / Cuyahoga 1-2 calibrations away; 74 more scaffolded
+- [x] Test mode — `--dry-run --webhook-url --send-canned`
+- [x] Health — writes to DCC's `scrape_runs` table
+- [x] Backfill — CLI command
 
-- [ ] **Webhook implementation** (or polling endpoint URL)
-- [ ] **List of cases Castle is monitoring**, in JSON format:
-  ```json
-  [
-    {"case_number": "2024CV12345", "county": "Hamilton", "castle_case_id": "cl_abc"},
-    ...
-  ]
-  ```
-- [ ] **Event type support** — minimum: `disbursement_ordered`, `hearing_scheduled`, `docket_updated`. Stretch: the full taxonomy above.
-- [ ] **Rate expectations** — what's the peak event volume Castle might send per hour?
-- [ ] **Scraper coverage** — list of Ohio counties Castle can reliably scrape. For uncovered counties, DCC falls back to manual Nathan-posts-updates.
-- [ ] **Test mode** — can Castle send a test event DCC can verify signatures + field shape against before going live?
-- [ ] **Health endpoint** — way for DCC to know Castle's scrapers are still running (e.g., `GET /health` returning last-successful-scrape-per-county timestamps). Optional but great for debugging.
-- [ ] **Backfill capability** — one-time "send all events from past 90 days for case X" endpoint, for onboarding new cases.
+### DCC's side
+- [x] `docket_events` + `docket_events_unmatched` tables (applied)
+- [x] `scrape_runs` table + `scraper_health` view (applied)
+- [x] Supabase Edge Function `docket-webhook` (deployed, HMAC validated, dedup, deal matching)
+- [x] RLS + RPCs (acknowledge, reconcile, unacknowledged count)
+- [x] Realtime publication on all three tables
+- [ ] HMAC secret set in Supabase Edge Function env vars (Nathan action — blocks live traffic)
+- [ ] HMAC secret shared with Castle out-of-band (Nathan action)
+- [ ] UI: DCC deal detail Docket tab with unacknowledged badge + acknowledge button
+- [ ] UI: client portal timeline additions for client-facing event types
+- [ ] UI: attorney portal docket tab on assigned cases
+- [ ] UI: admin scraper-health page reading from `scraper_health` view
+- [ ] Automation trigger: `disbursement_ordered` → client celebration hero + Nathan follow-up task + commission row
+- [ ] Automation trigger: `notice_of_claim` → Nathan alert (multi-claimant)
+- [ ] Automation trigger: `objection_filed` → Nathan alert (contest)
+- [ ] Daily digest email section summarizing new docket events
+- [ ] Filter: `external_id` starting with `test-` excluded from production UI
 
----
+### Nathan's side
+- [ ] Set `DOCKET_WEBHOOK_SECRET` env var in Supabase dashboard
+- [ ] Share secret + webhook URL + anon key with Castle out-of-band
+- [ ] 2Captcha API key (unblocks Butler + Warren + 10 Henschen counties)
 
-## What DCC will build on its side (after Castle confirms the contract)
-
-1. `docket_events` table + `docket_events_unmatched` staging table
-2. Supabase Edge Function `docket-webhook` — HMAC validation, dedup, deal matching, event routing
-3. Automation hooks for `disbursement_ordered`, `notice_of_claim`, `objection_filed`
-4. Client portal timeline additions for client-facing events
-5. Attorney portal docket tab showing full timeline
-6. DCC deal detail Docket tab with unacknowledged count + acknowledge button
-7. Daily digest email section summarizing new docket events
-8. Integration tests with Castle's test endpoint
-
-DCC will share the exact webhook URL and the shared secret once the Edge Function is deployed. Until then, Castle can build against a stub URL.
+Once Nathan's three items are done, Phase 1 (Franklin + PROWARE counties, ~40% of Ohio foreclosure volume) can flow events into DCC the same week.
 
 ---
 
