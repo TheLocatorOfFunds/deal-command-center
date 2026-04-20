@@ -158,12 +158,14 @@ Each PR should be independently shippable and independently testable. No big-ban
 
 ---
 
-## 8 — Open design questions for Nathan
+## 8 — Design questions — CONFIRMED by Nathan (Session 17, 2026-04-20)
 
-1. **Versioning**: keep old versions visible in a "history" drawer, or hide and only surface the current version? Recommendation: keep visible for audit, with "latest" pinned to the top.
-2. **External links** (e.g. a Loom or a Notion page): should `kind='link'` be a first-class citizen, or skip and assume everything is a file? Recommendation: first-class `link` kind — cheaper than migrating later, and Nathan already uses Loom.
-3. **Who can upload?** Admin-only, or VAs too? Recommendation: both, into `team`-visibility folders. Admins-only for `admin_only` folders.
-4. **Which folders ship pre-seeded on day 1?** Suggested seed list:
+Nathan confirmed "yes to all of the 5 open phase 3 questions, i am good with your rec." Locked-in answers below. Build accordingly.
+
+1. **Versioning — CONFIRMED: keep visible.** Old versions stay in a history drawer on each doc, with "latest" pinned to the top. Good for forensics and audit trails.
+2. **External links — CONFIRMED: first-class `kind='link'`.** Supports Loom, Notion, YouTube, any URL. Renders in the library list alongside uploaded files.
+3. **Upload rights — CONFIRMED: VAs can upload into `team` folders; admins-only for `admin_only` folders.** Matches DCC's existing role-gating pattern.
+4. **Seed folders on day 1 — CONFIRMED:**
    - `01 — Brand (cream/navy/gold, logos, icons, typography)`
    - `02 — Templates (engagement letters, attorney retainer, fee disclosure, W-9)`
    - `03 — SOPs (intake, attorney kickoff, post-recovery handoff, VA day-one)`
@@ -171,7 +173,7 @@ Each PR should be independently shippable and independently testable. No big-ban
    - `05 — Marketing (refundlocators assets, defenderha assets, fundlocators SEO)`
    - `06 — Training (Loom walkthroughs, onboarding videos)`
    - `07 — Financial (admin-only — monthly P&L exports, tax docs)`
-5. **Client portal integration**: should `visibility='client'` docs appear in every client's portal automatically, or only via per-deal pinning? Recommendation: per-deal pin only — prevents accidental leakage of generic docs into the wrong client's view.
+5. **Client portal integration — CONFIRMED: pin-per-deal only.** `visibility='client'` docs do NOT auto-appear in every portal. They only show up in a client's portal after an admin explicitly pins them to that deal (via the deferred `deal_library_pins` table in PR 3). Protects against accidental cross-deal leakage.
 
 ---
 
