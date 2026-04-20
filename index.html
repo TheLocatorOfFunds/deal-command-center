@@ -27,23 +27,104 @@
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #44403c; border-radius: 3px; }
 
-  /* ─── Mobile Layout ─────────────────────────────────────── */
+  /* ─── Touch + Tap fundamentals ─────────────────────────────── */
+  button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  input, textarea, select { -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+
+  /* ─── FAB (Floating Action Button) — mobile only ───────────── */
+  .fab { display: none; position: fixed; right: calc(16px + env(safe-area-inset-right));
+         bottom: calc(20px + env(safe-area-inset-bottom)); width: 56px; height: 56px;
+         border-radius: 50%; background: #d97706; color: #0c0a09; border: none;
+         box-shadow: 0 6px 18px rgba(217, 119, 6, 0.45), 0 2px 4px rgba(0, 0, 0, 0.3);
+         font-size: 26px; font-weight: 700; cursor: pointer; z-index: 90;
+         align-items: center; justify-content: center; line-height: 1; }
+  .fab:active { transform: scale(0.94); }
+
+  /* ─── Tablet (≤768px) ──────────────────────────────────────── */
   @media (max-width: 768px) {
     .portfolio-stats { grid-template-columns: 1fr 1fr !important; }
     .deal-grid { grid-template-columns: 1fr !important; }
     .main-grid { grid-template-columns: 1fr !important; }
-    .kanban-board { overflow-x: auto; }
+    .kanban-board { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .kanban-columns { min-width: 600px; }
-    .detail-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .detail-tabs button { padding: 8px 10px !important; font-size: 12px !important; }
+    .detail-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .detail-tabs::-webkit-scrollbar { display: none; }
+    .detail-tabs button { padding: 10px 12px !important; font-size: 13px !important; white-space: nowrap; }
     .expense-add-form { grid-template-columns: 1fr !important; }
-    .modal-inner { max-width: 100% !important; padding: 16px !important; margin: 8px !important; }
     .metric-grid-4 { grid-template-columns: 1fr 1fr !important; }
     .metric-grid-3 { grid-template-columns: 1fr !important; }
     .overview-grid { grid-template-columns: 1fr !important; }
     .header-bar { flex-direction: column; align-items: flex-start !important; gap: 12px !important; }
-    .header-right { align-self: flex-end; }
+    .header-right { align-self: stretch; flex-wrap: wrap; }
     .view-controls { flex-direction: column; align-items: stretch !important; gap: 10px !important; }
+  }
+
+  /* ─── Phone (≤640px) ───────────────────────────────────────── */
+  @media (max-width: 640px) {
+    /* Shell padding — tighter on phones, safe-area aware */
+    .shell { padding: 12px 12px calc(80px + env(safe-area-inset-bottom)) !important; }
+
+    /* Prevent iOS auto-zoom by ensuring inputs are ≥ 16px */
+    input, textarea, select { font-size: 16px !important; }
+
+    /* Tap targets: base ghost buttons get a proper minimum hit size */
+    .tap-target, .header-right button { min-height: 38px; padding: 8px 12px !important; }
+
+    /* Header: brand row wraps inputs down to own line */
+    .portfolio-stats { grid-template-columns: 1fr !important; gap: 10px !important; }
+    .portfolio-stat-card { padding: 14px !important; }
+
+    /* Portfolio metric labels smaller but more readable */
+    .portfolio-stat-label { font-size: 10px !important; }
+    .portfolio-stat-value { font-size: 22px !important; }
+
+    /* Titles — avoid massive desktop-scale headings */
+    .page-title { font-size: 26px !important; }
+    .page-kicker { font-size: 10px !important; }
+
+    /* Modal → full-screen bottom-sheet on phone */
+    .modal-backdrop { padding: 0 !important; align-items: flex-end !important; }
+    .modal-inner {
+      max-width: 100% !important;
+      width: 100% !important;
+      max-height: 92vh !important;
+      padding: 18px 16px calc(18px + env(safe-area-inset-bottom)) !important;
+      margin: 0 !important;
+      border-radius: 16px 16px 0 0 !important;
+      border-bottom: 0 !important;
+      animation: sheetUp 0.18s ease-out;
+    }
+    @keyframes sheetUp { from { transform: translateY(40px); opacity: 0.7; } to { transform: translateY(0); opacity: 1; } }
+
+    /* Show FAB on phone */
+    .fab { display: inline-flex; }
+
+    /* Hide desktop "+ New Deal" button since FAB replaces it */
+    .desktop-new-deal { display: none !important; }
+
+    /* Detail tabs scroll horizontally with snap */
+    .detail-tabs { scroll-snap-type: x mandatory; padding-bottom: 2px; }
+    .detail-tabs button { scroll-snap-align: start; }
+
+    /* Deal detail metric strip wraps to 2-up on phone */
+    .metric-grid-4 { grid-template-columns: 1fr 1fr !important; gap: 8px !important; }
+    .metric-card { padding: 12px 10px !important; }
+
+    /* Kanban stays scrollable — tighten column width */
+    .kanban-columns { min-width: 540px; }
+
+    /* Activity log rows — more breathing room on phone */
+    .activity-row { padding: 14px !important; }
+
+    /* Search modal — full screen on phone */
+    .search-modal-inner { max-width: 100% !important; max-height: 100vh !important; height: 100vh !important; border-radius: 0 !important; }
+  }
+
+  /* ─── Small phone (≤390px) — tighten further ──────────────── */
+  @media (max-width: 390px) {
+    .metric-grid-4 { grid-template-columns: 1fr !important; }
+    .portfolio-stat-value { font-size: 20px !important; }
+    .page-title { font-size: 22px !important; }
   }
 </style>
 </head>
@@ -135,7 +216,7 @@ const td = { padding: "10px 12px", verticalAlign: "top" };
 // ─── Shell ───────────────────────────────────────────────────────────
 function Shell({ children }) {
   return (
-    <div style={{ minHeight: "100vh", padding: "20px 24px" }}>
+    <div className="shell" style={{ minHeight: "100vh", padding: "20px 24px" }}>
       <div style={{ maxWidth: 1340, margin: "0 auto" }}>{children}</div>
     </div>
   );
@@ -308,10 +389,10 @@ function DealCommandCenter({ session, profile }) {
             </button>
           )}
           <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
+            <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
               {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "FundLocators Deal Hub"}
             </div>
-            <div style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
+            <div className="page-title" style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
               {activeDeal ? activeDeal.name : "Deal Command Center"}
             </div>
             {activeDeal && <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>{activeDeal.address}</div>}
@@ -346,6 +427,11 @@ function DealCommandCenter({ session, profile }) {
         }} />
       ) : (
         <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
+      )}
+
+      {/* Mobile FAB — only visible on phone via CSS */}
+      {!activeDeal && (
+        <button className="fab" onClick={() => setShowNewDeal(true)} aria-label="Add new deal">+</button>
       )}
     </Shell>
   );
@@ -440,7 +526,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
-          <button onClick={onNew} style={btnPrimary}>+ New Deal</button>
+          <button className="desktop-new-deal" onClick={onNew} style={btnPrimary}>+ New Deal</button>
         </div>
       </div>
 
@@ -637,9 +723,9 @@ function KanbanBoard({ deals, statuses, onSelect, type, onMoveDeal }) {
 
 function PortfolioStat({ label, value, sub, color }) {
   return (
-    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14, borderTop: `2px solid ${color}` }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono', monospace", marginTop: 6, color }}>{value}</div>
+    <div className="portfolio-stat-card" style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14, borderTop: `2px solid ${color}` }}>
+      <div className="portfolio-stat-label" style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</div>
+      <div className="portfolio-stat-value" style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono', monospace", marginTop: 6, color }}>{value}</div>
       <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>{sub}</div>
     </div>
   );
@@ -1272,12 +1358,18 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
 }
 
 function Modal({ onClose, title, children, wide }) {
+  // Lock body scroll while modal is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+    <div className="modal-backdrop" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div className="modal-inner" onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, padding: 24, width: "100%", maxWidth: wide ? 720 : 480, maxHeight: "90vh", overflowY: "auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, position: "sticky", top: -24, background: "#1c1917", zIndex: 1, paddingTop: 4, paddingBottom: 10 }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>{title}</div>
-          <button onClick={onClose} style={{ ...btnGhost, fontSize: 16, padding: "2px 10px" }}>×</button>
+          <button onClick={onClose} style={{ ...btnGhost, fontSize: 18, padding: "6px 12px", minWidth: 40, minHeight: 36 }} aria-label="Close">×</button>
         </div>
         {children}
       </div>
@@ -2393,11 +2485,44 @@ function Documents({ items, dealId, userId, logAct, reload }) {
   };
 
   const fmtSize = (b) => b < 1024 ? `${b} B` : b < 1024*1024 ? `${(b/1024).toFixed(1)} KB` : `${(b/1024/1024).toFixed(1)} MB`;
-  const humanizeType = (t) => (t || '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-  const fmtFieldValue = (v) => {
-    if (v === null || v === undefined) return <span style={{ color: "#57534e", fontStyle: "italic" }}>not present</span>;
+
+  const DOC_TYPE_META = {
+    // Surplus-specific
+    engagement_agreement:      { label: 'Engagement Agreement', color: '#065f46', bg: '#064e3b', text: '#6ee7b7' },
+    surplus_distribution_order:{ label: 'Distribution Order',   color: '#065f46', bg: '#064e3b', text: '#34d399' },
+    sheriff_sale_confirmation:  { label: 'Sale Confirmation',    color: '#065f46', bg: '#064e3b', text: '#6ee7b7' },
+    notice_of_default:         { label: 'Notice of Default',     color: '#92400e', bg: '#78350f', text: '#fcd34d' },
+    proof_of_claim:            { label: 'Proof of Claim',        color: '#1e3a5f', bg: '#1e3a5f', text: '#93c5fd' },
+    distribution_check:        { label: 'Distribution Check',    color: '#065f46', bg: '#14532d', text: '#86efac' },
+    // General legal
+    death_certificate:         { label: 'Death Certificate',     color: '#4c1d95', bg: '#3b0764', text: '#c4b5fd' },
+    id_document:               { label: 'ID / License',          color: '#374151', bg: '#1f2937', text: '#d1d5db' },
+    deed:                      { label: 'Deed',                  color: '#78350f', bg: '#451a03', text: '#fde68a' },
+    power_of_attorney:         { label: 'Power of Attorney',     color: '#4c1d95', bg: '#3b0764', text: '#c4b5fd' },
+    probate_document:          { label: 'Probate Document',      color: '#4c1d95', bg: '#3b0764', text: '#c4b5fd' },
+    bank_statement:            { label: 'Bank Statement',        color: '#374151', bg: '#1f2937', text: '#d1d5db' },
+    correspondence:            { label: 'Correspondence',        color: '#374151', bg: '#1f2937', text: '#9ca3af' },
+    court_filing:              { label: 'Court Filing',          color: '#1e3a5f', bg: '#1e3a5f', text: '#93c5fd' },
+    other:                     { label: 'Other',                 color: '#292524', bg: '#1c1917', text: '#a8a29e' },
+  };
+  const getTypeMeta = (t) => DOC_TYPE_META[t] || { label: (t||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase()), bg: '#292524', text: '#a8a29e' };
+
+  // Fields that represent dollar amounts — formatted with $
+  const MONEY_FIELDS = new Set(['surplus_amount','surplus_amount_estimated','sale_price','minimum_bid',
+    'judgment_amount','amount_claimed','claimant_share','consideration','ending_balance','amount']);
+  const PCT_FIELDS = new Set(['fee_percentage']);
+  // Fields shown as highlighted "key numbers" at the top of the extraction panel
+  const KEY_FIELDS = ['surplus_amount','surplus_amount_estimated','judgment_amount','sale_price',
+    'fee_percentage','amount_claimed','claimant_share','amount'];
+
+  const fmtFieldValue = (key, v) => {
+    if (v === null || v === undefined) return <span style={{ color: "#57534e", fontStyle: "italic" }}>—</span>;
     if (typeof v === 'boolean') return v ? 'Yes' : 'No';
-    if (typeof v === 'number') return v.toLocaleString();
+    if (typeof v === 'number') {
+      if (MONEY_FIELDS.has(key)) return `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      if (PCT_FIELDS.has(key)) return `${v}%`;
+      return v.toLocaleString();
+    }
     return String(v);
   };
 
@@ -2409,7 +2534,7 @@ function Documents({ items, dealId, userId, logAct, reload }) {
       </label>
     }>
       {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
-      {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload contracts, deeds, probate filings, scope of work, photos, etc. Uploaded files are auto-analyzed by Claude Vision to extract key fields (name, dates, case numbers, etc.).</div>}
+      {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload engagement agreements, distribution orders, sale confirmations, NODs, proof of claim, death certificates, IDs, deeds, or any court filing. Claude Vision reads each file and extracts key fields — surplus amounts, case numbers, dates, fee percentages — automatically.</div>}
       {items.map(doc => {
         const status = doc.extraction_status;
         const isExtracting = extracting[doc.id] || status === 'processing';
@@ -2422,9 +2547,10 @@ function Documents({ items, dealId, userId, logAct, reload }) {
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, cursor: "pointer", color: "#d97706", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => openDoc(doc)}>{doc.name}</div>
-                  {status === 'done' && doc.extracted?.document_type && (
-                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#064e3b", color: "#6ee7b7", letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{humanizeType(doc.extracted.document_type)}</span>
-                  )}
+                  {status === 'done' && doc.extracted?.document_type && (() => {
+                    const m = getTypeMeta(doc.extracted.document_type);
+                    return <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: m.bg, color: m.text, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{m.label}</span>;
+                  })()}
                   {status === 'processing' && (
                     <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: "#1e3a5f", color: "#93c5fd", letterSpacing: "0.06em", textTransform: "uppercase" }}>Analyzing…</span>
                   )}
@@ -2453,26 +2579,43 @@ function Documents({ items, dealId, userId, logAct, reload }) {
                 <button onClick={() => removeDoc(doc)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5", borderColor: "#7f1d1d" }}>Delete</button>
               </div>
             </div>
-            {isExpanded && status === 'done' && (
-              <div style={{ marginTop: 10, padding: 12, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 8 }}>
-                  {Object.entries(extractedFields).map(([key, value]) => (
-                    <div key={key}>
-                      <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>{key.replace(/_/g, ' ')}</div>
-                      <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 2, wordBreak: "break-word" }}>{fmtFieldValue(value)}</div>
+            {isExpanded && status === 'done' && (() => {
+              const keyHighlights = KEY_FIELDS.filter(k => extractedFields[k] != null);
+              const otherFields = Object.entries(extractedFields).filter(([k, v]) => v != null && !KEY_FIELDS.includes(k));
+              const conf = doc.extracted?.confidence;
+              const confColor = conf === 'high' ? '#34d399' : conf === 'medium' ? '#fcd34d' : '#fca5a5';
+              return (
+                <div style={{ marginTop: 10, padding: 12, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+                  {keyHighlights.length > 0 && (
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12, padding: "10px 12px", background: "#0f172a", borderRadius: 5, border: "1px solid #1e3a5f" }}>
+                      {keyHighlights.map(k => (
+                        <div key={k}>
+                          <div style={{ fontSize: 9, fontWeight: 700, color: "#64748b", letterSpacing: "0.08em", textTransform: "uppercase" }}>{k.replace(/_/g, ' ')}</div>
+                          <div style={{ fontSize: 16, fontWeight: 700, color: "#fbbf24", marginTop: 1 }}>{fmtFieldValue(k, extractedFields[k])}</div>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-                {doc.extracted?.notes && (
-                  <div style={{ marginTop: 10, padding: "8px 10px", background: "#1c1917", borderRadius: 4, fontSize: 11, color: "#a8a29e", fontStyle: "italic" }}>
-                    Claude's note: {doc.extracted.notes}
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 8 }}>
+                    {otherFields.map(([key, value]) => (
+                      <div key={key}>
+                        <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>{key.replace(/_/g, ' ')}</div>
+                        <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 2, wordBreak: "break-word" }}>{fmtFieldValue(key, value)}</div>
+                      </div>
+                    ))}
                   </div>
-                )}
-                <div style={{ fontSize: 10, color: "#57534e", marginTop: 8, textAlign: "right" }}>
-                  Extracted {doc.extracted?.confidence ? `with ${doc.extracted.confidence} confidence` : ''} by Claude Vision · {doc.extracted_at ? new Date(doc.extracted_at).toLocaleString() : ''}
+                  {doc.extracted?.notes && (
+                    <div style={{ marginTop: 10, padding: "8px 10px", background: "#1c1917", borderRadius: 4, fontSize: 11, color: "#a8a29e", fontStyle: "italic" }}>
+                      Note: {doc.extracted.notes}
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, color: "#57534e", marginTop: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>Extracted by Claude Vision · {doc.extracted_at ? new Date(doc.extracted_at).toLocaleString() : ''}</span>
+                    {conf && <span style={{ fontWeight: 700, color: confColor }}>{conf} confidence</span>}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
             {status === 'failed' && doc.extraction_error && (
               <div style={{ marginTop: 8, padding: "6px 10px", background: "#0c0a09", border: "1px solid #7f1d1d", borderRadius: 4, fontSize: 11, color: "#fca5a5" }}>
                 {doc.extraction_error}
@@ -2543,6 +2686,7 @@ function LeadsModal({ onClose, userName, onConverted }) {
   const [filter, setFilter] = useState('new');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [expandedDupId, setExpandedDupId] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -2566,8 +2710,55 @@ function LeadsModal({ onClose, userName, onConverted }) {
     setBusy(false);
   };
 
+  const dismissDuplicates = async (lead) => {
+    setBusy(true); setMsg(null);
+    const { error } = await sb.rpc('dismiss_lead_duplicates', { p_lead_id: lead.id, p_note: null });
+    if (error) setMsg({ type: 'error', text: error.message });
+    else setMsg({ type: 'success', text: 'Duplicate warning dismissed' });
+    await load();
+    setBusy(false);
+  };
+
+  const rescanDuplicates = async (lead) => {
+    setBusy(true); setMsg(null);
+    const { data, error } = await sb.rpc('rescan_lead_duplicates', { p_lead_id: lead.id });
+    if (error) setMsg({ type: 'error', text: error.message });
+    else {
+      const n = Array.isArray(data) ? data.length : 0;
+      setMsg({ type: 'success', text: n === 0 ? 'Rescanned — no duplicates found' : `Rescanned — ${n} match${n === 1 ? '' : 'es'}` });
+    }
+    await load();
+    setBusy(false);
+  };
+
+  const linkToExistingDeal = async (lead, dealId, dealName) => {
+    if (!window.confirm(`Link this lead to existing deal "${dealName}" (${dealId})? Lead will move to 'signed'.`)) return;
+    setBusy(true); setMsg(null);
+    const { error } = await sb.from('leads').update({ status: 'signed', converted_to_deal_id: dealId }).eq('id', lead.id);
+    if (error) setMsg({ type: 'error', text: error.message });
+    else {
+      setMsg({ type: 'success', text: `Linked to ${dealId}` });
+      onConverted?.();
+    }
+    await load();
+    setBusy(false);
+  };
+
   const convertToDeal = async (lead) => {
-    if (!window.confirm(`Create a new surplus deal for "${lead.name}"? Lead status will change to 'signed'.`)) return;
+    // Pre-check for existing deal matches — warn before creating a new one
+    const dealDups = (lead.metadata?.duplicates || []).filter(d => d.kind === 'deal');
+    const unresolvedDeals = lead.metadata?.duplicates_dismissed_at ? [] : dealDups;
+    if (unresolvedDeals.length > 0) {
+      const top = unresolvedDeals[0];
+      const ok = window.confirm(
+        `⚠ Existing deal detected: "${top.name}" (${top.id})\n\n` +
+        `Match score ${top.score}/100 — reasons: ${(top.reasons || []).join(', ')}\n\n` +
+        `Creating a new deal will create a duplicate. Click OK to create anyway, or Cancel and use "Link to existing" in the duplicates panel.`
+      );
+      if (!ok) return;
+    } else {
+      if (!window.confirm(`Create a new surplus deal for "${lead.name}"? Lead status will change to 'signed'.`)) return;
+    }
     setBusy(true); setMsg(null);
     try {
       const id = 'sf-' + lead.name.toLowerCase().split(' ').join('-').replace(/[^a-z0-9-]/g, '').slice(0, 30) + '-' + Date.now().toString(36);
@@ -2605,7 +2796,7 @@ function LeadsModal({ onClose, userName, onConverted }) {
   return (
     <Modal onClose={onClose} title="Leads — Intake Pipeline" wide>
       <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 16, flexWrap: "wrap" }}>
-        {['new', 'contacted', 'qualified', 'signed', 'rejected', 'spam', 'all'].map(s => (
+        {['new', 'contacted', 'qualified', 'signed', 'rejected', 'duplicate', 'spam', 'all'].map(s => (
           <button key={s} onClick={() => setFilter(s)} style={{
             padding: "5px 12px",
             borderRadius: 6,
@@ -2632,8 +2823,40 @@ function LeadsModal({ onClose, userName, onConverted }) {
 
       {!loading && leads.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {leads.map(l => (
-            <div key={l.id} style={{ padding: "14px 16px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+          {leads.map(l => {
+            const dups = l.metadata?.duplicates || [];
+            const dupCount = l.metadata?.duplicate_count || 0;
+            const dismissed = !!l.metadata?.duplicates_dismissed_at;
+            const hasUnresolvedDups = dupCount > 0 && !dismissed && l.status !== 'duplicate';
+            const topScore = dups.reduce((m, d) => Math.max(m, d.score || 0), 0);
+            const isExpanded = expandedDupId === l.id;
+            return (
+            <div key={l.id} style={{
+              padding: "14px 16px",
+              background: "#0c0a09",
+              border: hasUnresolvedDups ? "1px solid #78350f" : "1px solid #292524",
+              borderRadius: 8,
+            }}>
+              {hasUnresolvedDups && (
+                <div style={{ marginBottom: 10, padding: "8px 10px", background: "#1f1408", border: "1px solid #78350f", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                  <div style={{ fontSize: 11, color: "#fbbf24", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>⚠</span>
+                    <span>{dupCount} possible duplicate{dupCount === 1 ? '' : 's'} detected {topScore > 0 && <span style={{ fontWeight: 400, color: "#d6a85a" }}>· top match {topScore}/100</span>}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => setExpandedDupId(isExpanded ? null : l.id)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px", color: "#fbbf24", borderColor: "#78350f" }}>
+                      {isExpanded ? 'Hide' : 'Review'}
+                    </button>
+                    <button onClick={() => dismissDuplicates(l)} disabled={busy} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px", color: "#78716c" }}>Dismiss</button>
+                  </div>
+                </div>
+              )}
+              {dismissed && dupCount > 0 && (
+                <div style={{ marginBottom: 10, padding: "6px 10px", background: "#0c0a09", border: "1px dashed #292524", borderRadius: 6, fontSize: 10, color: "#57534e", display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span>Duplicate warning dismissed ({dupCount} match{dupCount === 1 ? '' : 'es'})</span>
+                  <button onClick={() => rescanDuplicates(l)} disabled={busy} style={{ background: "transparent", border: "none", color: "#78716c", fontSize: 10, cursor: "pointer", textDecoration: "underline", padding: 0 }}>Re-scan</button>
+                </div>
+              )}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 200 }}>
                   <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>
@@ -2650,7 +2873,47 @@ function LeadsModal({ onClose, userName, onConverted }) {
                   </div>
                 </div>
               </div>
-              {!l.converted_to_deal_id && l.status !== 'rejected' && l.status !== 'spam' && (
+              {isExpanded && dups.length > 0 && (
+                <div style={{ marginTop: 10, padding: "10px 12px", background: "#000", border: "1px solid #292524", borderRadius: 6 }}>
+                  <div style={{ fontSize: 10, color: "#78716c", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8 }}>Possible matches</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                    {dups.map((d, idx) => {
+                      const scoreColor = d.score >= 90 ? "#ef4444" : d.score >= 70 ? "#f59e0b" : "#fbbf24";
+                      return (
+                        <div key={idx} style={{ padding: "8px 10px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 5, display: "flex", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                          <div style={{ flex: 1, minWidth: 180 }}>
+                            <div style={{ fontSize: 12, color: "#fafaf9", fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                              <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 3, background: d.kind === 'deal' ? "#4c1d95" : "#1e3a5f", color: d.kind === 'deal' ? "#c4b5fd" : "#93c5fd", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>{d.kind}</span>
+                              <span>{d.name}</span>
+                              <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#292524", color: scoreColor, fontWeight: 700 }}>{d.score}</span>
+                            </div>
+                            <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 3, lineHeight: 1.5 }}>
+                              {d.kind === 'deal' ? <>ID: <code style={{ color: "#d6d3d1" }}>{d.id}</code></> : <>{d.email}{d.phone && ` · ${d.phone}`}</>}
+                              {d.address && <><br/>{d.address}</>}
+                              {d.case_number && <> · Case {d.case_number}</>}
+                              {d.county && <> · {d.county} Co.</>}
+                              {d.status && <> · <span style={{ color: statusFg(d.status) }}>{d.status}</span></>}
+                            </div>
+                            <div style={{ marginTop: 4, display: "flex", gap: 4, flexWrap: "wrap" }}>
+                              {(d.reasons || []).map(r => (
+                                <span key={r} style={{ fontSize: 9, padding: "1px 6px", borderRadius: 3, background: "#292524", color: "#d6a85a", fontWeight: 600 }}>{r.replace(/_/g, ' ')}</span>
+                              ))}
+                            </div>
+                          </div>
+                          {d.kind === 'deal' && !l.converted_to_deal_id && (
+                            <button onClick={() => linkToExistingDeal(l, d.id, d.name)} disabled={busy} style={{ ...btnPrimary, fontSize: 10, padding: "4px 10px", whiteSpace: "nowrap" }}>Link to this deal</button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ marginTop: 10, display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                    {l.status !== 'duplicate' && <button onClick={() => updateStatus(l, 'duplicate')} disabled={busy} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px", color: "#c4b5fd" }}>Mark this lead as duplicate</button>}
+                    <button onClick={() => rescanDuplicates(l)} disabled={busy} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Re-scan</button>
+                  </div>
+                </div>
+              )}
+              {!l.converted_to_deal_id && l.status !== 'rejected' && l.status !== 'spam' && l.status !== 'duplicate' && (
                 <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
                   {l.status !== 'contacted' && <button onClick={() => updateStatus(l, 'contacted')} disabled={busy} style={{ ...btnGhost, fontSize: 11 }}>Mark contacted</button>}
                   {l.status !== 'qualified' && <button onClick={() => updateStatus(l, 'qualified')} disabled={busy} style={{ ...btnGhost, fontSize: 11 }}>Qualified</button>}
@@ -2660,7 +2923,7 @@ function LeadsModal({ onClose, userName, onConverted }) {
                 </div>
               )}
             </div>
-          ))}
+          );})}
         </div>
       )}
 
@@ -2676,8 +2939,8 @@ function LeadsModal({ onClose, userName, onConverted }) {
     </Modal>
   );
 }
-const statusBg = (s) => ({ new: '#78350f', contacted: '#1e3a5f', qualified: '#4c1d95', signed: '#064e3b', rejected: '#292524', spam: '#7f1d1d' })[s] || '#292524';
-const statusFg = (s) => ({ new: '#fbbf24', contacted: '#93c5fd', qualified: '#c4b5fd', signed: '#6ee7b7', rejected: '#a8a29e', spam: '#fca5a5' })[s] || '#d6d3d1';
+const statusBg = (s) => ({ new: '#78350f', contacted: '#1e3a5f', qualified: '#4c1d95', signed: '#064e3b', rejected: '#292524', spam: '#7f1d1d', duplicate: '#3b2105' })[s] || '#292524';
+const statusFg = (s) => ({ new: '#fbbf24', contacted: '#93c5fd', qualified: '#c4b5fd', signed: '#6ee7b7', rejected: '#a8a29e', spam: '#fca5a5', duplicate: '#d6a85a' })[s] || '#d6d3d1';
 
 // ─── Global Search Modal (⌘K) ─────────────────────────
 function SearchModal({ deals, onClose, onSelect }) {
@@ -2715,7 +2978,7 @@ function SearchModal({ deals, onClose, onSelect }) {
 
   return (
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 200, display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "80px 20px 20px" }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, width: "100%", maxWidth: 640, maxHeight: "70vh", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)" }}>
+      <div className="search-modal-inner" onClick={e => e.stopPropagation()} style={{ background: "#1c1917", border: "1px solid #44403c", borderRadius: 12, width: "100%", maxWidth: 640, maxHeight: "70vh", overflow: "hidden", boxShadow: "0 20px 60px rgba(0,0,0,0.5)", display: "flex", flexDirection: "column" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 18px", borderBottom: "1px solid #292524" }}>
           <span style={{ fontSize: 16 }}>🔍</span>
           <input
@@ -2723,10 +2986,10 @@ function SearchModal({ deals, onClose, onSelect }) {
             value={q}
             onChange={e => setQ(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && results.length > 0) onSelect(results[0].id); }}
-            placeholder="Search deals by name, address, attorney, case number, county…"
-            style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#fafaf9", fontSize: 15, fontFamily: "inherit" }}
+            placeholder="Search deals…"
+            style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#fafaf9", fontSize: 16, fontFamily: "inherit" }}
           />
-          <span style={{ fontSize: 10, color: "#78716c", fontFamily: "'DM Mono', monospace" }}>ESC to close</span>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", color: "#78716c", fontSize: 20, cursor: "pointer", padding: "4px 8px", minHeight: 32 }} aria-label="Close">×</button>
         </div>
         <div style={{ maxHeight: "60vh", overflowY: "auto" }}>
           {query.length === 0 ? (

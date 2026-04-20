@@ -185,6 +185,10 @@
   .sticky-call a { display: flex; align-items: center; justify-content: center; gap: 10px; background: var(--navy); color: #fffcf5; padding: 14px 20px; border-radius: 999px; font-weight: 600; font-size: 15px; text-decoration: none; box-shadow: 0 6px 20px rgba(11, 31, 58, 0.3); max-width: 440px; margin: 0 auto; }
   .sticky-call a:active { background: var(--navy-mid); }
   .sticky-call .call-icon { font-size: 18px; }
+  /* Touch + tap fundamentals */
+  button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  input, textarea, select { -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+
   @media (max-width: 720px) {
     .sticky-call { display: block; }
     .container { padding-bottom: 100px; }
@@ -202,6 +206,49 @@
     .intel-card { padding: 18px; gap: 12px; }
     .intel-icon { font-size: 24px; }
     .intel-headline { font-size: 16px; }
+
+    /* iOS zoom prevention + bigger tap targets */
+    input, textarea, select { font-size: 16px !important; }
+    .btn-ghost { min-height: 38px; padding: 9px 14px !important; font-size: 13px !important; }
+    .btn-primary, .btn-full, .empathy-submit { min-height: 46px; padding: 13px 20px !important; font-size: 15px !important; }
+    .btn-secondary { min-height: 42px; padding: 11px 16px !important; font-size: 14px !important; }
+    .doc-action { min-height: 38px; padding: 9px 14px !important; font-size: 13px !important; }
+
+    /* Team row — reflow on narrow screens for readable contact lines */
+    .team-row { flex-wrap: wrap; padding: 14px 0; }
+    .team-name { font-size: 14px; }
+    .team-role { font-size: 11px; }
+
+    /* Status badges larger on phone */
+    .status-badge { font-size: 12px; padding: 7px 14px; }
+
+    /* Header stacks on very narrow screens */
+    header.portal-header { flex-wrap: wrap; gap: 10px; }
+    .brand { font-size: 18px; }
+    .brand-tag { font-size: 9px; }
+
+    /* Video caption more readable */
+    .welcome-video-caption { font-size: 13px; }
+
+    /* Timeline action text slightly larger */
+    .timeline-action { font-size: 13px; }
+    .timeline-date { font-size: 10px; }
+
+    /* Empathy moods — reduce gap on phone, larger hit area */
+    .empathy-moods { gap: 8px; }
+    .empathy-mood { padding: 16px 6px; min-height: 88px; }
+    .mood-emoji { font-size: 32px; }
+    .mood-label { font-size: 11px; }
+
+    /* Sticky call button — readable text, full-width feel */
+    .sticky-call a { padding: 15px 20px; font-size: 16px; }
+  }
+
+  @media (max-width: 380px) {
+    h1.deal-name { font-size: 22px; }
+    .payout-amount { font-size: 30px; }
+    .celebration-amount { font-size: 30px; }
+    .celebration-title { font-size: 22px; }
   }
 </style>
 </head>

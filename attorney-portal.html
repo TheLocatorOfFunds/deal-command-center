@@ -142,12 +142,47 @@
   .empty { padding: 40px 20px; text-align: center; color: var(--text-muted); font-size: 14px; }
   a { color: var(--navy-mid); }
 
+  /* Touch + tap fundamentals */
+  button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  input, textarea, select { -webkit-appearance: none; -moz-appearance: none; appearance: none; }
+
+  /* Sticky back-link on case detail so you can always exit quickly */
+  .sticky-back { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 14px 0 10px; margin: -20px 0 10px; border-bottom: 1px solid var(--border); backdrop-filter: saturate(160%) blur(8px); -webkit-backdrop-filter: saturate(160%) blur(8px); background: rgba(245, 241, 232, 0.92); }
+
   @media (max-width: 600px) {
-    .container { padding: 16px 14px 60px; }
-    .card { padding: 18px; }
-    h1.page-title { font-size: 26px; }
-    .case-row { padding: 16px 18px; flex-direction: column; gap: 10px; }
+    .container { padding: 14px 14px calc(20px + env(safe-area-inset-bottom)); }
+    .card { padding: 18px 16px; }
+    h1.page-title { font-size: 24px; line-height: 1.15; }
+    .page-sub { font-size: 13px; margin-bottom: 18px; }
+    .case-row { padding: 16px; flex-direction: column; gap: 12px; }
     .case-right { text-align: left; }
+    .case-name { font-size: 18px; }
+
+    /* iOS zoom prevention + bigger tap targets */
+    input, textarea, select { font-size: 16px !important; }
+    .btn-ghost, .doc-action { min-height: 40px; padding: 10px 14px !important; font-size: 13px !important; }
+    .btn-primary, .btn-full, .upload-label { min-height: 44px; padding: 12px 18px !important; font-size: 14px !important; }
+    .badge { font-size: 11px; padding: 5px 11px; }
+    .update-text { min-height: 100px; }
+
+    /* Header brand-tag hides on narrow screens to keep title on one line */
+    .brand-tag { display: none; }
+    header.app-header { padding: 6px 0 14px; margin-bottom: 16px; }
+    .user-meta { gap: 8px; font-size: 12px; }
+    .user-meta > span { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    /* Doc row wraps on tiny screens */
+    .doc-row { flex-wrap: wrap; }
+    .doc-action { margin-left: auto; }
+
+    /* Sticky back consumes top safe area */
+    .sticky-back { padding-top: calc(14px + env(safe-area-inset-top)); margin-top: calc(-14px - env(safe-area-inset-top)); }
+  }
+
+  @media (max-width: 380px) {
+    .case-name { font-size: 16px; }
+    h1.page-title { font-size: 22px; }
+    .stat-grid { grid-template-columns: 1fr !important; }
   }
 </style>
 </head>
@@ -458,7 +493,9 @@ function CaseDetail({ dealId, session, profile }) {
 
   return (
     <div>
-      <a className="back-link" href="#/">← All cases</a>
+      <div className="sticky-back">
+        <a className="back-link" href="#/" style={{ marginBottom: 0 }}>← All cases</a>
+      </div>
 
       <h1 className="page-title">{deal.name}</h1>
       <div className="page-sub">
