@@ -293,7 +293,14 @@ function Root() {
 // ─── Main App ────────────────────────────────────────────────────────
 function DealCommandCenter({ session, profile }) {
   const [deals, setDeals] = useState([]);
-  const [activeDealId, setActiveDealId] = useState(null);
+
+  // ── Hash routing helpers ──────────────────────────────────────────
+  const parseHash = () => {
+    const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
+    return { dealId: parts[0] === 'deal' && parts[1] ? parts[1] : null, tab: parts[2] || 'overview' };
+  };
+
+  const [activeDealId, setActiveDealId] = useState(() => parseHash().dealId);
   const [loaded, setLoaded] = useState(false);
   const [showNewDeal, setShowNewDeal] = useState(false);
   const [teamMembers, setTeamMembers] = useState([profile.name]);
@@ -362,6 +369,26 @@ function DealCommandCenter({ session, profile }) {
   }, []);
 
   const activeDeal = deals.find(d => d.id === activeDealId);
+
+  // Sync activeDealId → hash (tab portion managed by DealDetail)
+  useEffect(() => {
+    if (activeDealId) {
+      const { tab } = parseHash();
+      window.location.hash = `#/deal/${activeDealId}/${tab}`;
+    } else {
+      window.location.hash = '#/';
+    }
+  }, [activeDealId]);
+
+  // Back/forward button support
+  useEffect(() => {
+    const onHashChange = () => {
+      const { dealId } = parseHash();
+      setActiveDealId(dealId);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   const addDeal = async (deal) => {
     const { error } = await sb.from('deals').insert({ ...deal, owner_id: session.user.id });
@@ -456,7 +483,7 @@ function DealCommandCenter({ session, profile }) {
           updateDealMeta(id, { meta: { ...m, flagged: !m.flagged } });
         }} />
       ) : (
-        <DealDetail deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} />
+        <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} />
       )}
 
       {/* Mobile FAB — only visible on phone via CSS */}
@@ -1426,8 +1453,13 @@ function Modal({ onClose, title, children, wide }) {
 }
 
 // ─── Deal Detail ─────────────────────────────────────────────────────
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin }) {
-  const [tab, setTab] = useState("overview");
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab }) {
+  const [tab, setTab] = useState(initialTab || "overview");
+
+  const switchTab = (t) => {
+    setTab(t);
+    window.location.hash = `#/deal/${deal.id}/${t}`;
+  };
   const [expenses, setExpenses] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [vendors, setVendors] = useState([]);
@@ -1588,7 +1620,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
 
       <div className="detail-tabs" style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
         {tabs.map(id => (
-          <button key={id} onClick={() => setTab(id)} style={{
+          <button key={id} onClick={() => switchTab(id)} style={{
             background: "transparent", border: "none", color: tab === id ? "#fafaf9" : "#78716c",
             padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
             borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
