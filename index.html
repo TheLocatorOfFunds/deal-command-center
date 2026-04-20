@@ -3134,11 +3134,22 @@ function OutboundMessages({ dealId, vendors }) {
   const [msgs, setMsgs] = useState([]);
   const [phoneNumbers, setPhoneNumbers] = useState([]);
   const [fromNumber, setFromNumber] = useState('');
-  const [to, setTo] = useState('');
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [sendErr, setSendErr] = useState(null);
+  // activeContact: { name, role, phone } | { name: phone, phone, _custom: true } | null
+  const [activeContact, setActiveContact] = useState(null);
+  // newMode: showing the "+ New" number entry form
+  const [newMode, setNewMode] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  // extraContacts: contacts started via "+ New" not already in vendors
+  const [extraContacts, setExtraContacts] = useState([]);
   const threadRef = useRef(null);
+
+  const contacts = [
+    ...(vendors || []).filter(v => v.phone),
+    ...extraContacts,
+  ];
 
   const load = async () => {
     const { data } = await sb.from('messages_outbound')
@@ -3160,18 +3171,25 @@ function OutboundMessages({ dealId, vendors }) {
     return () => sb.removeChannel(ch);
   }, [dealId]);
 
+  // Auto-select first contact when contacts list becomes available
+  useEffect(() => {
+    if (contacts.length > 0 && !activeContact) setActiveContact(contacts[0]);
+  }, [vendors]);
+
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [msgs]);
+  }, [msgs, activeContact]);
+
+  const activeTo = activeContact?.phone || '';
 
   const send = async () => {
-    if (!to.trim() || !body.trim() || sending) return;
+    if (!activeTo.trim() || !body.trim() || sending) return;
     setSending(true); setSendErr(null);
-    const optimistic = { id: 'opt-' + Date.now(), to_number: to.trim(), from_number: fromNumber || '…', body: body.trim(), status: 'queued', created_at: new Date().toISOString() };
+    const optimistic = { id: 'opt-' + Date.now(), to_number: activeTo.trim(), from_number: fromNumber || '…', body: body.trim(), status: 'queued', created_at: new Date().toISOString() };
     setMsgs(prev => [...prev, optimistic]);
     setBody('');
     try {
-      const { data, error } = await sb.functions.invoke('send-sms', { body: { to: to.trim(), body: optimistic.body, deal_id: dealId, from_number: fromNumber || undefined } });
+      const { data, error } = await sb.functions.invoke('send-sms', { body: { to: activeTo.trim(), body: optimistic.body, deal_id: dealId, from_number: fromNumber || undefined } });
       if (error) throw new Error(error.message);
       if (data?.status === 'failed') throw new Error(data.error_message || 'Twilio error');
     } catch (e) { setSendErr(e.message); }
@@ -3179,9 +3197,27 @@ function OutboundMessages({ dealId, vendors }) {
   };
 
   const handleKeyDown = e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send(); };
-  const phoneSuggestions = (vendors || []).filter(v => v.phone).map(v => ({ label: `${v.name} — ${v.phone}`, value: v.phone }));
 
-  const days = msgs.reduce((acc, m) => {
+  const startNew = () => {
+    const phone = newPhone.trim();
+    if (!phone) return;
+    const already = contacts.find(c => c.phone === phone);
+    if (already) { setActiveContact(already); }
+    else {
+      const c = { name: phone, phone, _custom: true };
+      setExtraContacts(prev => [...prev, c]);
+      setActiveContact(c);
+    }
+    setNewMode(false);
+    setNewPhone('');
+  };
+
+  // Messages for the active contact's thread
+  const threadMsgs = activeContact
+    ? msgs.filter(m => m.to_number === activeContact.phone)
+    : msgs;
+
+  const days = threadMsgs.reduce((acc, m) => {
     const day = new Date(m.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     if (!acc.length || acc[acc.length - 1].day !== day) acc.push({ day, items: [] });
     acc[acc.length - 1].items.push(m);
@@ -3192,16 +3228,68 @@ function OutboundMessages({ dealId, vendors }) {
   const statusIcon = s => s === 'sent' ? '✓' : s === 'failed' ? '✗' : '···';
   const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
 
+  const msgCount = c => msgs.filter(m => m.to_number === c.phone).length;
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 580, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
-      <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: phoneSuggestions.length > 0 ? 8 : 0 }}>
-          <div style={{ width: 34, height: 34, borderRadius: '50%', background: '#292524', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>💬</div>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
+
+      {/* Conversation tabs */}
+      <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1c1917', background: '#0f0d0c', overflowX: 'auto', flexShrink: 0, scrollbarWidth: 'none' }}>
+        {contacts.map(c => {
+          const active = activeContact?.phone === c.phone;
+          const count = msgCount(c);
+          return (
+            <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); }}
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? '2px solid #d97706' : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
+                <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {c.name.split(' ')[0]}
+                </span>
+                {count > 0 && <span style={{ fontSize: 9, background: '#292524', color: '#a8a29e', borderRadius: 8, padding: '1px 5px', flexShrink: 0 }}>{count}</span>}
+              </div>
+              <span style={{ fontSize: 9, color: active ? '#d97706' : '#44403c', textTransform: 'uppercase', letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+                {c._custom ? c.phone : (c.role || 'Contact')}
+              </span>
+            </button>
+          );
+        })}
+        {/* + New button */}
+        <button onClick={() => { setNewMode(true); setActiveContact(null); }}
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: newMode ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: newMode ? '#d97706' : '#44403c', fontSize: 18, fontWeight: 300 }}>
+          ＋
+        </button>
+        {contacts.length === 0 && !newMode && (
+          <span style={{ fontSize: 11, color: '#44403c', alignSelf: 'center', padding: '0 14px', whiteSpace: 'nowrap' }}>No contacts with phone numbers — add vendors first or click ＋</span>
+        )}
+      </div>
+
+      {/* New conversation input */}
+      {newMode && (
+        <div style={{ padding: '8px 12px', borderBottom: '1px solid #1c1917', background: '#141210', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+          <input autoFocus value={newPhone} onChange={e => setNewPhone(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && startNew()}
+            placeholder="+1 (555) 000-0000"
+            style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+          <button onClick={startNew} disabled={!newPhone.trim()}
+            style={{ background: newPhone.trim() ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: newPhone.trim() ? 'pointer' : 'default' }}>
+            Start
+          </button>
+          <button onClick={() => { setNewMode(false); if (contacts.length > 0) setActiveContact(contacts[0]); }}
+            style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Thread header */}
+      {activeContact && (
+        <div style={{ padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 30, height: 30, borderRadius: '50%', background: '#292524', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0 }}>
+            {activeContact._custom ? '📱' : '👤'}
+          </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {to || <span style={{ color: '#57534e', fontWeight: 400 }}>No recipient selected</span>}
-            </div>
-            <div style={{ fontSize: 10, color: '#57534e', marginTop: 1 }}>SMS · Twilio</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{activeContact.name}</div>
+            <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{activeContact.phone}{activeContact.role ? ` · ${activeContact.role}` : ''}</div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
             <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
@@ -3214,24 +3302,21 @@ function OutboundMessages({ dealId, vendors }) {
             }
           </div>
         </div>
-        {phoneSuggestions.length > 0 && (
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', paddingLeft: 44 }}>
-            <span style={{ fontSize: 10, color: '#57534e', alignSelf: 'center' }}>To:</span>
-            {phoneSuggestions.map(p => (
-              <button key={p.value} onClick={() => setTo(p.value)}
-                style={{ background: to === p.value ? '#44403c' : '#1c1917', border: '1px solid #44403c', color: to === p.value ? '#fafaf9' : '#a8a29e', padding: '2px 8px', borderRadius: 4, fontSize: 10, cursor: 'pointer', whiteSpace: 'nowrap' }}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
+
+      {/* Thread */}
       <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 0 }}>
-        {msgs.length === 0 && (
+        {!activeContact && !newMode && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13, gap: 6, paddingTop: 60 }}>
             <div style={{ fontSize: 32 }}>💬</div>
-            <div>No messages yet</div>
-            <div style={{ fontSize: 11 }}>Type below and hit Send</div>
+            <div>Select a contact above or tap ＋ to start a new conversation</div>
+          </div>
+        )}
+        {activeContact && threadMsgs.length === 0 && (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13, gap: 6, paddingTop: 60 }}>
+            <div style={{ fontSize: 32 }}>💬</div>
+            <div>No messages with {activeContact.name.split(' ')[0]} yet</div>
+            <div style={{ fontSize: 11 }}>Type below to start the conversation</div>
           </div>
         )}
         {days.map(({ day, items }) => (
@@ -3246,13 +3331,12 @@ function OutboundMessages({ dealId, vendors }) {
               const showMeta = i === items.length - 1 || items[i + 1]?.to_number !== m.to_number;
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
-                  <div style={{ maxWidth: '78%', background: bubbleBg(m.status), borderRadius: i === 0 ? '16px 16px 4px 16px' : showMeta ? '16px 4px 4px 16px' : '16px 4px 4px 16px', padding: '9px 13px' }}>
+                  <div style={{ maxWidth: '78%', background: bubbleBg(m.status), borderRadius: '16px 16px 4px 16px', padding: '9px 13px' }}>
                     <div style={{ fontSize: 14, color: '#fafaf9', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.body}</div>
                   </div>
                   {showMeta && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingRight: 2 }}>
-                      {m.to_number && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>→ {m.to_number}</span>}
-                      {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>· from {m.from_number}</span>}
+                      {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>from {m.from_number}</span>}
                       <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
                       <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
                     </div>
@@ -3266,25 +3350,26 @@ function OutboundMessages({ dealId, vendors }) {
           </div>
         ))}
       </div>
-      <div style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
-        {!to && (
-          <input value={to} onChange={e => setTo(e.target.value)} placeholder="+1 (555) 000-0000  ·  enter recipient number"
-            style={{ width: '100%', background: 'transparent', border: 'none', borderBottom: '1px solid #292524', color: '#fafaf9', padding: '4px 6px', fontSize: 12, fontFamily: "'DM Mono', monospace", marginBottom: 8, outline: 'none', boxSizing: 'border-box' }} />
-        )}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-          <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
-            placeholder="iMessage"
-            rows={2}
-            style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5 }}
-          />
-          <button onClick={send} disabled={!to.trim() || !body.trim() || sending}
-            style={{ width: 34, height: 34, borderRadius: '50%', background: (!to.trim() || !body.trim() || sending) ? '#292524' : '#d97706', border: 'none', color: '#fafaf9', fontSize: 17, cursor: (!to.trim() || !body.trim() || sending) ? 'default' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
-            ↑
-          </button>
+
+      {/* Compose */}
+      {(activeContact || newMode) && (
+        <div style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
+              placeholder={activeContact ? `Message ${activeContact.name.split(' ')[0]}…` : 'Enter a number above first'}
+              disabled={!activeContact}
+              rows={2}
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5, opacity: activeContact ? 1 : 0.4 }}
+            />
+            <button onClick={send} disabled={!activeContact || !body.trim() || sending}
+              style={{ width: 34, height: 34, borderRadius: '50%', background: (activeContact && body.trim() && !sending) ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', fontSize: 17, cursor: (activeContact && body.trim() && !sending) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
+              ↑
+            </button>
+          </div>
+          {sendErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 5, paddingLeft: 4 }}>⚠ {sendErr}</div>}
+          <div style={{ fontSize: 10, color: '#44403c', marginTop: 4, paddingLeft: 4 }}>⌘↵ to send</div>
         </div>
-        {sendErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 5, paddingLeft: 4 }}>⚠ {sendErr}</div>}
-        <div style={{ fontSize: 10, color: '#44403c', marginTop: 4, paddingLeft: 4 }}>⌘↵ to send</div>
-      </div>
+      )}
     </div>
   );
 }
