@@ -401,9 +401,24 @@ function DealCommandCenter({ session, profile }) {
               {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "FundLocators Deal Hub"}
             </div>
             <div className="page-title" style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
-              {activeDeal ? activeDeal.name : "Deal Command Center"}
+              {activeDeal ? (activeDeal.name || '').split(' - ')[0] : "Deal Command Center"}
             </div>
-            {activeDeal && <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>{activeDeal.address}</div>}
+            {activeDeal && (() => {
+              // Subtitle rebuilds from discrete data — cleaner for internal view than
+              // legacy "Name - Address" string concatenation.
+              const m = activeDeal.meta || {};
+              const nameParts = (activeDeal.name || '').split(' - ');
+              const addressFromName = nameParts.slice(1).join(' - ');
+              const address = activeDeal.address || addressFromName || '';
+              const courtCase = m.courtCase;
+              const county = m.county;
+              const bits = [courtCase, county ? `${county} County` : null, address].filter(Boolean);
+              return bits.length > 0 ? (
+                <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>
+                  {bits.join(' · ')}
+                </div>
+              ) : null;
+            })()}
           </div>
         </div>
         <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
@@ -565,7 +580,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: view === "analytics" ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
-            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} />
+            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
           ) : view === "analytics" ? (
             <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : layoutMode === "kanban" ? (
@@ -733,10 +748,28 @@ function KanbanBoard({ deals, statuses, onSelect, type, onMoveDeal }) {
   );
 }
 
-function PortfolioStat({ label, value, sub, color }) {
+function PortfolioStat({ label, value, sub, color, onClick }) {
+  const clickable = typeof onClick === 'function';
   return (
-    <div className="portfolio-stat-card" style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14, borderTop: `2px solid ${color}` }}>
-      <div className="portfolio-stat-label" style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>{label}</div>
+    <div
+      className="portfolio-stat-card"
+      onClick={clickable ? onClick : undefined}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }) : undefined}
+      style={{
+        background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14,
+        borderTop: `2px solid ${color}`,
+        cursor: clickable ? "pointer" : "default",
+        transition: "transform 0.08s, border-color 0.12s, background 0.12s",
+      }}
+      onMouseEnter={clickable ? (e => { e.currentTarget.style.background = "#292524"; e.currentTarget.style.borderColor = "#57534e"; }) : undefined}
+      onMouseLeave={clickable ? (e => { e.currentTarget.style.background = "#1c1917"; e.currentTarget.style.borderColor = "#292524"; }) : undefined}
+    >
+      <div className="portfolio-stat-label" style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>{label}</span>
+        {clickable && <span style={{ fontSize: 11, color: "#57534e", fontWeight: 400 }}>→</span>}
+      </div>
       <div className="portfolio-stat-value" style={{ fontSize: 22, fontWeight: 700, fontFamily: "'DM Mono', monospace", marginTop: 6, color }}>{value}</div>
       <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>{sub}</div>
     </div>
@@ -1067,7 +1100,7 @@ function AnalyticsView({ deals, onSelect }) {
   );
 }
 
-function TodayView({ deals, onSelect, isAdmin }) {
+function TodayView({ deals, onSelect, isAdmin, setView }) {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -1142,11 +1175,11 @@ function TodayView({ deals, onSelect, isAdmin }) {
 
   return (
     <div>
-      {/* Monthly stats strip */}
+      {/* Monthly stats strip — each card is clickable */}
       <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(3, 1fr)" : "repeat(2, 1fr)", gap: 12, marginBottom: 20 }}>
-        <PortfolioStat label={`Deals Added · ${monthName}`} value={addedThisMonth.length} sub={addedThisMonth.length === 1 ? "1 new deal this month" : `${addedThisMonth.length} new deals this month`} color="#3b82f6" />
-        {isAdmin && <PortfolioStat label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />}
-        <PortfolioStat label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
+        <PortfolioStat onClick={() => setView && setView("active")}  label={`Deals Added · ${monthName}`} value={addedThisMonth.length} sub={addedThisMonth.length === 1 ? "1 new deal this month" : `${addedThisMonth.length} new deals this month`} color="#3b82f6" />
+        {isAdmin && <PortfolioStat onClick={() => setView && setView("analytics")} label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />}
+        <PortfolioStat onClick={() => setView && setView("active")}  label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
       </div>
 
       {/* Priority queue */}
