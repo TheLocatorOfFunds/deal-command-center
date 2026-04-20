@@ -1435,6 +1435,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   const [activity, setActivity] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const [showPostUpdate, setShowPostUpdate] = useState(false);
 
   const loadAll = async () => {
     setLoaded(false);
@@ -1470,8 +1471,14 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
     return () => { sb.removeChannel(ch); };
   }, [deal.id]);
 
-  const logAct = async (msg) => {
-    await sb.from('activity').insert({ deal_id: deal.id, user_id: userId, action: msg });
+  // logAct writes an activity row. `visibility` controls who sees it:
+  //   ['team']                         = internal audit only (DCC). Default.
+  //   ['team', 'client', 'attorney']   = case milestone — shows in both portals.
+  //   ['team', 'client']               = client-only milestone.
+  //   ['team', 'attorney']             = attorney-only milestone.
+  // Always include 'team' so Nathan + VAs see it in DCC's audit log.
+  const logAct = async (msg, visibility = ['team']) => {
+    await sb.from('activity').insert({ deal_id: deal.id, user_id: userId, action: msg, visibility });
   };
 
   const totalExpenses = expenses.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0);
@@ -1512,7 +1519,10 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           if (isClosedStatus(next) && !deal.closed_at) patch.closed_at = new Date().toISOString();
           if (!isClosedStatus(next) && isClosedStatus(prev)) patch.closed_at = null;
           onUpdateDeal(patch);
-          logAct(`Status changed: ${prev.replace(/-/g," ")} → ${next.replace(/-/g," ")}`);
+          // Status changes are a case milestone — clients AND attorneys see this.
+          // Store the simplified "Case moved to X" form so it renders universally
+          // and reads like plain English in the portal timelines.
+          logAct(`Case moved to ${next.replace(/-/g," ")}`, ['team', 'client', 'attorney']);
         }} style={{ ...selectStyle, fontSize: 11 }}>
           {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
         </select>
@@ -1548,6 +1558,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <a href={`attorney-portal.html#/case/${deal.id}`} target="_blank" rel="noreferrer" title="Open this deal in the counsel portal preview" style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
               ⚖ Counsel view
             </a>
+            <button onClick={() => setShowPostUpdate(true)} title="Post a case update to the client and/or attorney timeline" style={{ background: "#d97706", color: "#0c0a09", border: "none", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              📢 Post Update
+            </button>
           </>
         )}
       </div>
@@ -1598,7 +1611,82 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "notes" && <Notes items={notes} dealId={deal.id} userId={userId} userName={userName} reload={loadAll} />}
       {tab === "activity" && <Activity items={activity} />}
       {tab === "sms" && <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />}
+
+      {showPostUpdate && (
+        <PostUpdateModal
+          dealName={deal.name}
+          onClose={() => setShowPostUpdate(false)}
+          onPost={async (text, visibility) => {
+            await logAct(text, visibility);
+            setShowPostUpdate(false);
+            await loadAll();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Post Case Update (admin-composed message visible in client/attorney portal) ──
+// Writes directly to `activity` with explicit visibility so the message
+// shows up on the client or attorney timeline alongside automatic status
+// changes. Internal bonus/assignment/doc events stay team-only by default.
+function PostUpdateModal({ dealName, onClose, onPost }) {
+  const [text, setText] = useState('');
+  const [toClient, setToClient] = useState(true);
+  const [toAttorney, setToAttorney] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const submit = async () => {
+    const msg = text.trim();
+    if (!msg) { setErr('Write a short update first.'); return; }
+    if (!toClient && !toAttorney) { setErr('Pick at least one audience (client or attorney) — otherwise just leave a team-only note in the Notes tab instead.'); return; }
+    setBusy(true); setErr(null);
+    const visibility = ['team'];
+    if (toClient)   visibility.push('client');
+    if (toAttorney) visibility.push('attorney');
+    await onPost(msg, visibility);
+    setBusy(false);
+  };
+
+  return (
+    <Modal onClose={onClose} title={`Post case update — ${dealName}`} wide>
+      <p style={{ fontSize: 13, color: "#a8a29e", marginTop: 0, marginBottom: 16, lineHeight: 1.55 }}>
+        This posts one line to the Case Timeline that the selected audience sees in their portal.
+        Use it for meaningful progress only — "Attorney filed objection response today" or
+        "Hearing date confirmed for Tuesday" — not internal admin notes.
+      </p>
+      <Field label="Update">
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          rows={4}
+          autoFocus
+          placeholder="Example: Attorney filed the surplus claim today. Expect a hearing date within 6–12 weeks."
+          style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }}
+        />
+      </Field>
+      <div style={{ marginTop: 14, display: "flex", gap: 20, flexWrap: "wrap" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" checked={toClient} onChange={e => setToClient(e.target.checked)} />
+          👤 Visible to client
+        </label>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+          <input type="checkbox" checked={toAttorney} onChange={e => setToAttorney(e.target.checked)} />
+          ⚖ Visible to attorney
+        </label>
+      </div>
+      {err && (
+        <div style={{ padding: "8px 12px", borderRadius: 6, marginTop: 14, fontSize: 12, background: "#7f1d1d", color: "#fecaca" }}>{err}</div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20 }}>
+        <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
+        <button onClick={submit} disabled={busy || !text.trim()} style={btnPrimary}>
+          {busy ? 'Posting…' : '📢 Post update'}
+        </button>
+      </div>
+    </Modal>
   );
 }
 
