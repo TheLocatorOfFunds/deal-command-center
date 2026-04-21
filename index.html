@@ -3274,6 +3274,15 @@ function Activity({ items }) {
 }
 
 // ─── SMS Thread ──────────────────────────────────────────────────────
+// Normalize any phone number to E.164 for consistent comparison
+function normalizePhone(p) {
+  if (!p) return '';
+  const d = String(p).replace(/\D/g, '');
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith('1')) return `+${d}`;
+  return p;
+}
+
 function OutboundMessages({ dealId, vendors, deal }) {
   const [msgs, setMsgs] = useState([]);
   const [phoneNumbers, setPhoneNumbers] = useState([]);
@@ -3367,7 +3376,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
   // Messages for the active contact's thread
   const threadMsgs = activeContact
-    ? msgs.filter(m => m.to_number === activeContact.phone)
+    ? msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(activeContact.phone))
     : msgs;
 
   const days = threadMsgs.reduce((acc, m) => {
@@ -3381,7 +3390,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const statusIcon = s => s === 'sent' ? '✓' : s === 'failed' ? '✗' : '···';
   const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
 
-  const msgCount = c => msgs.filter(m => m.to_number === c.phone).length;
+  const msgCount = c => msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(c.phone)).length;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
