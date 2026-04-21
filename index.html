@@ -3339,7 +3339,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
     setBody('');
     try {
       const { data, error } = await sb.functions.invoke('send-sms', { body: { to: activeTo.trim(), body: optimistic.body, deal_id: dealId, from_number: fromNumber || undefined } });
-      if (error) throw new Error(error.message);
+      if (error) {
+        let msg = error.message;
+        try { const body = await error.context?.json?.(); msg = body?.error || body?.message || JSON.stringify(body) || msg; } catch {}
+        throw new Error(msg);
+      }
       if (data?.status === 'failed') throw new Error(data.error_message || 'Twilio error');
     } catch (e) { setSendErr(e.message); }
     setSending(false); load();
