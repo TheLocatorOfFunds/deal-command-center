@@ -3491,16 +3491,22 @@ function OutboundMessages({ dealId, vendors, deal }) {
             {items.map((m, i) => {
               const time = new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
               const showMeta = i === items.length - 1 || items[i + 1]?.to_number !== m.to_number;
+              const isInbound = m.direction === 'inbound';
               return (
-                <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
-                  <div style={{ maxWidth: '78%', background: bubbleBg(m.status), borderRadius: '16px 16px 4px 16px', padding: '9px 13px' }}>
+                <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
+                  <div style={{ maxWidth: '78%', background: isInbound ? '#292524' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? '1px solid #44403c' : 'none' }}>
                     <div style={{ fontSize: 14, color: '#fafaf9', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.body}</div>
                   </div>
                   {showMeta && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingRight: 2 }}>
-                      {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>from {m.from_number}</span>}
-                      <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingLeft: isInbound ? 2 : 0, paddingRight: isInbound ? 0 : 2 }}>
+                      {isInbound
+                        ? <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>received {time}</span>
+                        : <>
+                            {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>from {m.from_number}</span>}
+                            <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
+                          </>
+                      }
                     </div>
                   )}
                   {m.error_message && (
