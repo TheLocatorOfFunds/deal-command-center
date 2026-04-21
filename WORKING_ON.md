@@ -21,9 +21,11 @@ Template:
 
 ## Nathan's session
 
-**Status**: Idle
+**Status**: Active
+**Working on**: Phase 3 Library — PR 2 deal integration
+**Touching**: migration `library_deal_integration` (adds `documents.from_library_id` FK + `documents.library_merge_values` jsonb) · `index.html` (new "📚 From library" button on DealDetail Documents tab + LibraryPickerForDeal component with optional merge-field form)
+**ETA**: Done today
 **Last updated**: Apr 21, 2026
-**Last done**: Phase 3 Library PR 1 shipped — migration `library_foundation` (2 tables + 1 link table + `library` storage bucket + 7 seed folders + RLS) + 📚 Library button in DCC header + three-pane LibraryModal (folder tree / file list / preview) with upload, new-folder, search, realtime sync. Admin + VA access; admin_only folders gated.
 
 <!--
 Template:
