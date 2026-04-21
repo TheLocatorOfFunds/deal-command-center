@@ -11,10 +11,24 @@ Deno.serve(async (req) => {
   }
 
   try {
-    // Verify caller is authenticated
+    // Gateway already verified JWT (verify_jwt: true).
+    // Decode the sub claim directly to get the user ID without an extra API round-trip.
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       return new Response(JSON.stringify({ error: 'Missing authorization' }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
+
+    const token = authHeader.replace('Bearer ', '')
+    let userId: string
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]))
+      userId = payload.sub
+      if (!userId) throw new Error('no sub')
+    } catch {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
         status: 401,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
@@ -26,17 +40,7 @@ Deno.serve(async (req) => {
     const twilioAuthToken = Deno.env.get('TWILIO_AUTH_TOKEN')!
     const twilioFromNumber = Deno.env.get('TWILIO_FROM_NUMBER')!
 
-    // Verify JWT and resolve user identity
     const sb = createClient(supabaseUrl, serviceRoleKey)
-    const token = authHeader.replace('Bearer ', '')
-    const { data: { user }, error: authError } = await sb.auth.getUser(token)
-
-    if (authError || !user) {
-      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
-    }
 
     const { to, body, deal_id, from_number } = await req.json()
 
@@ -67,7 +71,7 @@ Deno.serve(async (req) => {
         from_number: resolvedFrom,
         body,
         status: 'queued',
-        sent_by: user.id,
+        sent_by: userId,
         deal_id: deal_id ?? null,
       })
       .select()
