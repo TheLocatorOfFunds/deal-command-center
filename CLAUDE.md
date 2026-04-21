@@ -138,6 +138,71 @@ Nothing to do in the dashboard — just share the URL. First sign-in auto-create
 - **Nathan** (nathan@refundlocators.com) — owner
 - **Justin** (justin@refundlocators.com) — co-founder / developer
 
+## Domain ownership (two parallel Claude Code sessions)
+
+Nathan and Justin each run their own Claude Code session on the same repo and Supabase project.
+**Before touching anything, check this table.** If you're Justin's Claude and something is in
+Nathan's column — leave it alone and ask. Same in reverse.
+
+| Domain | Owner | Key files / tables |
+|---|---|---|
+| SMS / Twilio outbound + inbound | **Justin** | `messages_outbound`, `phone_numbers`, `supabase/functions/send-sms`, `supabase/functions/receive-sms`, `OutboundMessages` component in `index.html` |
+| iMessage bridge (Mac Mini daemon) | **Justin** | TBD — not yet built |
+| Client portal | **Nathan** | `portal.html`, `client_access` table, `client_empathy_checkin` RPC |
+| Attorney/counsel portal | **Nathan** | `attorney-portal.html`, `attorney_assignments` table, attorney triggers |
+| Castle / docket integration | **Nathan** | `docket_events`, `docket_events_unmatched`, `scrape_runs`, `supabase/functions/docket-webhook` |
+| Email / Resend triggers | **Nathan** | `messages_email_notify`, `docket_events_client_notify`, `send_daily_digest` |
+| Lead intake + dup detection | **Nathan** | `lead-intake.html`, `leads` table, `find_lead_duplicates` RPC |
+| Lauren / pgvector AI chat | **Justin** | `lauren_*` tables, pgvector embeddings |
+| Phase 3 Library | **Nathan** | Designed — not yet built |
+| Phase 4 Financials | **Nathan** | Not yet built |
+| **Shared (either can touch)** | Both | `deals`, `vendors`, `tasks`, `expenses`, `activity`, `deal_notes`, `documents`, `contacts`, `contact_deals`, `index.html` shell + nav + shared components |
+
+**When in doubt**: don't write migrations or edit Edge Functions in another owner's domain.
+Post a note and wait for the other session to coordinate.
+
+## Co-coding protocol (read every session)
+
+### Session start ritual
+```bash
+git pull                                    # always — Nathan may have pushed
+cat WORKING_ON.md                           # see what the other session is doing
+```
+Then update `WORKING_ON.md` with what you're about to work on.
+
+### Branch strategy
+- Work on a short-lived branch: `git checkout -b justin/your-feature-name`
+- Push the branch, open a PR, merge to `main` when done
+- `main` is what GitHub Pages serves — only stable, tested work goes there
+- Never force-push to `main`
+
+### Migration protocol
+1. `git pull` before writing any migration
+2. Check `ls supabase/migrations/` — find the latest timestamp
+3. Increment by 1 second for your new migration filename
+4. Apply via Supabase SQL editor (not `supabase db push` — no local DB)
+5. Commit the `.sql` file in the same commit as the feature that needs it
+
+### Session end ritual
+1. Commit everything (including any migration files)
+2. Update `WORKING_ON.md` — clear your entry or note what's left
+3. Push branch (or merge to `main` if it's stable and tested)
+
+### RLS convention (hard rule — applies to both sessions)
+Always use the helper functions — never inline role checks:
+```sql
+-- ✅ Correct
+using (public.is_admin())
+using (public.is_admin() OR public.is_va())
+
+-- ❌ Wrong
+using ((select role from public.profiles where id = auth.uid()) = 'admin')
+```
+
+### Email templates brand rule
+All email copy says **RefundLocators**, never FundLocators.
+Sender: `RefundLocators <hello@refundlocators.com>`
+
 ## When asking an AI to change this
 
 Give it this file plus the specific task. Good prompts:
