@@ -44,14 +44,18 @@ Deno.serve(async (req) => {
 
     const sb = createClient(supabaseUrl, serviceRoleKey)
 
-    const { to, body, deal_id, from_number } = await req.json()
+    const { to: toRaw, body, deal_id, from_number } = await req.json()
 
-    if (!to || !body) {
+    if (!toRaw || !body) {
       return new Response(JSON.stringify({ error: 'Missing required fields: to, body' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
+
+    // Normalize to E.164: strip non-digits, prepend +1 for 10-digit US numbers
+    const digits = toRaw.replace(/\D/g, '')
+    const to = digits.length === 10 ? `+1${digits}` : digits.length === 11 && digits.startsWith('1') ? `+${digits}` : toRaw
 
     // Resolve from_number: use client-supplied value if it's in phone_numbers, else fall back to env
     let resolvedFrom = twilioFromNumber
