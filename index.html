@@ -3350,7 +3350,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
     const ch = sb.channel(`sms-${dealId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
-    return () => sb.removeChannel(ch);
+    // Polling fallback: inbound replies are inserted server-side via the Edge
+    // Function and can be silently dropped by Realtime's RLS filter. Poll every
+    // 6 s so new texts appear automatically without a manual refresh.
+    const poll = setInterval(load, 6000);
+    return () => { sb.removeChannel(ch); clearInterval(poll); };
   }, [dealId]);
 
   // Auto-select first contact when contacts list becomes available
