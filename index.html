@@ -3310,10 +3310,34 @@ function OutboundMessages({ dealId, vendors, deal }) {
   ];
 
   const load = async () => {
-    const { data } = await sb.from('messages_outbound')
+    // Fetch all messages for this deal
+    const { data: dealMsgs } = await sb.from('messages_outbound')
       .select('*').eq('deal_id', dealId)
-      .order('created_at', { ascending: true }).limit(100);
-    setMsgs(data || []);
+      .order('created_at', { ascending: true }).limit(200);
+
+    // Also fetch inbound messages by contact phone number across ALL deals.
+    // This ensures replies show here even if they were auto-assigned to a
+    // different deal (e.g. the same contact phone exists in multiple deals).
+    const contactPhones = [
+      deal?.meta?.homeownerPhone,
+      ...(vendors || []).map(v => v.phone),
+    ].filter(Boolean).flatMap(p => [normalizePhone(p), p.replace(/\D/g,'')]).filter(Boolean);
+
+    let extra = [];
+    if (contactPhones.length > 0) {
+      const { data: inboundByPhone } = await sb.from('messages_outbound')
+        .select('*')
+        .eq('direction', 'inbound')
+        .in('to_number', [...new Set(contactPhones)])
+        .order('created_at', { ascending: true });
+      // Merge: keep any inbound not already in dealMsgs (different deal_id)
+      const seen = new Set((dealMsgs || []).map(m => m.id));
+      extra = (inboundByPhone || []).filter(m => !seen.has(m.id));
+    }
+
+    const all = [...(dealMsgs || []), ...extra]
+      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+    setMsgs(all);
   };
 
   useEffect(() => {

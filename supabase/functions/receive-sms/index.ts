@@ -32,24 +32,39 @@ Deno.serve(async (req) => {
     const from = normalize(fromRaw)
     const to   = normalize(toRaw)
 
-    // Try to find which deal this contact belongs to.
-    // Phone may be stored in multiple formats (e.g. "4797196859" or "+14797196859"),
-    // so search for both the normalized form and the bare 10-digit form.
-    const bare = from.replace(/^\+1/, '')  // strip leading +1 for US numbers
+    const bare = from.replace(/^\+1/, '')  // 10-digit form without country code
     let dealId: string | null = null
 
-    const { data: dealRow } = await sb.rpc('find_deal_by_phone', { phone_e164: from, phone_bare: bare })
-    if (dealRow && dealRow.length > 0) {
-      dealId = dealRow[0].id
-    } else {
-      // Fallback: check vendors table
-      const { data: vendorRow } = await sb
-        .from('vendors')
-        .select('deal_id')
-        .or(`phone.eq.${from},phone.eq.${bare}`)
-        .limit(1)
-        .single()
-      if (vendorRow) dealId = vendorRow.deal_id
+    // Primary heuristic: use the deal we most recently SENT a message to this number.
+    // If the same contact is in multiple deals, the reply almost certainly belongs
+    // to the conversation that was most recently active.
+    const { data: recentOutbound } = await sb
+      .from('messages_outbound')
+      .select('deal_id')
+      .in('to_number', [from, bare])
+      .eq('direction', 'outbound')
+      .not('deal_id', 'is', null)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+    if (recentOutbound) {
+      dealId = recentOutbound.deal_id
+    }
+
+    // Fallback: find deal by homeowner phone or vendor phone
+    if (!dealId) {
+      const { data: dealRow } = await sb.rpc('find_deal_by_phone', { phone_e164: from, phone_bare: bare })
+      if (dealRow && dealRow.length > 0) {
+        dealId = dealRow[0].id
+      } else {
+        const { data: vendorRow } = await sb
+          .from('vendors')
+          .select('deal_id')
+          .or(`phone.eq.${from},phone.eq.${bare}`)
+          .limit(1)
+          .single()
+        if (vendorRow) dealId = vendorRow.deal_id
+      }
     }
 
     // Store inbound message — use to_number = contact's number so UI thread filter works
