@@ -480,6 +480,10 @@ function Inbox({ isPreview }) {
         const b = byDeal[ev.deal_id]; if (!b) continue;
         const evDate = new Date(ev.event_date || ev.created_at);
         if (evDate > b.last) b.last = evDate;
+        // Skip backfill rows from live-activity counts: they're historical
+        // replays imported in one go, not fresh events worth badging. They
+        // still render in the per-case Docket tab on demand.
+        if (ev.is_backfill) continue;
         if (evDate > sevenDaysAgo) b.docket7d++;
         const lastSeen = seenMap[ev.deal_id] ? new Date(seenMap[ev.deal_id]) : null;
         if (lastSeen && ev.created_at && new Date(ev.created_at) > lastSeen) b.docketUnread++;
@@ -494,11 +498,16 @@ function Inbox({ isPreview }) {
 
       setCases(enriched);
 
-      // Combined recent docket feed — latest 15 events across all cases
-      const feed = (dockRes.data || []).slice(0, 15).map(ev => ({
-        ...ev,
-        _dealName: byDeal[ev.deal_id]?.deal?.name || ev.deal_id,
-      }));
+      // Combined recent docket feed — latest 15 LIVE events across all
+      // cases. Backfill/historical events are excluded so Jeff's "what's
+      // new" stream doesn't get polluted with 12 months of replayed docket.
+      const feed = (dockRes.data || [])
+        .filter(ev => !ev.is_backfill)
+        .slice(0, 15)
+        .map(ev => ({
+          ...ev,
+          _dealName: byDeal[ev.deal_id]?.deal?.name || ev.deal_id,
+        }));
       setRecentDocket(feed);
     } catch (e) {
       setError(e.message || String(e));

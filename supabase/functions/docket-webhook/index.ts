@@ -134,6 +134,7 @@ serve(async (req: Request) => {
 
   // ─── No match: stash in unmatched staging ────────────────
   if (dealCount === 0) {
+    const rawObjUnmatched = (event.raw as Record<string, unknown>) || {};
     const { error: stageErr } = await sb.from('docket_events_unmatched').upsert(
       {
         external_id: event.external_id,
@@ -147,6 +148,7 @@ serve(async (req: Request) => {
         raw: event.raw || {},
         detected_at: event.detected_at,
         castle_case_id: event.castle_case_id,
+        is_backfill: rawObjUnmatched.backfill === true,
       },
       { onConflict: 'external_id', ignoreDuplicates: true }
     );
@@ -156,6 +158,14 @@ serve(async (req: Request) => {
     }
     return json(200, { accepted: true, unmatched: true });
   }
+
+  // Castle flags backfill runs by setting raw.backfill = true on every
+  // event. We mirror that onto the is_backfill column and pre-acknowledge
+  // so the notification trigger + UI don't treat 53 historical events as
+  // 53 fresh notifications. See docs/DCC_GO_LIVE_HANDOFF.md §4 Option B.
+  const rawObj = (event.raw as Record<string, unknown>) || {};
+  const isBackfill = rawObj.backfill === true;
+  const nowIso = new Date().toISOString();
 
   // ─── Insert event for each matching deal ─────────────────
   const insertedDealIds: string[] = [];
@@ -174,6 +184,8 @@ serve(async (req: Request) => {
       raw: event.raw || {},
       detected_at: event.detected_at,
       castle_case_id: event.castle_case_id,
+      is_backfill: isBackfill,
+      acknowledged_at: isBackfill ? nowIso : null,
     });
 
     if (insertErr) {
@@ -216,5 +228,6 @@ serve(async (req: Request) => {
     client_facing: CLIENT_FACING_EVENTS.has(event.event_type as string),
     alert: ALERT_EVENTS.has(event.event_type as string),
     payout_trigger: PAYOUT_TRIGGER_EVENTS.has(event.event_type as string),
+    is_backfill: isBackfill,
   });
 });
