@@ -1,6 +1,6 @@
-# FundLocators Business & Technical Transfer Document
+# RefundLocators Business & Technical Transfer Document
 
-**Purpose**: Full knowledge handoff for a new Claude Code project (or a new human owner) to take over FundLocators' operations without losing context. Read this top-to-bottom on day 1, then keep it open as reference.
+**Purpose**: Full knowledge handoff for a new Claude Code project (or a new human owner) to take over RefundLocators' operations without losing context. Read this top-to-bottom on day 1, then keep it open as reference.
 
 **Written for**: Nathan's next Claude Code session (primary), secondarily any future owner or contractor assuming control of the business.
 
@@ -34,21 +34,21 @@ The long-term vision Nathan describes: *"one login, everything, sellable as a bu
 
 | DBA | Purpose | Status |
 |---|---|---|
+| **RefundLocators** (refundlocators.com) | Primary consumer brand. Covers everything surplus-recovery: SMS funnel top-of-funnel, public lead intake, post-signing client ops, DCC team tooling, attorney portal, engagement letters. This is the name customers and counsel see everywhere. | DBA registration pending with Ohio SoS |
 | **Defender Homeowner Advocates** (defenderha.com) | Pre-sale deal activation — working with homeowners *before* foreclosure auction happens | Registered DBA |
-| **RefundLocators** (refundlocators.com) | Consumer-facing SMS funnel + post-foreclosure surplus recovery top-of-funnel | DBA pending registration |
-| **FundLocators** (fundlocators.com) | Primary operating brand, post-signing operations, SEO, the name on engagement letters | Primary trade name |
 
-### The three consumer-facing websites
+### The two consumer-facing websites
 
 | Site | Audience | What it does |
 |---|---|---|
-| **fundlocators.com** | Already-engaged clients + SEO traffic | Post-signing ops; official brand presence |
+| **refundlocators.com** | Former homeowners (surplus recovery) + SEO | Primary brand. Top-of-funnel SMS, lead intake, client portal, attorney portal, DCC entry |
 | **defenderha.com** | Pre-auction homeowners | Pre-sale deal activation, help before the hammer drops |
-| **refundlocators.com** | Post-foreclosure homeowners via SMS | SMS-first funnel; converts a one-tap text into a signed client |
 
-All three share one data infra (DCC's Supabase) and one phone number: **(513) 951-8855** (GHL-unified since 2026-04-17).
+Both brands share one data infra (DCC's Supabase) and one phone number: **(513) 951-8855** (GHL-unified since 2026-04-17).
 
-Unified STOP / opt-out compliance across all three brands.
+Unified STOP / opt-out compliance across both brands.
+
+Legal footer pattern: *"RefundLocators, a d/b/a of FundLocators LLC"* — consumer brand forward, LLC preserved for legal disclosure.
 
 ---
 
@@ -101,8 +101,8 @@ Attorneys sign in, see only cases they're assigned to via `attorney_assignments`
 
 | Person | Role | Email | Notes |
 |---|---|---|---|
-| **Nathan** | Founder, CEO | `nathan@fundlocators.com` | Primary decision-maker. Role: `admin`. |
-| **Justin** | Co-founder, developer | `justin@fundlocators.com` | Pushes occasional commits directly via GitHub web UI. Role: `admin`. |
+| **Nathan** | Founder, CEO | `nathan@refundlocators.com` | Primary decision-maker. Role: `admin`. |
+| **Justin** | Co-founder, developer | `justin@refundlocators.com` | Pushes occasional commits directly via GitHub web UI. Role: `admin`. |
 | **Lauren** | AI chat brand voice | — | Referenced in `LAUREN_PROMPT_V2.md` — chat widget brand/copy for refundlocators.com |
 | **Jeff Kainiz** | Attorney | — | Referenced on open cases. Uses counsel portal. |
 | VAs | Operations | — | Role: `va` — full DCC access except financials. |
@@ -367,7 +367,7 @@ Per §12 of the product spec:
 - Branch: `main`
 - Pages source: root of main
 - Rebuild time: ~30-60s after push
-- Custom domain: none currently (was `check.fundlocators.com` briefly — removed 2026-04-20)
+- Custom domain: none currently (was `check.refundlocators.com` briefly — removed 2026-04-20)
 
 ### Local dev workflow
 
@@ -501,7 +501,7 @@ Built chronologically, 13 sessions so far:
 - [ ] Set `DOCKET_WEBHOOK_SECRET` env var in Supabase Edge Function settings (value: `83be9a6d78bdf9e69cd80c369b1d153320605ea5fcc33bf7ac7db98393042948`)
 - [ ] Share webhook URL + secret + anon key with Castle team out-of-band
 - [ ] Decide: keep smoke-test docket event for Kemper visible, or delete?
-- [ ] Provide Kemper Ansel's real email so I can swap `client_access.email` from `nathan@fundlocators.com`
+- [ ] Provide Kemper Ansel's real email so I can swap `client_access.email` from `nathan@refundlocators.com`
 - [ ] Reach out to Kemper warm-style before first real notification lands in his inbox
 - [ ] Provide GHL API key + location ID (or Twilio creds) to wire SMS notifications
 - [ ] 2Captcha API key — Castle operational concern; unblocks Butler (John Dunn), Warren, Henschen counties
@@ -540,7 +540,7 @@ Built chronologically, 13 sessions so far:
 
 Nathan's stated goal: **"compact our entire business into the Command Center, not just deals … our own Google Drive, our own QuickBooks, our own AI, our own business ideas and goals … we communicate with customers, our clients use the portal, attorneys send their introductory email through the portal, it is our CRM, our business mind, our document storage system. I want to be able to sell this business to someone and literally hand them one login and they have everything and know everything."**
 
-This is a correct and ambitious vision. Treat DCC as the operating system of FundLocators, not just a tracker. Here's the roadmap to get there.
+This is a correct and ambitious vision. Treat DCC as the operating system of RefundLocators, not just a tracker. Here's the roadmap to get there.
 
 ### Phase 1 — What DCC is today (deals + portals)
 ✅ Deal pipeline tracking
@@ -568,7 +568,7 @@ Currently all uploads are per-deal. Expand to:
 - **Library view in DCC**: folder-like tree, search, tag filter, version history
 - **Embed-by-link into client/attorney portals** so templates flow into comms
 
-This alone replaces Google Drive for 80% of FundLocators' needs.
+This alone replaces Google Drive for 80% of RefundLocators' needs.
 
 ### Phase 4 — Financials (QuickBooks alternative)
 
@@ -605,7 +605,7 @@ Embed Claude directly into DCC (via Anthropic API). A sidebar "Ask DCC" that can
 ### Phase 7 — Multi-brand management
 
 Tables:
-- **`brands`**: FundLocators / Defender Homeowner Advocates / RefundLocators — each with its own color palette, phone, email signature, legal footer, website
+- **`brands`**: RefundLocators / Defender Homeowner Advocates / RefundLocators — each with its own color palette, phone, email signature, legal footer, website
 - **Per-deal brand attribution**: which brand owns this deal (affects emails, client portal skin, SOP set)
 - **Cross-brand analytics** in DCC: per-brand revenue, LTV, CAC
 
@@ -649,7 +649,7 @@ On your first message with Nathan:
 
 5. Honesty. When you don't know something, say so. When you make a mistake, own it clearly (e.g., Session 13 fabricated docket events — the right response was to apologize, delete, and never do that again). Never dress up fake data as research.
 
-6. He uses `@` emails informally. `nathan@fundlocators.com` is his admin account. Don't assume another email is his just because it's mentioned.
+6. He uses `@` emails informally. `nathan@refundlocators.com` is his admin account. Don't assume another email is his just because it's mentioned.
 
 7. Mobile matters. Many users (Nathan + VA + homeowners + attorneys) work from phones. Don't break mobile to fix desktop.
 

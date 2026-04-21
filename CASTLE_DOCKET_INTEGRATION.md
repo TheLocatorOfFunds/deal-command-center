@@ -1,15 +1,15 @@
 # Castle → DCC Docket Events Integration
 
-**From**: DCC (Deal Command Center) — the team/client/attorney CRM for FundLocators
+**From**: DCC (Deal Command Center) — the team/client/attorney CRM for RefundLocators
 **To**: Castle — the system that already owns county court docket scrapers
-**Purpose**: Get live docket events from Castle into DCC so homeowners, attorneys, and the FundLocators team see real-time case movement.
+**Purpose**: Get live docket events from Castle into DCC so homeowners, attorneys, and the RefundLocators team see real-time case movement.
 **Direction**: Castle → DCC (outbound from Castle, inbound to DCC).
 
 ---
 
 ## TL;DR for the Castle Claude session
 
-DCC needs a webhook event stream of docket updates, scoped to the Ohio surplus cases FundLocators is actively working. Castle reads DCC's `deals` table directly to know which cases to monitor. When an event occurs, Castle POSTs it to DCC's Supabase Edge Function.
+DCC needs a webhook event stream of docket updates, scoped to the Ohio surplus cases RefundLocators is actively working. Castle reads DCC's `deals` table directly to know which cases to monitor. When an event occurs, Castle POSTs it to DCC's Supabase Edge Function.
 
 Event shape, auth, taxonomy, case-matching, and scraper-health contract are all below.
 
@@ -67,7 +67,7 @@ Right now these feeds are manual. Nathan checks dockets, posts updates. This int
 
 **Castle's domain** (unchanged):
 - Per-county scrapers, credential management, anti-bot handling, rate limiting
-- Case intelligence: surplus estimates, sale dates, equity — already flowing to FundLocators via existing channels
+- Case intelligence: surplus estimates, sale dates, equity — already flowing to RefundLocators via existing channels
 - Docket change detection
 
 **DCC's domain** (this integration):
@@ -371,7 +371,7 @@ Once Castle answers these, DCC will deploy the Edge Function, generate the share
 
 Copy-paste this when you hand the doc to Castle:
 
-> Here's a spec for wiring up docket events from Castle → DCC (the FundLocators CRM). The document is self-contained — you don't need any other context about DCC to answer.
+> Here's a spec for wiring up docket events from Castle → DCC (the RefundLocators CRM). The document is self-contained — you don't need any other context about DCC to answer.
 >
 > Read the whole thing, then:
 > 1. Tell me which delivery mechanism (webhook vs polling) Castle should build, and what the effort looks like.

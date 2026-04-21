@@ -1,6 +1,6 @@
 # Onboarding: Making Changes to the Deal Command Center with Claude Code
 
-Welcome. This guide gets you from zero to pushing updates to the FundLocators Deal Command Center using Claude Code, the same setup Nathan uses.
+Welcome. This guide gets you from zero to pushing updates to the RefundLocators Deal Command Center using Claude Code, the same setup Nathan uses.
 
 By the end of this doc you'll be able to:
 
@@ -16,7 +16,7 @@ By the end of this doc you'll be able to:
 
 **URL**: https://thelocatoroffunds.github.io/deal-command-center/
 
-A single-page lead and deal tracker for FundLocators — flips and surplus fund cases. Nathan, Eric, Inaam and others sign in with magic links and collaborate on deals in real time.
+A single-page lead and deal tracker for RefundLocators — flips and surplus fund cases. Nathan, Eric, Inaam and others sign in with magic links and collaborate on deals in real time.
 
 **Architecture**:
 - One HTML file: `index.html` (~90 KB, ~1400 lines). No build step, no bundler.
@@ -166,7 +166,7 @@ The rule: tell Claude **what field/feature**, **where it goes**, and **how it sh
 
 ### Add a new user to the assignment dropdown
 
-1. Ask Claude: *"Add Sarah to the assignment dropdown — email sarah@fundlocators.com."*
+1. Ask Claude: *"Add Sarah to the assignment dropdown — email sarah@refundlocators.com."*
 2. Claude updates the `teamMembers` array.
 3. Sarah still needs to sign in separately to get a `profiles` row.
 
@@ -244,8 +244,8 @@ The app is realtime. If you deploy a broken version while Nathan is editing a de
 
 ## 9. Coordinating with the team
 
-- **Nathan** (nathan@fundlocators.com) — owner, makes most of the changes
-- **Justin** (justin@fundlocators.com) — co-founder / developer
+- **Nathan** (nathan@refundlocators.com) — owner, makes most of the changes
+- **Justin** (justin@refundlocators.com) — co-founder / developer
 - **Eric, Inaam** — team members, may be assigned deals
 
 Before making anything bigger than a small UI tweak or a new field, message the team. Things worth coordinating:

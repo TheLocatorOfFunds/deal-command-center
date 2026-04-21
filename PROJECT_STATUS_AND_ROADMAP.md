@@ -1,4 +1,4 @@
-# FundLocators — Full Project Status & Roadmap
+# RefundLocators — Full Project Status & Roadmap
 
 **Point-in-time snapshot**: Apr 21, 2026, end of Session 22
 **Purpose**: One document that shows (a) exactly what exists today, (b) what's about to happen next, (c) where this whole thing is heading, and (d) the playbook to run it. Read this first on any new day; read it first on a new Claude Code session; read it first if you hand the business to someone else.
@@ -13,7 +13,7 @@
 
 ## 1 — TL;DR (read this if nothing else)
 
-**Business**: FundLocators LLC — one Ohio LLC, three consumer-facing brands (fundlocators.com live, defenderha.com live, refundlocators.com WIP), centered on Ohio foreclosure surplus fund recovery.
+**Business**: FundLocators LLC — one Ohio LLC operating as **RefundLocators** (primary consumer brand, refundlocators.com) and **Defender Homeowner Advocates** (defenderha.com — pre-auction work). Centered on Ohio foreclosure surplus fund recovery.
 
 **Stack**: Single-file HTML apps on GitHub Pages + Supabase (Postgres + Auth + Realtime + Edge Functions + Vault). No build step. Dev in browser, ship by pushing to `main`.
 
@@ -72,17 +72,18 @@
 
 ### 3.1 Entity + Brand structure
 
-**FundLocators LLC** — Ohio LLC, single legal entity. All operations, all banking, all tax returns.
+**FundLocators LLC** — Ohio LLC, single legal entity. All operations, all banking, all tax returns happen under the LLC name.
 
-Three DBAs / brands:
+Two public-facing brands (both d/b/a's of the LLC):
 
-| DBA | Domain | Purpose |
+| Brand | Domain | Purpose |
 |---|---|---|
-| **FundLocators** | fundlocators.com | Primary brand, post-signing ops, SEO, official name on engagement letters |
-| **Defender Homeowner Advocates** | defenderha.com | Pre-sale deal activation — work with homeowners *before* auction |
-| **RefundLocators** | refundlocators.com | Consumer-facing SMS funnel; DBA registration pending |
+| **RefundLocators** | refundlocators.com | The primary consumer brand. Everything surplus-recovery-related — top-of-funnel SMS intake, post-signing client work, DCC team tooling, attorney portal — is branded RefundLocators. DBA registration pending with Ohio SoS. |
+| **Defender Homeowner Advocates** | defenderha.com | Pre-auction / pre-sale deal activation. Work with homeowners *before* the foreclosure sale happens. Registered DBA. |
 
 Unified phone: **(513) 951-8855** (GHL-unified 2026-04-17). Any doc still showing 513-516-2306 or 513-253-1100 is stale.
+
+Legal footer pattern on every public-facing surface: *"RefundLocators, a d/b/a of FundLocators LLC"* (or equivalent) — keeps consumer brand forward, preserves legal entity.
 
 ### 3.2 Live URLs
 
@@ -289,7 +290,7 @@ All tables in `public` unless noted. RLS enabled on all. Realtime enabled on mos
 - Generated fresh DOCKET_WEBHOOK_SECRET (old one may have leaked via screenshot/chat)
 - Nathan set it on Supabase; I set it in Castle's config/.env
 - Found + set SUPABASE_SERVICE_KEY in Castle's .env
-- Shipped Justin's lead-intake.html rebuild: fixed 5 phone typos, canonical/OG URL to GitHub Pages, landing attribution dynamic, removed unused useEffect import, email corrected to nathan@fundlocators.com
+- Shipped Justin's lead-intake.html rebuild: fixed 5 phone typos, canonical/OG URL to GitHub Pages, landing attribution dynamic, removed unused useEffect import, email corrected to nathan@refundlocators.com
 - Confirmed config/.env is gitignored (zero risk of secret leak via git)
 
 ---
@@ -389,7 +390,7 @@ Design already locked in `PHASE_3_LIBRARY_PLAN.md`. Answers all 5 open questions
 - Attorney portal same for `visible_to_attorney=true`
 - Auto-attach templates to deals (e.g., engagement letter template)
 
-**Replaces**: Google Drive for most FundLocators use cases. Absorbs all the scattered strategy .md files currently in the repo.
+**Replaces**: Google Drive for most RefundLocators use cases. Absorbs all the scattered strategy .md files currently in the repo.
 
 ### Phase 4: Financial Layer (QuickBooks-alternative)
 
@@ -423,7 +424,7 @@ Tables:
 
 ### Phase 7: Multi-Brand Attribution
 
-- `brands` table: FundLocators / Defender HA / RefundLocators, each with palette, phone, signature, footer, website
+- `brands` table: RefundLocators / Defender HA / RefundLocators, each with palette, phone, signature, footer, website
 - Per-deal brand attribution
 - Cross-brand analytics: per-brand revenue, LTV, CAC
 - Different portal skins per brand (same backend)
@@ -471,7 +472,7 @@ Tables:
 | **Local-only strategy docs** (JUSTIN_KICKOFF.md, LAUREN_PROMPT_V2.md, REFUNDLOCATORS_VISION.md, etc — all untracked by git) | High | Phase 3 Library absorbs these |
 | **Nathan-only institutional knowledge** (why a deal is structured a certain way, who Jeff is, what a "Castle" is) | High | This doc + CLAUDE.md + TRANSFER doc; expand over time |
 | **No disaster recovery playbook** (what if Supabase goes down, what if GitHub goes down) | Medium | Daily backup job + Step 4 below |
-| **Domain registrar logins** (fundlocators.com, defenderha.com, refundlocators.com) | Medium | Get into 1Password |
+| **Domain registrar logins** (refundlocators.com, defenderha.com, refundlocators.com) | Medium | Get into 1Password |
 | **Financial opacity** (no single source of truth for monthly P&L across brands) | Medium | Phase 4 Financial layer |
 | **Justin and Nathan bus factor** (two-person team) | Low-medium | This doc + transfer layer |
 | **Castle dependency** (one scraper project) | Low | DCC-side schema is agnostic; any replacement scraper with same webhook contract works |
@@ -646,7 +647,7 @@ This means Castle can fire test events against the live webhook safely; they lan
 
 Two directions in `messages` trigger:
 
-**Client/attorney → team**: Email `nathan@fundlocators.com` (hardcoded; future: `team_notification_prefs` table) with case context + "Reply in DCC" CTA. `reply_to: nathan@fundlocators.com` so replying in mail client goes to Nathan.
+**Client/attorney → team**: Email `nathan@refundlocators.com` (hardcoded; future: `team_notification_prefs` table) with case context + "Reply in DCC" CTA. `reply_to: nathan@refundlocators.com` so replying in mail client goes to Nathan.
 
 **Team (admin/va/user) → client**: Email every enabled `client_access.email` for the deal where `prefs.notify_email != false`. CTA to "Open your case portal."
 
@@ -705,7 +706,7 @@ DCC uses **dark theme** (`#0c0a09`, `#1c1917` base). Portals use **cream/light t
 
 ## 13 — How to Brief a New Claude Code Session
 
-Copy-paste this as your first message to a fresh Claude Code in the FundLocators project:
+Copy-paste this as your first message to a fresh Claude Code in the RefundLocators project:
 
 > Read these three files in order:
 > 1. `PROJECT_STATUS_AND_ROADMAP.md` (this is the current state)

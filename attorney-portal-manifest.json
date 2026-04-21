@@ -1,7 +1,7 @@
 {
-  "name": "FundLocators Counsel Portal",
+  "name": "RefundLocators Counsel Portal",
   "short_name": "FL Counsel",
-  "description": "Case management for attorneys retained by FundLocators",
+  "description": "Case management for attorneys retained by RefundLocators",
   "start_url": "/deal-command-center/attorney-portal.html",
   "scope": "/deal-command-center/",
   "display": "standalone",

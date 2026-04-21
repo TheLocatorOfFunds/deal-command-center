@@ -1,6 +1,6 @@
 {
-  "name": "FundLocators Case Portal",
-  "short_name": "FundLocators",
+  "name": "RefundLocators Case Portal",
+  "short_name": "RefundLocators",
   "description": "Track your surplus fund recovery case",
   "start_url": "/deal-command-center/portal.html",
   "scope": "/deal-command-center/",

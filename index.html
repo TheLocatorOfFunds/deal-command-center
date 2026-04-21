@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Deal Command Center · FundLocators</title>
+<title>Deal Command Center · RefundLocators</title>
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#0b1f3a" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -244,7 +244,7 @@ function Login() {
   return (
     <Shell>
       <div style={{ maxWidth: 420, margin: "120px auto", textAlign: "center" }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>FundLocators</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>RefundLocators</div>
         <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6 }}>Deal Command Center</div>
         <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 8, marginBottom: 32 }}>Sign in with your work email — we'll send you a magic link.</div>
         {sent ? (
@@ -254,7 +254,7 @@ function Login() {
           </div>
         ) : (
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
-            <input type="email" autoFocus value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="you@fundlocators.com" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }} />
+            <input type="email" autoFocus value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="you@refundlocators.com" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }} />
             <button onClick={send} disabled={busy || !email} style={{ ...btnPrimary, width: "100%", padding: "10px 14px", fontSize: 13, marginTop: 12, opacity: busy||!email ? 0.5 : 1 }}>{busy ? "Sending..." : "Send magic link"}</button>
             {err && <div style={{ fontSize: 11, color: "#fca5a5", marginTop: 10 }}>{err}</div>}
           </div>
@@ -426,7 +426,7 @@ function DealCommandCenter({ session, profile }) {
           )}
           <div>
             <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-              {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "FundLocators Deal Hub"}
+              {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "RefundLocators Deal Hub"}
             </div>
             <div className="page-title" style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
               {activeDeal ? (activeDeal.name || '').split(' - ')[0] : "Deal Command Center"}
@@ -3957,7 +3957,7 @@ function TeamModal({ onClose, currentUserId }) {
           Sends a sign-in link via email. When the person signs in, a new profile appears below — you then set their role. New profiles default to "Admin" (full access) so promote or demote immediately.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="teammate@fundlocators.com" style={{ ...inputStyle, flex: 1, minWidth: 220 }} onKeyDown={e => { if (e.key === 'Enter' && inviteEmail) invite(); }} />
+          <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="teammate@refundlocators.com" style={{ ...inputStyle, flex: 1, minWidth: 220 }} onKeyDown={e => { if (e.key === 'Enter' && inviteEmail) invite(); }} />
           <select value={inviteRole} onChange={e => setInviteRole(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
             <option value="va">Virtual Assistant</option>
             <option value="admin">Admin</option>

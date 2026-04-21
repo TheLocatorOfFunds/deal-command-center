@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1f3a">
-<title>FundLocators Attorney Portal</title>
+<title>RefundLocators Attorney Portal</title>
 <link rel="manifest" href="attorney-portal-manifest.json" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-<meta name="apple-mobile-web-app-title" content="FundLocators Counsel" />
+<meta name="apple-mobile-web-app-title" content="RefundLocators Counsel" />
 <link rel="apple-touch-icon" href="icon-attorney.svg" />
 <link rel="icon" type="image/svg+xml" href="icon-attorney.svg" />
 <link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
@@ -279,7 +279,7 @@ function SignIn() {
       <div className="card signin-card">
         <div className="brand" style={{ marginBottom: 20 }}>
           <span className="brand-dot"></span>
-          FundLocators
+          RefundLocators
           <span className="brand-tag">Counsel Portal</span>
         </div>
         {sent ? (
@@ -292,7 +292,7 @@ function SignIn() {
         ) : (
           <div>
             <h1>Counsel sign-in</h1>
-            <p className="lead">Sign in to view the cases FundLocators has retained you on.</p>
+            <p className="lead">Sign in to view the cases RefundLocators has retained you on.</p>
             <input
               type="email" value={email} autoFocus
               onChange={e => setEmail(e.target.value)}
@@ -336,11 +336,11 @@ function Authenticated({ session }) {
         <div className="card signin-card">
           <div className="brand" style={{ marginBottom: 20 }}>
             <span className="brand-dot"></span>
-            FundLocators
+            RefundLocators
             <span className="brand-tag">Counsel Portal</span>
           </div>
           <h1 className="serif">Wrong portal</h1>
-          <p className="lead">You're signed in as <b>{session.user.email}</b>, but this portal is only for attorneys retained by FundLocators.</p>
+          <p className="lead">You're signed in as <b>{session.user.email}</b>, but this portal is only for attorneys retained by RefundLocators.</p>
           <p className="fineprint">
             If you're a client, please use <a href="portal.html">the client portal</a> instead.<br/><br/>
             If you're a team member, go to <a href="/deal-command-center/">DCC</a>.<br/><br/>
@@ -394,7 +394,7 @@ function Portal({ session, profile, isPreview }) {
         <header className="app-header">
           <div className="brand">
             <span className="brand-dot"></span>
-            FundLocators
+            RefundLocators
             <span className="brand-tag">Counsel Portal</span>
           </div>
           <div className="user-meta">
@@ -558,7 +558,7 @@ function Inbox({ isPreview }) {
 
       {cases.length === 0 ? (
         <div className="card empty">
-          You haven't been assigned to any FundLocators cases yet. When Nathan retains you, this page will show every case you're working on — with filings, documents, and live docket updates.
+          You haven't been assigned to any RefundLocators cases yet. When Nathan retains you, this page will show every case you're working on — with filings, documents, and live docket updates.
         </div>
       ) : (
         <>
@@ -782,7 +782,7 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
       {/* Notes (read-only — team maintains these) */}
       {Array.isArray(notes) && notes.length > 0 && (
         <div className="card">
-          <p className="card-title">Case Notes (from FundLocators team)</p>
+          <p className="card-title">Case Notes (from RefundLocators team)</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {notes.map(n => (
               <div key={n.id} style={{ padding: '10px 12px', border: '1px solid var(--border, #e5e5e5)', borderRadius: 8, background: 'var(--bg-subtle, #fafafa)' }}>
@@ -852,7 +852,7 @@ function MessagesThread({ dealId, session, senderName, isPreview }) {
 
   return (
     <div className="card">
-      <p className="card-title">Messages with FundLocators team</p>
+      <p className="card-title">Messages with RefundLocators team</p>
       {loading ? (
         <div className="empty" style={{ padding: '12px 0' }}>Loading…</div>
       ) : messages.length === 0 ? (

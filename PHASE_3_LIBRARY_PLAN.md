@@ -185,7 +185,7 @@ Rough sizing in "Nathan-prompts, Claude-executes" sessions:
 - **PR 2** (upload, folders, list, search, OCR): ~1.5 sessions
 - **PR 3** (templates + deal pinning + client portal surfacing): ~1.5 sessions
 
-Total: **~3-4 sessions to replace Google Drive for 80% of FundLocators' document needs.** The other 20% (image-heavy marketing folders, Loom trees, historical deep archive) can stay in Google Drive forever or migrate gradually.
+Total: **~3-4 sessions to replace Google Drive for 80% of RefundLocators' document needs.** The other 20% (image-heavy marketing folders, Loom trees, historical deep archive) can stay in Google Drive forever or migrate gradually.
 
 ---
 

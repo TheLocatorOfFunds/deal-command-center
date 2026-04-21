@@ -81,7 +81,7 @@ One of the most powerful unlocks: the same data serves different audiences diffe
 - **Referral partner portal** — people who send you leads see deals they referred and their earned commission. Builds loyalty and keeps referrals flowing.
 - **Public stats page** — anonymized "X cases recovered, $Y returned to homeowners" for marketing. Builds credibility with county clerks and regulators.
 - **Client-facing status timeline** — a pretty, step-by-step timeline showing sellers exactly where their case is in the process.
-- **Branded PDF reports** — export a deal summary as a FundLocators-branded PDF to send to attorneys, investors, or clients.
+- **Branded PDF reports** — export a deal summary as a RefundLocators-branded PDF to send to attorneys, investors, or clients.
 
 ---
 
@@ -141,7 +141,7 @@ You've built something genuinely useful. The surplus fund recovery industry runs
 
 - **White-label for other surplus-fund recovery teams** — rename it, they bring their own Supabase project. $99–$299/month SaaS, or revenue share.
 - **Flip-operator edition** — strip the surplus features, amp up rehab tracking, sell to house-flippers.
-- **Vertical marketplace** — "FundLocators Network" where independent recovery operators list deals they can't staff, and other operators take them for a cut.
+- **Vertical marketplace** — "RefundLocators Network" where independent recovery operators list deals they can't staff, and other operators take them for a cut.
 - **Training / coaching offering** — the Command Center becomes a credential. "I recovered $2M in surplus funds using this system — here's the course."
 - **Data as a product** — sell anonymized county-level recovery stats to researchers, local newspapers, state regulators.
 - **API access tier** — let power users build on top of your data with their own tools.
@@ -170,7 +170,7 @@ If only three things could get built this quarter, these would produce the most 
 - Magic-link login for the homeowner whose surplus you're recovering.
 - Read-only view of their case status, last update, estimated recovery.
 - Massively reduces inbound "what's going on with my money" phone calls.
-- **Why it wins**: Lowest build cost for highest customer-experience lift. Differentiates FundLocators from competitors.
+- **Why it wins**: Lowest build cost for highest customer-experience lift. Differentiates RefundLocators from competitors.
 
 ---
 

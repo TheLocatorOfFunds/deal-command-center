@@ -1,6 +1,6 @@
 # Deal Command Center — AI Collaborator Primer
 
-This repo is a lead/deal tracker for **FundLocators** (flips + surplus fund cases). Read this file before making changes — it has the stuff that isn't obvious from reading the code.
+This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund cases). Read this file before making changes — it has the stuff that isn't obvious from reading the code.
 
 ## Architecture at a glance
 
@@ -135,8 +135,8 @@ Nothing to do in the dashboard — just share the URL. First sign-in auto-create
 
 ## Team
 
-- **Nathan** (nathan@fundlocators.com) — owner
-- **Justin** (justin@fundlocators.com) — co-founder / developer
+- **Nathan** (nathan@refundlocators.com) — owner
+- **Justin** (justin@refundlocators.com) — co-founder / developer
 
 ## When asking an AI to change this
 

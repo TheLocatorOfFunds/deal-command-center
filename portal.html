@@ -4,11 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1f3a">
-<title>FundLocators Case Portal</title>
+<title>RefundLocators Case Portal</title>
 <link rel="manifest" href="portal-manifest.json" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-<meta name="apple-mobile-web-app-title" content="FundLocators" />
+<meta name="apple-mobile-web-app-title" content="RefundLocators" />
 <link rel="apple-touch-icon" href="icon-portal.svg" />
 <link rel="icon" type="image/svg+xml" href="icon-portal.svg" />
 <link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
@@ -377,7 +377,7 @@ function statusIntel(status, filedAt) {
     'contacted': {
       icon: '📞', tone: 'info',
       headline: "Our team has reached out to you",
-      body: "A FundLocators specialist has contacted you to discuss your case. Please respond when you can — the sooner we can talk, the sooner we can begin your recovery.",
+      body: "A RefundLocators specialist has contacted you to discuss your case. Please respond when you can — the sooner we can talk, the sooner we can begin your recovery.",
       cta: "If you haven't heard from us, call Nathan at (513) 951-8855.",
     },
     'awaiting-docs': {
@@ -624,7 +624,7 @@ function SignIn() {
       <div className="card signin-card">
         <div className="brand" style={{ marginBottom: 24 }}>
           <span className="brand-dot"></span>
-          FundLocators
+          RefundLocators
           <span className="brand-tag">Case Portal</span>
         </div>
         {sent ? (
@@ -1563,7 +1563,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       <header className="portal-header">
         <div className="brand">
           <span className="brand-dot"></span>
-          FundLocators
+          RefundLocators
           <span className="brand-tag">Case Portal</span>
         </div>
         <button className="btn-ghost" onClick={onSignOut}>Sign out</button>
@@ -1654,10 +1654,10 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
           <div className="team-avatar">N</div>
           <div className="team-info">
             <div className="team-name">Nathan Johnson</div>
-            <div className="team-role">Principal, FundLocators</div>
+            <div className="team-role">Principal, RefundLocators</div>
             <div className="team-contact">
               <a href="tel:+15139518855">(513) 951-8855</a> &middot;{' '}
-              <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>
+              <a href="mailto:nathan@refundlocators.com">nathan@refundlocators.com</a>
             </div>
           </div>
         </div>
@@ -1714,13 +1714,13 @@ function NoAccess({ session }) {
       <div className="card signin-card">
         <div className="brand" style={{ marginBottom: 24 }}>
           <span className="brand-dot"></span>
-          FundLocators
+          RefundLocators
           <span className="brand-tag">Case Portal</span>
         </div>
         <h1 className="serif">We couldn't find your case</h1>
         <p className="lead">You're signed in as <b>{session.user.email}</b>, but we don't have a case linked to this email address.</p>
         <p className="fineprint">
-          If you believe this is an error, please contact Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a> or <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>. We'll verify and get you access within the business day.
+          If you believe this is an error, please contact Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a> or <a href="mailto:nathan@refundlocators.com">nathan@refundlocators.com</a>. We'll verify and get you access within the business day.
         </p>
         <button className="btn-primary" onClick={() => sb.auth.signOut()} style={{ marginTop: 24 }}>
           Sign out and try a different email
@@ -1736,7 +1736,7 @@ function GenericError() {
       <div className="card signin-card">
         <div className="brand" style={{ marginBottom: 24 }}>
           <span className="brand-dot"></span>
-          FundLocators
+          RefundLocators
           <span className="brand-tag">Case Portal</span>
         </div>
         <h1 className="serif">Something went wrong</h1>

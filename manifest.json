@@ -1,7 +1,7 @@
 {
   "name": "Deal Command Center",
   "short_name": "DCC",
-  "description": "FundLocators internal deal tracker — flips and surplus fund recovery",
+  "description": "RefundLocators internal deal tracker — flips and surplus fund recovery",
   "start_url": "/deal-command-center/",
   "scope": "/deal-command-center/",
   "display": "standalone",
