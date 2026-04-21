@@ -21,7 +21,10 @@ Template:
 
 ## Nathan's session
 
-**Status**: Idle
+**Status**: Active
+**Working on**: Attorney portal UX overhaul per Nathan's feedback
+**Touching**: `attorney-portal.html` (title uniformity · docket scroller · case-detail info blocks · message board with visibility indicators · post-update client-visible toggle)
+**ETA**: Done today
 **Last updated**: Apr 21, 2026
 
 <!--
