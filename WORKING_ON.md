@@ -21,11 +21,9 @@ Template:
 
 ## Nathan's session
 
-**Status**: Active
-**Working on**: Attorney portal UX overhaul per Nathan's feedback
-**Touching**: `attorney-portal.html` (title uniformity · docket scroller · case-detail info blocks · message board with visibility indicators · post-update client-visible toggle)
-**ETA**: Done today
+**Status**: Idle
 **Last updated**: Apr 21, 2026
+**Last done**: Attorney portal UX overhaul (title cleanup · richer case details card with property address + client phone/email · "share with client" visibility toggle on case updates · visibility-badge timeline · fixed-height docket scroller with Case History accordion for backfill) + migration `attorney_post_update_visibility_control`.
 
 <!--
 Template:

@@ -629,6 +629,26 @@ function Inbox({ isPreview }) {
 }
 
 // Per-case card with status + color-coded "days since last update" + live docket badges.
+// Title shows the client name only (no address) — address goes in the detail view.
+function displayName(deal) {
+  // Legacy convention: some deals have name="Client Name - 123 Main St" concatenated.
+  // Some just have the address (older flips). Return the clean client part, or the
+  // address if there's no distinct client name portion.
+  const raw = (deal.name || '').trim();
+  if (!raw) return deal.address || deal.id;
+  const parts = raw.split(' - ');
+  // If split produces > 1 parts, first part is the client name.
+  return parts[0];
+}
+function displaySecondaryAddress(deal) {
+  // Return whatever address we know — from deal.address or the tail of the name.
+  if (deal.address) return deal.address;
+  const raw = (deal.name || '').trim();
+  const parts = raw.split(' - ');
+  if (parts.length > 1) return parts.slice(1).join(' - ');
+  return '';
+}
+
 function CaseCard({ deal, closed }) {
   const m = deal.meta || {};
   const filedAt = m.filed_at || deal.filed_at;
@@ -644,7 +664,7 @@ function CaseCard({ deal, closed }) {
   return (
     <div className="case-row" onClick={() => navigate('#/case/' + encodeURIComponent(deal.id))}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="case-name">{deal.name}</div>
+        <div className="case-name">{displayName(deal)}</div>
         <div className="case-meta">
           {m.county ? `${m.county} County` : (deal.address || '')}
           {m.courtCase && <> &nbsp;·&nbsp; Case {m.courtCase}</>}
@@ -720,15 +740,15 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
         <a className="back-link" href="#/" style={{ marginBottom: 0 }}>← All cases</a>
       </div>
 
-      <h1 className="page-title">{deal.name}</h1>
+      <h1 className="page-title">{displayName(deal)}</h1>
       <div className="page-sub">
-        {m.county ? `${m.county} County, Ohio` : (deal.address || '')}
+        {m.county ? `${m.county} County, Ohio` : 'Ohio'}
         <span style={{ marginLeft: 12 }}>
           <span className={"badge " + statusCls}>{statusLabel(deal.status)}</span>
         </span>
       </div>
 
-      {/* Case info */}
+      {/* Case info — compact, attorney-focused */}
       <div className="card">
         <p className="card-title">Case Details</p>
         <div className="stat-grid">
@@ -749,6 +769,32 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
             <div className="stat-value">{deadline ? fmtDate(deadline) : '—'}</div>
           </div>
         </div>
+        {(displaySecondaryAddress(deal) || m.phone || m.email) && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--border)', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            {displaySecondaryAddress(deal) && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Property address</div>
+                <div style={{ fontSize: 14, color: 'var(--navy)' }}>{displaySecondaryAddress(deal)}</div>
+              </div>
+            )}
+            {m.phone && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Client phone</div>
+                <div style={{ fontSize: 14 }}>
+                  <a href={`tel:${m.phone.replace(/[^0-9+]/g, '')}`} style={{ color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600 }}>{m.phone}</a>
+                </div>
+              </div>
+            )}
+            {m.email && (
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Client email</div>
+                <div style={{ fontSize: 14 }}>
+                  <a href={`mailto:${m.email}`} style={{ color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600, wordBreak: 'break-all' }}>{m.email}</a>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Post update */}
@@ -763,19 +809,44 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
       {/* Docket */}
       <AttorneyDocketSection dealId={deal.id} />
 
-      {/* Timeline */}
+      {/* Case Timeline — visibility-aware, scrollable */}
       <div className="card">
-        <p className="card-title">Case Timeline</p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+          <p className="card-title" style={{ margin: 0 }}>Case timeline <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>({activity.length})</span></p>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <span>🔒 Internal</span>
+            <span>👤 Client sees</span>
+            <span>👨‍⚖️ Your posts</span>
+          </div>
+        </div>
         {activity.length === 0 ? (
-          <div className="empty" style={{ padding: '12px 0' }}>No activity yet.</div>
+          <div className="empty" style={{ padding: '12px 0' }}>No activity yet. Post a case update above to start the record.</div>
         ) : (
-          activity.map(a => (
-            <div className="timeline-item" key={a.id}>
-              <div className="timeline-dot"></div>
-              <div className="timeline-action">{a.action}</div>
-              <div className="timeline-date">{fmtDate(a.created_at)}</div>
-            </div>
-          ))
+          <div style={{ maxHeight: 500, overflowY: 'auto', paddingRight: 6 }}>
+            {activity.map(a => {
+              const vis = a.visibility || ['team'];
+              const clientSees = vis.includes('client');
+              const isMine = (a.action || '').startsWith('👨‍⚖️ Attorney update:');
+              const cleanAction = isMine ? a.action.replace(/^👨‍⚖️ Attorney update:\s*/, '') : a.action;
+              const badge = isMine
+                ? { icon: '👨‍⚖️', text: clientSees ? 'Your post · client sees' : 'Your post · internal', color: clientSees ? '#2d7a4f' : '#4338ca' }
+                : clientSees
+                  ? { icon: '👤', text: 'Client sees this', color: '#2d7a4f' }
+                  : { icon: '🔒', text: 'Internal only', color: '#6b6b6b' };
+              return (
+                <div className="timeline-item" key={a.id} style={{ background: isMine ? 'rgba(67, 56, 202, 0.04)' : 'transparent', padding: '12px 10px', borderRadius: 6 }}>
+                  <div className="timeline-dot" style={{ background: badge.color }}></div>
+                  <div>
+                    <div className="timeline-action" style={{ lineHeight: 1.5 }}>{cleanAction}</div>
+                    <div style={{ fontSize: 10, color: badge.color, fontWeight: 700, marginTop: 4, letterSpacing: '0.04em' }}>
+                      {badge.icon} {badge.text}
+                    </div>
+                  </div>
+                  <div className="timeline-date">{fmtDate(a.created_at)}</div>
+                </div>
+              );
+            })}
+          </div>
         )}
       </div>
 
@@ -965,49 +1036,83 @@ function AttorneyDocketSection({ dealId }) {
 
   if (loading) return null;
 
+  // Live events (ordered desc already from query) vs backfill-collapsed history
+  const liveEvents = events.filter(e => !e.is_backfill);
+  const historyEvents = events.filter(e => e.is_backfill);
+
+  const renderEvent = (e) => {
+    const meta = ATTORNEY_EVENT_META[e.event_type] || { label: e.event_type, color: '#6b6b6b', icon: '•' };
+    return (
+      <div key={e.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center', marginTop: 2 }}>{meta.icon}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', background: meta.color + '1a', borderRadius: 3 }}>{meta.label}</span>
+              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{e.event_date}</span>
+            </div>
+            <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>{e.description}</div>
+            <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              {e.court_system && <span>{e.court_system}</span>}
+              {e.case_number && <span>Case {e.case_number}</span>}
+            </div>
+            {e.document_url && (
+              <a href={e.document_url} target="_blank" rel="noreferrer" style={{ display: 'inline-block', fontSize: 12, color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600, marginTop: 8 }}>
+                📄 View court document →
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="card">
-      <p className="card-title">Docket ({events.length})</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+        <p className="card-title" style={{ margin: 0 }}>Docket <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>({events.length})</span></p>
+        {events.length > 5 && (
+          <div style={{ fontSize: 11, color: 'var(--text-subtle)', fontStyle: 'italic' }}>Scroll inside the box to browse all events</div>
+        )}
+      </div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
         Every event on the court docket for this case, ingested automatically from the county scraper. Complements but doesn't replace your own filings.
       </div>
       {events.length === 0 ? (
         <div className="empty" style={{ padding: '12px 0' }}>No docket events on file yet.</div>
       ) : (
-        events.map(e => {
-          const meta = ATTORNEY_EVENT_META[e.event_type] || { label: e.event_type, color: '#6b6b6b', icon: '•' };
-          return (
-            <div key={e.id} style={{ padding: '14px 0', borderBottom: '1px solid var(--border)' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center', marginTop: 2 }}>{meta.icon}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', background: meta.color + '1a', borderRadius: 3 }}>{meta.label}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{e.event_date}</span>
-                  </div>
-                  <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>{e.description}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                    {e.court_system && <span>{e.court_system}</span>}
-                    {e.case_number && <span>Case {e.case_number}</span>}
-                  </div>
-                  {e.document_url && (
-                    <a href={e.document_url} target="_blank" rel="noreferrer" style={{ display: 'inline-block', fontSize: 12, color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600, marginTop: 8 }}>
-                      📄 View court document →
-                    </a>
-                  )}
-                </div>
+        <>
+          {/* Live events — scrollable fixed-height container */}
+          <div style={{ maxHeight: 480, overflowY: 'auto', paddingRight: 6, border: '1px solid var(--border)', borderRadius: 8, padding: '4px 14px 4px 14px' }}>
+            {liveEvents.length > 0 ? liveEvents.map(renderEvent) : (
+              <div className="empty" style={{ padding: '18px 0' }}>No live events yet — {historyEvents.length > 0 ? 'history is in the accordion below.' : 'check back after Castle runs.'}</div>
+            )}
+          </div>
+
+          {/* Collapsed case history (backfill events) */}
+          {historyEvents.length > 0 && (
+            <details style={{ marginTop: 14 }}>
+              <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--navy-mid)', fontWeight: 600, padding: '8px 0' }}>
+                📜 Case history · {historyEvents.length} historical docket {historyEvents.length === 1 ? 'entry' : 'entries'}
+              </summary>
+              <div style={{ maxHeight: 360, overflowY: 'auto', paddingRight: 6, marginTop: 8, border: '1px solid var(--border)', borderRadius: 8, padding: '4px 14px 4px 14px' }}>
+                {historyEvents.map(renderEvent)}
               </div>
-            </div>
-          );
-        })
+            </details>
+          )}
+        </>
       )}
     </div>
   );
 }
 
 // ─── Update form ──────────────────────────────────────
+// Attorney posts a case update. Two visibility options:
+//  - Internal (default): RefundLocators team + attorney only
+//  - Share with client: team + attorney + client sees it in their portal timeline
 function UpdateForm({ dealId, onPosted, isPreview }) {
   const [text, setText] = useState("");
+  const [shareWithClient, setShareWithClient] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
@@ -1015,10 +1120,16 @@ function UpdateForm({ dealId, onPosted, isPreview }) {
     if (!text.trim()) return;
     if (isPreview) { setMsg({ type: 'error', text: 'Preview mode — update not posted.' }); return; }
     setBusy(true); setMsg(null);
-    const { error } = await sb.rpc('attorney_post_update', { p_deal_id: dealId, p_note: text.trim() });
+    const { error } = await sb.rpc('attorney_post_update', {
+      p_deal_id: dealId,
+      p_note: text.trim(),
+      p_share_with_client: shareWithClient,
+    });
     setBusy(false);
     if (error) { setMsg({ type: 'error', text: error.message }); return; }
-    setText(""); setMsg({ type: 'success', text: 'Update posted.' });
+    setText("");
+    setShareWithClient(false);
+    setMsg({ type: 'success', text: shareWithClient ? 'Update posted — client will see it.' : 'Update posted — internal to team only.' });
     onPosted?.();
   };
 
@@ -1033,8 +1144,30 @@ function UpdateForm({ dealId, onPosted, isPreview }) {
           placeholder="e.g. Hearing continued to May 15. Filed response to motion to intervene."
           maxLength={2000}
         />
+
+        {/* Client-visibility toggle — attorney chooses audience per post */}
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', background: shareWithClient ? 'var(--gold-soft)' : 'var(--bg-card-alt)', border: '1px solid ' + (shareWithClient ? 'var(--gold)' : 'var(--border)'), borderRadius: 8, cursor: isPreview ? 'not-allowed' : 'pointer', transition: 'all 0.12s' }}>
+          <input
+            type="checkbox"
+            checked={shareWithClient}
+            onChange={e => setShareWithClient(e.target.checked)}
+            disabled={isPreview}
+            style={{ marginTop: 3, cursor: 'inherit', width: 16, height: 16, flexShrink: 0 }}
+          />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--navy)' }}>
+              {shareWithClient ? '👤 Client will see this update' : '🔒 Internal — team + attorney only'}
+            </div>
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.5 }}>
+              {shareWithClient
+                ? 'This update will appear in the homeowner\'s case portal timeline. Use plain language — no internal jargon.'
+                : 'The homeowner will NOT see this. Safe for internal strategy, objections, motion drafts, billing notes.'}
+            </div>
+          </div>
+        </label>
+
         <button className="btn-primary" onClick={post} disabled={busy || !text.trim()}>
-          {busy ? 'Posting…' : 'Post update'}
+          {busy ? 'Posting…' : (shareWithClient ? 'Post (client will see)' : 'Post (internal)')}
         </button>
         {msg && <div className={msg.type === 'success' ? 'success' : 'error'}>{msg.text}</div>}
       </div>
