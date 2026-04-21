@@ -21,11 +21,9 @@ Template:
 
 ## Nathan's session
 
-**Status**: Active
-**Working on**: Phase 3 Library — PR 2 deal integration
-**Touching**: migration `library_deal_integration` (adds `documents.from_library_id` FK + `documents.library_merge_values` jsonb) · `index.html` (new "📚 From library" button on DealDetail Documents tab + LibraryPickerForDeal component with optional merge-field form)
-**ETA**: Done today
+**Status**: Idle
 **Last updated**: Apr 21, 2026
+**Last done**: Phase 3 Library PR 2 shipped — migration `library_deal_integration` (`documents.from_library_id` FK + `documents.library_merge_values` jsonb) + "📚 From library" button on DealDetail Documents tab + `LibraryPickerForDeal` component (folder tree picker · editable merge-field form when template_fields defined · cross-bucket clone from `library` to `deal-docs` · writes documents row with provenance + captured merge values).
 
 <!--
 Template:

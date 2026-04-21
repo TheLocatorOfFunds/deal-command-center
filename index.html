@@ -1646,7 +1646,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
-      {tab === "documents" && <Documents items={documents} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
+      {tab === "documents" && <Documents items={documents} dealId={deal.id} deal={deal} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "notes" && <Notes items={notes} dealId={deal.id} userId={userId} userName={userName} reload={loadAll} />}
       {tab === "activity" && <Activity items={activity} />}
       {tab === "sms" && <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />}
@@ -2923,11 +2923,12 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
   );
 }
 
-function Documents({ items, dealId, userId, logAct, reload }) {
+function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [extracting, setExtracting] = useState({});
   const [expanded, setExpanded] = useState({});
+  const [showLibraryPicker, setShowLibraryPicker] = useState(false);
   const fileRef = useRef(null);
 
   const upload = async (file) => {
@@ -3021,11 +3022,26 @@ function Documents({ items, dealId, userId, logAct, reload }) {
 
   return (
     <Card title={`Documents (${items.length})`} action={
-      <label style={{ ...btnPrimary, cursor: "pointer", display: "inline-block", opacity: busy ? 0.5 : 1 }}>
-        {busy ? "Uploading..." : "+ Upload File"}
-        <input ref={fileRef} type="file" style={{ display: "none" }} disabled={busy} onChange={e => upload(e.target.files[0])} />
-      </label>
+      <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+        <button onClick={() => setShowLibraryPicker(true)} style={{ ...btnGhost, fontSize: 11 }}>
+          📚 From library
+        </button>
+        <label style={{ ...btnPrimary, cursor: "pointer", display: "inline-block", opacity: busy ? 0.5 : 1 }}>
+          {busy ? "Uploading..." : "+ Upload File"}
+          <input ref={fileRef} type="file" style={{ display: "none" }} disabled={busy} onChange={e => upload(e.target.files[0])} />
+        </label>
+      </div>
     }>
+      {showLibraryPicker && (
+        <LibraryPickerForDeal
+          deal={deal}
+          dealId={dealId}
+          userId={userId}
+          logAct={logAct}
+          onClose={() => setShowLibraryPicker(false)}
+          onAttached={async () => { await reload(); setShowLibraryPicker(false); }}
+        />
+      )}
       {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
       {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload engagement agreements, distribution orders, sale confirmations, NODs, proof of claim, death certificates, IDs, deeds, or any court filing. Claude Vision reads each file and extracts key fields — surplus amounts, case numbers, dates, fee percentages — automatically.</div>}
       {items.map(doc => {
@@ -4900,6 +4916,265 @@ function LibraryModal({ onClose, isAdmin, userId }) {
         {folders.length} folder{folders.length === 1 ? '' : 's'} · {docs.length} document{docs.length === 1 ? '' : 's'}
         {' · '}Team + admin access · Admin-only folders marked 🔒
       </div>
+    </Modal>
+  );
+}
+
+// ─── Library Picker for a specific deal (PR 2) ────────────
+// Lets admin/VA pick a file from the library and attach it to the current deal.
+// If the library doc has template_fields, shows an editable merge-values form
+// pre-filled from deal data. On submit, clones the file from `library` bucket
+// to `deal-docs` bucket and inserts a `documents` row with from_library_id +
+// library_merge_values for provenance.
+//
+// Resolve dot-paths like "deal.meta.courtCase" against the deal object.
+function resolveDealPath(deal, path) {
+  if (!path || typeof path !== 'string') return '';
+  const parts = path.split('.');
+  let cur = { deal };
+  for (const p of parts) {
+    if (cur == null) return '';
+    cur = cur[p];
+  }
+  return cur == null ? '' : String(cur);
+}
+
+function LibraryPickerForDeal({ deal, dealId, userId, logAct, onClose, onAttached }) {
+  const [folders, setFolders] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [selectedFolderId, setSelectedFolderId] = useState(null);
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [mergeValues, setMergeValues] = useState({});
+  const [attaching, setAttaching] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  useEffect(() => {
+    (async () => {
+      const [fRes, dRes] = await Promise.all([
+        sb.from('library_folders').select('id, name, icon, visibility, sort_order').order('sort_order', { ascending: true }),
+        sb.from('library_documents').select('id, folder_id, title, path, size, mime_type, kind, external_url, template_fields, visibility').order('created_at', { ascending: false }),
+      ]);
+      setFolders(fRes.data || []);
+      setDocs(dRes.data || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  // When a doc is selected, pre-populate merge values from deal data
+  useEffect(() => {
+    if (!selectedDoc) return;
+    const tf = selectedDoc.template_fields || {};
+    const pre = {};
+    for (const [placeholder, path] of Object.entries(tf)) {
+      pre[placeholder] = resolveDealPath(deal, path);
+    }
+    setMergeValues(pre);
+  }, [selectedDoc]);
+
+  const q = search.trim().toLowerCase();
+  const visibleDocs = docs.filter(d => {
+    if (q) {
+      const hay = [d.title, d.mime_type, d.kind].filter(Boolean).join(' ').toLowerCase();
+      return hay.includes(q);
+    }
+    if (selectedFolderId) return d.folder_id === selectedFolderId;
+    return true;
+  });
+
+  const attach = async () => {
+    if (!selectedDoc) return;
+    setAttaching(true); setMsg(null);
+    try {
+      // 1. Download from library bucket
+      const signed = await sb.storage.from('library').createSignedUrl(selectedDoc.path, 120);
+      if (signed.error || !signed.data?.signedUrl) throw new Error(signed.error?.message || 'Could not access library file');
+      const res = await fetch(signed.data.signedUrl);
+      if (!res.ok) throw new Error('Library file fetch failed: ' + res.status);
+      const blob = await res.blob();
+      // 2. Upload to deal-docs bucket
+      const safeName = (selectedDoc.title || 'document').replace(/[^a-zA-Z0-9._-]/g, '_');
+      const path = `${dealId}/library-${selectedDoc.id.slice(0, 8)}-${Date.now()}-${safeName}`;
+      const up = await sb.storage.from('deal-docs').upload(path, blob, { contentType: selectedDoc.mime_type || 'application/octet-stream' });
+      if (up.error) throw up.error;
+      // 3. Create documents row with provenance
+      const hasMergeValues = Object.keys(mergeValues).length > 0;
+      const { error: insErr } = await sb.from('documents').insert({
+        deal_id: dealId,
+        name: selectedDoc.title,
+        path,
+        size: selectedDoc.size || blob.size,
+        uploaded_by: userId,
+        extraction_status: 'pending',
+        from_library_id: selectedDoc.id,
+        library_merge_values: hasMergeValues ? mergeValues : null,
+      });
+      if (insErr) throw insErr;
+      // 4. Activity row (internal team-only — the file itself is what matters)
+      if (logAct) await logAct(`📎 Attached from library: ${selectedDoc.title}`);
+      setMsg({ type: 'success', text: `Attached "${selectedDoc.title}" to this deal.` });
+      setTimeout(() => { onAttached?.(); }, 600);
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Attach failed' });
+    } finally {
+      setAttaching(false);
+    }
+  };
+
+  const fmtSize = (b) => !b ? '' : b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
+  const kindIcon = (d) => d.kind === 'template' ? '📝' : d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄';
+  const mergeFieldKeys = selectedDoc && selectedDoc.template_fields ? Object.keys(selectedDoc.template_fields) : [];
+
+  return (
+    <Modal onClose={onClose} title={`📚 Attach from library → ${(deal.name || '').split(' - ')[0]}`} wide>
+      {loading ? (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading library…</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 220px) 1fr", gap: 12, minHeight: 380 }} className="library-panes">
+          {/* LEFT — folder tree */}
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, overflowY: "auto", maxHeight: 500 }}>
+            <button
+              onClick={() => { setSelectedFolderId(null); setSearch(""); }}
+              style={{
+                display: "block", width: "100%", textAlign: "left",
+                padding: "8px 10px", marginBottom: 2,
+                background: selectedFolderId === null ? "#292524" : "transparent",
+                border: "1px solid " + (selectedFolderId === null ? "#44403c" : "transparent"),
+                color: selectedFolderId === null ? "#fafaf9" : "#a8a29e",
+                borderRadius: 5, cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+              }}
+            >
+              <span style={{ marginRight: 6 }}>📁</span>All files ({docs.length})
+            </button>
+            {folders.map(f => {
+              const isSel = f.id === selectedFolderId;
+              const count = docs.filter(d => d.folder_id === f.id).length;
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => { setSelectedFolderId(f.id); setSearch(""); }}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: "8px 10px", marginBottom: 2,
+                    background: isSel ? "#292524" : "transparent",
+                    border: "1px solid " + (isSel ? "#44403c" : "transparent"),
+                    color: isSel ? "#fafaf9" : "#a8a29e",
+                    borderRadius: 5, cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>{f.icon || '📂'}</span>
+                    <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</span>
+                    {count > 0 && <span style={{ fontSize: 10, color: "#57534e", fontWeight: 600 }}>{count}</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* RIGHT — file list + selected-doc detail */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 0 }}>
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search all library files…"
+              style={{ ...inputStyle, background: "#1c1917" }}
+            />
+
+            {/* file list */}
+            <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, overflowY: "auto", maxHeight: 240 }}>
+              {visibleDocs.length === 0 ? (
+                <div style={{ fontSize: 12, color: "#78716c", padding: 16, textAlign: "center", fontStyle: "italic" }}>
+                  {q ? `No matches for "${q}"` : "No files in this folder. Upload to the library first."}
+                </div>
+              ) : (
+                visibleDocs.map(d => {
+                  const isSel = selectedDoc?.id === d.id;
+                  return (
+                    <div
+                      key={d.id}
+                      onClick={() => setSelectedDoc(d)}
+                      style={{
+                        padding: "8px 10px", marginBottom: 3, borderRadius: 5, cursor: "pointer",
+                        background: isSel ? "#292524" : "transparent",
+                        border: "1px solid " + (isSel ? "#44403c" : "transparent"),
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 16, flexShrink: 0 }}>{kindIcon(d)}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: "#fafaf9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{d.title}</div>
+                          <div style={{ fontSize: 10, color: "#78716c", marginTop: 1 }}>
+                            {d.kind === 'template' && <span style={{ color: "#d97706", fontWeight: 700, marginRight: 6, letterSpacing: "0.04em" }}>TEMPLATE</span>}
+                            {d.size ? fmtSize(d.size) : ''}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* selected-doc detail + merge field form + attach button */}
+            {selectedDoc ? (
+              <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#fafaf9", marginBottom: 10 }}>
+                  {kindIcon(selectedDoc)} {selectedDoc.title}
+                </div>
+
+                {mergeFieldKeys.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 10, color: "#d97706", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                      Merge fields · pre-filled from deal
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginBottom: 12 }}>
+                      {mergeFieldKeys.map(key => (
+                        <div key={key}>
+                          <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>{key}</div>
+                          <input
+                            value={mergeValues[key] || ''}
+                            onChange={e => setMergeValues(v => ({ ...v, [key]: e.target.value }))}
+                            style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
+                            placeholder="—"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5, padding: "8px 10px", background: "#1c1917", borderRadius: 5 }}>
+                      Values are saved to this deal's document record. PR 3 will use them for automatic DocuSign field-filling. For now, download the file and fill in manually as needed.
+                    </div>
+                  </>
+                )}
+
+                {mergeFieldKeys.length === 0 && (
+                  <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5 }}>
+                    No merge fields defined for this document — it will attach as-is.
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+                  <button onClick={attach} disabled={attaching} style={{ ...btnPrimary, fontSize: 11 }}>
+                    {attaching ? 'Attaching…' : '📎 Attach to this deal'}
+                  </button>
+                </div>
+
+                {msg && (
+                  <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 5, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 11 }}>
+                    {msg.text}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div style={{ background: "#0c0a09", border: "1px dashed #292524", borderRadius: 8, padding: 24, textAlign: "center", fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
+                Pick a file from the list above to attach it to <b style={{ color: "#a8a29e" }}>{(deal.name || '').split(' - ')[0]}</b>.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
