@@ -21,9 +21,11 @@ Template:
 
 ## Nathan's session
 
-**Status**: Idle
+**Status**: Active
+**Working on**: Phase 3 Library — PR 1 foundation
+**Touching**: new `library_folders`/`library_documents`/`library_document_contacts` tables · `library` storage bucket · `index.html` (📚 Library button + LibraryModal) · migration `library_foundation`
+**ETA**: Done today
 **Last updated**: Apr 21, 2026
-**Last done**: Attorney portal UX overhaul (title cleanup · richer case details card with property address + client phone/email · "share with client" visibility toggle on case updates · visibility-badge timeline · fixed-height docket scroller with Case History accordion for backfill) + migration `attorney_post_update_visibility_control`.
 
 <!--
 Template:
