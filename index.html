@@ -61,6 +61,10 @@
 
   /* ─── Phone (≤640px) ───────────────────────────────────────── */
   @media (max-width: 640px) {
+    /* Library modal three-pane collapses to single column on phone */
+    .library-panes { grid-template-columns: 1fr !important; }
+    .library-panes > div { max-height: 280px !important; }
+
     /* Shell padding — tighter on phones, safe-area aware */
     .shell { padding: 12px 12px calc(80px + env(safe-area-inset-bottom)) !important; }
 
@@ -313,6 +317,7 @@ function DealCommandCenter({ session, profile }) {
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [showDocket, setShowDocket] = useState(false);
   const [showContacts, setShowContacts] = useState(false);
+  const [showLibrary, setShowLibrary] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
@@ -462,6 +467,7 @@ function DealCommandCenter({ session, profile }) {
             ⚖ Docket {unackDocketCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#f59e0b", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{unackDocketCount}</span>}
           </button>}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
+          {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
           {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
@@ -474,6 +480,7 @@ function DealCommandCenter({ session, profile }) {
       {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
       {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
       {showContacts && <ContactsModal onClose={() => setShowContacts(false)} isAdmin={isAdmin} userId={session.user.id} deals={deals} onJumpToDeal={(id) => { setActiveDealId(id); setShowContacts(false); }} />}
+      {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} onToggleFlag={(id) => {
@@ -4600,6 +4607,300 @@ function ContactsTab({ dealId, userId, isAdmin }) {
         </>
       )}
     </div>
+  );
+}
+
+// ─── Library Modal — Phase 3 PR 1 ─────────────────────────
+// Company-wide document library: templates, SOPs, brand, legal, marketing, training, financial.
+// Separate system from per-deal `documents` — lives in `library_documents` + `library` bucket.
+// Three-pane layout on desktop, stacked on mobile. Admin + VA access (VA blocked from admin_only folders).
+function LibraryModal({ onClose, isAdmin, userId }) {
+  const [folders, setFolders] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [selectedFolderId, setSelectedFolderId] = useState(null);
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [showNewFolder, setShowNewFolder] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [newFolderAdminOnly, setNewFolderAdminOnly] = useState(false);
+  const fileInputRef = useRef(null);
+
+  const loadAll = async () => {
+    setLoading(true);
+    const [foldersRes, docsRes] = await Promise.all([
+      sb.from('library_folders').select('*').order('sort_order', { ascending: true }).order('name', { ascending: true }),
+      sb.from('library_documents').select('*').order('is_pinned', { ascending: false }).order('created_at', { ascending: false }),
+    ]);
+    setFolders(foldersRes.data || []);
+    setDocs(docsRes.data || []);
+    setLoading(false);
+    // Default-select first folder if nothing is selected
+    if (!selectedFolderId && (foldersRes.data || []).length > 0) {
+      setSelectedFolderId(foldersRes.data[0].id);
+    }
+  };
+
+  useEffect(() => { loadAll(); }, []);
+
+  // Realtime so the other admin sees live updates
+  useEffect(() => {
+    const ch = sb.channel('library-ch')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'library_folders' }, loadAll)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'library_documents' }, loadAll)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const upload = async (file, visibility) => {
+    if (!file || !selectedFolderId) {
+      setMsg({ type: 'error', text: 'Pick a folder first, then upload.' });
+      return;
+    }
+    setUploading(true); setMsg(null);
+    try {
+      const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const id = crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+      const path = `${selectedFolderId}/${id}-${safe}`;
+      const up = await sb.storage.from('library').upload(path, file, { contentType: file.type });
+      if (up.error) throw up.error;
+      const { data: inserted, error } = await sb.from('library_documents').insert({
+        folder_id: selectedFolderId,
+        title: file.name,
+        path,
+        size: file.size,
+        mime_type: file.type,
+        kind: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : 'file',
+        visibility: visibility || 'team',
+        owner_id: userId,
+      }).select().single();
+      if (error) throw error;
+      setMsg({ type: 'success', text: `Uploaded ${file.name}` });
+      setSelectedDoc(inserted);
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Upload failed' });
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const createFolder = async () => {
+    const name = (newFolderName || '').trim();
+    if (!name) return;
+    const visibility = newFolderAdminOnly ? 'admin_only' : 'team';
+    const { error } = await sb.from('library_folders').insert({
+      name, visibility,
+      sort_order: 1000 + (folders.length),
+      created_by: userId,
+    });
+    if (error) { setMsg({ type: 'error', text: error.message }); return; }
+    setNewFolderName("");
+    setNewFolderAdminOnly(false);
+    setShowNewFolder(false);
+  };
+
+  const deleteDoc = async (doc) => {
+    if (!window.confirm(`Delete "${doc.title}"? This cannot be undone.`)) return;
+    // Delete file from storage first (row delete will happen regardless)
+    if (doc.path) await sb.storage.from('library').remove([doc.path]);
+    const { error } = await sb.from('library_documents').delete().eq('id', doc.id);
+    if (error) { setMsg({ type: 'error', text: error.message }); return; }
+    setSelectedDoc(null);
+  };
+
+  const openDoc = async (doc) => {
+    if (doc.kind === 'link' && doc.external_url) { window.open(doc.external_url, '_blank'); return; }
+    if (!doc.path) return;
+    const { data, error } = await sb.storage.from('library').createSignedUrl(doc.path, 600);
+    if (error || !data?.signedUrl) { alert("Couldn't open that file. Call Nathan (513) 951-8855."); return; }
+    window.open(data.signedUrl, '_blank');
+  };
+
+  // Filter docs shown: selected folder + search match
+  const q = search.trim().toLowerCase();
+  const docsInFolder = docs.filter(d => {
+    if (q) {
+      const hay = [d.title, d.description, (d.tags || []).join(' '), d.mime_type].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+      return true; // global search ignores folder
+    }
+    return d.folder_id === selectedFolderId;
+  });
+
+  const selectedFolder = folders.find(f => f.id === selectedFolderId);
+  const fmtSize = (b) => !b ? '' : b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
+
+  const kindIcon = (d) => d.kind === 'template' ? '📝' : d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄';
+
+  return (
+    <Modal onClose={onClose} title="📚 Library — Company-wide documents" wide>
+      {/* Top bar: search + actions */}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder={q ? `Searching all folders…` : `Search in "${selectedFolder?.name || 'library'}"…`}
+          style={{ ...inputStyle, flex: 1, minWidth: 200, background: "#1c1917" }}
+        />
+        {isAdmin && <button onClick={() => setShowNewFolder(!showNewFolder)} style={{ ...btnGhost, fontSize: 11 }}>+ Folder</button>}
+        <button onClick={() => fileInputRef.current?.click()} disabled={!selectedFolderId || uploading} style={{ ...btnPrimary, fontSize: 11 }}>
+          {uploading ? 'Uploading…' : '⬆ Upload'}
+        </button>
+        <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={e => upload(e.target.files[0], selectedFolder?.visibility)} />
+      </div>
+
+      {showNewFolder && isAdmin && (
+        <div style={{ padding: 12, background: "#1c1917", border: "1px solid #44403c", borderRadius: 8, marginBottom: 12, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            value={newFolderName}
+            onChange={e => setNewFolderName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter' && newFolderName.trim()) createFolder(); }}
+            placeholder="Folder name (e.g. 08 — Vendor contracts)"
+            style={{ ...inputStyle, flex: 1, minWidth: 180 }}
+            autoFocus
+          />
+          <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#a8a29e", cursor: "pointer" }}>
+            <input type="checkbox" checked={newFolderAdminOnly} onChange={e => setNewFolderAdminOnly(e.target.checked)} />
+            🔒 Admin only
+          </label>
+          <button onClick={createFolder} disabled={!newFolderName.trim()} style={{ ...btnPrimary, fontSize: 11 }}>Create</button>
+          <button onClick={() => { setShowNewFolder(false); setNewFolderName(""); }} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+        </div>
+      )}
+
+      {msg && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+          {msg.text}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading library…</div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 220px) 1fr minmax(240px, 300px)", gap: 12, minHeight: 420 }} className="library-panes">
+          {/* LEFT — folder tree */}
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, overflowY: "auto", maxHeight: 520 }}>
+            {folders.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 12 }}>No folders yet.</div>}
+            {folders.map(f => {
+              const isSel = f.id === selectedFolderId;
+              const count = docs.filter(d => d.folder_id === f.id).length;
+              return (
+                <button
+                  key={f.id}
+                  onClick={() => { setSelectedFolderId(f.id); setSearch(""); setSelectedDoc(null); }}
+                  style={{
+                    display: "block", width: "100%", textAlign: "left",
+                    padding: "8px 10px", marginBottom: 2,
+                    background: isSel ? "#292524" : "transparent",
+                    border: "1px solid " + (isSel ? "#44403c" : "transparent"),
+                    color: isSel ? "#fafaf9" : "#a8a29e",
+                    borderRadius: 5, cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>{f.icon || '📂'}</span>
+                    <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{f.name}</span>
+                    {f.visibility === 'admin_only' && <span style={{ fontSize: 9, color: "#f59e0b" }}>🔒</span>}
+                    {count > 0 && <span style={{ fontSize: 10, color: "#57534e", fontWeight: 600 }}>{count}</span>}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* MIDDLE — file list */}
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, overflowY: "auto", maxHeight: 520 }}>
+            {docsInFolder.length === 0 ? (
+              <div style={{ fontSize: 12, color: "#78716c", padding: 24, textAlign: "center", fontStyle: "italic" }}>
+                {q ? `No matches for "${q}"` : "Empty folder. Click ⬆ Upload to add a file."}
+              </div>
+            ) : (
+              docsInFolder.map(d => {
+                const isSel = selectedDoc?.id === d.id;
+                return (
+                  <div
+                    key={d.id}
+                    onClick={() => setSelectedDoc(d)}
+                    onDoubleClick={() => openDoc(d)}
+                    style={{
+                      padding: "10px 12px", marginBottom: 4, borderRadius: 5, cursor: "pointer",
+                      background: isSel ? "#292524" : "transparent",
+                      border: "1px solid " + (isSel ? "#44403c" : "transparent"),
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 18, flexShrink: 0 }}>{kindIcon(d)}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: "#fafaf9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {d.is_pinned && '📌 '}{d.title}
+                        </div>
+                        <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                          {d.kind !== 'file' && <span style={{ marginRight: 8, fontWeight: 700, color: "#d97706", textTransform: "uppercase", letterSpacing: "0.06em" }}>{d.kind}</span>}
+                          {d.size ? `${fmtSize(d.size)} · ` : ''}
+                          {new Date(d.created_at).toLocaleDateString()}
+                          {d.visibility === 'admin_only' && <span style={{ marginLeft: 8, color: "#f59e0b" }}>🔒 admin only</span>}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* RIGHT — preview / metadata */}
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 12, overflowY: "auto", maxHeight: 520 }}>
+            {!selectedDoc ? (
+              <div style={{ fontSize: 12, color: "#78716c", padding: 24, textAlign: "center", fontStyle: "italic" }}>
+                Click a document to preview it here.
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", marginBottom: 6, wordBreak: "break-word" }}>
+                  {kindIcon(selectedDoc)} {selectedDoc.title}
+                </div>
+                <div style={{ fontSize: 10, color: "#78716c", marginBottom: 12 }}>
+                  {selectedDoc.kind !== 'file' && <div><b>Kind:</b> {selectedDoc.kind}</div>}
+                  {selectedDoc.size && <div><b>Size:</b> {fmtSize(selectedDoc.size)}</div>}
+                  {selectedDoc.mime_type && <div><b>Type:</b> {selectedDoc.mime_type}</div>}
+                  <div><b>Added:</b> {new Date(selectedDoc.created_at).toLocaleString()}</div>
+                  {selectedDoc.visibility && <div><b>Visibility:</b> {selectedDoc.visibility.replace('_', ' ')}</div>}
+                </div>
+                {selectedDoc.description && <div style={{ fontSize: 12, color: "#d6d3d1", marginBottom: 12, lineHeight: 1.5 }}>{selectedDoc.description}</div>}
+                {(selectedDoc.tags || []).length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 12 }}>
+                    {selectedDoc.tags.map(t => (
+                      <span key={t} style={{ fontSize: 10, padding: "2px 7px", background: "#292524", color: "#d6a85a", borderRadius: 3, fontWeight: 600 }}>{t}</span>
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <button onClick={() => openDoc(selectedDoc)} style={{ ...btnPrimary, fontSize: 11 }}>
+                    {selectedDoc.kind === 'link' ? '🔗 Open link' : '↗ Open / download'}
+                  </button>
+                  {isAdmin && (
+                    <button onClick={() => deleteDoc(selectedDoc)} style={{ ...btnGhost, fontSize: 11, color: "#ef4444" }}>
+                      Delete
+                    </button>
+                  )}
+                </div>
+                <div style={{ marginTop: 16, padding: "8px 10px", background: "#1c1917", borderRadius: 5, fontSize: 10, color: "#57534e", lineHeight: 1.5 }}>
+                  PR 2 adds: "Use on a deal" button — clones a template into a specific deal with pre-filled fields. PR 3 wires DocuSign. PR 4 pins docs to client/attorney portals.
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginTop: 14, padding: "8px 12px", background: "#0c0a09", borderRadius: 6, fontSize: 11, color: "#78716c", lineHeight: 1.5 }}>
+        {folders.length} folder{folders.length === 1 ? '' : 's'} · {docs.length} document{docs.length === 1 ? '' : 's'}
+        {' · '}Team + admin access · Admin-only folders marked 🔒
+      </div>
+    </Modal>
   );
 }
 

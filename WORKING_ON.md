@@ -21,11 +21,9 @@ Template:
 
 ## Nathan's session
 
-**Status**: Active
-**Working on**: Phase 3 Library — PR 1 foundation
-**Touching**: new `library_folders`/`library_documents`/`library_document_contacts` tables · `library` storage bucket · `index.html` (📚 Library button + LibraryModal) · migration `library_foundation`
-**ETA**: Done today
+**Status**: Idle
 **Last updated**: Apr 21, 2026
+**Last done**: Phase 3 Library PR 1 shipped — migration `library_foundation` (2 tables + 1 link table + `library` storage bucket + 7 seed folders + RLS) + 📚 Library button in DCC header + three-pane LibraryModal (folder tree / file list / preview) with upload, new-folder, search, realtime sync. Admin + VA access; admin_only folders gated.
 
 <!--
 Template:
