@@ -1592,7 +1592,290 @@ function StickyCallButton() {
 }
 
 // ─── Case View ─────────────────────────────────────────
+// Preforeclosure client view — totally different framing from surplus recovery.
+// This is for clients who are CURRENT homeowners in foreclosure and want us to
+// buy their home or coordinate the sale before auction. Zero "surplus funds"
+// language. Client sees: sale coordination status, offer amount, auction
+// countdown, closing timeline, what they walk away with, updates from Nathan.
+// Still RefundLocators-branded — Nathan helps with both situations, this is
+// just the right framing for this client's situation.
+const PREFORECLOSURE_STAGES = [
+  { key: 'review',     label: 'We\'re reviewing your situation', desc: 'Gathering court records, property data, and mortgage info so we can make you a fair offer.' },
+  { key: 'offer',      label: 'Offer made',                       desc: 'We\'ve sent you an offer. Review the terms and let us know if you\'d like to move forward.' },
+  { key: 'contract',   label: 'Under contract',                   desc: 'We\'re preparing closing documents, title work, and coordinating with your mortgage company.' },
+  { key: 'closing',    label: 'Closing scheduled',                desc: 'Closing date is set. We\'ll walk you through what to expect and what to bring.' },
+  { key: 'closed',     label: 'Transaction complete',             desc: 'The sale has closed. Your portion has been paid out.' },
+];
+
+function preforeclosureStage(deal) {
+  const m = deal.meta || {};
+  const hasOffer = Number(m.contractPrice) > 0;
+  const closingSet = !!(m.closingDate || m.closing_date);
+  if (deal.status === 'closed') return 'closed';
+  if (deal.status === 'dead') return 'dead';
+  if (deal.status === 'under-contract' || deal.status === 'under-offer') {
+    return closingSet ? 'closing' : 'contract';
+  }
+  if (deal.status === 'rehab' || deal.status === 'listing') return 'contract';
+  if (hasOffer) return 'offer';
+  return 'review';
+}
+
+function PreforeclosureTracker({ stage }) {
+  if (stage === 'dead') return null;
+  const idx = PREFORECLOSURE_STAGES.findIndex(s => s.key === stage);
+  return (
+    <div className="card" style={{ marginTop: 18, padding: '18px 20px' }}>
+      <p className="card-title" style={{ marginBottom: 14 }}>Where we are</p>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 12, flexWrap: 'wrap' }}>
+        {PREFORECLOSURE_STAGES.map((s, i) => {
+          const done = i < idx;
+          const active = i === idx;
+          return (
+            <div key={s.key} style={{ flex: 1, minWidth: 100 }}>
+              <div style={{
+                height: 4,
+                background: done ? 'var(--gold)' : active ? 'var(--gold)' : 'var(--border)',
+                borderRadius: 2,
+                marginBottom: 6,
+                opacity: done || active ? 1 : 0.4,
+              }} />
+              <div style={{
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: done ? 'var(--text-muted)' : active ? 'var(--navy)' : 'var(--text-muted)',
+                opacity: done || active ? 1 : 0.5,
+              }}>{s.label.split(' ').slice(0, 3).join(' ')}</div>
+            </div>
+          );
+        })}
+      </div>
+      {idx >= 0 && (
+        <div style={{ padding: '14px 16px', background: 'var(--bg-card-alt)', borderRadius: 10, border: '1px solid var(--border)' }}>
+          <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 18, fontWeight: 500, color: 'var(--navy)', letterSpacing: '-0.01em', marginBottom: 6 }}>
+            {PREFORECLOSURE_STAGES[idx].label}
+          </div>
+          <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>
+            {PREFORECLOSURE_STAGES[idx].desc}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AuctionCountdown({ auctionDate }) {
+  if (!auctionDate) return null;
+  const d = new Date(auctionDate);
+  const ms = d.getTime() - Date.now();
+  const days = Math.ceil(ms / (24 * 60 * 60 * 1000));
+  if (days < 0) return null; // auction already happened
+  const urgent = days <= 30;
+  return (
+    <div className="card" style={{ marginTop: 18, padding: '16px 20px', borderLeft: '4px solid ' + (urgent ? '#dc2626' : '#d8b560'), background: urgent ? '#fef2f2' : undefined }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: urgent ? '#991b1b' : 'var(--text-muted)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+            {urgent ? '⚠ Auction approaching' : 'Auction scheduled'}
+          </div>
+          <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 22, fontWeight: 500, color: urgent ? '#991b1b' : 'var(--navy)', letterSpacing: '-0.015em' }}>
+            {days === 0 ? 'Auction is today' : days === 1 ? '1 day to auction' : `${days} days to auction`}
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 4 }}>
+            Sheriff sale set for {d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5, maxWidth: 240 }}>
+          We're working to close the sale before this date so the auction is cancelled and you walk away with proceeds.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OfferSummaryCard({ offerPrice, clientNet, address, closingDate }) {
+  if (!offerPrice || offerPrice <= 0) return null;
+  return (
+    <div className="card" style={{ marginTop: 18, padding: '18px 20px', borderLeft: '4px solid var(--gold)' }}>
+      <p className="card-title" style={{ marginBottom: 10 }}>Our offer</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Offer for {address || 'your home'}</div>
+          <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 28, fontWeight: 500, color: 'var(--navy)', letterSpacing: '-0.015em', marginTop: 4 }}>
+            ${offerPrice.toLocaleString('en-US')}
+          </div>
+        </div>
+        {clientNet > 0 && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Your estimated walkaway</div>
+            <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 28, fontWeight: 500, color: '#15803d', letterSpacing: '-0.015em', marginTop: 4 }}>
+              ${clientNet.toLocaleString('en-US')}
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>after mortgage payoff</div>
+          </div>
+        )}
+        {closingDate && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.06em', textTransform: 'uppercase' }}>Target closing</div>
+            <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontSize: 22, fontWeight: 500, color: 'var(--navy)', letterSpacing: '-0.015em', marginTop: 4 }}>
+              {new Date(closingDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}
+            </div>
+          </div>
+        )}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 14, lineHeight: 1.5 }}>
+        Estimates only. Final numbers confirmed at closing after title clears and the mortgage payoff is verified. Call Nathan with any questions.
+      </div>
+    </div>
+  );
+}
+
+function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVideoUrl, session, onSignOut, isPreview }) {
+  const m = deal.meta || {};
+  const offerPrice = Number(m.contractPrice) || 0;
+  const lienPayoff = Number(m.lienPayoff) || 0;
+  const reinstatement = Number(m.reinstatement) || 0;
+  const clientNet = offerPrice > 0 ? Math.max(0, offerPrice - lienPayoff - reinstatement) : 0;
+  const closingDate = m.closingDate || m.closing_date;
+  const auctionDate = m.auctionDate || m.sale_date || m.auction_date;
+  const county = m.county;
+  const stage = preforeclosureStage(deal);
+  const address = deal.address || m.propertyAddress;
+
+  return (
+    <div className="container">
+      <header className="portal-header">
+        <div className="brand">
+          <span className="brand-dot"></span>
+          RefundLocators
+          <span className="brand-tag">Home Sale Coordination</span>
+        </div>
+        <button className="btn-ghost" onClick={onSignOut}>Sign out</button>
+      </header>
+
+      <h1 className="deal-name">{(deal.name || '').split(' - ')[0]}</h1>
+      <div className="deal-sub">
+        {address || (county ? `${county} County, Ohio` : 'Your home')}
+      </div>
+
+      <WelcomeVideoBlock url={welcomeVideoUrl} />
+
+      <AuctionCountdown auctionDate={auctionDate} />
+
+      <OfferSummaryCard offerPrice={offerPrice} clientNet={clientNet} address={address} closingDate={closingDate} />
+
+      {stage === 'review' && offerPrice === 0 && (
+        <div className="card" style={{ marginTop: 18, padding: '18px 20px', background: 'var(--bg-card-alt)' }}>
+          <p className="card-title" style={{ marginBottom: 8 }}>We're on it</p>
+          <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.55 }}>
+            Nathan is pulling the court file and property data to put together an offer for you. You'll see the offer here as soon as it's ready — usually within one to two business days. Meanwhile, if you have questions or anything changes on your end, call or text Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.
+          </div>
+        </div>
+      )}
+
+      <PreforeclosureTracker stage={stage} />
+
+      {stage !== 'closed' && stage !== 'dead' && (
+        <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} isPreview={isPreview} />
+      )}
+
+      {/* Minimal property & case reference — low-prominence, for transparency */}
+      <div className="card">
+        <p className="card-title">Your property</p>
+        <div className="stat-grid">
+          <div className="stat">
+            <div className="stat-label">Address</div>
+            <div className="stat-value">{address || '—'}</div>
+          </div>
+          {county && (
+            <div className="stat">
+              <div className="stat-label">County</div>
+              <div className="stat-value">{county}</div>
+            </div>
+          )}
+          {m.courtCase && (
+            <div className="stat">
+              <div className="stat-label">Case</div>
+              <div className="stat-value">{m.courtCase}</div>
+            </div>
+          )}
+          <div className="stat">
+            <div className="stat-label">Status</div>
+            <div className="stat-value">{PREFORECLOSURE_STAGES.find(s => s.key === stage)?.label || 'Active'}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Your team */}
+      <div className="card">
+        <p className="card-title">Your point of contact</p>
+        <div className="team-row">
+          <div className="team-avatar">N</div>
+          <div className="team-info">
+            <div className="team-name">Nathan Johnson</div>
+            <div className="team-role">Principal, RefundLocators</div>
+            <div className="team-contact">
+              <a href="tel:+15139518855">(513) 951-8855</a> &middot;{' '}
+              <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 10, lineHeight: 1.5 }}>
+          Call or text anytime. If you prefer email, Nathan usually replies within a few hours during business days.
+        </div>
+      </div>
+
+      <MessagesThread dealId={deal.id} session={session} clientName={deal.name} isPreview={isPreview} />
+
+      {/* Updates from Nathan */}
+      <div className="card">
+        <p className="card-title">Updates on your sale</p>
+        {activity.length === 0 ? (
+          <div className="empty">No updates yet. As Nathan moves your sale forward, each step will appear here so you always know where things stand.</div>
+        ) : (
+          activity.map((a, i) => (
+            <div className="timeline-item" key={a.id || i}>
+              <div className="timeline-dot"></div>
+              <div className="timeline-action">{a.action}</div>
+              <div className="timeline-date">{fmtDateShort(a.created_at)}</div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} isPreview={isPreview} />
+
+      <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
+        Questions? Call Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.<br/>
+        This portal updates in real time as your sale progresses.
+      </p>
+
+      <StickyCallButton />
+    </div>
+  );
+}
+
 function CaseView({ deal, access, activity, documents, claimantCount, welcomeVideoUrl, session, onSignOut, isPreview }) {
+  // Branch on deal type: flip deals (especially those from preforeclosure
+  // intake) get a totally different client view — sale coordination, not
+  // surplus recovery. Everything else stays on the surplus recovery flow.
+  if (deal.type === 'flip' || (deal.meta?.intake_type === 'preforeclosure')) {
+    return (
+      <PreforeclosureCaseView
+        deal={deal}
+        access={access}
+        activity={activity}
+        documents={documents}
+        welcomeVideoUrl={welcomeVideoUrl}
+        session={session}
+        onSignOut={onSignOut}
+        isPreview={isPreview}
+      />
+    );
+  }
+
   const m = deal.meta || {};
   const estimatedSurplus = Number(m.estimatedSurplus) || 0;
   const feePct = Number(m.feePct) || 0;
