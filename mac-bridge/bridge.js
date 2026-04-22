@@ -3,95 +3,128 @@
  * DCC iMessage Bridge
  * Runs on the Mac Mini under Nathan's business Apple ID user account.
  *
- * What it does:
- *   - Every 5 seconds, reads ~/Library/Messages/chat.db for new messages
- *   - Inbound  (someone texted Nathan): inserts into messages_outbound as direction='inbound'
- *   - Outbound (Nathan texted someone):  inserts into messages_outbound as direction='outbound'
- *   - Deduplicates using the message guid so restarts are safe
+ * INBOUND  — polls chat.db every 5s, syncs new messages to messages_outbound
+ * OUTBOUND — polls Supabase for status='pending_mac', sends via Messages.app AppleScript
  *
  * Requirements:
- *   - Node.js installed
- *   - `npm install` run in this directory
+ *   - Node.js installed, `npm install` run in this directory
  *   - .env file with SUPABASE_SERVICE_KEY set
- *   - Terminal (or node binary) granted Full Disk Access in System Settings
+ *   - Terminal granted Full Disk Access (System Settings → Privacy & Security)
  *   - Messages.app open and signed into Nathan's business Apple ID
  *   - Nathan's iPhone SMS Forwarding enabled to this Mac
  */
 
 require('dotenv').config();
-const Database  = require('better-sqlite3');
+const Database   = require('better-sqlite3');
 const { createClient } = require('@supabase/supabase-js');
-const { execSync } = require('child_process');
-const path      = require('path');
-const os        = require('os');
-const fs        = require('fs');
+const { execFileSync } = require('child_process');
+const path       = require('path');
+const os         = require('os');
+const fs         = require('fs');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
-const NATHAN_NUMBER   = '+15135162306';
-const SUPABASE_URL    = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
-const SERVICE_KEY     = process.env.SUPABASE_SERVICE_KEY;
-const CHAT_DB_PATH    = path.join(os.homedir(), 'Library/Messages/chat.db');
-const WATERMARK_FILE  = path.join(__dirname, '.watermark');
-const POLL_MS         = 5000;
-
-// Apple's epoch starts Jan 1 2001 — offset from Unix epoch (Jan 1 1970)
-const APPLE_EPOCH_OFFSET = 978307200;
+const NATHAN_NUMBER  = '+15135162306';
+const SUPABASE_URL   = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
+const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
+const WATERMARK_FILE = path.join(__dirname, '.watermark');
+const POLL_MS        = 5000;
+const APPLE_EPOCH    = 978307200; // Jan 1 2001 in Unix seconds
 
 // ─── Startup checks ──────────────────────────────────────────────────────────
 
 if (!SERVICE_KEY) {
-  console.error('❌  SUPABASE_SERVICE_KEY is not set. Copy .env.example to .env and add the key.');
+  console.error('❌  SUPABASE_SERVICE_KEY not set. Copy .env.example → .env and add the key.');
   process.exit(1);
 }
-
 if (!fs.existsSync(CHAT_DB_PATH)) {
   console.error(`❌  chat.db not found at ${CHAT_DB_PATH}`);
-  console.error('    Make sure Messages.app is open and signed in on this Mac.');
+  console.error('    Open Messages.app and make sure it is signed in.');
   process.exit(1);
 }
 
 const sb = createClient(SUPABASE_URL, SERVICE_KEY);
 
 console.log('✅  DCC iMessage Bridge starting');
-console.log(`    Nathan's number : ${NATHAN_NUMBER}`);
-console.log(`    chat.db         : ${CHAT_DB_PATH}`);
-console.log(`    Poll interval   : ${POLL_MS / 1000}s`);
+console.log(`    Nathan : ${NATHAN_NUMBER}`);
+console.log(`    DB     : ${CHAT_DB_PATH}`);
+console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function normalizePhone(raw) {
   if (!raw) return null;
-  // Strip everything except digits
-  const digits = String(raw).replace(/\D/g, '');
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
-  // email addresses (iMessage handles) — skip
-  if (String(raw).includes('@')) return null;
+  if (String(raw).includes('@')) return null; // skip email iMessage handles
+  const d = String(raw).replace(/\D/g, '');
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith('1')) return `+${d}`;
   return raw;
 }
 
 function appleTs(nanos) {
-  // chat.db stores timestamps as nanoseconds since Apple epoch
-  return new Date((nanos / 1e9 + APPLE_EPOCH_OFFSET) * 1000).toISOString();
+  return new Date((nanos / 1e9 + APPLE_EPOCH) * 1000).toISOString();
 }
 
 function getWatermark() {
   try { return parseInt(fs.readFileSync(WATERMARK_FILE, 'utf8').trim(), 10) || 0; }
   catch { return 0; }
 }
+function saveWatermark(rowid) { fs.writeFileSync(WATERMARK_FILE, String(rowid)); }
 
-function saveWatermark(rowid) {
-  fs.writeFileSync(WATERMARK_FILE, String(rowid));
+// ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
+
+function sendViaMessages(toPhone, body) {
+  // Write AppleScript to a temp file to avoid shell-escaping nightmares
+  const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const script  = [
+    'tell application "Messages"',
+    `  set targetService to 1st service whose service type = iMessage`,
+    `  set targetBuddy to buddy "${toPhone}" of targetService`,
+    `  send "${escaped}" to targetBuddy`,
+    'end tell',
+  ].join('\n');
+
+  const tmpPath = `/tmp/dcc_send_${Date.now()}.applescript`;
+  fs.writeFileSync(tmpPath, script);
+  try {
+    execFileSync('osascript', [tmpPath]);
+  } finally {
+    fs.unlinkSync(tmpPath);
+  }
 }
 
-// ─── Core sync ───────────────────────────────────────────────────────────────
+async function processPendingOutbound() {
+  const { data: pending, error } = await sb
+    .from('messages_outbound')
+    .select('id, to_number, body')
+    .eq('status', 'pending_mac')
+    .eq('from_number', NATHAN_NUMBER);
 
-async function poll() {
+  if (error) { console.error('⚠️  pending_mac query error:', error.message); return; }
+  if (!pending || pending.length === 0) return;
+
+  for (const msg of pending) {
+    try {
+      sendViaMessages(msg.to_number, msg.body);
+      await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
+      const preview = msg.body.length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
+      console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
+    } catch (err) {
+      await sb.from('messages_outbound')
+        .update({ status: 'failed', error_message: err.message })
+        .eq('id', msg.id);
+      console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
+    }
+  }
+}
+
+// ─── Inbound: sync chat.db → Supabase ────────────────────────────────────────
+
+async function syncFromChatDb() {
   let db;
   try {
-    // Open read-only so we never accidentally corrupt chat.db
     db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
   } catch (err) {
     console.error('⚠️  Cannot open chat.db:', err.message);
@@ -100,7 +133,6 @@ async function poll() {
   }
 
   const watermark = getWatermark();
-
   let rows;
   try {
     rows = db.prepare(`
@@ -110,13 +142,12 @@ async function poll() {
         m.text,
         m.date,
         m.is_from_me,
-        m.service,
-        h.id   AS contact_id,
+        h.id            AS contact_id,
         c.chat_identifier
       FROM message m
       LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
-      LEFT JOIN chat             c   ON cmj.chat_id = c.ROWID
-      LEFT JOIN handle           h   ON m.handle_id = h.ROWID
+      LEFT JOIN chat              c   ON cmj.chat_id = c.ROWID
+      LEFT JOIN handle            h   ON m.handle_id = h.ROWID
       WHERE m.ROWID > ?
         AND m.text IS NOT NULL
         AND m.text != ''
@@ -130,42 +161,31 @@ async function poll() {
   if (rows.length === 0) return;
 
   let maxRowid = watermark;
-
   for (const row of rows) {
     maxRowid = Math.max(maxRowid, row.ROWID);
 
-    // Resolve the contact's phone number
-    const rawContact = row.contact_id || row.chat_identifier;
-    const contactPhone = normalizePhone(rawContact);
-
-    // Skip email-based iMessage handles (not SMS/phone)
+    const contactPhone = normalizePhone(row.contact_id || row.chat_identifier);
     if (!contactPhone) continue;
 
     const isInbound = row.is_from_me === 0;
-    const guid      = `imsg_${row.guid}`;   // unique key for dedup
+    const guid      = `imsg_${row.guid}`;
 
-    const record = {
-      to_number:   isInbound ? contactPhone  : contactPhone,
-      from_number: isInbound ? NATHAN_NUMBER : NATHAN_NUMBER,
+    const { error } = await sb.from('messages_outbound').upsert({
+      to_number:   contactPhone,
+      from_number: NATHAN_NUMBER,
       body:        row.text,
-      direction:   isInbound ? 'inbound'     : 'outbound',
-      status:      isInbound ? 'received'    : 'sent',
+      direction:   isInbound ? 'inbound' : 'outbound',
+      status:      isInbound ? 'received' : 'sent',
       twilio_sid:  guid,
       created_at:  appleTs(row.date),
-      // deal_id will be null — DCC's 6s poll + smart routing will associate it
-    };
-
-    const { error } = await sb
-      .from('messages_outbound')
-      .upsert(record, { onConflict: 'twilio_sid', ignoreDuplicates: true });
+    }, { onConflict: 'twilio_sid', ignoreDuplicates: true });
 
     if (error) {
-      console.error(`⚠️  Supabase insert error for ${guid}:`, error.message);
+      console.error(`⚠️  Supabase error (${guid}):`, error.message);
     } else {
-      const dir   = isInbound ? '⬇ IN ' : '⬆ OUT';
-      const other = contactPhone;
-      const body  = row.text.length > 60 ? row.text.slice(0, 57) + '…' : row.text;
-      console.log(`${dir}  ${other}  "${body}"`);
+      const dir     = isInbound ? '⬇ IN ' : '⬆ OUT';
+      const preview = row.text.length > 60 ? row.text.slice(0, 57) + '…' : row.text;
+      console.log(`${dir}  ${contactPhone}  "${preview}"`);
     }
   }
 
@@ -174,8 +194,12 @@ async function poll() {
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
+async function tick() {
+  await processPendingOutbound(); // send any queued DCC → Messages.app
+  await syncFromChatDb();         // pull new messages from Messages.app → DCC
+}
+
 (async () => {
-  // Run once immediately, then on interval
-  await poll();
-  setInterval(poll, POLL_MS);
+  await tick();
+  setInterval(tick, POLL_MS);
 })();
