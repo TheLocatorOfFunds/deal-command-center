@@ -2666,6 +2666,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   const [documents, setDocuments] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [showPostUpdate, setShowPostUpdate] = useState(false);
+  const [showSendIntro, setShowSendIntro] = useState(false);
 
   const loadAll = async () => {
     setLoaded(false);
@@ -2791,6 +2792,11 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <button onClick={() => setShowPostUpdate(true)} title="Post a case update to the client and/or attorney timeline" style={{ background: "#d97706", color: "#0c0a09", border: "none", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
               📢 Post Update
             </button>
+            {deal.meta?.homeownerPhone && (
+              <button onClick={() => setShowSendIntro(true)} title="Send a pre-filled intro text to the homeowner via the iMessage bridge" style={{ background: "#064e3b", color: "#6ee7b7", border: "1px solid #065f46", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                💬 Send Intro Text
+              </button>
+            )}
           </>
         )}
       </div>
@@ -2851,6 +2857,13 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             setShowPostUpdate(false);
             await loadAll();
           }}
+        />
+      )}
+      {showSendIntro && (
+        <SendIntroTextModal
+          deal={deal}
+          onClose={() => setShowSendIntro(false)}
+          onSent={async () => { await loadAll(); }}
         />
       )}
     </div>
