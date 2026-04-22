@@ -1314,6 +1314,135 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
   );
 }
 
+// MiniDocketPulse — compact "Recent Docket Activity" section for lead cards.
+// Shows last 3 non-backfill events, elevates unack'd critical events to top,
+// renders a staleness badge, and distinguishes "Monitoring setup in progress"
+// (zero events, scraper not built) from "No new activity" (has backfill only).
+// See ~/Documents/Claude/refundlocators-pipeline/docs/DCC_LEAD_CARD_DOCKET_SPEC.md.
+function MiniDocketPulse({ dealId }) {
+  const [recent, setRecent] = useState([]);
+  const [hasAny, setHasAny] = useState(false);
+  const [lastDetected, setLastDetected] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    // 1) Last 3 non-backfill events for the primary render
+    const { data: live } = await sb.from('docket_events')
+      .select('id, event_type, event_date, description, acknowledged_at, detected_at, received_at')
+      .eq('deal_id', dealId)
+      .eq('is_backfill', false)
+      .order('event_date', { ascending: false })
+      .order('received_at', { ascending: false })
+      .limit(3);
+    // 2) Whether ANY event exists (distinguish "scraper not built" from "backfill only")
+    //    and the most recent detected_at for staleness.
+    const { data: latest } = await sb.from('docket_events')
+      .select('detected_at, received_at')
+      .eq('deal_id', dealId)
+      .order('received_at', { ascending: false })
+      .limit(1);
+    setRecent(live || []);
+    setHasAny((latest || []).length > 0);
+    setLastDetected(latest?.[0]?.detected_at || latest?.[0]?.received_at || null);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('mini-docket-' + dealId)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId]);
+
+  if (loading) return null;
+
+  // Zero rows ever → scraper not built yet for this county. Neutral messaging.
+  if (!hasAny) {
+    return (
+      <div style={{ marginTop: 12, padding: "7px 10px", background: "#0c0a09", border: "1px dashed #292524", borderRadius: 6 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, color: "#57534e", letterSpacing: "0.1em", textTransform: "uppercase" }}>Docket</div>
+        <div style={{ fontSize: 11, color: "#57534e", marginTop: 2 }}>Monitoring setup in progress</div>
+      </div>
+    );
+  }
+
+  // Staleness label — derived from max(detected_at). Lead card shows at-a-glance
+  // age so stale scrapers are visible without drilling in.
+  const hrs = lastDetected ? Math.max(0, Math.floor((Date.now() - new Date(lastDetected).getTime()) / 3_600_000)) : null;
+  let stale = null;
+  if (hrs != null) {
+    if (hrs >= 48) stale = { text: `Last check ${Math.floor(hrs / 24)}d ago`, color: '#f59e0b' };
+    else if (hrs >= 24) stale = { text: `Last check ${hrs}h ago`, color: '#f59e0b' };
+    else if (hrs >= 6) stale = { text: `Updated ${hrs}h ago`, color: '#78716c' };
+    else if (hrs >= 1) stale = { text: `Updated ${hrs}h ago`, color: '#57534e' };
+    else stale = { text: 'Updated just now', color: '#57534e' };
+  }
+
+  // History exists but no new non-backfill events → "waiting for next real event"
+  if (recent.length === 0) {
+    return (
+      <div style={{ marginTop: 12, padding: "7px 10px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+          <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>Recent Docket</div>
+          {stale && <div style={{ fontSize: 9, color: stale.color }}>{stale.text}</div>}
+        </div>
+        <div style={{ fontSize: 11, color: "#78716c", marginTop: 2 }}>No new activity · history indexed</div>
+      </div>
+    );
+  }
+
+  // Sort: unack'd critical first (regardless of date), then by event_date desc.
+  const sorted = [...recent].sort((a, b) => {
+    const ac = isCriticalEvent(a.event_type) && !a.acknowledged_at ? 1 : 0;
+    const bc = isCriticalEvent(b.event_type) && !b.acknowledged_at ? 1 : 0;
+    if (ac !== bc) return bc - ac;
+    return (b.event_date || '').localeCompare(a.event_date || '');
+  });
+
+  return (
+    <div style={{ marginTop: 12, padding: "8px 10px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>Recent Docket</div>
+        {stale && <div style={{ fontSize: 9, color: stale.color }}>{stale.text}</div>}
+      </div>
+      {sorted.map(e => {
+        const meta = eventMeta(e.event_type);
+        const crit = isCriticalEvent(e.event_type) && !e.acknowledged_at;
+        return (
+          <div key={e.id} style={{
+            display: "flex",
+            alignItems: "baseline",
+            gap: 6,
+            padding: "2px 0",
+            opacity: e.acknowledged_at ? 0.55 : 1,
+          }}>
+            <span style={{ fontSize: crit ? 11 : 9, color: crit ? meta.color : "#57534e", flexShrink: 0, width: 14, textAlign: "center" }}>
+              {crit ? meta.icon : '•'}
+            </span>
+            <span style={{ fontSize: 10, color: "#78716c", fontFamily: "'DM Mono', monospace", flexShrink: 0 }}>
+              {e.event_date ? new Date(e.event_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—'}
+            </span>
+            <span style={{
+              fontSize: 11,
+              color: crit ? "#fafaf9" : "#a8a29e",
+              fontWeight: crit ? 500 : 400,
+              flex: 1,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }} title={e.description}>
+              {e.description}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
@@ -1349,6 +1478,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
           {filedDays != null && <MiniStat label="Days Since Filed" value={filedDays + "d"} />}
         </div>
       )}
+      {!isClosed && <MiniDocketPulse dealId={deal.id} />}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {(m.lead_source || deal.lead_source) && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{m.lead_source || deal.lead_source}</span>}
@@ -2805,6 +2935,18 @@ const EVENT_TYPE_META = {
   docket_updated:       { label: "Docket Update",        color: "#78716c", icon: "•",  priority: 0, client: false },
 };
 const eventMeta = (t) => EVENT_TYPE_META[t] || { label: t, color: "#78716c", icon: "•", priority: 0, client: false };
+
+// Critical events get visual elevation on lead cards and push to top of the
+// MiniDocketPulse when unacknowledged. Hardcoded per the Castle spec rather
+// than derived from EVENT_TYPE_META.priority because `order_entered` is priority
+// 2 but is NOT a critical event (routine court paperwork, common on many dockets).
+const CRITICAL_EVENT_TYPES = new Set([
+  'disbursement_ordered', 'disbursement_paid',
+  'hearing_scheduled', 'hearing_continued',
+  'objection_filed', 'notice_of_claim',
+  'judgment_entered',
+]);
+const isCriticalEvent = (t) => CRITICAL_EVENT_TYPES.has(t);
 
 function DocketTab({ dealId }) {
   const [events, setEvents] = useState([]);

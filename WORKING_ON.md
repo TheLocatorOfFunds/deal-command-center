@@ -21,8 +21,10 @@ Template:
 
 ## Nathan's session
 
-**Status**: Idle
-**Last done**: Messages-tab email composer upgrade — custom subject, client/attorney audience picker, merge-field tokens ({{ClientName}}, {{CaseNumber}}, {{County}}, {{PropertyAddress}}) rendered before send. Migration `messages_subject_and_audience` applied; `dispatch_message_notifications` trigger rewritten to honor subject + fan out to attorneys when 'attorney' is in audience.
+**Status**: Active
+**Working on**: Lead-card "Recent Docket Activity" section per spec at `~/Documents/Claude/refundlocators-pipeline/docs/DCC_LEAD_CARD_DOCKET_SPEC.md` — DealCard/SurplusCard compact docket pulse (last 3 non-backfill events, critical-event elevation, staleness badge, "Monitoring setup in progress" for deals with 0 events), Supabase realtime on `docket_events`. Plus pass on DocketTab (already exists) + client/attorney portal timeline filtering.
+**Touching**: `index.html` (DealCard/SurplusCard, MiniDocketPulse component, realtime subscription), `portal.html` (filter portal docket to client-safe event types), `attorney-portal.html` (verify full event list)
+**ETA**: Done today
 **Last updated**: Apr 22, 2026
 
 <!--
