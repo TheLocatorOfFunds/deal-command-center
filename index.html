@@ -326,15 +326,60 @@ function Login() {
   );
 }
 
+// ─── Set New Password (post-reset flow) ──────────────────────────────
+function SetNewPassword({ onDone }) {
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm]   = useState("");
+  const [busy, setBusy]         = useState(false);
+  const [err, setErr]           = useState("");
+
+  const save = async () => {
+    if (password.length < 6) { setErr("Password must be at least 6 characters."); return; }
+    if (password !== confirm) { setErr("Passwords don't match."); return; }
+    setBusy(true); setErr("");
+    const { error } = await sb.auth.updateUser({ password });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onDone();
+  };
+
+  return (
+    <Shell>
+      <div style={{ maxWidth: 420, margin: "120px auto", textAlign: "center" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>RefundLocators</div>
+        <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6 }}>Deal Command Center</div>
+        <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 8, marginBottom: 32 }}>Set your new password.</div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
+          <input autoFocus type="password" value={password} onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && document.getElementById("dcc-pw-confirm")?.focus()}
+            placeholder="New password" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }} />
+          <input id="dcc-pw-confirm" type="password" value={confirm} onChange={e => setConfirm(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && save()}
+            placeholder="Confirm password" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px", marginTop: 10 }} />
+          <button onClick={save} disabled={busy || !password || !confirm}
+            style={{ ...btnPrimary, width: "100%", padding: "10px 14px", fontSize: 13, marginTop: 12, opacity: busy || !password || !confirm ? 0.5 : 1 }}>
+            {busy ? "Saving..." : "Set password"}
+          </button>
+          {err && <div style={{ fontSize: 11, color: "#fca5a5", marginTop: 10 }}>{err}</div>}
+        </div>
+      </div>
+    </Shell>
+  );
+}
+
 // ─── Root: session gate ──────────────────────────────────────────────
 function Root() {
-  const [session, setSession] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [checking, setChecking] = useState(true);
+  const [session, setSession]       = useState(null);
+  const [profile, setProfile]       = useState(null);
+  const [checking, setChecking]     = useState(true);
+  const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => { setSession(data.session); setChecking(false); });
-    const { data: sub } = sb.auth.onAuthStateChange((_evt, s) => setSession(s));
+    const { data: sub } = sb.auth.onAuthStateChange((evt, s) => {
+      if (evt === "PASSWORD_RECOVERY") { setSession(s); setRecovering(true); }
+      else { setSession(s); setRecovering(false); }
+    });
     return () => sub.subscription.unsubscribe();
   }, []);
 
@@ -347,6 +392,7 @@ function Root() {
   }, [session]);
 
   if (checking) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading...</div></Shell>;
+  if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />;
   if (!session) return <Login />;
   if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
   return <DealCommandCenter session={session} profile={profile} />;
