@@ -275,6 +275,7 @@ function DealRoom({ data }) {
       <div className="cta-bar">
         <a href="tel:+15139518855" className="cta-primary">📞 Call Nathan · (513) 951-8855</a>
         <a href="sms:+15139518855" className="cta-secondary">💬 Text</a>
+        <WalkthroughRequestButton investorName={investor_name} />
       </div>
 
       {/* Property stats */}
@@ -487,6 +488,78 @@ function VideoBlock({ url }) {
   if (vimeo) return <div className="video-wrap"><iframe src={`https://player.vimeo.com/video/${vimeo[1]}`} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen /></div>;
   if (/\.(mp4|mov|webm)$/i.test(url)) return <div className="video-wrap"><video src={url} controls /></div>;
   return <a href={url} target="_blank" rel="noreferrer" className="btn-gold">Open walkthrough video</a>;
+}
+
+function WalkthroughRequestButton({ investorName }) {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ when: '', note: '', phone: '', email: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  if (sent) {
+    return <div className="cta-secondary" style={{ background: '#dff3e6', borderColor: 'var(--green)', color: 'var(--green)', cursor: 'default' }}>✓ Request sent — Nathan will reach out shortly</div>;
+  }
+
+  if (!open) {
+    return <button onClick={() => setOpen(true)} className="cta-secondary">🏠 Request walkthrough</button>;
+  }
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const { data: request_id, error } = await sb.rpc('submit_walkthrough_request', {
+        p_token: TOKEN,
+        p_preferred_time: form.when.trim() || null,
+        p_note: form.note.trim() || null,
+        p_investor_phone: form.phone.trim() || null,
+        p_investor_email: form.email.trim() || null,
+      });
+      if (error) throw error;
+      // Fire-and-forget SMS notification to Nathan
+      fetch(SUPABASE_URL + '/functions/v1/notify-walkthrough-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ request_id }),
+      }).catch(() => {});
+      setSent(true);
+    } catch (err) {
+      alert("Couldn't send: " + (err.message || 'try again'));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <form onSubmit={submit} style={{ flexBasis: '100%', background: 'var(--bg-card-alt)', border: '1px solid var(--border-strong)', borderRadius: 10, padding: 14, marginTop: 4 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)', marginBottom: 8 }}>Request a walkthrough</div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 8, marginBottom: 8 }}>
+        <input
+          value={form.when}
+          onChange={e => setForm({ ...form, when: e.target.value })}
+          placeholder="When works? (e.g. Thu afternoon)"
+          style={{ padding: '8px 10px', border: '1px solid var(--border-strong)', borderRadius: 6, fontSize: 13, fontFamily: 'inherit', background: 'var(--bg-card)' }}
+        />
+        {!investorName && <input
+          value={form.phone}
+          onChange={e => setForm({ ...form, phone: e.target.value })}
+          placeholder="Your phone (so Nathan can call)"
+          style={{ padding: '8px 10px', border: '1px solid var(--border-strong)', borderRadius: 6, fontSize: 13, fontFamily: 'inherit', background: 'var(--bg-card)' }}
+        />}
+      </div>
+      <textarea
+        value={form.note}
+        onChange={e => setForm({ ...form, note: e.target.value })}
+        placeholder="Anything else Nathan should know? (optional)"
+        rows={2}
+        style={{ width: '100%', padding: '8px 10px', border: '1px solid var(--border-strong)', borderRadius: 6, fontSize: 13, fontFamily: 'inherit', background: 'var(--bg-card)', marginBottom: 8, resize: 'vertical' }}
+      />
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" onClick={() => setOpen(false)} className="btn-ghost">Cancel</button>
+        <button type="submit" disabled={submitting} className="btn-gold">{submitting ? 'Sending…' : 'Send to Nathan'}</button>
+      </div>
+    </form>
+  );
 }
 
 function DocRow({ doc }) {

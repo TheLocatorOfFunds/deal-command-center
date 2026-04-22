@@ -421,6 +421,8 @@ function DealCommandCenter({ session, profile }) {
   const [showSearch, setShowSearch] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
+  const [pendingWalkthroughs, setPendingWalkthroughs] = useState([]);
+  const [showWalkthroughs, setShowWalkthroughs] = useState(false);
   const [showDocket, setShowDocket] = useState(false);
   const [showContacts, setShowContacts] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -438,6 +440,15 @@ function DealCommandCenter({ session, profile }) {
   const loadDocketCount = async () => {
     const { data } = await sb.rpc('docket_unacknowledged_count');
     setUnackDocketCount(data || 0);
+  };
+
+  const loadPendingWalkthroughs = async () => {
+    const { data } = await sb.from('walkthrough_requests')
+      .select('*, deals(name, address, meta)')
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(20);
+    setPendingWalkthroughs(data || []);
   };
 
   // Cmd+K / Ctrl+K → open search
@@ -466,7 +477,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); }, []);
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
@@ -475,6 +486,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, loadPendingWalkthroughs)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -572,6 +584,11 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowDocket(true)} title="Docket events + scraper health" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: unackDocketCount > 0 ? "#78350f" : "#44403c", color: unackDocketCount > 0 ? "#fbbf24" : "#78716c" }}>
             ⚖ Docket {unackDocketCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#f59e0b", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{unackDocketCount}</span>}
           </button>}
+          {isTeam && pendingWalkthroughs.length > 0 && (
+            <button onClick={() => setShowWalkthroughs(true)} title="Investor walkthrough requests" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#78350f", color: "#fbbf24", animation: "pulse 2s ease-in-out infinite" }}>
+              🏠 Walkthroughs <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingWalkthroughs.length}</span>
+            </button>
+          )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
           {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
@@ -579,6 +596,7 @@ function DealCommandCenter({ session, profile }) {
         </div>
       </div>
 
+      {showWalkthroughs && <WalkthroughRequestsModal onClose={() => setShowWalkthroughs(false)} userId={session.user.id} onJumpToDeal={(id) => { setActiveDealId(id); setShowWalkthroughs(false); }} />}
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
@@ -2602,8 +2620,106 @@ function ClientPortalCard({ deal, logAct }) {
 // Two cards: InvestorPortalCard manages token-based share links;
 // InvestorDetailsEditor fills out the buyer-facing deal fields that
 // investor-portal.html reads from meta.investor jsonb.
+// Cross-deal inbox for walkthrough requests. Opens from the nav button.
+function WalkthroughRequestsModal({ onClose, userId, onJumpToDeal }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('pending');
+
+  const load = async () => {
+    let q = sb.from('walkthrough_requests').select('*, deals(name, address)').order('created_at', { ascending: false }).limit(50);
+    if (filter !== 'all') q = q.eq('status', filter);
+    const { data } = await q;
+    setRows(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [filter]);
+
+  useEffect(() => {
+    const ch = sb.channel('wt-modal')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [filter]);
+
+  const mark = async (wr, status) => {
+    await sb.from('walkthrough_requests')
+      .update({ status, handled_at: new Date().toISOString(), handled_by: userId })
+      .eq('id', wr.id);
+    load();
+  };
+
+  return (
+    <Modal onClose={onClose} title="🏠 Walkthrough Requests" wide>
+      <div style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 16, flexWrap: "wrap", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
+        {['pending', 'contacted', 'scheduled', 'completed', 'dismissed', 'all'].map(s => (
+          <button key={s} onClick={() => setFilter(s)} style={{
+            padding: "5px 12px", borderRadius: 6,
+            border: "1px solid " + (filter === s ? "#44403c" : "transparent"),
+            background: filter === s ? "#292524" : "transparent",
+            color: filter === s ? "#fafaf9" : "#78716c",
+            fontSize: 12, fontWeight: filter === s ? 700 : 500,
+            cursor: "pointer", fontFamily: "inherit", textTransform: "uppercase", letterSpacing: "0.06em",
+          }}>{s}</button>
+        ))}
+      </div>
+
+      {loading && <div style={{ padding: 20, textAlign: "center", color: "#78716c", fontSize: 12 }}>Loading…</div>}
+
+      {!loading && rows.length === 0 && (
+        <div style={{ padding: 40, textAlign: "center", color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
+          {filter === 'pending' ? 'No pending walkthrough requests. You\'re clear.' : `No ${filter} requests.`}
+        </div>
+      )}
+
+      {!loading && rows.map(w => {
+        const d = w.deals;
+        const addr = d?.address || d?.meta?.propertyAddress || w.deal_id;
+        return (
+          <div key={w.id} style={{ marginBottom: 10, padding: "12px 16px", background: "#1c1917", border: "1px solid " + (w.status === 'pending' ? "#d97706" : "#292524"), borderLeft: "3px solid " + (w.status === 'pending' ? "#fbbf24" : "#44403c"), borderRadius: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#fafaf9" }}>
+                  {w.investor_name || 'Unnamed investor'} · {d?.name || 'Unknown deal'}
+                </div>
+                <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{addr}</div>
+                {w.preferred_time && <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 6 }}>⏰ <b>Prefers:</b> {w.preferred_time}</div>}
+                {w.investor_note && <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 4, lineHeight: 1.5 }}>📝 {w.investor_note}</div>}
+                <div style={{ display: "flex", gap: 12, marginTop: 6, flexWrap: "wrap" }}>
+                  {w.investor_phone && <a href={`tel:${w.investor_phone}`} style={{ color: "#fbbf24", fontSize: 12 }}>📞 {w.investor_phone}</a>}
+                  {w.investor_email && <a href={`mailto:${w.investor_email}`} style={{ color: "#fbbf24", fontSize: 12 }}>✉ {w.investor_email}</a>}
+                </div>
+                <div style={{ fontSize: 10, color: "#57534e", marginTop: 6 }}>
+                  {new Date(w.created_at).toLocaleString()}
+                  {w.handled_at && <> · Handled {new Date(w.handled_at).toLocaleString()}</>}
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 4, alignItems: "flex-end", flexShrink: 0 }}>
+                <button onClick={() => onJumpToDeal(w.deal_id)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>Open deal →</button>
+                {w.status === 'pending' && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button onClick={() => mark(w, 'contacted')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#93c5fd" }}>Contacted</button>
+                    <button onClick={() => mark(w, 'scheduled')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#6ee7b7" }}>Scheduled</button>
+                    <button onClick={() => mark(w, 'dismissed')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#a8a29e" }}>Dismiss</button>
+                  </div>
+                )}
+                {w.status !== 'pending' && (
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 3, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.08em", textTransform: "uppercase" }}>{w.status}</span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </Modal>
+  );
+}
+
 function InvestorPortalCard({ deal, userId }) {
   const [rows, setRows] = useState([]);
+  const [walkthroughs, setWalkthroughs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', phone: '' });
@@ -2613,15 +2729,33 @@ function InvestorPortalCard({ deal, userId }) {
   const buildLink = (token) => base + 'investor-portal.html?t=' + token;
 
   const load = async () => {
-    const { data } = await sb.from('investor_deal_access')
-      .select('*')
-      .eq('deal_id', deal.id)
-      .order('invited_at', { ascending: false });
-    setRows(data || []);
+    const [accessRes, wtRes] = await Promise.all([
+      sb.from('investor_deal_access').select('*').eq('deal_id', deal.id).order('invited_at', { ascending: false }),
+      sb.from('walkthrough_requests').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(20),
+    ]);
+    setRows(accessRes.data || []);
+    setWalkthroughs(wtRes.data || []);
     setLoading(false);
   };
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [deal.id]);
+
+  // Realtime: when an investor submits a walkthrough request, pop it in
+  useEffect(() => {
+    const ch = sb.channel('walkthroughs-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests', filter: `deal_id=eq.${deal.id}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_deal_access', filter: `deal_id=eq.${deal.id}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [deal.id]);
+
+  const markHandled = async (wr, status) => {
+    await sb.from('walkthrough_requests')
+      .update({ status, handled_at: new Date().toISOString(), handled_by: userId })
+      .eq('id', wr.id);
+    load();
+  };
 
   const add = async () => {
     if (!form.name.trim() && !form.email.trim() && !form.phone.trim()) {
@@ -2666,10 +2800,44 @@ function InvestorPortalCard({ deal, userId }) {
     } catch { window.prompt('Copy this link:', link); }
   };
 
+  const pendingWts = walkthroughs.filter(w => w.status === 'pending');
+
   return (
     <Card title="Investor Portal" style={{ marginTop: 16 }}>
+      {pendingWts.length > 0 && (
+        <div style={{ marginBottom: 16, padding: "12px 14px", background: "#78350f22", border: "1px solid #d97706", borderLeft: "4px solid #fbbf24", borderRadius: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#fbbf24", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+            🏠 Walkthrough request{pendingWts.length === 1 ? '' : 's'} · {pendingWts.length} pending
+          </div>
+          {pendingWts.map(w => (
+            <div key={w.id} style={{ padding: "8px 0", borderTop: "1px solid #78350f" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "#fafaf9" }}>
+                {w.investor_name || 'Unnamed investor'} wants to walk the property
+              </div>
+              <div style={{ fontSize: 11, color: "#d6d3d1", marginTop: 4, lineHeight: 1.5 }}>
+                {w.preferred_time && <div>⏰ <b>When:</b> {w.preferred_time}</div>}
+                {w.investor_note && <div>📝 {w.investor_note}</div>}
+                {(w.investor_phone || w.investor_email) && (
+                  <div style={{ marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    {w.investor_phone && <a href={`tel:${w.investor_phone}`} style={{ color: "#fbbf24" }}>📞 {w.investor_phone}</a>}
+                    {w.investor_email && <a href={`mailto:${w.investor_email}`} style={{ color: "#fbbf24" }}>✉ {w.investor_email}</a>}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                <button onClick={() => markHandled(w, 'contacted')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#93c5fd" }}>Mark contacted</button>
+                <button onClick={() => markHandled(w, 'scheduled')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#6ee7b7" }}>Mark scheduled</button>
+                <button onClick={() => markHandled(w, 'completed')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#6ee7b7" }}>Completed</button>
+                <button onClick={() => markHandled(w, 'dismissed')} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#a8a29e" }}>Dismiss</button>
+              </div>
+              <div style={{ fontSize: 9, color: "#57534e", marginTop: 4 }}>Requested {new Date(w.created_at).toLocaleString()}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.55 }}>
-        Generate a share link for a buyer. They click the link — no signup — and see the Investor Details you fill in below (asking price, ARV, rehab, condition, photos, closing). Revoke anytime.
+        Generate a share link for a buyer. They click the link — no signup — and see the Investor Details you fill in below (asking price, ARV, rehab, condition, photos, closing). Revoke anytime. Links auto-revoke when this deal is marked closed or dead.
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 10 }}>
@@ -2677,9 +2845,27 @@ function InvestorPortalCard({ deal, userId }) {
         <Field label="Email"><input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
         <Field label="Phone"><input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
       </div>
-      <button onClick={add} disabled={adding} style={btnPrimary}>
-        {adding ? 'Generating…' : '+ Generate share link'}
-      </button>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={add} disabled={adding} style={btnPrimary}>
+          {adding ? 'Generating…' : '+ Generate share link'}
+        </button>
+        {rows.some(r => r.enabled && !r.revoked_at) && (
+          <button
+            onClick={async () => {
+              const live = rows.filter(r => r.enabled && !r.revoked_at);
+              if (!confirm(`Revoke access for all ${live.length} active investor link${live.length === 1 ? '' : 's'}? This cannot be undone; they'll need new links to view again.`)) return;
+              await sb.from('investor_deal_access')
+                .update({ enabled: false, revoked_at: new Date().toISOString() })
+                .eq('deal_id', deal.id)
+                .eq('enabled', true);
+              load();
+            }}
+            style={{ ...btnGhost, color: "#fca5a5", borderColor: "#7f1d1d" }}
+          >
+            Revoke all active
+          </button>
+        )}
+      </div>
 
       <div style={{ marginTop: 16 }}>
         {loading ? null : rows.length === 0 ? (
@@ -3967,7 +4153,22 @@ function DocketTab({ dealId }) {
       )}
 
       {!loading && events.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 10,
+          // Fixed-height scroller keeps the Docket tab from blowing out the
+          // deal view when Castle has dumped 50-100 entries. Scrolls internally,
+          // the rest of the deal page stays put.
+          maxHeight: 520,
+          overflowY: events.length > 3 ? "auto" : "visible",
+          paddingRight: events.length > 3 ? 6 : 0,
+          borderTop: events.length > 3 ? "1px solid #292524" : "none",
+          borderBottom: events.length > 3 ? "1px solid #292524" : "none",
+          paddingTop: events.length > 3 ? 10 : 0,
+          paddingBottom: events.length > 3 ? 10 : 0,
+          marginTop: events.length > 3 ? -1 : 0,
+        }}>
           {events.map(e => {
             const meta = eventMeta(e.event_type);
             const isUnack = !e.acknowledged_at;
