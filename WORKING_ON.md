@@ -21,11 +21,9 @@ Template:
 
 ## Nathan's session
 
-**Status**: Active
-**Working on**: Phase 3 Library — PR 4 portal pinning
-**Touching**: migration `library_deal_pins` (new `deal_library_pins` table + RLS + storage RLS for client/attorney pin-read) · `index.html` (new "📌 Pin from library" button on DealDetail Documents tab, pin list + unpin action) · `portal.html` + `attorney-portal.html` (render pinned library docs alongside deal-scoped documents)
-**ETA**: Done today
+**Status**: Idle
 **Last updated**: Apr 21, 2026
+**Last done**: Phase 3 Library PR 4 shipped — migration `library_deal_pins` (new `deal_library_pins` table + 4 RLS policies + 2 extra policies on `library_documents` for pin-scoped attorney/client reads + 2 storage policies so attorneys/clients can signed-URL library files only when pinned to their assigned/own deal) + DCC "📌 Pin from library" button on Documents tab (audience checkboxes · optional label · unpin action · pinned-docs section with badges) + client portal + attorney portal rendering pinned docs alongside deal-scoped documents.
 
 <!--
 Template:

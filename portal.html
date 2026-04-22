@@ -1302,6 +1302,30 @@ function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
 function ClientDocumentsSection({ dealId, documents, session, onChange, isPreview }) {
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState(null);
+  const [pins, setPins] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from('deal_library_pins')
+        .select('id, pinned_for, label, pinned_at, library_documents(id, title, path, size, mime_type, kind, external_url, description)')
+        .eq('deal_id', dealId)
+        .contains('pinned_for', ['client']);
+      setPins(data || []);
+    })();
+  }, [dealId]);
+
+  const openPinned = async (pin) => {
+    const d = pin.library_documents;
+    if (!d) return;
+    if (d.kind === 'link' && d.external_url) { window.open(d.external_url, '_blank'); return; }
+    if (!d.path) return;
+    const { data, error } = await sb.storage.from('library').createSignedUrl(d.path, 300);
+    if (error || !data?.signedUrl) {
+      alert("Couldn't open that document. Please call Nathan at (513) 951-8855.");
+      return;
+    }
+    window.open(data.signedUrl, '_blank');
+  };
 
   const upload = async (file) => {
     if (!file) return;
@@ -1365,7 +1389,32 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
         </label>
       </div>
       {err && <div className="empathy-error">{err}</div>}
-      {documents.length === 0 ? (
+
+      {/* Pinned library resources — documents Nathan's team has curated for every client */}
+      {pins.length > 0 && (
+        <>
+          {pins.map(pin => {
+            const d = pin.library_documents;
+            if (!d) return null;
+            const icon = d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄';
+            return (
+              <div className="doc-row" key={'pin-' + pin.id} onClick={() => openPinned(pin)} style={{ cursor: 'pointer' }}>
+                <div className="doc-icon" style={{ background: 'var(--gold-soft)', color: 'var(--amber)' }}>{icon}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="doc-name">{pin.label || d.title}</div>
+                  <div className="doc-size">
+                    {d.size ? Math.round(d.size / 1024) + ' KB · ' : ''}From RefundLocators
+                    {d.description && ` · ${d.description}`}
+                  </div>
+                </div>
+                <button className="doc-action" onClick={(e) => { e.stopPropagation(); openPinned(pin); }}>View</button>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {documents.length === 0 && pins.length === 0 ? (
         <div className="empty" style={{ padding: '12px 0' }}>No documents on file yet. Upload anything we've requested, or just save it here for your records.</div>
       ) : (
         documents.map(d => (

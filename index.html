@@ -2929,7 +2929,36 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [extracting, setExtracting] = useState({});
   const [expanded, setExpanded] = useState({});
   const [showLibraryPicker, setShowLibraryPicker] = useState(false);
+  const [pickerMode, setPickerMode] = useState('attach'); // 'attach' | 'pin'
+  const [pins, setPins] = useState([]);
   const fileRef = useRef(null);
+
+  const loadPins = async () => {
+    const { data } = await sb.from('deal_library_pins')
+      .select('id, pinned_for, label, pinned_at, library_document_id, library_documents(id, title, path, size, mime_type, kind, external_url)')
+      .eq('deal_id', dealId)
+      .order('pinned_at', { ascending: false });
+    setPins(data || []);
+  };
+  useEffect(() => { loadPins(); }, [dealId]);
+
+  const openPinnedDoc = async (pin) => {
+    const doc = pin.library_documents;
+    if (!doc) return;
+    if (doc.kind === 'link' && doc.external_url) { window.open(doc.external_url, '_blank'); return; }
+    if (!doc.path) return;
+    const { data, error } = await sb.storage.from('library').createSignedUrl(doc.path, 300);
+    if (error || !data?.signedUrl) { alert("Couldn't open pinned doc: " + (error?.message || 'unknown')); return; }
+    window.open(data.signedUrl, '_blank');
+  };
+
+  const unpin = async (pin) => {
+    if (!confirm(`Unpin "${pin.label || pin.library_documents?.title || 'this doc'}" from this deal? The library file stays; only the deal-level pin is removed.`)) return;
+    const { error } = await sb.from('deal_library_pins').delete().eq('id', pin.id);
+    if (error) { alert(error.message); return; }
+    if (logAct) await logAct(`📌 Unpinned library doc: ${pin.library_documents?.title || pin.label || '?'}`);
+    await loadPins();
+  };
 
   const upload = async (file) => {
     if (!file) return;
@@ -3021,9 +3050,12 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   };
 
   return (
-    <Card title={`Documents (${items.length})`} action={
+    <Card title={`Documents (${items.length}${pins.length > 0 ? ' · ' + pins.length + ' pinned' : ''})`} action={
       <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-        <button onClick={() => setShowLibraryPicker(true)} style={{ ...btnGhost, fontSize: 11 }}>
+        <button onClick={() => { setPickerMode('pin'); setShowLibraryPicker(true); }} title="Expose a library doc on this deal's client or attorney portal without copying" style={{ ...btnGhost, fontSize: 11 }}>
+          📌 Pin from library
+        </button>
+        <button onClick={() => { setPickerMode('attach'); setShowLibraryPicker(true); }} title="Clone a library file into this deal's documents" style={{ ...btnGhost, fontSize: 11 }}>
           📚 From library
         </button>
         <label style={{ ...btnPrimary, cursor: "pointer", display: "inline-block", opacity: busy ? 0.5 : 1 }}>
@@ -3038,10 +3070,44 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
           dealId={dealId}
           userId={userId}
           logAct={logAct}
+          mode={pickerMode}
           onClose={() => setShowLibraryPicker(false)}
           onAttached={async () => { await reload(); setShowLibraryPicker(false); }}
+          onPinned={async () => { await loadPins(); setShowLibraryPicker(false); }}
         />
       )}
+
+      {/* Pinned library docs — visible on client/attorney portals per pin audience */}
+      {pins.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "10px 12px", background: "#0c0a09", border: "1px dashed #44403c", borderRadius: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+            📌 Pinned from library · visible on {pins.some(p => (p.pinned_for || []).includes('client')) ? 'client' : ''}{pins.some(p => (p.pinned_for || []).includes('client')) && pins.some(p => (p.pinned_for || []).includes('attorney')) ? ' + ' : ''}{pins.some(p => (p.pinned_for || []).includes('attorney')) ? 'attorney' : ''} portal{pins.length === 1 ? '' : 's'}
+          </div>
+          {pins.map(pin => {
+            const d = pin.library_documents;
+            if (!d) return null;
+            const aud = (pin.pinned_for || []);
+            return (
+              <div key={pin.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid #1c1917" }}>
+                <span style={{ fontSize: 14 }}>{d.kind === 'template' ? '📝' : d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#fafaf9", cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} onClick={() => openPinnedDoc(pin)}>
+                    {pin.label || d.title}
+                  </div>
+                  <div style={{ fontSize: 10, color: "#78716c", marginTop: 1, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    {aud.includes('client') && <span style={{ color: "#6ee7b7" }}>👤 client</span>}
+                    {aud.includes('attorney') && <span style={{ color: "#c4b5fd" }}>⚖ attorney</span>}
+                    <span>pinned {new Date(pin.pinned_at).toLocaleDateString()}</span>
+                  </div>
+                </div>
+                <button onClick={() => openPinnedDoc(pin)} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px" }}>Open</button>
+                <button onClick={() => unpin(pin)} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#ef4444" }}>Unpin</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
       {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload engagement agreements, distribution orders, sale confirmations, NODs, proof of claim, death certificates, IDs, deeds, or any court filing. Claude Vision reads each file and extracts key fields — surplus amounts, case numbers, dates, fee percentages — automatically.</div>}
       {items.map(doc => {
@@ -4939,7 +5005,7 @@ function resolveDealPath(deal, path) {
   return cur == null ? '' : String(cur);
 }
 
-function LibraryPickerForDeal({ deal, dealId, userId, logAct, onClose, onAttached }) {
+function LibraryPickerForDeal({ deal, dealId, userId, logAct, mode = 'attach', onClose, onAttached, onPinned }) {
   const [folders, setFolders] = useState([]);
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -4949,6 +5015,10 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, onClose, onAttache
   const [mergeValues, setMergeValues] = useState({});
   const [attaching, setAttaching] = useState(false);
   const [msg, setMsg] = useState(null);
+  // Pin-mode state
+  const [pinForClient, setPinForClient] = useState(true);
+  const [pinForAttorney, setPinForAttorney] = useState(true);
+  const [pinLabel, setPinLabel] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -5022,12 +5092,47 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, onClose, onAttache
     }
   };
 
+  const pin = async () => {
+    if (!selectedDoc) return;
+    const audience = [
+      ...(pinForClient   ? ['client']   : []),
+      ...(pinForAttorney ? ['attorney'] : []),
+    ];
+    if (audience.length === 0) {
+      setMsg({ type: 'error', text: 'Pick at least one audience — client and/or attorney.' });
+      return;
+    }
+    setAttaching(true); setMsg(null);
+    try {
+      const { error } = await sb.from('deal_library_pins').insert({
+        deal_id: dealId,
+        library_document_id: selectedDoc.id,
+        pinned_for: audience,
+        label: pinLabel.trim() || null,
+        pinned_by: userId,
+      });
+      if (error) {
+        if (String(error.message).toLowerCase().includes('duplicate')) {
+          throw new Error('This doc is already pinned to this deal. Unpin it first to change the audience.');
+        }
+        throw error;
+      }
+      if (logAct) await logAct(`📌 Pinned library doc "${selectedDoc.title}" · ${audience.join(' + ')}`);
+      setMsg({ type: 'success', text: `Pinned "${selectedDoc.title}" · visible to ${audience.join(' + ')} on this deal.` });
+      setTimeout(() => { onPinned?.(); }, 600);
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Pin failed' });
+    } finally {
+      setAttaching(false);
+    }
+  };
+
   const fmtSize = (b) => !b ? '' : b < 1024 ? `${b} B` : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`;
   const kindIcon = (d) => d.kind === 'template' ? '📝' : d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄';
   const mergeFieldKeys = selectedDoc && selectedDoc.template_fields ? Object.keys(selectedDoc.template_fields) : [];
 
   return (
-    <Modal onClose={onClose} title={`📚 Attach from library → ${(deal.name || '').split(' - ')[0]}`} wide>
+    <Modal onClose={onClose} title={`${mode === 'pin' ? '📌 Pin from library' : '📚 Attach from library'} → ${(deal.name || '').split(' - ')[0]}`} wide>
       {loading ? (
         <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading library…</div>
       ) : (
@@ -5117,49 +5222,97 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, onClose, onAttache
               )}
             </div>
 
-            {/* selected-doc detail + merge field form + attach button */}
+            {/* selected-doc detail — attach mode OR pin mode */}
             {selectedDoc ? (
               <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: "#fafaf9", marginBottom: 10 }}>
                   {kindIcon(selectedDoc)} {selectedDoc.title}
                 </div>
 
-                {mergeFieldKeys.length > 0 && (
+                {mode === 'attach' && (
                   <>
-                    <div style={{ fontSize: 10, color: "#d97706", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-                      Merge fields · pre-filled from deal
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginBottom: 12 }}>
-                      {mergeFieldKeys.map(key => (
-                        <div key={key}>
-                          <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>{key}</div>
-                          <input
-                            value={mergeValues[key] || ''}
-                            onChange={e => setMergeValues(v => ({ ...v, [key]: e.target.value }))}
-                            style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
-                            placeholder="—"
-                          />
+                    {mergeFieldKeys.length > 0 ? (
+                      <>
+                        <div style={{ fontSize: 10, color: "#d97706", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                          Merge fields · pre-filled from deal
                         </div>
-                      ))}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5, padding: "8px 10px", background: "#1c1917", borderRadius: 5 }}>
-                      Values are saved to this deal's document record. PR 3 will use them for automatic DocuSign field-filling. For now, download the file and fill in manually as needed.
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8, marginBottom: 12 }}>
+                          {mergeFieldKeys.map(key => (
+                            <div key={key}>
+                              <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>{key}</div>
+                              <input
+                                value={mergeValues[key] || ''}
+                                onChange={e => setMergeValues(v => ({ ...v, [key]: e.target.value }))}
+                                style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
+                                placeholder="—"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5, padding: "8px 10px", background: "#1c1917", borderRadius: 5 }}>
+                          Values are saved to this deal's document record. PR 3 will use them for automatic DocuSign field-filling. For now, download the file and fill in manually as needed.
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5 }}>
+                        No merge fields defined for this document — it will attach as-is.
+                      </div>
+                    )}
+
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+                      <button onClick={attach} disabled={attaching} style={{ ...btnPrimary, fontSize: 11 }}>
+                        {attaching ? 'Attaching…' : '📎 Attach to this deal'}
+                      </button>
                     </div>
                   </>
                 )}
 
-                {mergeFieldKeys.length === 0 && (
-                  <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5 }}>
-                    No merge fields defined for this document — it will attach as-is.
-                  </div>
-                )}
+                {mode === 'pin' && (
+                  <>
+                    <div style={{ fontSize: 10, color: "#d97706", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                      Pin audience — who sees this on the portals?
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 12 }}>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", background: pinForClient ? "#064e3b" : "#1c1917", border: "1px solid " + (pinForClient ? "#10b981" : "#292524"), borderRadius: 5, cursor: "pointer" }}>
+                        <input type="checkbox" checked={pinForClient} onChange={e => setPinForClient(e.target.checked)} style={{ marginTop: 2 }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: pinForClient ? "#6ee7b7" : "#a8a29e" }}>👤 Client portal</div>
+                          <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Homeowner sees this in their Documents section. Good for welcome packets, FAQs, post-sign guidance.</div>
+                        </div>
+                      </label>
+                      <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", background: pinForAttorney ? "#312e81" : "#1c1917", border: "1px solid " + (pinForAttorney ? "#8b5cf6" : "#292524"), borderRadius: 5, cursor: "pointer" }}>
+                        <input type="checkbox" checked={pinForAttorney} onChange={e => setPinForAttorney(e.target.checked)} style={{ marginTop: 2 }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: pinForAttorney ? "#c4b5fd" : "#a8a29e" }}>⚖ Attorney portal</div>
+                          <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Retained attorney sees this on their case view. Good for Ohio surplus reference sheets, form templates.</div>
+                        </div>
+                      </label>
+                    </div>
 
-                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
-                  <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
-                  <button onClick={attach} disabled={attaching} style={{ ...btnPrimary, fontSize: 11 }}>
-                    {attaching ? 'Attaching…' : '📎 Attach to this deal'}
-                  </button>
-                </div>
+                    <div style={{ marginBottom: 12 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Display label (optional)</div>
+                      <input
+                        value={pinLabel}
+                        onChange={e => setPinLabel(e.target.value)}
+                        style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
+                        placeholder={selectedDoc.title}
+                      />
+                      <div style={{ fontSize: 10, color: "#57534e", marginTop: 3 }}>Leave blank to use the library title verbatim.</div>
+                    </div>
+
+                    <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.5, padding: "8px 10px", background: "#1c1917", borderRadius: 5 }}>
+                      Pinning doesn't copy the file — it just exposes it on this deal's chosen portal(s) with a signed URL. When the library doc updates, the pinned version updates automatically. Unpin anytime from the deal's Documents tab.
+                    </div>
+
+                    <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                      <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+                      <button onClick={pin} disabled={attaching || (!pinForClient && !pinForAttorney)} style={{ ...btnPrimary, fontSize: 11 }}>
+                        {attaching ? 'Pinning…' : '📌 Pin to this deal'}
+                      </button>
+                    </div>
+                  </>
+                )}
 
                 {msg && (
                   <div style={{ marginTop: 10, padding: "6px 10px", borderRadius: 5, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 11 }}>
@@ -5169,7 +5322,7 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, onClose, onAttache
               </div>
             ) : (
               <div style={{ background: "#0c0a09", border: "1px dashed #292524", borderRadius: 8, padding: 24, textAlign: "center", fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
-                Pick a file from the list above to attach it to <b style={{ color: "#a8a29e" }}>{(deal.name || '').split(' - ')[0]}</b>.
+                Pick a file from the list above to {mode === 'pin' ? 'pin' : 'attach'} to <b style={{ color: "#a8a29e" }}>{(deal.name || '').split(' - ')[0]}</b>.
               </div>
             )}
           </div>

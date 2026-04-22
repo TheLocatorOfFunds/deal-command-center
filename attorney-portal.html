@@ -1179,6 +1179,27 @@ function UpdateForm({ dealId, onPosted, isPreview }) {
 function DocumentsSection({ dealId, documents, onChange, isPreview }) {
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState(null);
+  const [pins, setPins] = useState([]);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from('deal_library_pins')
+        .select('id, pinned_for, label, pinned_at, library_documents(id, title, path, size, mime_type, kind, external_url, description)')
+        .eq('deal_id', dealId)
+        .contains('pinned_for', ['attorney']);
+      setPins(data || []);
+    })();
+  }, [dealId]);
+
+  const openPinned = async (pin) => {
+    const d = pin.library_documents;
+    if (!d) return;
+    if (d.kind === 'link' && d.external_url) { window.open(d.external_url, '_blank'); return; }
+    if (!d.path) return;
+    const { data, error } = await sb.storage.from('library').createSignedUrl(d.path, 600);
+    if (error || !data?.signedUrl) { alert("Couldn't open pinned resource: " + (error?.message || 'unknown')); return; }
+    window.open(data.signedUrl, '_blank');
+  };
 
   const upload = async (file) => {
     if (!file) return;
@@ -1231,8 +1252,43 @@ function DocumentsSection({ dealId, documents, onChange, isPreview }) {
         </label>
       </div>
       {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
-      {documents.length === 0 ? (
+
+      {/* Pinned library resources — reference docs, templates, SOPs the team has
+          curated for every attorney on this case. Show at top with a gold accent. */}
+      {pins.length > 0 && (
+        <>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--navy-mid)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8, marginTop: 4 }}>
+            📌 Provided by RefundLocators
+          </div>
+          {pins.map(pin => {
+            const d = pin.library_documents;
+            if (!d) return null;
+            const icon = d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : d.kind === 'template' ? '📝' : '📄';
+            return (
+              <div className="doc-row" key={'pin-' + pin.id} onClick={() => openPinned(pin)} style={{ cursor: 'pointer' }}>
+                <div className="doc-icon" style={{ background: 'var(--gold-soft)' }}>{icon}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="doc-name">{pin.label || d.title}</div>
+                  <div className="doc-meta">
+                    {fmtSize(d.size)}
+                    {d.description && ` · ${d.description}`}
+                  </div>
+                </div>
+                <button className="doc-action" onClick={(e) => { e.stopPropagation(); openPinned(pin); }}>View</button>
+              </div>
+            );
+          })}
+          <div style={{ height: 12 }} />
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
+            Case files
+          </div>
+        </>
+      )}
+
+      {documents.length === 0 && pins.length === 0 ? (
         <div className="empty" style={{ padding: '12px 0' }}>No documents yet. Upload filings, court orders, or correspondence here.</div>
+      ) : documents.length === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>No case-specific files yet. Upload filings, court orders, or correspondence.</div>
       ) : (
         documents.map(d => (
           <div className="doc-row" key={d.id}>
