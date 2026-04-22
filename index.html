@@ -4439,30 +4439,64 @@ function LeadsModal({ onClose, userName, onConverted }) {
       );
       if (!ok) return;
     } else {
-      if (!window.confirm(`Create a new surplus deal for "${lead.name}"? Lead status will change to 'signed'.`)) return;
+      // Route by lead.lead_type:
+      //   surplus        -> surplus deal (former homeowner, funds at court)
+      //   preforeclosure -> flip deal   (current homeowner, distressed property)
+      //   other          -> surplus deal + note so Nathan triages manually
+      const leadType = lead.lead_type || 'surplus';
+      const isFlip = leadType === 'preforeclosure';
+      const trackLabel = isFlip ? 'flip/wholesale' : leadType === 'other' ? 'surplus (other — review)' : 'surplus';
+      if (!window.confirm(`Create a new ${trackLabel} deal for "${lead.name}"? Lead status will change to 'signed'.`)) return;
     }
     setBusy(true); setMsg(null);
     try {
-      const id = 'sf-' + lead.name.toLowerCase().split(' ').join('-').replace(/[^a-z0-9-]/g, '').slice(0, 30) + '-' + Date.now().toString(36);
+      const leadType = lead.lead_type || 'surplus';
+      const isFlip = leadType === 'preforeclosure';
+      const idPrefix = isFlip ? 'flip' : 'sf';
+      const slug = lead.name.toLowerCase().split(' ').join('-').replace(/[^a-z0-9-]/g, '').slice(0, 30);
+      const id = `${idPrefix}-${slug}-${Date.now().toString(36)}`;
+      const dealType = isFlip ? 'flip' : 'surplus';
+      const dealStatus = isFlip ? 'lead' : 'new-lead';
+      const baseMeta = {
+        county: lead.county || '',
+        courtCase: lead.case_number || '',
+        homeownerPhone: lead.phone || '',
+        homeownerEmail: lead.email,
+        homeownerName: lead.name,
+        from_lead_id: lead.id,
+        intake_type: leadType,
+        intake_notes: lead.notes || '',
+      };
+      const meta = isFlip
+        ? {
+            ...baseMeta,
+            contractPrice: 0,
+            reinstatement: 0,
+            lienPayoff: 0,
+            listPrice: 0,
+            flatFee: 0,
+            buyerAgentPct: 3,
+            closingMiscPct: 1,
+            concessions: [],
+          }
+        : {
+            ...baseMeta,
+            feePct: 25,
+            estimatedSurplus: 0,
+            attorney: '',
+          };
       const { error: dealErr } = await sb.from('deals').insert({
         id,
-        type: 'surplus',
-        status: 'new-lead',
+        type: dealType,
+        status: dealStatus,
         name: lead.name,
         address: lead.address || '',
         lead_source: lead.source || 'refundlocators-web',
-        meta: {
-          county: lead.county || '',
-          courtCase: lead.case_number || '',
-          phone: lead.phone || '',
-          email: lead.email,
-          from_lead_id: lead.id,
-          intake_notes: lead.notes || '',
-        },
+        meta,
       });
       if (dealErr) throw dealErr;
       await sb.from('leads').update({ status: 'signed', converted_to_deal_id: id }).eq('id', lead.id);
-      setMsg({ type: 'success', text: `Created deal ${id}` });
+      setMsg({ type: 'success', text: `Created ${dealType} deal ${id}` });
       await load();
       onConverted?.();
     } catch (e) {
@@ -4544,6 +4578,11 @@ function LeadsModal({ onClose, userName, onConverted }) {
                   <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>
                     {l.name}
                     <span style={{ marginLeft: 8, fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: statusBg(l.status), color: statusFg(l.status), letterSpacing: "0.06em", textTransform: "uppercase" }}>{l.status}</span>
+                    {l.lead_type && l.lead_type !== 'surplus' && (
+                      <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: l.lead_type === 'preforeclosure' ? "#78350f" : "#1c1917", color: l.lead_type === 'preforeclosure' ? "#fbbf24" : "#a8a29e", border: "1px solid " + (l.lead_type === 'preforeclosure' ? "#d97706" : "#44403c"), letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                        {l.lead_type === 'preforeclosure' ? '🏠 Preforeclosure' : '? Other'}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4, lineHeight: 1.5 }}>
                     {l.email}{l.phone && ` · ${l.phone}`}<br/>

@@ -328,6 +328,7 @@ function FaqItem({ q, a }) {
 function App() {
   const [form, setForm] = useState({
     name: "", phone: "", email: "", address: "", county: "", case_number: "",
+    lead_type: "surplus", notes: "",
   });
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
@@ -346,12 +347,15 @@ function App() {
       address: form.address.trim() || null,
       county: form.county || null,
       case_number: form.case_number.trim() || null,
+      notes: form.notes.trim() || null,
+      lead_type: form.lead_type || 'surplus',
       source: ATTRIBUTION.utm_source ? `${ATTRIBUTION.utm_source}-web` : 'refundlocators-web',
       user_agent: navigator.userAgent.slice(0, 500),
       metadata: {
         referrer: document.referrer || null,
         submitted_from: window.location.href,
         landing: window.location.host,
+        intake_type: form.lead_type || 'surplus',
         ...ATTRIBUTION,
       },
     };
@@ -546,8 +550,35 @@ function App() {
           </div>
           <form className="form-card" onSubmit={submit}>
             <p className="form-intro">
-              Tell us about the property and we'll check the public records for a surplus. <strong>Takes 60 seconds.</strong> Response within one business day. No phone spam — just one call from Nathan, our principal.
+              Tell us about the property and we'll check the public records. <strong>Takes 60 seconds.</strong> Response within one business day. No phone spam — just one call from Nathan, our principal.
             </p>
+
+            <div className="field">
+              <label className="field-label">Your situation</label>
+              <div className="situation-group" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', border: '1px solid ' + (form.lead_type === 'surplus' ? 'var(--gold)' : 'var(--border-strong)'), borderRadius: 8, background: form.lead_type === 'surplus' ? 'var(--bg-card-alt)' : 'transparent', cursor: 'pointer' }}>
+                  <input type="radio" name="lead_type" value="surplus" checked={form.lead_type === 'surplus'} onChange={update('lead_type')} style={{ marginTop: 3 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--navy)' }}>I lost a home at foreclosure</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Check for surplus funds the court may be holding in my name.</div>
+                  </div>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', border: '1px solid ' + (form.lead_type === 'preforeclosure' ? 'var(--gold)' : 'var(--border-strong)'), borderRadius: 8, background: form.lead_type === 'preforeclosure' ? 'var(--bg-card-alt)' : 'transparent', cursor: 'pointer' }}>
+                  <input type="radio" name="lead_type" value="preforeclosure" checked={form.lead_type === 'preforeclosure'} onChange={update('lead_type')} style={{ marginTop: 3 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--navy)' }}>I'm currently in foreclosure or behind on payments</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Still own the home. Looking at options before it goes to auction.</div>
+                  </div>
+                </label>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px', border: '1px solid ' + (form.lead_type === 'other' ? 'var(--gold)' : 'var(--border-strong)'), borderRadius: 8, background: form.lead_type === 'other' ? 'var(--bg-card-alt)' : 'transparent', cursor: 'pointer' }}>
+                  <input type="radio" name="lead_type" value="other" checked={form.lead_type === 'other'} onChange={update('lead_type')} style={{ marginTop: 3 }} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--navy)' }}>Something else</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Tell us in the notes below and we'll figure it out together.</div>
+                  </div>
+                </label>
+              </div>
+            </div>
 
             <div className="field-row">
               <div className="field">
@@ -584,10 +615,17 @@ function App() {
               </div>
             </div>
 
+            {form.lead_type === 'other' && (
+              <div className="field">
+                <label className="field-label">Tell us more <span className="field-optional">(optional)</span></label>
+                <textarea value={form.notes} onChange={update('notes')} placeholder="Describe your situation in a sentence or two and Nathan will reach out." rows={3} style={{ width: '100%', fontFamily: 'inherit', padding: 10, borderRadius: 8, border: '1px solid var(--border-strong)', background: 'var(--bg-input)', color: 'var(--navy)', fontSize: 14, resize: 'vertical' }} />
+              </div>
+            )}
+
             {error && <div className="error">{error}</div>}
 
             <button type="submit" className="submit" disabled={submitting || !form.name || !form.email}>
-              {submitting ? 'Sending…' : 'Check my property — free'}
+              {submitting ? 'Sending…' : form.lead_type === 'preforeclosure' ? 'Tell Nathan about my situation' : 'Check my property — free'}
             </button>
 
             <p className="privacy">
