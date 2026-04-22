@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1f3a">
+<title>Property Questionnaire — RefundLocators</title>
+<link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbf8f1;
+    --bg-card: #ffffff;
+    --bg-card-alt: #f4ecdc;
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --gold: #c9a24a;
+    --gold-soft: #ede5cf;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
+    --border: #e5dfd0;
+    --border-strong: #c9bea3;
+    --green: #2d7a4f;
+    --red: #a83232;
+    --shadow: 0 1px 2px rgba(11,31,58,.06), 0 8px 24px rgba(11,31,58,.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Inter',-apple-system,sans-serif; background: var(--bg); color: var(--text); line-height: 1.55; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+  .serif { font-family: 'Fraunces',Georgia,serif; font-weight: 500; letter-spacing: -0.01em; }
+  .container { max-width: 700px; margin: 0 auto; padding: 24px 20px 80px; }
+  .centered-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 28px; box-shadow: var(--shadow); }
+  header.portal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: 'Fraunces',serif; font-weight: 700; font-size: 20px; color: var(--navy); }
+  .brand-dot { width: 9px; height: 9px; background: var(--gold); border-radius: 50%; }
+  .brand-tag { font-family: 'Inter',sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--text-muted); text-transform: uppercase; margin-left: 6px; }
+
+  .progress { display: flex; gap: 4px; margin: 18px 0 24px; }
+  .progress-step { flex: 1; height: 4px; background: var(--border); border-radius: 2px; transition: background .2s; }
+  .progress-step.active, .progress-step.done { background: var(--gold); }
+
+  h1 { font-family: 'Fraunces',serif; font-weight: 500; font-size: 26px; line-height: 1.2; color: var(--navy); margin: 0 0 8px; letter-spacing: -0.015em; }
+  h2 { font-family: 'Fraunces',serif; font-weight: 500; font-size: 22px; color: var(--navy); margin: 0 0 6px; letter-spacing: -0.01em; }
+  p.lead { color: var(--text-muted); font-size: 14px; margin: 0 0 22px; line-height: 1.6; }
+
+  .field { margin-bottom: 16px; }
+  .field-label { display: block; font-size: 12px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 6px; }
+  .field-label .opt { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--text-subtle); }
+  .field input[type="text"], .field input[type="tel"], .field input[type="email"], .field input[type="number"], .field input[type="date"], .field select, .field textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 7px; font-size: 15px; font-family: inherit; background: var(--bg-card); color: var(--text);
+  }
+  .field textarea { resize: vertical; min-height: 60px; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field-row-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  @media (max-width: 520px) { .field-row, .field-row-3 { grid-template-columns: 1fr; } }
+
+  .radio-group { display: flex; flex-direction: column; gap: 8px; }
+  .radio-card { display: flex; gap: 10px; padding: 12px 14px; border: 1px solid var(--border-strong); border-radius: 8px; cursor: pointer; background: var(--bg-card); align-items: flex-start; }
+  .radio-card.active { border-color: var(--gold); background: var(--gold-soft); }
+  .radio-card input { margin-top: 3px; }
+  .radio-card-label { font-weight: 600; font-size: 14px; color: var(--navy); }
+  .radio-card-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+  .btn-primary, .btn-ghost { font-family: inherit; font-weight: 600; border-radius: 8px; padding: 11px 20px; font-size: 15px; cursor: pointer; border: 1px solid transparent; transition: all .12s; }
+  .btn-primary { background: var(--navy); color: #fffcf5; }
+  .btn-primary:hover { background: var(--navy-mid); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ghost { background: transparent; border-color: var(--border-strong); color: var(--navy); }
+  .btn-ghost:hover { border-color: var(--navy); }
+  .btn-bar { display: flex; justify-content: space-between; gap: 10px; margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border); }
+
+  .fineprint { font-size: 12px; color: var(--text-subtle); line-height: 1.55; }
+  .notice { padding: 14px 16px; background: var(--bg-card-alt); border-left: 3px solid var(--gold); border-radius: 6px; font-size: 13px; color: var(--text); line-height: 1.6; margin-bottom: 20px; }
+  .success { padding: 18px 20px; background: #e4f1e9; border: 1px solid var(--green); border-radius: 10px; color: var(--green); font-weight: 600; text-align: center; }
+  .error { padding: 10px 14px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; color: var(--red); font-size: 13px; margin-bottom: 16px; }
+
+  .sub-group { padding: 12px 14px; background: var(--bg-card-alt); border-radius: 8px; margin-bottom: 14px; border: 1px solid var(--border); }
+  .sub-group-title { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const url = new URL(window.location.href);
+const TOKEN = url.searchParams.get('t') || url.searchParams.get('token');
+
+function App() {
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+
+  useEffect(() => {
+    (async () => {
+      if (!TOKEN) { setState({ loading: false, data: null, error: 'no-token' }); return; }
+      const { data, error } = await sb.rpc('get_homeowner_intake_by_token', { p_token: TOKEN });
+      if (error) { setState({ loading: false, data: null, error: error.message }); return; }
+      if (!data) { setState({ loading: false, data: null, error: 'invalid-token' }); return; }
+      setState({ loading: false, data, error: null });
+    })();
+  }, []);
+
+  if (state.loading) return <Centered>Loading…</Centered>;
+  if (state.error || !state.data) return <InvalidLink error={state.error} />;
+
+  return <Wizard meta={state.data} />;
+}
+
+function Centered({ children }) {
+  return <div className="centered-shell"><div className="card" style={{ padding: 40, textAlign: 'center', maxWidth: 480 }}>
+    <div className="brand" style={{ justifyContent: 'center', marginBottom: 20 }}>
+      <span className="brand-dot"></span>RefundLocators<span className="brand-tag">Property Questionnaire</span>
+    </div>
+    <div className="fineprint">{children}</div>
+  </div></div>;
+}
+
+function InvalidLink({ error }) {
+  const msg = error === 'no-token' ? 'Link is missing its access code. Check the full URL you received.' :
+              error === 'invalid-token' ? 'This link is no longer active. Contact Nathan for a refreshed link.' :
+              'We couldn\'t load your questionnaire. Please try again or contact Nathan.';
+  return <Centered>{msg}<br/><br/><a href="tel:+15139518855" className="btn-primary" style={{ display: 'inline-block', marginTop: 12, textDecoration: 'none' }}>📞 Call Nathan</a></Centered>;
+}
+
+const STEPS = [
+  { key: 'situation', title: 'Your situation' },
+  { key: 'mortgage',  title: 'Mortgage & liens' },
+  { key: 'property',  title: 'About the property' },
+  { key: 'condition', title: 'Condition & systems' },
+  { key: 'finish',    title: 'Anything else' },
+];
+
+function Wizard({ meta }) {
+  const prior = meta.prior || {};
+  const [form, setForm] = useState({
+    situationState: prior.situationState || '',
+    monthsBehind: prior.monthsBehind || '',
+    auctionDate: prior.auctionDate || '',
+    sellingReason: prior.sellingReason || '',
+
+    lenderName: prior.lenderName || '',
+    mortgageBalance: prior.mortgageBalance || '',
+    otherLiens: prior.otherLiens || '',
+    taxesCurrent: prior.taxesCurrent || '',
+
+    beds: prior.beds || '',
+    baths: prior.baths || '',
+    sqft: prior.sqft || '',
+    yearBuilt: prior.yearBuilt || '',
+    lotSize: prior.lotSize || '',
+    occupancy: prior.occupancy || 'owner-occupied',
+    accessNotes: prior.accessNotes || '',
+
+    roof: prior.roof || { age: '', condition: '', material: '' },
+    hvac: prior.hvac || { age: '', condition: '' },
+    waterHeater: prior.waterHeater || { age: '' },
+    electrical: prior.electrical || { updated: '', condition: '' },
+    plumbing: prior.plumbing || { updated: '' },
+    windows: prior.windows || { age: '', condition: '' },
+    exterior: prior.exterior || { type: '', condition: '' },
+    basement: prior.basement || { type: '', condition: '' },
+    foundation: prior.foundation || { condition: '' },
+
+    knownIssues: prior.knownIssues || '',
+    extraNotes: prior.extraNotes || '',
+  });
+  const [step, setStep] = useState(0);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const update = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const updateNested = (k, sub, v) => setForm(f => ({ ...f, [k]: { ...(f[k] || {}), [sub]: v } }));
+
+  const submit = async () => {
+    setSubmitting(true); setErr(null);
+    try {
+      const { data: access_id, error } = await sb.rpc('submit_homeowner_intake', {
+        p_token: TOKEN,
+        p_data: form,
+      });
+      if (error) throw error;
+      fetch(SUPABASE_URL + '/functions/v1/notify-homeowner-intake', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ access_id }),
+      }).catch(() => {});
+      setSubmitted(true);
+    } catch (e) {
+      setErr(e.message || 'Could not submit. Please try again or call Nathan.');
+    } finally { setSubmitting(false); }
+  };
+
+  if (submitted) {
+    return (
+      <div className="container">
+        <header className="portal-header">
+          <div className="brand">
+            <span className="brand-dot"></span>RefundLocators<span className="brand-tag">Property Questionnaire</span>
+          </div>
+        </header>
+        <div className="card">
+          <div className="success">✓ Thank you — Nathan has your answers.</div>
+          <p className="lead" style={{ marginTop: 22 }}>
+            Your responses went straight to Nathan's phone. He'll follow up within one business day — usually same day — with next steps and any clarifying questions.
+          </p>
+          <p className="fineprint">If you need to update anything, just call or text Nathan at <a href="tel:+15139518855" style={{ color: 'var(--navy)' }}>(513) 951-8855</a>. You can also return to this same link anytime to edit your answers.</p>
+        </div>
+      </div>
+    );
+  }
+
+  const cur = STEPS[step];
+  return (
+    <div className="container">
+      <header className="portal-header">
+        <div className="brand">
+          <span className="brand-dot"></span>RefundLocators<span className="brand-tag">Property Questionnaire</span>
+        </div>
+      </header>
+
+      <h1>Hi{meta.homeowner_name ? ` ${meta.homeowner_name.split(' ')[0]}` : ''}, let's get Nathan up to speed.</h1>
+      <p className="lead">
+        The more Nathan knows up front, the faster he can put together an offer that actually works for you. This takes 3-5 minutes. You can save and come back anytime.
+      </p>
+
+      <div className="progress">
+        {STEPS.map((s, i) => <div key={s.key} className={'progress-step ' + (i < step ? 'done' : i === step ? 'active' : '')} />)}
+      </div>
+
+      <div className="card">
+        <h2>{cur.title}</h2>
+
+        {cur.key === 'situation' && (
+          <>
+            <p className="lead">A few questions about where things stand right now. No judgment — Nathan's seen it all.</p>
+            <div className="field">
+              <label className="field-label">What's your current situation?</label>
+              <div className="radio-group">
+                {[
+                  { v: 'behind', l: 'Behind on payments', s: "Can't cover the mortgage, want to move on my terms before this gets worse." },
+                  { v: 'foreclosure', l: 'In active foreclosure', s: 'The bank has filed and an auction is set or being scheduled.' },
+                  { v: 'bankruptcy', l: 'In or considering bankruptcy', s: 'Trying to figure out what makes sense.' },
+                  { v: 'stable', l: 'Just want to sell quickly', s: 'Not in distress, just want a fast, no-hassle sale.' },
+                  { v: 'other', l: 'Something else', s: 'Tell Nathan in the notes at the end.' },
+                ].map(opt => (
+                  <label key={opt.v} className={'radio-card ' + (form.situationState === opt.v ? 'active' : '')}>
+                    <input type="radio" name="situation" value={opt.v} checked={form.situationState === opt.v} onChange={e => update('situationState', e.target.value)} />
+                    <div>
+                      <div className="radio-card-label">{opt.l}</div>
+                      <div className="radio-card-sub">{opt.s}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {(form.situationState === 'behind' || form.situationState === 'foreclosure') && (
+              <div className="field-row">
+                <div className="field">
+                  <label className="field-label">Months behind <span className="opt">(approx)</span></label>
+                  <input type="number" value={form.monthsBehind} onChange={e => update('monthsBehind', e.target.value)} placeholder="3" />
+                </div>
+                <div className="field">
+                  <label className="field-label">Sheriff sale date <span className="opt">(if scheduled)</span></label>
+                  <input type="date" value={form.auctionDate} onChange={e => update('auctionDate', e.target.value)} />
+                </div>
+              </div>
+            )}
+            <div className="field">
+              <label className="field-label">Why are you thinking about selling?</label>
+              <textarea value={form.sellingReason} onChange={e => update('sellingReason', e.target.value)} placeholder="Lost my job, health issue, divorce, inherited the property, just want out — whatever the real reason is. This helps Nathan tailor the offer." rows={3} />
+            </div>
+          </>
+        )}
+
+        {cur.key === 'mortgage' && (
+          <>
+            <p className="lead">Rough numbers are fine. Nathan will pull the actual payoff from the bank when we get to closing — this just helps him size the offer.</p>
+            <div className="field">
+              <label className="field-label">Mortgage holder / lender</label>
+              <input type="text" value={form.lenderName} onChange={e => update('lenderName', e.target.value)} placeholder="Freedom Mortgage, Wells Fargo, etc." />
+            </div>
+            <div className="field">
+              <label className="field-label">Approximate mortgage balance <span className="opt">(what you owe)</span></label>
+              <input type="number" value={form.mortgageBalance} onChange={e => update('mortgageBalance', e.target.value)} placeholder="145000" />
+            </div>
+            <div className="field">
+              <label className="field-label">Other liens / judgments on the property <span className="opt">(optional)</span></label>
+              <textarea value={form.otherLiens} onChange={e => update('otherLiens', e.target.value)} placeholder="IRS lien, HOA lien, contractor's lien, second mortgage, etc. Best guess is fine." rows={2} />
+            </div>
+            <div className="field">
+              <label className="field-label">Property taxes</label>
+              <div className="radio-group">
+                {[
+                  { v: 'current', l: 'Current — paid up' },
+                  { v: 'behind-1', l: 'Behind ~1 year' },
+                  { v: 'behind-2+', l: 'Behind 2+ years' },
+                  { v: 'unsure', l: "Not sure" },
+                ].map(opt => (
+                  <label key={opt.v} className={'radio-card ' + (form.taxesCurrent === opt.v ? 'active' : '')}>
+                    <input type="radio" name="taxes" value={opt.v} checked={form.taxesCurrent === opt.v} onChange={e => update('taxesCurrent', e.target.value)} />
+                    <div className="radio-card-label">{opt.l}</div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {cur.key === 'property' && (
+          <>
+            <p className="lead">The basics. Rough estimates are fine — buyers will verify before closing.</p>
+            <div className="field-row-3">
+              <div className="field"><label className="field-label">Beds</label><input type="number" value={form.beds} onChange={e => update('beds', e.target.value)} placeholder="3" /></div>
+              <div className="field"><label className="field-label">Baths</label><input type="number" step="0.5" value={form.baths} onChange={e => update('baths', e.target.value)} placeholder="2.5" /></div>
+              <div className="field"><label className="field-label">Sqft <span className="opt">(rough)</span></label><input type="number" value={form.sqft} onChange={e => update('sqft', e.target.value)} placeholder="2000" /></div>
+            </div>
+            <div className="field-row">
+              <div className="field"><label className="field-label">Year built <span className="opt">(rough)</span></label><input type="number" value={form.yearBuilt} onChange={e => update('yearBuilt', e.target.value)} placeholder="1998" /></div>
+              <div className="field"><label className="field-label">Lot size <span className="opt">(rough)</span></label><input type="text" value={form.lotSize} onChange={e => update('lotSize', e.target.value)} placeholder="0.25 acres" /></div>
+            </div>
+            <div className="field">
+              <label className="field-label">Is anyone living there?</label>
+              <div className="radio-group">
+                {[
+                  { v: 'owner-occupied', l: "I live there" },
+                  { v: 'tenant-occupied', l: "A tenant lives there" },
+                  { v: 'vacant', l: "It's vacant" },
+                  { v: 'family', l: "Family / friend lives there (no rent)" },
+                ].map(opt => (
+                  <label key={opt.v} className={'radio-card ' + (form.occupancy === opt.v ? 'active' : '')}>
+                    <input type="radio" name="occupancy" value={opt.v} checked={form.occupancy === opt.v} onChange={e => update('occupancy', e.target.value)} />
+                    <div className="radio-card-label">{opt.l}</div>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">How can people see the house?</label>
+              <textarea value={form.accessNotes} onChange={e => update('accessNotes', e.target.value)} placeholder="Call me 24h ahead / lockbox on the porch / I'm home evenings / drive by only for now, etc." rows={2} />
+            </div>
+          </>
+        )}
+
+        {cur.key === 'condition' && (
+          <>
+            <p className="lead">Best-guess ages for the big systems. "Not sure" is a fine answer — Nathan's buyers prefer honest unknowns to guesses.</p>
+
+            <MechGroup label="Roof" data={form.roof} update={(s, v) => updateNested('roof', s, v)} fields={[
+              { k: 'age', label: 'Age (years)', type: 'number', placeholder: '10' },
+              { k: 'condition', label: 'Condition', type: 'select', options: ['', 'Good', 'Needs work', 'Needs replacement', 'Not sure'] },
+              { k: 'material', label: 'Material', type: 'select', options: ['', 'Shingle', 'Metal', 'Tile', 'Flat / rubber', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="HVAC (furnace + AC)" data={form.hvac} update={(s, v) => updateNested('hvac', s, v)} fields={[
+              { k: 'age', label: 'Age (years)', type: 'number', placeholder: '8' },
+              { k: 'condition', label: 'Working?', type: 'select', options: ['', 'Yes, works', 'Works but needs service', 'Broken', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="Water heater" data={form.waterHeater} update={(s, v) => updateNested('waterHeater', s, v)} fields={[
+              { k: 'age', label: 'Age (years)', type: 'number', placeholder: '5' },
+              { k: 'condition', label: 'Condition', type: 'select', options: ['', 'Works', 'Needs replacement', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="Electrical" data={form.electrical} update={(s, v) => updateNested('electrical', s, v)} fields={[
+              { k: 'updated', label: 'Year updated', type: 'number', placeholder: '2015' },
+              { k: 'condition', label: 'Condition', type: 'select', options: ['', 'Modern', 'Older / original', 'Knob & tube', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="Plumbing" data={form.plumbing} update={(s, v) => updateNested('plumbing', s, v)} fields={[
+              { k: 'updated', label: 'Year updated', type: 'number', placeholder: '2015' },
+            ]} />
+
+            <MechGroup label="Windows" data={form.windows} update={(s, v) => updateNested('windows', s, v)} fields={[
+              { k: 'age', label: 'Age (years)', type: 'number', placeholder: '10' },
+              { k: 'condition', label: 'Condition', type: 'select', options: ['', 'New / vinyl', 'Decent', 'Original wood', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="Exterior / siding" data={form.exterior} update={(s, v) => updateNested('exterior', s, v)} fields={[
+              { k: 'type', label: 'Type', type: 'select', options: ['', 'Brick', 'Vinyl', 'Wood', 'Aluminum', 'Stucco', 'Mixed', 'Not sure'] },
+              { k: 'condition', label: 'Condition', type: 'select', options: ['', 'Good', 'Needs paint/wash', 'Damaged', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="Basement" data={form.basement} update={(s, v) => updateNested('basement', s, v)} fields={[
+              { k: 'type', label: 'Type', type: 'select', options: ['', 'No basement', 'Unfinished', 'Partially finished', 'Finished', 'Not sure'] },
+              { k: 'condition', label: 'Any water issues?', type: 'select', options: ['', 'Dry', 'Occasional damp', 'Active leak / water', 'Not sure'] },
+            ]} />
+
+            <MechGroup label="Foundation" data={form.foundation} update={(s, v) => updateNested('foundation', s, v)} fields={[
+              { k: 'condition', label: 'Condition', type: 'select', options: ['', 'Good / no cracks', 'Small cracks', 'Noticeable settlement', 'Major issue', 'Not sure'] },
+            ]} />
+
+            <div className="field" style={{ marginTop: 20 }}>
+              <label className="field-label">Known issues <span className="opt">(anything a buyer should know)</span></label>
+              <textarea value={form.knownIssues} onChange={e => update('knownIssues', e.target.value)} placeholder="Roof leak in back bedroom, basement takes water during big rains, original knob & tube in the attic, mold in one bathroom, unpermitted addition on the back — anything like that." rows={3} />
+              <div className="fineprint" style={{ marginTop: 6 }}>Being honest up front saves everyone time. Buyers expect fixers — they just want to know what they're getting.</div>
+            </div>
+          </>
+        )}
+
+        {cur.key === 'finish' && (
+          <>
+            <p className="lead">Last step. Tell Nathan anything else he should know.</p>
+            <div className="field">
+              <label className="field-label">Anything else</label>
+              <textarea value={form.extraNotes} onChange={e => update('extraNotes', e.target.value)} placeholder="Upcoming deadlines, specific terms you need, questions, concerns, or anything at all. Nathan reads every word." rows={5} />
+            </div>
+            <div className="notice">
+              <b>What happens next:</b> Nathan gets an alert the moment you hit submit. He'll review your answers and call or text within one business day with an initial number and next steps. If the numbers work, we can usually close in 2-3 weeks — often before a scheduled auction.
+            </div>
+          </>
+        )}
+
+        {err && <div className="error">{err}</div>}
+
+        <div className="btn-bar">
+          <button type="button" className="btn-ghost" disabled={step === 0 || submitting} onClick={() => setStep(s => Math.max(0, s - 1))}>← Back</button>
+          {step < STEPS.length - 1 ? (
+            <button type="button" className="btn-primary" onClick={() => setStep(s => s + 1)}>Continue →</button>
+          ) : (
+            <button type="button" className="btn-primary" onClick={submit} disabled={submitting}>{submitting ? 'Sending…' : 'Send to Nathan'}</button>
+          )}
+        </div>
+      </div>
+
+      <p className="fineprint" style={{ textAlign: 'center', marginTop: 24 }}>
+        Questions? Call Nathan at <a href="tel:+15139518855" style={{ color: 'var(--navy)' }}>(513) 951-8855</a>.<br/>
+        Your answers are private — shared only with Nathan and anyone he chooses to bring in on your deal.
+      </p>
+    </div>
+  );
+}
+
+function MechGroup({ label, data, update, fields }) {
+  return (
+    <div className="sub-group">
+      <div className="sub-group-title">{label}</div>
+      <div className="field-row-3">
+        {fields.map(f => (
+          <div key={f.k} className="field" style={{ marginBottom: 0 }}>
+            <label className="field-label" style={{ fontSize: 10 }}>{f.label}</label>
+            {f.type === 'select' ? (
+              <select value={data[f.k] || ''} onChange={e => update(f.k, e.target.value)}>
+                {f.options.map(o => <option key={o} value={o}>{o || '—'}</option>)}
+              </select>
+            ) : (
+              <input type={f.type || 'text'} value={data[f.k] || ''} onChange={e => update(f.k, e.target.value)} placeholder={f.placeholder} />
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

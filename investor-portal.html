@@ -252,13 +252,20 @@ function DealRoom({ data }) {
         {!coverUrl && <div className="hero-photo-placeholder">Photos coming</div>}
       </div>
 
-      <h1 className="deal-name">{address || deal.name}</h1>
-      <div className="deal-sub">{county && <>{county} County · </>}Ohio</div>
+      {inv.address_gated ? (
+        <AddressGate county={county} deal={deal} />
+      ) : (
+        <>
+          <h1 className="deal-name">{address || deal.name}</h1>
+          <div className="deal-sub">{county && <>{county} County · </>}Ohio</div>
+        </>
+      )}
 
       <div className="deal-tags">
+        {inv.verified && <span className="pill pill-green">✓ Verified Deal</span>}
         {inv.dealType && <span className="pill pill-navy">{DEAL_TYPE_LABEL[inv.dealType] || cap(inv.dealType)}</span>}
         {inv.occupancy && <span className="pill pill-gold">{cap(inv.occupancy)}</span>}
-        {inv.rehabTier && <span className="pill pill-gold">{cap(inv.rehabTier)} rehab</span>}
+        {(inv.rehabScope || inv.rehabTier) && <span className="pill pill-gold">{cap(inv.rehabScope || inv.rehabTier)} rehab</span>}
       </div>
 
       <AuctionCountdown auctionDate={auctionDate} />
@@ -490,6 +497,31 @@ function VideoBlock({ url }) {
   if (vimeo) return <div className="video-wrap"><iframe src={`https://player.vimeo.com/video/${vimeo[1]}`} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen /></div>;
   if (/\.(mp4|mov|webm)$/i.test(url)) return <div className="video-wrap"><video src={url} controls /></div>;
   return <a href={url} target="_blank" rel="noreferrer" className="btn-gold">Open walkthrough video</a>;
+}
+
+function AddressGate({ county, deal }) {
+  const [requested, setRequested] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const parts = (deal.headline_address || '').split(',');
+  const cityState = parts.length >= 2 ? parts.slice(-2).join(',').trim() : (county ? county + ' County, Ohio' : 'Ohio');
+  const request = async () => {
+    setSubmitting(true);
+    try {
+      await sb.rpc('request_investor_address', { p_token: TOKEN });
+      setRequested(true);
+    } finally { setSubmitting(false); }
+  };
+  return (
+    <div style={{ padding: '18px 20px', background: 'var(--bg-card-alt)', border: '1px solid var(--border-strong)', borderRadius: 12, marginBottom: 10 }}>
+      <h1 className="deal-name" style={{ marginBottom: 2 }}>Property in {cityState}</h1>
+      <div className="deal-sub" style={{ marginBottom: 12 }}>Full address released after Nathan verifies you're a serious buyer.</div>
+      {requested ? (
+        <div style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>✓ Requested — Nathan will text you the address shortly.</div>
+      ) : (
+        <button onClick={request} disabled={submitting} className="btn-gold">{submitting ? 'Sending…' : '📍 Request full address'}</button>
+      )}
+    </div>
+  );
 }
 
 function OfferCountdown({ deadline }) {
