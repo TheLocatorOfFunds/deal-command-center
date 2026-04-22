@@ -26,6 +26,7 @@
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: #44403c; border-radius: 3px; }
+  @keyframes dotPulse { 0%,80%,100%{transform:scale(.7);opacity:.4} 40%{transform:scale(1);opacity:1} }
 
   /* ─── Touch + Tap fundamentals ─────────────────────────────── */
   button, a, [role="button"] { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
@@ -5657,7 +5658,159 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+// ── Lauren DCC — internal AI assistant ──────────────────────────
+const LAUREN_INTERNAL_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/lauren-internal';
+
+function LaurenDCC() {
+  const [open, setOpen] = React.useState(false);
+  const [msgs, setMsgs] = React.useState([]);
+  const [input, setInput] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const sessionRef = React.useRef(localStorage.getItem('lauren_dcc_session') || null);
+  const historyRef = React.useRef([]); // API message history
+  const msgsEl = React.useRef(null);
+  const inputEl = React.useRef(null);
+
+  React.useEffect(() => {
+    if (open && msgs.length === 0) {
+      setMsgs([{ r: 'l', t: "What do you need?" }]);
+    }
+    if (open) setTimeout(() => inputEl.current?.focus(), 80);
+  }, [open]);
+
+  React.useEffect(() => {
+    if (msgsEl.current) msgsEl.current.scrollTop = msgsEl.current.scrollHeight;
+  }, [msgs, busy]);
+
+  async function send() {
+    if (busy || !input.trim()) return;
+    const text = input.trim();
+    setInput('');
+    setMsgs(m => [...m, { r: 'u', t: text }]);
+    historyRef.current = [...historyRef.current, { role: 'user', content: text }];
+    setBusy(true);
+    try {
+      const res = await fetch(LAUREN_INTERNAL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: historyRef.current, session_id: sessionRef.current })
+      });
+      const data = await res.json();
+      if (data.session_id) {
+        sessionRef.current = data.session_id;
+        localStorage.setItem('lauren_dcc_session', data.session_id);
+      }
+      const reply = data.reply || 'Something went wrong.';
+      historyRef.current = [...historyRef.current, { role: 'assistant', content: reply }];
+      setMsgs(m => [...m, { r: 'l', t: reply }]);
+    } catch {
+      setMsgs(m => [...m, { r: 'l', t: 'Connection error — try again.' }]);
+    }
+    setBusy(false);
+    setTimeout(() => inputEl.current?.focus(), 50);
+  }
+
+  const btnStyle = {
+    position: 'fixed', bottom: 24, right: 24, zIndex: 9000,
+    background: '#d97706', color: '#1c0a00', border: 'none',
+    borderRadius: 24, padding: '0 18px', height: 44,
+    display: 'flex', alignItems: 'center', gap: 8,
+    fontSize: 13, fontWeight: 700, cursor: 'pointer',
+    boxShadow: '0 4px 20px rgba(217,119,6,.45)', fontFamily: 'inherit',
+    transition: 'transform .1s'
+  };
+
+  return React.createElement(React.Fragment, null,
+    React.createElement('button', {
+      onClick: () => setOpen(o => !o),
+      style: btnStyle,
+      title: 'Chat with Lauren'
+    },
+      React.createElement('svg', { width: 16, height: 16, fill: 'none', viewBox: '0 0 20 20' },
+        React.createElement('path', { d: 'M18 10c0 4.418-3.582 8-8 8a7.96 7.96 0 0 1-3.93-1.03L2 18l1.03-4.07A7.96 7.96 0 0 1 2 10C2 5.582 5.582 2 10 2s8 3.582 8 8Z', stroke: 'currentColor', strokeWidth: 1.8, strokeLinejoin: 'round' })
+      ),
+      'Lauren'
+    ),
+    open && React.createElement('div', {
+      style: {
+        position: 'fixed', bottom: 80, right: 24, zIndex: 9001,
+        width: 380, height: 520,
+        background: '#1c1917', border: '1px solid #44403c',
+        borderRadius: 16, boxShadow: '0 16px 48px rgba(0,0,0,.65)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden'
+      }
+    },
+      // Header
+      React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: '#0c0a09', borderBottom: '1px solid #292524', flexShrink: 0 }
+      },
+        React.createElement('div', { style: { width: 8, height: 8, borderRadius: '50%', background: '#4ade80', flexShrink: 0 } }),
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#fafaf9' } }, 'Lauren'),
+          React.createElement('div', { style: { fontSize: 10, color: '#78716c' } }, 'Internal · FundLocators')
+        ),
+        React.createElement('button', {
+          onClick: () => setOpen(false),
+          style: { marginLeft: 'auto', background: 'none', border: 'none', color: '#78716c', fontSize: 22, lineHeight: 1, cursor: 'pointer', padding: '0 2px' }
+        }, '×')
+      ),
+      // Messages
+      React.createElement('div', {
+        ref: msgsEl,
+        style: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }
+      },
+        ...msgs.map((msg, i) => React.createElement('div', {
+          key: i,
+          style: {
+            alignSelf: msg.r === 'u' ? 'flex-end' : 'flex-start',
+            maxWidth: '84%', padding: '9px 13px',
+            background: msg.r === 'u' ? '#d97706' : '#292524',
+            color: msg.r === 'u' ? '#1c0a00' : '#fafaf9',
+            borderRadius: 12,
+            borderBottomRightRadius: msg.r === 'u' ? 3 : 12,
+            borderBottomLeftRadius: msg.r === 'l' ? 3 : 12,
+            fontSize: 13, lineHeight: 1.55,
+            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            fontWeight: msg.r === 'u' ? 500 : 400
+          }
+        }, msg.t)),
+        busy && React.createElement('div', {
+          style: { alignSelf: 'flex-start', background: '#292524', borderRadius: 12, borderBottomLeftRadius: 3, padding: '10px 14px', display: 'flex', gap: 5 }
+        },
+          ...[0,1,2].map(i => React.createElement('div', {
+            key: i,
+            style: { width: 7, height: 7, borderRadius: '50%', background: '#78716c', animation: `dotPulse 1.2s ease-in-out ${i*0.2}s infinite` }
+          }))
+        )
+      ),
+      // Input row
+      React.createElement('div', {
+        style: { display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #292524', background: '#1c1917', flexShrink: 0 }
+      },
+        React.createElement('textarea', {
+          ref: inputEl,
+          value: input,
+          onChange: e => setInput(e.target.value),
+          onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } },
+          placeholder: 'Ask Lauren anything…',
+          rows: 1,
+          style: { flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8, padding: '8px 12px', color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', minHeight: 38 }
+        }),
+        React.createElement('button', {
+          onClick: send, disabled: busy,
+          style: { minWidth: 38, height: 38, background: busy ? '#44403c' : '#d97706', color: busy ? '#78716c' : '#1c0a00', border: 'none', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }
+        }, '↑')
+      )
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  React.createElement(React.Fragment, null,
+    React.createElement(Root),
+    React.createElement(LaurenDCC)
+  )
+);
 </script>
 </body>
 </html>
