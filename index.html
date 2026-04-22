@@ -2105,8 +2105,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       </div>
 
       {tab === "overview" && (isFlip
-        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} />
-        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} />)}
+        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} userId={userId} />
+        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} userId={userId} />)}
       {tab === "messages" && <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
       {tab === "docket" && <DocketTab dealId={deal.id} />}
       {tab === "contacts" && <ContactsTab dealId={deal.id} userId={userId} isAdmin={isAdmin} />}
@@ -2197,7 +2197,7 @@ function PostUpdateModal({ dealName, onClose, onPost }) {
 }
 
 // ─── Flip Overview ───────────────────────────────────────────────────
-function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin }) {
+function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin, userId }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   const setStrategy = (s) => updateMeta({ strategy: s });
@@ -2207,6 +2207,8 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
   const maxCat = cats[0]?.[1] || 1;
 
   return (
+    <div>
+      <CaseIntelligence dealId={deal.id} deal={deal} />
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         {isAdmin && <Card title="Live P&L Waterfall">
@@ -2267,6 +2269,18 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
             <Field label="Email" style={{ gridColumn: "1 / -1" }}><input type="email" value={m.homeownerEmail || ""} onChange={e => updateMeta({ homeownerEmail: e.target.value })} style={inputStyle} placeholder="owner@email.com" /></Field>
           </div>
         </Card>
+        {(m.intake_type === 'preforeclosure' || m.courtCase || m.county) && (
+          <Card title="Foreclosure Context" style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 11, color: "#78716c", marginBottom: 10, lineHeight: 1.5 }}>
+              Flip deal from a preforeclosure lead. Fill in case + county to unlock docket monitoring and on-demand court pulls.
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} placeholder="e.g. CV 2022 08 1416" /></Field>
+              <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} placeholder="e.g. Butler" /></Field>
+            </div>
+            <CourtPullButton dealId={deal.id} caseNumber={m.courtCase} county={m.county} userId={userId} />
+          </Card>
+        )}
         <Card title="Progress" style={{ marginTop: 16 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
@@ -2289,6 +2303,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
           ))}
         </Card>
       </div>
+    </div>
     </div>
   );
 }
@@ -2669,10 +2684,294 @@ function WelcomeVideoCard({ deal, logAct, onUpdateDeal }) {
   );
 }
 
-function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin }) {
+// ─── Case Intelligence ───────────────────────────────────────────────
+// Synthesizes every AI-extracted document + recent docket event on this
+// deal into a single glanceable "here's what we know" card at the top
+// of the deal Overview. Pulls financial facts (judgment amount, appraised
+// value, sale price, surplus, min bid) into big-number tiles, lists the
+// one-line AI summaries of each analyzed document, and surfaces the last
+// 3 non-backfill docket events. Renders nothing until at least one
+// document has been analyzed, so new deals don't show an empty shell.
+function IntelTile({ label, value, tone = 'neutral', subtle = false }) {
+  const toneMap = {
+    red:     { border: '#991b1b', color: '#fca5a5' },
+    blue:    { border: '#1e40af', color: '#93c5fd' },
+    amber:   { border: '#92400e', color: '#fbbf24' },
+    green:   { border: '#065f46', color: '#6ee7b7' },
+    gold:    { border: '#b45309', color: '#fcd34d' },
+    neutral: { border: '#44403c', color: '#d6d3d1' },
+  };
+  const t = toneMap[tone] || toneMap.neutral;
+  return (
+    <div style={{ padding: "8px 10px", background: "#0c0a09", border: "1px solid " + t.border, borderRadius: 6, opacity: subtle ? 0.75 : 1 }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: t.color, marginTop: 2, fontFamily: "'DM Mono', monospace" }}>{value}</div>
+    </div>
+  );
+}
+
+// CourtPullButton — requests an on-demand court docket fetch for a deal.
+// Inserts a row into court_pull_requests, then Castle (Mac Mini daemon)
+// picks it up, runs the county scraper, uploads PDFs, inserts documents +
+// docket_events. Renders latest request status inline so Nathan can see
+// what's happening without leaving the deal.
+//
+// Currently supported counties (Castle side): Butler, Franklin. Others
+// accept the request but Castle will mark them failed with "scraper not
+// built yet" — that's the signal to build the scraper.
+const COURT_PULL_SUPPORTED_COUNTIES = new Set(['Butler', 'Franklin']);
+
+function CourtPullButton({ dealId, caseNumber, county, userId }) {
+  const [latest, setLatest] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [requesting, setRequesting] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('court_pull_requests')
+      .select('*')
+      .eq('deal_id', dealId)
+      .order('requested_at', { ascending: false })
+      .limit(1);
+    setLatest((data && data[0]) || null);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('court-pulls-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'court_pull_requests', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId]);
+
+  const trimmedCase = (caseNumber || '').trim();
+  const trimmedCounty = (county || '').trim();
+  const canRequest = !!trimmedCase && !!trimmedCounty;
+  const isPending = latest && ['queued', 'processing'].includes(latest.status);
+
+  const request = async () => {
+    if (!canRequest) return;
+    setRequesting(true); setErr(null);
+    const { error } = await sb.from('court_pull_requests').insert({
+      deal_id: dealId,
+      case_number: trimmedCase,
+      county: trimmedCounty,
+      requested_by: userId,
+    });
+    setRequesting(false);
+    if (error) { setErr(error.message); return; }
+    await load();
+  };
+
+  if (loading) return null;
+
+  const supported = COURT_PULL_SUPPORTED_COUNTIES.has(trimmedCounty);
+
+  // Status pill for the latest request (if any)
+  const statusLabel = latest && (() => {
+    const ago = Math.round((Date.now() - new Date(latest.requested_at).getTime()) / 60000);
+    const agoText = ago < 1 ? 'just now' : ago < 60 ? `${ago}m ago` : `${Math.round(ago/60)}h ago`;
+    if (latest.status === 'queued')     return { text: `Queued · ${agoText}`, color: '#78716c', bg: '#1c1917' };
+    if (latest.status === 'processing') return { text: `Pulling from ${latest.county}… · ${agoText}`, color: '#93c5fd', bg: '#1e3a5f' };
+    if (latest.status === 'done')       return { text: `✓ Last pulled ${agoText} · ${latest.documents_added || 0} docs · ${latest.events_added || 0} events`, color: '#6ee7b7', bg: '#064e3b' };
+    if (latest.status === 'failed')     return { text: `Failed · ${latest.error || 'see request log'}`, color: '#fca5a5', bg: '#7f1d1d' };
+    if (latest.status === 'cancelled')  return { text: `Cancelled · ${agoText}`, color: '#a8a29e', bg: '#1c1917' };
+    return null;
+  })();
+
+  return (
+    <div style={{ marginTop: 10, padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <button
+          onClick={request}
+          disabled={!canRequest || isPending || requesting}
+          style={{
+            ...btnGhost,
+            fontSize: 11,
+            padding: "5px 12px",
+            color: canRequest && !isPending ? "#fbbf24" : "#57534e",
+            borderColor: canRequest && !isPending ? "#92400e" : "#292524",
+            cursor: canRequest && !isPending ? "pointer" : "not-allowed",
+          }}
+          title={!trimmedCase ? "Enter a court case number first" : !trimmedCounty ? "Enter a county first" : !supported ? "Scraper for this county isn't built yet — request will queue anyway" : "Ask Castle to pull this case from the court and populate documents + docket events"}
+        >
+          {requesting ? 'Queuing…' : isPending ? 'Pull in progress…' : '🔍 Pull from court'}
+        </button>
+        {!canRequest && (
+          <span style={{ fontSize: 10, color: "#78716c" }}>
+            {!trimmedCase && !trimmedCounty ? 'Fill in Case # and County to enable' : !trimmedCase ? 'Missing Case #' : 'Missing County'}
+          </span>
+        )}
+        {canRequest && !supported && !isPending && (
+          <span style={{ fontSize: 10, color: "#d97706" }}>⚠ {trimmedCounty} scraper not built yet — request will queue for build</span>
+        )}
+        {statusLabel && (
+          <span style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 3, background: statusLabel.bg, color: statusLabel.color, letterSpacing: "0.04em" }}>
+            {statusLabel.text}
+          </span>
+        )}
+      </div>
+      {err && <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
+
+function CaseIntelligence({ dealId, deal }) {
+  const [docs, setDocs] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    const [docsRes, eventsRes] = await Promise.all([
+      sb.from('documents')
+        .select('id, name, extracted, extracted_at, extraction_status')
+        .eq('deal_id', dealId)
+        .eq('extraction_status', 'done')
+        .order('created_at', { ascending: false }),
+      sb.from('docket_events')
+        .select('id, event_type, event_date, description, is_backfill, acknowledged_at')
+        .eq('deal_id', dealId)
+        .order('event_date', { ascending: false })
+        .limit(10),
+    ]);
+    setDocs(docsRes.data || []);
+    setEvents(eventsRes.data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [dealId]);
+
+  useEffect(() => {
+    const ch = sb.channel('case-intel-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'documents', filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId]);
+
+  if (loading) return null;
+  // Empty state — only render when there's something meaningful to show
+  if (docs.length === 0 && events.length === 0) return null;
+
+  // Aggregate extracted fields across all docs — take the first non-null value.
+  // Docs are sorted newest-first so recent wins, but judgment/appraised rarely
+  // change so stability is fine.
+  const aggregate = (keys) => {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const doc of docs) {
+      for (const k of list) {
+        const v = doc.extracted?.fields?.[k];
+        if (v != null && v !== '' && !Number.isNaN(v)) return v;
+      }
+    }
+    return null;
+  };
+
+  const judgment     = aggregate('judgment_amount');
+  const appraised    = aggregate('appraised_value');
+  const salePrice    = aggregate('sale_price');
+  const minBid       = aggregate('minimum_bid');
+  const surplus      = aggregate(['surplus_amount', 'surplus_amount_estimated']);
+  const caseNumber   = aggregate('case_number') || deal.meta?.courtCase;
+  const county       = aggregate('county') || deal.meta?.county;
+  const plaintiff    = aggregate(['plaintiff_name', 'firm_name']);
+  const defendant    = aggregate(['defendant_name', 'client_name']);
+  const propertyAddr = aggregate('property_address') || deal.address;
+  const judge        = aggregate('judge_name');
+
+  // Derived: Ohio statute sets minimum bid at 2/3 of appraised value
+  const derivedMinBid = !minBid && appraised ? Math.round((appraised * 2) / 3) : null;
+  // Derived: projected surplus if we know sale price + judgment
+  const derivedSurplus = !surplus && salePrice && judgment ? Math.max(0, salePrice - judgment) : null;
+
+  const fmtMoney = v => {
+    if (v == null) return '—';
+    const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.-]/g, ''));
+    if (Number.isNaN(n)) return String(v);
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: n % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 });
+  };
+
+  const liveEvents = events.filter(e => !e.is_backfill).slice(0, 3);
+
+  return (
+    <Card style={{ marginBottom: 16, borderLeft: '3px solid #fbbf24' }}>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#fbbf24", letterSpacing: "0.12em", textTransform: "uppercase" }}>📊 Case Intelligence</div>
+        <div style={{ fontSize: 10, color: "#78716c" }}>
+          {docs.length > 0 && <>from {docs.length} analyzed doc{docs.length === 1 ? '' : 's'}</>}
+          {liveEvents.length > 0 && <> · {liveEvents.length} recent court event{liveEvents.length === 1 ? '' : 's'}</>}
+        </div>
+      </div>
+
+      {(plaintiff || defendant) && (
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#fafaf9", marginBottom: 4 }}>
+          {plaintiff || '—'} <span style={{ color: "#78716c", fontWeight: 400 }}>v.</span> {defendant || '—'}
+        </div>
+      )}
+      {propertyAddr && <div style={{ fontSize: 12, color: "#a8a29e", marginBottom: 4 }}>{propertyAddr}</div>}
+      {(caseNumber || county || judge) && (
+        <div style={{ fontSize: 10, color: "#78716c", marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {caseNumber && <span>Case {caseNumber}</span>}
+          {county && <>{caseNumber && <span>·</span>}<span>{county} County</span></>}
+          {judge && <><span>·</span><span>Judge {judge}</span></>}
+        </div>
+      )}
+
+      {(judgment || appraised || minBid || derivedMinBid || salePrice || surplus || derivedSurplus) && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 10, marginBottom: 14 }}>
+          {judgment  != null && <IntelTile label="Judgment" value={fmtMoney(judgment)} tone="red" />}
+          {appraised != null && <IntelTile label="Appraised" value={fmtMoney(appraised)} tone="blue" />}
+          {minBid    != null && <IntelTile label="Min Bid" value={fmtMoney(minBid)} tone="amber" />}
+          {!minBid && derivedMinBid != null && <IntelTile label="Min Bid (2/3)" value={fmtMoney(derivedMinBid)} tone="amber" subtle />}
+          {salePrice != null && <IntelTile label="Sale Price" value={fmtMoney(salePrice)} tone="green" />}
+          {surplus   != null && <IntelTile label="Surplus" value={fmtMoney(surplus)} tone="gold" />}
+          {!surplus && derivedSurplus != null && <IntelTile label="Projected Surplus" value={fmtMoney(derivedSurplus)} tone="gold" subtle />}
+        </div>
+      )}
+
+      {docs.length > 0 && (
+        <div style={{ borderTop: "1px solid #292524", paddingTop: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>What we know from documents</div>
+          {docs.map(d => (
+            <div key={d.id} style={{ display: "flex", gap: 8, fontSize: 12, color: "#a8a29e", marginBottom: 6, lineHeight: 1.55 }}>
+              <span style={{ color: "#d97706", flexShrink: 0 }}>•</span>
+              <span><span style={{ color: "#d6d3d1", fontWeight: 500 }}>{d.name}</span> — {d.extracted?.summary || 'no summary'}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {liveEvents.length > 0 && (
+        <div style={{ borderTop: "1px solid #292524", paddingTop: 10, marginTop: 10 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Recent court activity</div>
+          {liveEvents.map(e => {
+            const meta = eventMeta(e.event_type);
+            return (
+              <div key={e.id} style={{ display: "flex", gap: 8, fontSize: 12, color: "#a8a29e", marginBottom: 4, alignItems: "baseline" }}>
+                <span style={{ fontSize: 14, flexShrink: 0 }}>{meta.icon}</span>
+                <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10, color: "#78716c", flexShrink: 0 }}>
+                  {e.event_date ? new Date(e.event_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—'}
+                </span>
+                <span>{e.description}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
+    <div>
+      <CaseIntelligence dealId={deal.id} deal={deal} />
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Case Details">
@@ -2684,6 +2983,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
             <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
             <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
           </div>
+          <CourtPullButton dealId={deal.id} caseNumber={m.courtCase} county={m.county} userId={userId} />
         </Card>
         {isAdmin && <Card title="Financial Summary" style={{ marginTop: 16 }}>
           <WaterfallLine label="Estimated Surplus" value={m.estimatedSurplus || 0} positive bold />
@@ -2746,6 +3046,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           })}
         </Card>
       </div>
+    </div>
     </div>
   );
 }
@@ -3814,7 +4115,9 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
       {items.map(doc => {
         const status = doc.extraction_status;
         const isExtracting = extracting[doc.id] || status === 'processing';
-        const isExpanded = expanded[doc.id];
+        // Default to expanded so the AI analysis is visible without a click.
+        // User can still collapse by clicking "Hide fields".
+        const isExpanded = expanded[doc.id] !== false;
         const extractedFields = doc.extracted?.fields || {};
         const hasFields = Object.keys(extractedFields).length > 0;
         return (
@@ -3844,7 +4147,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
               </div>
               <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                 {status === 'done' && hasFields && (
-                  <button onClick={() => setExpanded(prev => ({ ...prev, [doc.id]: !prev[doc.id] }))} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{isExpanded ? 'Hide fields' : 'Show fields'}</button>
+                  <button onClick={() => setExpanded(prev => ({ ...prev, [doc.id]: !isExpanded }))} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{isExpanded ? 'Hide fields' : 'Show fields'}</button>
                 )}
                 {(!status || status === 'failed' || status === 'pending') && (
                   <button onClick={() => extract(doc)} disabled={isExtracting} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#d97706" }}>
