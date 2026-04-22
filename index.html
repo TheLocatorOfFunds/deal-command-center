@@ -730,6 +730,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
+          {viewBtn("pipeline", "🧭 Pipeline", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
           {viewBtn("hygiene", "🩺 Hygiene", 0)}
@@ -742,8 +743,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today / Analytics / Hygiene views) */}
-      {view !== "today" && view !== "analytics" && view !== "hygiene" && (
+      {/* Search / Filter / Layout toggle bar (hidden on Today / Analytics / Hygiene / Pipeline views) */}
+      {view !== "today" && view !== "analytics" && view !== "hygiene" && view !== "pipeline" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -762,7 +763,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: view === "analytics" ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "analytics" || view === "pipeline") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -770,6 +771,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : view === "hygiene" ? (
             <HygieneDashboard deals={deals} onSelect={onSelect} />
+          ) : view === "pipeline" ? (
+            <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -812,7 +815,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "analytics" && <div>
+        {view !== "analytics" && view !== "pipeline" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -847,6 +850,372 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           )}
         </div>}
       </div>
+    </div>
+  );
+}
+
+// ─── Sales Pipeline (CRM-style GHL replacement) ──────────────────────
+// Parallel lens to deal `status`. While status tracks where the CASE is
+// (filed → probate → awaiting-distribution), sales_stage tracks where the
+// LEAD is in Nathan + Eric's outreach funnel (new → texted → responded →
+// signed → ...). Two boards: Surplus (long-arc recovery) and 30DTS (auction
+// within 30 days, may get wholesaled).
+//
+// Castle feeds the scoring columns (lead_tier A/B/C, is_30dts, death_signal,
+// surplus_estimate, days_to_sale, scored_at). This view reads them, renders
+// tier badges, filters by tier, and sorts A/30DTS first with earliest sale
+// date up top so Eric always works the most urgent + highest-value first.
+
+const SURPLUS_STAGES = [
+  { key: 'new',             label: 'New',              color: '#3b82f6' },
+  { key: 'texted',          label: 'Texted',           color: '#8b5cf6' },
+  { key: 'responded',       label: 'Responded',        color: '#06b6d4' },
+  { key: 'agreement-sent',  label: 'Agreement Sent',   color: '#d97706' },
+  { key: 'signed',          label: 'Signed',           color: '#f59e0b' },
+  { key: 'filed',           label: 'Filed',            color: '#ec4899' },
+  { key: 'paid-out',        label: 'Paid Out',         color: '#10b981' },
+];
+const DTS_STAGES = [
+  { key: 'new',                   label: 'New',              color: '#ef4444' },
+  { key: 'texted',                label: 'Texted',           color: '#8b5cf6' },
+  { key: 'responded',             label: 'Responded',        color: '#06b6d4' },
+  { key: 'wholesale-offer',       label: 'Wholesale Offer',  color: '#d97706' },
+  { key: 'under-contract',        label: 'Under Contract',   color: '#f59e0b' },
+  { key: 'auction',               label: 'Auction',          color: '#a83232' },
+  { key: 'post-auction-surplus',  label: 'Post-Auction',     color: '#10b981' },
+];
+
+const TIER_META = {
+  A: { label: 'A', bg: '#d8b560', fg: '#0c0a09', title: 'A lead — $100k+ surplus, owner alive' },
+  B: { label: 'B · estate', bg: '#8b5cf6', fg: '#fafaf9', title: 'B lead — $100k+, likely deceased (family/heirs outreach)' },
+  C: { label: 'C', bg: '#44403c', fg: '#d6d3d1', title: 'C lead — $10k–$99,999 surplus' },
+};
+
+function TierBadge({ deal }) {
+  const t = deal.lead_tier;
+  if (!t || !TIER_META[t]) return null;
+  // Override label for deceased B-leads OR any tier with a death signal
+  const meta = TIER_META[t];
+  const finalLabel = (t !== 'B' && deal.death_signal) ? (meta.label + ' · estate') : meta.label;
+  return (
+    <span
+      title={meta.title}
+      style={{
+        fontSize: 9,
+        fontWeight: 700,
+        padding: '2px 7px',
+        borderRadius: 3,
+        background: meta.bg,
+        color: meta.fg,
+        letterSpacing: '0.08em',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
+      }}
+    >{finalLabel}</span>
+  );
+}
+
+function DTSCountdown({ days }) {
+  if (days == null || days < 0) return null;
+  const urgent = days <= 7;
+  return (
+    <span style={{
+      fontSize: 9,
+      fontWeight: 700,
+      padding: '2px 7px',
+      borderRadius: 3,
+      background: urgent ? '#7f1d1d' : '#78350f',
+      color: urgent ? '#fca5a5' : '#fbbf24',
+      letterSpacing: '0.06em',
+      textTransform: 'uppercase',
+      fontFamily: "'DM Mono', monospace",
+      whiteSpace: 'nowrap',
+      animation: urgent ? 'pulse 2s ease-in-out infinite' : 'none',
+    }}>
+      {days === 0 ? 'SALE TODAY' : days === 1 ? '1d to sale' : `${days}d to sale`}
+    </span>
+  );
+}
+
+function StalenessTag({ lastContactedAt }) {
+  if (!lastContactedAt) return <span style={{ fontSize: 9, color: '#ef4444', fontWeight: 700 }}>· never contacted</span>;
+  const hrs = Math.floor((Date.now() - new Date(lastContactedAt).getTime()) / 3_600_000);
+  const days = Math.floor(hrs / 24);
+  if (days > 14) return <span style={{ fontSize: 9, color: '#ef4444' }}>· {days}d cold</span>;
+  if (days > 7)  return <span style={{ fontSize: 9, color: '#f59e0b' }}>· {days}d since contact</span>;
+  if (days > 0)  return <span style={{ fontSize: 9, color: '#78716c' }}>· {days}d ago</span>;
+  return <span style={{ fontSize: 9, color: '#78716c' }}>· today</span>;
+}
+
+// Compares name vs. "Lastname - Street" split to show "Estate of Kemper Ansel"
+// for deceased leads where the handoff wants heir-focused framing.
+function DealCardName({ deal }) {
+  const first = (deal.name || '').split(' - ')[0] || deal.name || 'Unnamed';
+  const isEstate = deal.death_signal || deal.lead_tier === 'B';
+  return (
+    <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, color: '#fafaf9' }}>
+      {isEstate ? <span style={{ color: '#c4b5fd' }}>Estate of </span> : null}
+      {first}
+    </div>
+  );
+}
+
+function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
+  const [track, setTrack] = useState('surplus'); // 'surplus' | '30dts'
+  const [tierFilter, setTierFilter] = useState({ A: true, B: true, C: true, other: true });
+  const [countyFilter, setCountyFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [dragId, setDragId] = useState(null);
+  const [dragOverStage, setDragOverStage] = useState(null);
+
+  const stageField = track === 'surplus' ? 'sales_stage' : 'sales_stage_30dts';
+  const stages = track === 'surplus' ? SURPLUS_STAGES : DTS_STAGES;
+
+  // Filter candidate deals for this track. A deal in the 30DTS track is
+  // ANY deal with is_30dts=true regardless of sales_stage_30dts — so newly-
+  // flagged ones land in "new" automatically via the seeding migration.
+  const candidates = deals.filter(d => {
+    if (['closed', 'dead', 'recovered'].includes(d.status)) return false;
+    if (track === '30dts') return d.is_30dts === true;
+    // Surplus track excludes 30DTS deals to avoid duplication
+    return d.is_30dts !== true && d.sales_stage != null;
+  });
+
+  const counties = [...new Set(candidates.map(d => d.meta?.county).filter(Boolean))].sort();
+
+  const filtered = candidates.filter(d => {
+    const tier = d.lead_tier || 'other';
+    if (!tierFilter[tier]) return false;
+    if (countyFilter && (d.meta?.county || '') !== countyFilter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      const hay = [d.name, d.address, d.meta?.county, d.meta?.courtCase, d.id].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // Group by stage
+  const grouped = Object.fromEntries(stages.map(s => [s.key, []]));
+  const unassigned = [];
+  filtered.forEach(d => {
+    const s = d[stageField] || 'new';
+    if (grouped[s]) grouped[s].push(d);
+    else unassigned.push(d);
+  });
+
+  // Sort each column: tier order (A → B → C → other), then days_to_sale asc,
+  // then surplus_estimate desc. 30DTS gets the additional sort boost.
+  const tierOrder = { A: 0, B: 1, C: 2, other: 3 };
+  Object.values(grouped).forEach(col => col.sort((a, b) => {
+    const ta = tierOrder[a.lead_tier || 'other'];
+    const tb = tierOrder[b.lead_tier || 'other'];
+    if (ta !== tb) return ta - tb;
+    const dtsa = a.days_to_sale ?? 9999;
+    const dtsb = b.days_to_sale ?? 9999;
+    if (dtsa !== dtsb) return dtsa - dtsb;
+    const sa = Number(a.surplus_estimate) || 0;
+    const sb = Number(b.surplus_estimate) || 0;
+    return sb - sa;
+  }));
+
+  const moveStage = async (id, newStage) => {
+    const patch = { [stageField]: newStage };
+    // Nice side-effect: moving a deal to "signed" bumps the case status too
+    // (sales signed = ready to file). Can always override manually.
+    onUpdateDeal && onUpdateDeal(id, patch);
+  };
+
+  const handleDragStart = (e, id) => {
+    setDragId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+  };
+  const handleDragEnd = () => { setDragId(null); setDragOverStage(null); };
+  const handleDragOver = (e, stage) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (dragOverStage !== stage) setDragOverStage(stage);
+  };
+  const handleDragLeave = (stage) => { if (dragOverStage === stage) setDragOverStage(null); };
+  const handleDrop = (e, stage) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData('text/plain') || dragId;
+    setDragId(null); setDragOverStage(null);
+    if (!id) return;
+    const d = filtered.find(x => x.id === id);
+    if (!d || d[stageField] === stage) return;
+    moveStage(id, stage);
+  };
+
+  const fmtMoneyShort = v => {
+    const n = Number(v);
+    if (!n || n <= 0) return null;
+    if (n >= 1000000) return '$' + (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return '$' + Math.round(n / 1000) + 'k';
+    return '$' + n;
+  };
+
+  // Summary stats at the top
+  const pipelineValue = filtered.reduce((sum, d) => sum + (Number(d.surplus_estimate) || 0), 0);
+  const aCount = filtered.filter(d => d.lead_tier === 'A').length;
+  const bCount = filtered.filter(d => d.lead_tier === 'B').length;
+  const cCount = filtered.filter(d => d.lead_tier === 'C').length;
+  const unscored = filtered.filter(d => !d.lead_tier).length;
+
+  return (
+    <div>
+      {/* Header + track switcher + summary */}
+      <div style={{ marginBottom: 16, padding: 16, background: '#1c1917', border: '1px solid #292524', borderRadius: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+              🧭 Sales Pipeline
+            </div>
+            <div style={{ fontSize: 13, color: '#a8a29e', marginTop: 4, lineHeight: 1.5 }}>
+              {filtered.length} active leads
+              {pipelineValue > 0 && <> · <b style={{ color: '#fbbf24' }}>{fmtMoneyShort(pipelineValue) || '—'}</b> pipeline value</>}
+              {aCount > 0 && <> · <span style={{ color: '#d8b560', fontWeight: 700 }}>{aCount} A</span></>}
+              {bCount > 0 && <> · <span style={{ color: '#c4b5fd', fontWeight: 700 }}>{bCount} B estate</span></>}
+              {cCount > 0 && <> · <span style={{ color: '#a8a29e', fontWeight: 700 }}>{cCount} C</span></>}
+              {unscored > 0 && <> · <span style={{ color: '#78716c' }}>{unscored} unscored</span></>}
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 4, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3 }}>
+            <button onClick={() => setTrack('surplus')} style={{
+              padding: '6px 14px', borderRadius: 5, border: '1px solid ' + (track === 'surplus' ? '#44403c' : 'transparent'),
+              background: track === 'surplus' ? '#292524' : 'transparent',
+              color: track === 'surplus' ? '#fafaf9' : '#78716c',
+              fontSize: 12, fontWeight: track === 'surplus' ? 700 : 500, cursor: 'pointer',
+            }}>💰 Surplus</button>
+            <button onClick={() => setTrack('30dts')} style={{
+              padding: '6px 14px', borderRadius: 5, border: '1px solid ' + (track === '30dts' ? '#44403c' : 'transparent'),
+              background: track === '30dts' ? '#292524' : 'transparent',
+              color: track === '30dts' ? '#fafaf9' : '#78716c',
+              fontSize: 12, fontWeight: track === '30dts' ? 700 : 500, cursor: 'pointer',
+            }}>⏰ 30DTS</button>
+          </div>
+        </div>
+
+        {/* Filter bar */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginRight: 2 }}>Tier</span>
+          {(['A', 'B', 'C', 'other']).map(t => {
+            const meta = TIER_META[t] || { label: '?', bg: '#292524', fg: '#78716c' };
+            const isOn = tierFilter[t];
+            return (
+              <button key={t} onClick={() => setTierFilter(f => ({ ...f, [t]: !f[t] }))} style={{
+                fontSize: 10, padding: '4px 10px', borderRadius: 4,
+                background: isOn ? meta.bg : 'transparent',
+                color: isOn ? meta.fg : '#57534e',
+                border: '1px solid ' + (isOn ? meta.bg : '#292524'),
+                fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: 'pointer',
+              }}>{t === 'other' ? '? Unscored' : meta.label}</button>
+            );
+          })}
+          <select value={countyFilter} onChange={e => setCountyFilter(e.target.value)} style={{ ...selectStyle, fontSize: 11, padding: '4px 8px', minWidth: 140, marginLeft: 8 }}>
+            <option value="">All counties</option>
+            {counties.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / address / case #" style={{ ...inputStyle, fontSize: 11, padding: '4px 10px', maxWidth: 260, background: '#0c0a09' }} />
+        </div>
+      </div>
+
+      {/* Unassigned warning */}
+      {unassigned.length > 0 && (
+        <div style={{ marginBottom: 12, padding: '8px 12px', background: '#78350f22', border: '1px solid #d97706', borderRadius: 6, fontSize: 12, color: '#fbbf24' }}>
+          ⚠ {unassigned.length} deal{unassigned.length === 1 ? '' : 's'} with unrecognized sales_stage value — open and set a stage.
+        </div>
+      )}
+
+      {/* Kanban board */}
+      <div style={{ overflowX: 'auto', paddingBottom: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${stages.length}, minmax(220px, 1fr))`, gap: 10 }}>
+          {stages.map(stage => {
+            const cards = grouped[stage.key] || [];
+            const isOver = dragOverStage === stage.key;
+            return (
+              <div
+                key={stage.key}
+                onDragOver={e => handleDragOver(e, stage.key)}
+                onDragLeave={() => handleDragLeave(stage.key)}
+                onDrop={e => handleDrop(e, stage.key)}
+                style={{
+                  background: isOver ? '#1f1c19' : '#1c1917',
+                  border: `1px ${isOver ? 'dashed' : 'solid'} ${isOver ? stage.color : '#292524'}`,
+                  borderRadius: 10, padding: 10,
+                  borderTop: `3px solid ${stage.color}`,
+                  minHeight: 180,
+                  transition: 'background 0.1s, border-color 0.1s',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, padding: '0 4px' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: stage.color, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{stage.label}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: '#78716c', background: '#292524', padding: '2px 7px', borderRadius: 8, minWidth: 20, textAlign: 'center' }}>{cards.length}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {cards.map(d => {
+                    const dragging = dragId === d.id;
+                    return (
+                      <div
+                        key={d.id}
+                        draggable
+                        onDragStart={e => handleDragStart(e, d.id)}
+                        onDragEnd={handleDragEnd}
+                        onClick={() => onSelect(d.id)}
+                        style={{
+                          background: '#0c0a09', border: '1px solid ' + (d.is_30dts ? '#78350f' : '#292524'),
+                          borderLeft: '3px solid ' + (d.lead_tier === 'A' ? '#d8b560' : d.lead_tier === 'B' ? '#8b5cf6' : d.lead_tier === 'C' ? '#44403c' : '#292524'),
+                          borderRadius: 8, padding: 10, cursor: 'grab',
+                          opacity: dragging ? 0.4 : 1,
+                          transition: 'border-color 0.15s, opacity 0.1s',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 6, marginBottom: 4 }}>
+                          <DealCardName deal={d} />
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            {d.is_30dts && <DTSCountdown days={d.days_to_sale} />}
+                            <TierBadge deal={d} />
+                          </div>
+                        </div>
+                        <div style={{ fontSize: 10, color: '#78716c', marginBottom: 6, lineHeight: 1.4 }}>
+                          {d.meta?.county && <>{d.meta.county} County</>}
+                          {d.address && <> · <span title={d.address}>{(d.address.length > 40 ? d.address.slice(0, 40) + '…' : d.address)}</span></>}
+                        </div>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {Number(d.surplus_estimate) > 0 && (
+                            <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', fontFamily: "'DM Mono', monospace" }}>
+                              {fmtMoneyShort(d.surplus_estimate)}
+                            </span>
+                          )}
+                          <StalenessTag lastContactedAt={d.last_contacted_at} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {cards.length === 0 && <div style={{ fontSize: 10, color: '#57534e', textAlign: 'center', padding: '12px 0', fontStyle: 'italic' }}>{isOver ? 'Drop to move here' : 'Empty'}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {filtered.length === 0 && candidates.length > 0 && (
+        <div style={{ marginTop: 20, padding: 30, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>
+          All {candidates.length} {track === '30dts' ? '30DTS' : 'surplus'} deal{candidates.length === 1 ? '' : 's'} are hidden by the current filter. Clear tier filters or county to see them.
+        </div>
+      )}
+
+      {candidates.length === 0 && (
+        <div style={{ marginTop: 20, padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10, fontSize: 13, lineHeight: 1.6 }}>
+          {track === '30dts'
+            ? 'No 30DTS deals. Castle flags a deal as 30DTS when the sale date is within 30 days. If this list is empty and you\'re expecting one here, check that Castle\'s scoring ran recently.'
+            : 'No active surplus deals in the sales pipeline. Add a lead + set its stage, or wait for the homepage search to send one in.'
+          }
+        </div>
+      )}
     </div>
   );
 }
