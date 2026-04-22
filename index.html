@@ -1641,7 +1641,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "overview" && (isFlip
         ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} />
         : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} />)}
-      {tab === "messages" && <MessagesTab dealId={deal.id} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
+      {tab === "messages" && <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
       {tab === "docket" && <DocketTab dealId={deal.id} />}
       {tab === "contacts" && <ContactsTab dealId={deal.id} userId={userId} isAdmin={isAdmin} />}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
@@ -2520,11 +2520,18 @@ function Vendors({ items, dealId, logAct, reload }) {
 
 // ─── Documents Tab ───────────────────────────────────────────────────
 // ─── Messages Tab ─────────────────────────────────────────────────
-function MessagesTab({ dealId, userId, userName, userRole }) {
+function MessagesTab({ dealId, deal, userId, userName, userRole }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
+  const [subject, setSubject] = useState("");
+  const [sendToClient, setSendToClient] = useState(true);
+  const [sendToAttorney, setSendToAttorney] = useState(false);
+  const [hasAttorney, setHasAttorney] = useState(false);
+  const [clientEmails, setClientEmails] = useState([]);
+  const [attorneyEmails, setAttorneyEmails] = useState([]);
   const [sending, setSending] = useState(false);
+  const [showExpanded, setShowExpanded] = useState(false);
   const endRef = useRef(null);
 
   const load = async () => {
@@ -2535,7 +2542,20 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
     await sb.rpc('mark_messages_read', { p_deal_id: dealId });
   };
 
-  useEffect(() => { load(); }, [dealId]);
+  // Load recipient info to populate audience defaults and email-preview hints
+  const loadRecipients = async () => {
+    const [caRes, aaRes] = await Promise.all([
+      sb.from('client_access').select('email').eq('deal_id', dealId).eq('enabled', true),
+      sb.from('attorney_assignments').select('email').eq('deal_id', dealId).eq('enabled', true),
+    ]);
+    const clients = (caRes.data || []).map(r => r.email).filter(Boolean);
+    const attorneys = (aaRes.data || []).map(r => r.email).filter(Boolean);
+    setClientEmails(clients);
+    setAttorneyEmails(attorneys);
+    setHasAttorney(attorneys.length > 0);
+  };
+
+  useEffect(() => { load(); loadRecipients(); }, [dealId]);
 
   // Realtime subscription
   useEffect(() => {
@@ -2555,16 +2575,41 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
     if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages]);
 
+  // Insert a merge field token at cursor in the body textarea
+  const bodyRef = useRef(null);
+  const insertField = (token) => {
+    const el = bodyRef.current;
+    if (!el) { setText(prev => prev + token); return; }
+    const start = el.selectionStart || 0;
+    const end = el.selectionEnd || 0;
+    const newText = text.slice(0, start) + token + text.slice(end);
+    setText(newText);
+    setTimeout(() => {
+      el.focus();
+      el.selectionStart = el.selectionEnd = start + token.length;
+    }, 0);
+  };
+
   const send = async () => {
     const body = text.trim();
     if (!body || sending) return;
+    const audience = [];
+    if (sendToClient) audience.push('client');
+    if (sendToAttorney) audience.push('attorney');
+    // Render {{MergeFields}} using this deal's data so both the stored
+    // message and the dispatched email show real values instead of tokens.
+    const renderedBody = renderMergeFields(body, deal);
+    const rawSubject = subject.trim();
+    const renderedSubject = rawSubject ? renderMergeFields(rawSubject, deal) : null;
     setSending(true);
     const { error } = await sb.from('messages').insert({
       deal_id: dealId,
       sender_id: userId,
       sender_role: userRole,
       sender_name: userName,
-      body,
+      subject: renderedSubject,
+      audience,
+      body: renderedBody,
     });
     setSending(false);
     if (error) {
@@ -2572,6 +2617,9 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
       return;
     }
     setText("");
+    setSubject("");
+    // Collapse the composer back to compact state after send
+    setShowExpanded(false);
   };
 
   const roleLabel = (r) => ({ admin: 'Team', user: 'Team', va: 'Team', client: 'Client', attorney: 'Counsel' })[r] || r;
@@ -2595,14 +2643,24 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
         <div style={{ maxHeight: 480, overflowY: "auto", padding: "0 4px", marginBottom: 14 }}>
           {messages.map(m => {
             const isTeam = ['admin', 'user', 'va'].includes(m.sender_role);
+            const aud = m.audience || [];
             return (
               <div key={m.id} style={{ marginBottom: 14, display: "flex", flexDirection: "column", alignItems: isTeam ? "flex-end" : "flex-start" }}>
-                <div style={{ fontSize: 10, color: "#78716c", marginBottom: 4, display: "flex", gap: 6, alignItems: "center" }}>
+                <div style={{ fontSize: 10, color: "#78716c", marginBottom: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
                   <span style={{ color: roleColor(m.sender_role), fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>{roleLabel(m.sender_role)}</span>
                   <span>·</span>
                   <span>{m.sender_name || 'Unknown'}</span>
                   <span>·</span>
                   <span>{new Date(m.created_at).toLocaleString()}</span>
+                  {isTeam && aud.length > 0 && (
+                    <>
+                      <span>·</span>
+                      <span style={{ color: "#6ee7b7" }}>
+                        {aud.includes('client') && '👤'}
+                        {aud.includes('attorney') && '⚖'}
+                      </span>
+                    </>
+                  )}
                 </div>
                 <div style={{
                   maxWidth: "85%",
@@ -2615,6 +2673,11 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
                   whiteSpace: "pre-wrap",
                   border: isTeam ? "none" : "1px solid #292524",
                 }}>
+                  {m.subject && (
+                    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 6, opacity: 0.85 }}>
+                      📧 {m.subject}
+                    </div>
+                  )}
                   {m.body}
                 </div>
               </div>
@@ -2623,24 +2686,104 @@ function MessagesTab({ dealId, userId, userName, userRole }) {
           <div ref={endRef} />
         </div>
       )}
-      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
-        <textarea
-          value={text}
-          onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) send(); }}
-          placeholder="Reply to the client or attorney…"
-          rows={2}
-          style={{ ...inputStyle, flex: 1, resize: "vertical", minHeight: 48, fontFamily: "inherit", lineHeight: 1.5 }}
-        />
-        <button onClick={send} disabled={!text.trim() || sending} style={btnPrimary}>
-          {sending ? 'Sending…' : 'Send'}
-        </button>
-      </div>
-      <div style={{ fontSize: 10, color: "#57534e", marginTop: 6 }}>
-        ⌘/Ctrl + Enter to send · Visible to everyone with portal access to this case (client claimants + assigned attorneys)
+
+      {/* Composer — collapsed by default, expandable for subject + audience controls */}
+      <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 10 }}>
+        {showExpanded && (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>
+                Subject <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "#57534e" }}>(optional — overrides generic email subject)</span>
+              </div>
+              <input
+                value={subject}
+                onChange={e => setSubject(e.target.value)}
+                placeholder={userRole === 'admin' || userRole === 'user' || userRole === 'va' ? 'e.g. "Your RefundLocators portal is ready"' : ''}
+                style={{ ...inputStyle, fontSize: 13 }}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", alignSelf: "center", marginRight: 2 }}>
+                Email to
+              </div>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", background: sendToClient ? "#1e3a5f" : "transparent", border: "1px solid " + (sendToClient ? "#3b82f6" : "#292524"), borderRadius: 5, cursor: "pointer", fontSize: 12 }}>
+                <input type="checkbox" checked={sendToClient} onChange={e => setSendToClient(e.target.checked)} />
+                <span style={{ color: sendToClient ? "#93c5fd" : "#78716c" }}>👤 Client{clientEmails.length > 0 ? ` (${clientEmails.length})` : ' (none linked)'}</span>
+              </label>
+              <label style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", background: sendToAttorney ? "#312e81" : "transparent", border: "1px solid " + (sendToAttorney ? "#8b5cf6" : "#292524"), borderRadius: 5, cursor: hasAttorney ? "pointer" : "not-allowed", fontSize: 12, opacity: hasAttorney ? 1 : 0.4 }}>
+                <input type="checkbox" checked={sendToAttorney} onChange={e => setSendToAttorney(e.target.checked)} disabled={!hasAttorney} />
+                <span style={{ color: sendToAttorney ? "#c4b5fd" : "#78716c" }}>⚖ Counsel{attorneyEmails.length > 0 ? ` (${attorneyEmails.length})` : ' (none assigned)'}</span>
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: 2 }}>
+                Insert field
+              </div>
+              {[
+                { label: 'Client name', token: '{{ClientName}}' },
+                { label: 'Case #', token: '{{CaseNumber}}' },
+                { label: 'County', token: '{{County}}' },
+                { label: 'Address', token: '{{PropertyAddress}}' },
+              ].map(f => (
+                <button key={f.token} onClick={() => insertField(f.token)} style={{ ...btnGhost, fontSize: 10, padding: "3px 8px" }}>
+                  + {f.label}
+                </button>
+              ))}
+              <div style={{ fontSize: 10, color: "#57534e", marginLeft: 4 }}>
+                Tokens render on send using this deal's data
+              </div>
+            </div>
+          </>
+        )}
+
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+          <textarea
+            ref={bodyRef}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) send(); }}
+            placeholder={showExpanded ? "Message body — use {{ClientName}} etc. to insert deal data" : "Quick reply to the client or attorney…"}
+            rows={showExpanded ? 5 : 2}
+            style={{ ...inputStyle, flex: 1, resize: "vertical", minHeight: showExpanded ? 100 : 48, fontFamily: "inherit", lineHeight: 1.5 }}
+          />
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <button onClick={() => setShowExpanded(!showExpanded)} style={{ ...btnGhost, fontSize: 11 }} title={showExpanded ? "Collapse composer" : "Expand — add subject, pick audience, insert fields"}>
+              {showExpanded ? '↑' : '✉️'}
+            </button>
+            <button onClick={send} disabled={!text.trim() || sending || (!sendToClient && !sendToAttorney)} style={btnPrimary}>
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 10, color: "#57534e", marginTop: 6, lineHeight: 1.5 }}>
+          ⌘/Ctrl+Enter sends · Message shows in both portals regardless of audience (audience only controls who gets the email) · Replies come back into this thread
+        </div>
       </div>
     </Card>
   );
+}
+
+// Merge-field renderer — replaces {{Token}} with deal data before send
+function renderMergeFields(text, deal) {
+  if (!text || !deal) return text;
+  const m = deal.meta || {};
+  const vals = {
+    ClientName: (deal.name || '').split(' - ')[0],
+    CaseNumber: m.courtCase || '',
+    County: m.county || '',
+    PropertyAddress: deal.address || '',
+    FeePct: m.feePct ? String(m.feePct) + '%' : '',
+    AttorneyName: m.attorney || '',
+    FiledDate: deal.filed_at || m.filed_at || '',
+  };
+  let out = text;
+  for (const [k, v] of Object.entries(vals)) {
+    out = out.replace(new RegExp('\\{\\{\\s*' + k + '\\s*\\}\\}', 'g'), v);
+  }
+  return out;
 }
 
 // ─── Docket Tab ───────────────────────────────────────────────────

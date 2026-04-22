@@ -21,10 +21,8 @@ Template:
 
 ## Nathan's session
 
-**Status**: Active
-**Working on**: Messages-tab email composer upgrade — custom subject + audience picker (client/attorney) + template support
-**Touching**: migration `messages_subject_and_audience` (add `subject` + `audience` cols to messages) · update `dispatch_message_notifications` trigger (honor subject, fan out to attorneys when audience includes it) · DCC DealDetail Messages Tab composer (subject input, audience checkboxes)
-**ETA**: Done today
+**Status**: Idle
+**Last done**: Messages-tab email composer upgrade — custom subject, client/attorney audience picker, merge-field tokens ({{ClientName}}, {{CaseNumber}}, {{County}}, {{PropertyAddress}}) rendered before send. Migration `messages_subject_and_audience` applied; `dispatch_message_notifications` trigger rewritten to honor subject + fan out to attorneys when 'attorney' is in audience.
 **Last updated**: Apr 22, 2026
 
 <!--
