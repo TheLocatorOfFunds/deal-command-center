@@ -806,49 +806,8 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
       {/* Documents */}
       <DocumentsSection dealId={deal.id} documents={documents} onChange={reload} isPreview={isPreview} />
 
-      {/* Docket */}
-      <AttorneyDocketSection dealId={deal.id} />
-
-      {/* Case Timeline — visibility-aware, scrollable */}
-      <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-          <p className="card-title" style={{ margin: 0 }}>Case timeline <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>({activity.length})</span></p>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <span>🔒 Internal</span>
-            <span>👤 Client sees</span>
-            <span>👨‍⚖️ Your posts</span>
-          </div>
-        </div>
-        {activity.length === 0 ? (
-          <div className="empty" style={{ padding: '12px 0' }}>No activity yet. Post a case update above to start the record.</div>
-        ) : (
-          <div style={{ maxHeight: 500, overflowY: 'auto', paddingRight: 6 }}>
-            {activity.map(a => {
-              const vis = a.visibility || ['team'];
-              const clientSees = vis.includes('client');
-              const isMine = (a.action || '').startsWith('👨‍⚖️ Attorney update:');
-              const cleanAction = isMine ? a.action.replace(/^👨‍⚖️ Attorney update:\s*/, '') : a.action;
-              const badge = isMine
-                ? { icon: '👨‍⚖️', text: clientSees ? 'Your post · client sees' : 'Your post · internal', color: clientSees ? '#2d7a4f' : '#4338ca' }
-                : clientSees
-                  ? { icon: '👤', text: 'Client sees this', color: '#2d7a4f' }
-                  : { icon: '🔒', text: 'Internal only', color: '#6b6b6b' };
-              return (
-                <div className="timeline-item" key={a.id} style={{ background: isMine ? 'rgba(67, 56, 202, 0.04)' : 'transparent', padding: '12px 10px', borderRadius: 6 }}>
-                  <div className="timeline-dot" style={{ background: badge.color }}></div>
-                  <div>
-                    <div className="timeline-action" style={{ lineHeight: 1.5 }}>{cleanAction}</div>
-                    <div style={{ fontSize: 10, color: badge.color, fontWeight: 700, marginTop: 4, letterSpacing: '0.04em' }}>
-                      {badge.icon} {badge.text}
-                    </div>
-                  </div>
-                  <div className="timeline-date">{fmtDate(a.created_at)}</div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {/* Unified Case Timeline: activity + docket in one scrolling list */}
+      <UnifiedTimeline dealId={deal.id} activity={activity} />
 
       {/* Notes (read-only — team maintains these) */}
       {Array.isArray(notes) && notes.length > 0 && (
@@ -1074,8 +1033,8 @@ const ATTORNEY_EVENT_META = {
   docket_updated:       { label: "Docket Update",        color: "#6b6b6b", icon: "•"  },
 };
 
-function AttorneyDocketSection({ dealId }) {
-  const [events, setEvents] = useState([]);
+function UnifiedTimeline({ dealId, activity }) {
+  const [docket, setDocket] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
@@ -1084,14 +1043,14 @@ function AttorneyDocketSection({ dealId }) {
       .eq('deal_id', dealId)
       .order('event_date', { ascending: false })
       .order('received_at', { ascending: false });
-    setEvents(data || []);
+    setDocket(data || []);
     setLoading(false);
   };
 
   useEffect(() => { load(); }, [dealId]);
 
   useEffect(() => {
-    const ch = sb.channel('atty-docket-' + dealId)
+    const ch = sb.channel('atty-timeline-' + dealId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
     return () => { sb.removeChannel(ch); };
@@ -1099,71 +1058,100 @@ function AttorneyDocketSection({ dealId }) {
 
   if (loading) return null;
 
-  // Live events (ordered desc already from query) vs backfill-collapsed history
-  const liveEvents = events.filter(e => !e.is_backfill);
-  const historyEvents = events.filter(e => e.is_backfill);
+  const liveDocket = docket.filter(e => !e.is_backfill);
+  const historyDocket = docket.filter(e => e.is_backfill);
 
-  const renderEvent = (e) => {
+  const activityItems = (activity || []).map(a => ({ kind: 'activity', id: 'a-' + a.id, date: a.created_at, data: a }));
+  const docketItems = liveDocket.map(e => ({ kind: 'docket', id: 'd-' + e.id, date: e.event_date || e.received_at, data: e }));
+  const merged = [...activityItems, ...docketItems].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  const renderDocket = (e) => {
     const meta = ATTORNEY_EVENT_META[e.event_type] || { label: e.event_type, color: '#6b6b6b', icon: '•' };
     return (
-      <div key={e.id} style={{ padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-          <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center', marginTop: 2 }}>{meta.icon}</div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
-              <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', background: meta.color + '1a', borderRadius: 3 }}>{meta.label}</span>
-              <span style={{ fontSize: 11, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>{e.event_date}</span>
-            </div>
-            <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.5 }}>{e.description}</div>
-            <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      <div className="timeline-item" key={'d-' + e.id} style={{ padding: '12px 10px', borderRadius: 6 }}>
+        <div className="timeline-dot" style={{ background: meta.color }}></div>
+        <div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 4 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: '0.08em', textTransform: 'uppercase', padding: '2px 8px', background: meta.color + '1a', borderRadius: 3 }}>{meta.icon} {meta.label}</span>
+          </div>
+          <div className="timeline-action" style={{ lineHeight: 1.5 }}>{e.description}</div>
+          {(e.court_system || e.case_number) && (
+            <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
               {e.court_system && <span>{e.court_system}</span>}
               {e.case_number && <span>Case {e.case_number}</span>}
             </div>
-            {e.document_url && (
-              <a href={e.document_url} target="_blank" rel="noreferrer" style={{ display: 'inline-block', fontSize: 12, color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600, marginTop: 8 }}>
-                📄 View court document →
-              </a>
-            )}
+          )}
+          {e.document_url && (
+            <a href={e.document_url} target="_blank" rel="noreferrer" style={{ display: 'inline-block', fontSize: 12, color: 'var(--navy-mid)', textDecoration: 'none', fontWeight: 600, marginTop: 6 }}>
+              📄 View court document →
+            </a>
+          )}
+          <div style={{ fontSize: 10, color: '#a5731c', fontWeight: 700, marginTop: 4, letterSpacing: '0.04em' }}>
+            📋 Court docket · auto-ingested
           </div>
         </div>
+        <div className="timeline-date">{e.event_date}</div>
       </div>
     );
   };
 
+  const renderActivity = (a) => {
+    const vis = a.visibility || ['team'];
+    const clientSees = vis.includes('client');
+    const isMine = (a.action || '').startsWith('👨‍⚖️ Attorney update:');
+    const cleanAction = isMine ? a.action.replace(/^👨‍⚖️ Attorney update:\s*/, '') : a.action;
+    const badge = isMine
+      ? { icon: '👨‍⚖️', text: clientSees ? 'Your post · client sees' : 'Your post · internal', color: clientSees ? '#2d7a4f' : '#4338ca' }
+      : clientSees
+        ? { icon: '👤', text: 'Client sees this', color: '#2d7a4f' }
+        : { icon: '🔒', text: 'Internal only', color: '#6b6b6b' };
+    return (
+      <div className="timeline-item" key={'a-' + a.id} style={{ background: isMine ? 'rgba(67, 56, 202, 0.04)' : 'transparent', padding: '12px 10px', borderRadius: 6 }}>
+        <div className="timeline-dot" style={{ background: badge.color }}></div>
+        <div>
+          <div className="timeline-action" style={{ lineHeight: 1.5 }}>{cleanAction}</div>
+          <div style={{ fontSize: 10, color: badge.color, fontWeight: 700, marginTop: 4, letterSpacing: '0.04em' }}>
+            {badge.icon} {badge.text}
+          </div>
+        </div>
+        <div className="timeline-date">{fmtDate(a.created_at)}</div>
+      </div>
+    );
+  };
+
+  const total = merged.length;
+
   return (
     <div className="card">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-        <p className="card-title" style={{ margin: 0 }}>Docket <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>({events.length})</span></p>
-        {events.length > 5 && (
-          <div style={{ fontSize: 11, color: 'var(--text-subtle)', fontStyle: 'italic' }}>Scroll inside the box to browse all events</div>
-        )}
+        <p className="card-title" style={{ margin: 0 }}>Case timeline <span style={{ color: 'var(--text-subtle)', fontWeight: 400 }}>({total})</span></p>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <span>🔒 Internal</span>
+          <span>👤 Client sees</span>
+          <span>👨‍⚖️ Your posts</span>
+          <span>📋 Court docket</span>
+        </div>
       </div>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-        Every event on the court docket for this case, ingested automatically from the county scraper. Complements but doesn't replace your own filings.
+        Case updates, messages, and every event on the court docket — auto-ingested from the county scraper. Most recent at the top.
       </div>
-      {events.length === 0 ? (
-        <div className="empty" style={{ padding: '12px 0' }}>No docket events on file yet.</div>
+      {total === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>No activity yet. Post a case update above to start the record.</div>
       ) : (
-        <>
-          {/* Live events — scrollable fixed-height container */}
-          <div style={{ maxHeight: 480, overflowY: 'auto', paddingRight: 6, border: '1px solid var(--border)', borderRadius: 8, padding: '4px 14px 4px 14px' }}>
-            {liveEvents.length > 0 ? liveEvents.map(renderEvent) : (
-              <div className="empty" style={{ padding: '18px 0' }}>No live events yet — {historyEvents.length > 0 ? 'history is in the accordion below.' : 'check back after Castle runs.'}</div>
-            )}
-          </div>
+        <div style={{ maxHeight: 560, overflowY: 'auto', paddingRight: 6 }}>
+          {merged.map(item => item.kind === 'docket' ? renderDocket(item.data) : renderActivity(item.data))}
+        </div>
+      )}
 
-          {/* Collapsed case history (backfill events) */}
-          {historyEvents.length > 0 && (
-            <details style={{ marginTop: 14 }}>
-              <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--navy-mid)', fontWeight: 600, padding: '8px 0' }}>
-                📜 Case history · {historyEvents.length} historical docket {historyEvents.length === 1 ? 'entry' : 'entries'}
-              </summary>
-              <div style={{ maxHeight: 360, overflowY: 'auto', paddingRight: 6, marginTop: 8, border: '1px solid var(--border)', borderRadius: 8, padding: '4px 14px 4px 14px' }}>
-                {historyEvents.map(renderEvent)}
-              </div>
-            </details>
-          )}
-        </>
+      {historyDocket.length > 0 && (
+        <details style={{ marginTop: 14 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 13, color: 'var(--navy-mid)', fontWeight: 600, padding: '8px 0' }}>
+            📜 Case history · {historyDocket.length} historical docket {historyDocket.length === 1 ? 'entry' : 'entries'}
+          </summary>
+          <div style={{ maxHeight: 360, overflowY: 'auto', paddingRight: 6, marginTop: 8 }}>
+            {historyDocket.map(renderDocket)}
+          </div>
+        </details>
       )}
     </div>
   );
