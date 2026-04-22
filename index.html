@@ -643,6 +643,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
+          {viewBtn("hygiene", "🩺 Hygiene", 0)}
           {viewBtn("archive", "Closed Deals", archivedDeals.length)}
           {isAdmin && viewBtn("analytics", "📊 Analytics", 0)}
         </div>
@@ -652,8 +653,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today view) */}
-      {view !== "today" && view !== "analytics" && (
+      {/* Search / Filter / Layout toggle bar (hidden on Today / Analytics / Hygiene views) */}
+      {view !== "today" && view !== "analytics" && view !== "hygiene" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -678,6 +679,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
           ) : view === "analytics" ? (
             <AnalyticsView deals={deals} onSelect={onSelect} />
+          ) : view === "hygiene" ? (
+            <HygieneDashboard deals={deals} onSelect={onSelect} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -1322,6 +1325,234 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Hygiene Dashboard ───────────────────────────────────────────
+// Scans every open surplus deal against 13 hygiene checks (phone, portal
+// access, court case, filed date, attorney, deadline, financials, welcome
+// video, documents, etc.) and shows per-deal completeness with a summary
+// of the most-common gaps. Click any row to expand the detailed checklist;
+// click "Open" to jump into that deal's detail view.
+const HYGIENE_LABELS = {
+  phone: 'Homeowner phone', email: 'Homeowner email', portal: 'Client portal',
+  case: 'Court case #', county: 'County',
+  filed: 'Filed date', deadline: 'Deadline',
+  surplus: 'Est. surplus', fee: 'Fee %',
+  attorney: 'Attorney named', atty_portal: 'Counsel portal',
+  docs: 'Documents', video: 'Welcome video',
+};
+const hygieneLabel = (k) => HYGIENE_LABELS[k] || k;
+
+function HygieneDashboard({ deals, onSelect }) {
+  const openSurplus = deals.filter(d =>
+    d.type === 'surplus' && !['closed', 'dead', 'recovered'].includes(d.status)
+  );
+  const [support, setSupport] = useState({ ca: new Map(), aa: new Map(), docs: new Map() });
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('completeness');
+
+  const loadSupport = async () => {
+    if (openSurplus.length === 0) { setLoading(false); return; }
+    const ids = openSurplus.map(d => d.id);
+    const [caRes, aaRes, docRes] = await Promise.all([
+      sb.from('client_access').select('deal_id, enabled, email, user_id, last_seen_at').in('deal_id', ids),
+      sb.from('attorney_assignments').select('deal_id, enabled, email, user_id').in('deal_id', ids),
+      sb.from('documents').select('deal_id').in('deal_id', ids),
+    ]);
+    const ca = new Map();
+    (caRes.data || []).forEach(r => {
+      const arr = ca.get(r.deal_id) || [];
+      arr.push(r);
+      ca.set(r.deal_id, arr);
+    });
+    const aa = new Map();
+    (aaRes.data || []).forEach(r => {
+      const arr = aa.get(r.deal_id) || [];
+      arr.push(r);
+      aa.set(r.deal_id, arr);
+    });
+    const docs = new Map();
+    (docRes.data || []).forEach(r => {
+      docs.set(r.deal_id, (docs.get(r.deal_id) || 0) + 1);
+    });
+    setSupport({ ca, aa, docs });
+    setLoading(false);
+  };
+
+  useEffect(() => { loadSupport(); /* eslint-disable-next-line */ }, [openSurplus.length]);
+
+  const scoreOf = (deal) => {
+    const m = deal.meta || {};
+    const ca = support.ca.get(deal.id) || [];
+    const aa = support.aa.get(deal.id) || [];
+    const docCount = support.docs.get(deal.id) || 0;
+    const attorneyNamed = !!(m.attorney && String(m.attorney).trim());
+
+    const checks = [
+      { key: 'phone',    label: HYGIENE_LABELS.phone,    passed: !!(m.homeownerPhone && String(m.homeownerPhone).trim()),  severity: 'high' },
+      { key: 'email',    label: HYGIENE_LABELS.email,    passed: !!(m.homeownerEmail && String(m.homeownerEmail).trim()),  severity: 'high' },
+      { key: 'portal',   label: HYGIENE_LABELS.portal,   passed: ca.some(r => r.enabled),                                  severity: 'high' },
+      { key: 'case',     label: HYGIENE_LABELS.case,     passed: !!(m.courtCase && String(m.courtCase).trim()),            severity: 'high' },
+      { key: 'county',   label: HYGIENE_LABELS.county,   passed: !!(m.county && String(m.county).trim()),                  severity: 'high' },
+      { key: 'filed',    label: HYGIENE_LABELS.filed,    passed: !!(deal.filed_at || m.filed_at),                          severity: 'med'  },
+      { key: 'deadline', label: HYGIENE_LABELS.deadline, passed: !!(deal.deadline || m.deadline),                          severity: 'med'  },
+      { key: 'surplus',  label: HYGIENE_LABELS.surplus,  passed: !!(m.estimatedSurplus && Number(m.estimatedSurplus) > 0), severity: 'med'  },
+      { key: 'fee',      label: HYGIENE_LABELS.fee,      passed: !!(m.feePct && Number(m.feePct) > 0),                     severity: 'med'  },
+      { key: 'attorney', label: HYGIENE_LABELS.attorney, passed: attorneyNamed,                                            severity: 'med'  },
+      { key: 'atty_portal', label: HYGIENE_LABELS.atty_portal, passed: (!attorneyNamed || aa.some(r => r.enabled)),        severity: 'med'  },
+      { key: 'docs',     label: HYGIENE_LABELS.docs,     passed: docCount > 0,                                             severity: 'low'  },
+      { key: 'video',    label: HYGIENE_LABELS.video,    passed: !!(m.welcome_video && m.welcome_video.path),              severity: 'low'  },
+    ];
+
+    const passed = checks.filter(c => c.passed).length;
+    const total = checks.length;
+    const highMissing = checks.filter(c => !c.passed && c.severity === 'high').length;
+    return { checks, passed, total, highMissing };
+  };
+
+  const scored = openSurplus.map(d => ({ deal: d, score: scoreOf(d) }));
+
+  // Gap stats: how many deals are missing each field?
+  const gapStats = {};
+  scored.forEach(({ score }) => {
+    score.checks.forEach(c => {
+      if (!c.passed) gapStats[c.key] = (gapStats[c.key] || 0) + 1;
+    });
+  });
+  const topGaps = Object.entries(gapStats).sort((a, b) => b[1] - a[1]);
+
+  const filtered = filter === 'all'
+    ? scored
+    : scored.filter(({ score }) => score.checks.some(c => !c.passed && c.key === filter));
+
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'completeness') {
+      if (a.score.highMissing !== b.score.highMissing) return b.score.highMissing - a.score.highMissing;
+      return a.score.passed - b.score.passed;
+    }
+    if (sortBy === 'name') return (a.deal.name || '').localeCompare(b.deal.name || '');
+    return 0;
+  });
+
+  return (
+    <div>
+      {/* Summary + gap filter bar */}
+      <div style={{ marginBottom: 16, padding: 16, background: "#1c1917", border: "1px solid #292524", borderRadius: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>Deal Hygiene Scan</div>
+            <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 6, lineHeight: 1.5, maxWidth: 560 }}>
+              {openSurplus.length} open surplus deal{openSurplus.length === 1 ? '' : 's'} scanned against 13 hygiene checks.
+              Rows with missing high-priority fields (phone, portal access, case number) sort to the top.
+              Click a row to expand, "Open" to fix it.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>Sort</span>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...selectStyle, fontSize: 11, padding: "4px 8px", minWidth: 120 }}>
+              <option value="completeness">Least complete first</option>
+              <option value="name">Name (A–Z)</option>
+            </select>
+          </div>
+        </div>
+
+        {topGaps.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
+            <span style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", alignSelf: "center", marginRight: 4 }}>Top gaps</span>
+            {topGaps.slice(0, 8).map(([key, count]) => (
+              <button key={key} onClick={() => setFilter(filter === key ? 'all' : key)} style={{
+                fontSize: 10,
+                padding: "3px 9px",
+                borderRadius: 4,
+                cursor: "pointer",
+                background: filter === key ? "#78350f" : "transparent",
+                color: filter === key ? "#fbbf24" : "#a8a29e",
+                border: "1px solid " + (filter === key ? "#d97706" : "#44403c"),
+                letterSpacing: "0.04em",
+              }}>
+                {hygieneLabel(key)}: {count}
+              </button>
+            ))}
+            {filter !== 'all' && (
+              <button onClick={() => setFilter('all')} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 4, cursor: "pointer", background: "transparent", color: "#78716c", border: "1px solid #44403c" }}>
+                Clear filter
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {loading && <div style={{ padding: 24, textAlign: "center", color: "#78716c", fontSize: 12 }}>Loading hygiene scan…</div>}
+
+      {!loading && sorted.length === 0 && (
+        <div style={{ padding: 40, textAlign: "center", color: "#78716c", border: "1px dashed #292524", borderRadius: 10, fontSize: 13 }}>
+          {openSurplus.length === 0 ? "No open surplus deals to scan. Add a surplus deal first." : "No deals match the current filter."}
+        </div>
+      )}
+
+      {!loading && sorted.map(({ deal, score }) => {
+        const isExpanded = expandedId === deal.id;
+        const pct = Math.round((score.passed / score.total) * 100);
+        const barColor = pct >= 80 ? '#10b981' : pct >= 50 ? '#d97706' : '#ef4444';
+        return (
+          <div key={deal.id} style={{ marginBottom: 8, background: "#1c1917", border: "1px solid " + (score.highMissing > 0 ? "#7f1d1d" : "#292524"), borderLeft: `3px solid ${barColor}`, borderRadius: 8, overflow: "hidden" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", cursor: "pointer" }} onClick={() => setExpandedId(isExpanded ? null : deal.id)}>
+              <span style={{ fontSize: 10, color: "#78716c", width: 10, flexShrink: 0 }}>{isExpanded ? '▼' : '▶'}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#fafaf9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {deal.name}
+                </div>
+                <div style={{ fontSize: 10, color: "#78716c", display: "flex", gap: 6, marginTop: 2 }}>
+                  <span>{deal.meta?.county || '—'}</span>
+                  <span>·</span>
+                  <span style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}>{deal.status.replace(/-/g, ' ')}</span>
+                  {score.highMissing > 0 && (
+                    <>
+                      <span>·</span>
+                      <span style={{ color: "#ef4444", fontWeight: 700 }}>{score.highMissing} critical gap{score.highMissing === 1 ? '' : 's'}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div style={{ width: 130, flexShrink: 0 }}>
+                <div style={{ height: 5, background: "#0c0a09", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: barColor, transition: "width 0.2s" }} />
+                </div>
+                <div style={{ fontSize: 10, color: "#78716c", marginTop: 3, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>
+                  {score.passed}/{score.total} · {pct}%
+                </div>
+              </div>
+              <button onClick={e => { e.stopPropagation(); onSelect(deal.id); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 10px", whiteSpace: "nowrap" }}>
+                Open →
+              </button>
+            </div>
+
+            {isExpanded && (
+              <div style={{ padding: "10px 16px 14px 36px", borderTop: "1px solid #292524", background: "#0c0a09" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "6px 16px" }}>
+                  {score.checks.map(c => {
+                    const mute = c.passed;
+                    const dot = c.passed ? '✓' : (c.severity === 'high' ? '✗' : '○');
+                    const dotColor = c.passed ? '#10b981' : (c.severity === 'high' ? '#ef4444' : '#78716c');
+                    return (
+                      <div key={c.key} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 11 }}>
+                        <span style={{ fontSize: 13, color: dotColor, width: 12, flexShrink: 0, fontWeight: 700 }}>{dot}</span>
+                        <span style={{ color: mute ? "#78716c" : (c.severity === 'high' ? "#fca5a5" : "#a8a29e"), textDecoration: mute ? 'line-through' : 'none' }}>
+                          {c.label}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -22,7 +22,7 @@ Template:
 ## Nathan's session
 
 **Status**: Idle
-**Last done**: MiniDocketPulse — lead-card "Recent Docket Activity" section per Castle spec. Compact component on SurplusCard for open surplus deals: 3 states (Monitoring setup in progress for 0-event deals, No new activity · history indexed for backfill-only deals, live render for non-backfill events with critical-event elevation). Realtime subscription per card. Staleness badge. Portal/attorney-portal/DocketTab unchanged — already had full-timeline renders and RLS already filters client view to 5 safe event types. Shipped `cefbc9b`.
+**Last done**: Deal Hygiene dashboard — new 🩺 Hygiene view on the main nav. Scans all open surplus deals against 13 checks (phone, email, portal access, court case, county, filed date, deadline, est. surplus, fee%, attorney, counsel portal, docs uploaded, welcome video) and shows per-deal completeness with top-gap filter chips + expand/collapse detail rows. Click-through to open the deal to fix. Discovered: 16/17 missing phone, 15/17 missing client portal access, 17/17 missing deadline — huge activation opportunity in filling these in.
 **Last updated**: Apr 22, 2026
 
 <!--
