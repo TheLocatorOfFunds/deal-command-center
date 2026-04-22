@@ -2105,8 +2105,8 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       </div>
 
       {tab === "overview" && (isFlip
-        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} userId={userId} />
-        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} userId={userId} />)}
+        ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} userId={userId} onJumpToTab={setTab} />
+        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} userId={userId} onJumpToTab={setTab} />)}
       {tab === "messages" && <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />}
       {tab === "docket" && <DocketTab dealId={deal.id} />}
       {tab === "contacts" && <ContactsTab dealId={deal.id} userId={userId} isAdmin={isAdmin} />}
@@ -2197,7 +2197,7 @@ function PostUpdateModal({ dealName, onClose, onPost }) {
 }
 
 // ─── Flip Overview ───────────────────────────────────────────────────
-function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin, userId }) {
+function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin, userId, onJumpToTab }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   const setStrategy = (s) => updateMeta({ strategy: s });
@@ -2208,7 +2208,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
 
   return (
     <div>
-      <CaseIntelligence dealId={deal.id} deal={deal} />
+      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         {isAdmin && <Card title="Live P&L Waterfall">
@@ -2819,7 +2819,7 @@ function CourtPullButton({ dealId, caseNumber, county, userId }) {
   );
 }
 
-function CaseIntelligence({ dealId, deal }) {
+function CaseIntelligence({ dealId, deal, onJumpToTab }) {
   const [docs, setDocs] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2933,21 +2933,64 @@ function CaseIntelligence({ dealId, deal }) {
         </div>
       )}
 
-      {docs.length > 0 && (
-        <div style={{ borderTop: "1px solid #292524", paddingTop: 10 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>What we know from documents</div>
-          {docs.map(d => (
-            <div key={d.id} style={{ display: "flex", gap: 8, fontSize: 12, color: "#a8a29e", marginBottom: 6, lineHeight: 1.55 }}>
-              <span style={{ color: "#d97706", flexShrink: 0 }}>•</span>
-              <span><span style={{ color: "#d6d3d1", fontWeight: 500 }}>{d.name}</span> — {d.extracted?.summary || 'no summary'}</span>
+      {docs.length > 0 && (() => {
+        // Doc type distribution so Nathan sees the shape of the file at a glance
+        const typeCounts = docs.reduce((acc, d) => {
+          const t = d.extracted?.document_type || 'other';
+          acc[t] = (acc[t] || 0) + 1;
+          return acc;
+        }, {});
+        const typeList = Object.entries(typeCounts).sort((a, b) => b[1] - a[1]);
+        // Only show the 3 most recent doc summaries so the card stays scannable.
+        // Everything else lives in the Documents tab one tab-click away.
+        const topDocs = docs.slice(0, 3);
+        const moreCount = docs.length - topDocs.length;
+        return (
+          <div style={{ borderTop: "1px solid #292524", paddingTop: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                Document summary · {docs.length} analyzed
+              </div>
+              {onJumpToTab && (
+                <button onClick={() => onJumpToTab('documents')} style={{ background: "transparent", border: "none", color: "#d97706", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", cursor: "pointer", padding: 0 }}>
+                  View all in Documents tab →
+                </button>
+              )}
             </div>
-          ))}
-        </div>
-      )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 }}>
+              {typeList.map(([t, n]) => (
+                <span key={t} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 3, background: "#1c1917", color: "#a8a29e", border: "1px solid #292524", letterSpacing: "0.03em" }}>
+                  {t.replace(/_/g, ' ')} · {n}
+                </span>
+              ))}
+            </div>
+            {topDocs.map(d => (
+              <div key={d.id} style={{ display: "flex", gap: 8, fontSize: 12, color: "#a8a29e", marginBottom: 6, lineHeight: 1.5 }}>
+                <span style={{ color: "#d97706", flexShrink: 0 }}>•</span>
+                <span><span style={{ color: "#d6d3d1", fontWeight: 500 }}>{d.name}</span> — {d.extracted?.summary || 'no summary'}</span>
+              </div>
+            ))}
+            {moreCount > 0 && (
+              <div style={{ fontSize: 11, color: "#57534e", marginTop: 4, fontStyle: "italic" }}>
+                + {moreCount} more document{moreCount === 1 ? '' : 's'} — open the Documents tab to see each with extracted fields
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
-      {liveEvents.length > 0 && (
+      {events.filter(e => !e.is_backfill).length > 0 && (
         <div style={{ borderTop: "1px solid #292524", paddingTop: 10, marginTop: 10 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Recent court activity</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              Recent court activity · {events.filter(e => !e.is_backfill).length} event{events.filter(e => !e.is_backfill).length === 1 ? '' : 's'}
+            </div>
+            {onJumpToTab && (
+              <button onClick={() => onJumpToTab('docket')} style={{ background: "transparent", border: "none", color: "#d97706", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", cursor: "pointer", padding: 0 }}>
+                View full timeline →
+              </button>
+            )}
+          </div>
           {liveEvents.map(e => {
             const meta = eventMeta(e.event_type);
             return (
@@ -2960,18 +3003,23 @@ function CaseIntelligence({ dealId, deal }) {
               </div>
             );
           })}
+          {events.filter(e => !e.is_backfill).length > 3 && (
+            <div style={{ fontSize: 11, color: "#57534e", marginTop: 4, fontStyle: "italic" }}>
+              + {events.filter(e => !e.is_backfill).length - 3} more event{events.filter(e => !e.is_backfill).length - 3 === 1 ? '' : 's'} in the Docket tab
+            </div>
+          )}
         </div>
       )}
     </Card>
   );
 }
 
-function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId }) {
+function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
     <div>
-      <CaseIntelligence dealId={deal.id} deal={deal} />
+      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Case Details">
