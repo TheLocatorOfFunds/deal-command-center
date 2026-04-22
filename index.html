@@ -423,6 +423,7 @@ function DealCommandCenter({ session, profile }) {
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [pendingWalkthroughs, setPendingWalkthroughs] = useState([]);
   const [showWalkthroughs, setShowWalkthroughs] = useState(false);
+  const [pendingOffersCount, setPendingOffersCount] = useState(0);
   const [showDocket, setShowDocket] = useState(false);
   const [showContacts, setShowContacts] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
@@ -451,6 +452,12 @@ function DealCommandCenter({ session, profile }) {
     setPendingWalkthroughs(data || []);
   };
 
+  const loadPendingOffersCount = async () => {
+    const { count } = await sb.from('investor_offers').select('*', { count: 'exact', head: true })
+      .in('status', ['new','pof-requested','pof-confirmed']);
+    setPendingOffersCount(count || 0);
+  };
+
   // Cmd+K / Ctrl+K → open search
   useEffect(() => {
     const onKey = (e) => {
@@ -477,7 +484,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); }, []);
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
@@ -487,6 +494,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, loadPendingWalkthroughs)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers' }, loadPendingOffersCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -585,8 +593,23 @@ function DealCommandCenter({ session, profile }) {
             ⚖ Docket {unackDocketCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#f59e0b", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{unackDocketCount}</span>}
           </button>}
           {isTeam && pendingWalkthroughs.length > 0 && (
-            <button onClick={() => setShowWalkthroughs(true)} title="Investor walkthrough requests" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#78350f", color: "#fbbf24", animation: "pulse 2s ease-in-out infinite" }}>
+            <button onClick={() => setShowWalkthroughs(true)} title="Investor walkthrough requests" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#78350f", color: "#fbbf24" }}>
               🏠 Walkthroughs <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingWalkthroughs.length}</span>
+            </button>
+          )}
+          {isTeam && pendingOffersCount > 0 && (
+            <button
+              onClick={() => {
+                // Find the first deal with a pending offer and jump to it; if user is on a deal already, do nothing.
+                if (activeDealId) return;
+                sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', { ascending: false }).limit(1).then(({ data }) => {
+                  if (data && data[0]) setActiveDealId(data[0].deal_id);
+                });
+              }}
+              title="Pending investor offers"
+              style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#065f46", color: "#6ee7b7" }}
+            >
+              💰 Offers <span style={{ display: "inline-block", marginLeft: 4, background: "#10b981", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingOffersCount}</span>
             </button>
           )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
@@ -2300,6 +2323,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
           </Card>
         )}
         <InvestorDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
+        <InvestorOffersCard deal={deal} userId={userId} />
         <InvestorPortalCard deal={deal} userId={userId} />
         <Card title="Progress" style={{ marginTop: 16 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
@@ -2620,6 +2644,148 @@ function ClientPortalCard({ deal, logAct }) {
 // Two cards: InvestorPortalCard manages token-based share links;
 // InvestorDetailsEditor fills out the buyer-facing deal fields that
 // investor-portal.html reads from meta.investor jsonb.
+// ─── Investor offers card — per-deal inbox + respond loop ───────────
+function InvestorOffersCard({ deal, userId }) {
+  const [offers, setOffers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [respondingId, setRespondingId] = useState(null);
+  const [respondForm, setRespondForm] = useState({ mode: null, note: '' });
+
+  const load = async () => {
+    const { data } = await sb.from('investor_offers')
+      .select('*, access:access_id(investor_name, investor_email, investor_phone)')
+      .eq('deal_id', deal.id)
+      .order('submitted_at', { ascending: false });
+    setOffers(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [deal.id]);
+
+  useEffect(() => {
+    const ch = sb.channel('offers-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers', filter: `deal_id=eq.${deal.id}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [deal.id]);
+
+  const respond = async (offer, newStatus) => {
+    const payload = {
+      status: newStatus,
+      responded_at: new Date().toISOString(),
+      responded_by: userId,
+      response_note: respondForm.note.trim() || null,
+    };
+    await sb.from('investor_offers').update(payload).eq('id', offer.id);
+    setRespondingId(null);
+    setRespondForm({ mode: null, note: '' });
+    load();
+  };
+
+  const pending = offers.filter(o => ['new', 'pof-requested', 'pof-confirmed'].includes(o.status));
+  const history = offers.filter(o => !['new', 'pof-requested', 'pof-confirmed'].includes(o.status));
+  const fmtMoney = v => v != null ? '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 }) : '—';
+
+  const statusStyle = (s) => {
+    if (s === 'accepted') return { bg: '#064e3b22', color: '#6ee7b7', border: '#065f46' };
+    if (s === 'declined' || s === 'expired' || s === 'withdrawn') return { bg: '#7f1d1d22', color: '#fca5a5', border: '#7f1d1d' };
+    if (s === 'countered') return { bg: '#78350f22', color: '#fbbf24', border: '#92400e' };
+    return { bg: '#1e3a5f22', color: '#93c5fd', border: '#1e3a5f' };
+  };
+
+  if (offers.length === 0 && !loading) return null; // don't render empty state; offers card appears only when there's something
+
+  return (
+    <Card title="Investor Offers" style={{ marginTop: 16 }} action={
+      <div style={{ fontSize: 10, color: "#78716c" }}>
+        {pending.length > 0 ? `${pending.length} awaiting response` : `${offers.length} total`}
+      </div>
+    }>
+      {pending.length > 0 && (
+        <div style={{ marginBottom: history.length > 0 ? 16 : 0 }}>
+          {pending.map(o => {
+            const s = statusStyle(o.status);
+            const isResponding = respondingId === o.id;
+            return (
+              <div key={o.id} style={{ marginBottom: 10, padding: "12px 14px", background: "#0c0a09", border: "1px solid #d97706", borderLeft: "4px solid #fbbf24", borderRadius: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div style={{ flex: 1, minWidth: 220 }}>
+                    <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 20, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#fbbf24" }}>{fmtMoney(o.offer_price)}</div>
+                      <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: s.bg, color: s.color, border: "1px solid " + s.border, letterSpacing: "0.08em", textTransform: "uppercase" }}>{o.status.replace(/-/g, ' ')}</span>
+                      {o.financing_type && <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.04em", textTransform: "uppercase" }}>{o.financing_type}</span>}
+                    </div>
+                    <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 4 }}>
+                      {o.investor_name || o.access?.investor_name || 'Unnamed investor'}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#78716c", marginTop: 6, display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: 6 }}>
+                      {o.emd_amount  && <div>EMD: <b style={{ color: "#d6d3d1" }}>{fmtMoney(o.emd_amount)}</b></div>}
+                      {o.closing_days && <div>Close: <b style={{ color: "#d6d3d1" }}>{o.closing_days}d</b></div>}
+                      {o.title_company && <div>Title: <b style={{ color: "#d6d3d1" }}>{o.title_company}</b></div>}
+                    </div>
+                    {o.contingencies && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 6 }}><b>Contingencies:</b> {o.contingencies}</div>}
+                    {o.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 4 }}><b>Note:</b> {o.notes}</div>}
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 6, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <span>{new Date(o.submitted_at).toLocaleString()}</span>
+                      {o.investor_phone && <a href={`tel:${o.investor_phone}`} style={{ color: "#fbbf24" }}>📞 {o.investor_phone}</a>}
+                      {o.investor_email && <a href={`mailto:${o.investor_email}`} style={{ color: "#fbbf24" }}>✉ {o.investor_email}</a>}
+                    </div>
+                  </div>
+                </div>
+
+                {isResponding ? (
+                  <div style={{ paddingTop: 10, borderTop: "1px solid #292524" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>
+                      {respondForm.mode === 'accepted' ? 'Accept this offer' : respondForm.mode === 'countered' ? 'Counter — note to investor' : respondForm.mode === 'declined' ? 'Decline — optional note' : 'Request proof of funds'}
+                    </div>
+                    <textarea value={respondForm.note} onChange={e => setRespondForm({ ...respondForm, note: e.target.value })} rows={2} placeholder="Optional note shown to investor on portal" style={{ ...inputStyle, resize: "vertical", minHeight: 50, fontFamily: "inherit" }} />
+                    <div style={{ display: "flex", gap: 6, marginTop: 8, justifyContent: "flex-end" }}>
+                      <button onClick={() => { setRespondingId(null); setRespondForm({ mode: null, note: '' }); }} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+                      <button onClick={() => respond(o, respondForm.mode)} style={{ ...btnPrimary, fontSize: 11 }}>Confirm {respondForm.mode}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", gap: 6, paddingTop: 8, borderTop: "1px solid #292524", flexWrap: "wrap" }}>
+                    <button onClick={() => { setRespondingId(o.id); setRespondForm({ mode: 'accepted', note: '' }); }} style={{ ...btnGhost, fontSize: 11, color: "#6ee7b7", borderColor: "#065f46" }}>✓ Accept</button>
+                    <button onClick={() => { setRespondingId(o.id); setRespondForm({ mode: 'countered', note: '' }); }} style={{ ...btnGhost, fontSize: 11, color: "#fbbf24", borderColor: "#92400e" }}>↺ Counter</button>
+                    <button onClick={() => { setRespondingId(o.id); setRespondForm({ mode: 'pof-requested', note: 'Please send proof of funds so we can proceed.' }); }} style={{ ...btnGhost, fontSize: 11, color: "#93c5fd" }}>Request POF</button>
+                    <button onClick={() => { setRespondingId(o.id); setRespondForm({ mode: 'declined', note: '' }); }} style={{ ...btnGhost, fontSize: 11, color: "#fca5a5", borderColor: "#7f1d1d" }}>✗ Decline</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div style={{ opacity: 0.7 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>History</div>
+          {history.map(o => {
+            const s = statusStyle(o.status);
+            return (
+              <div key={o.id} style={{ padding: "8px 12px", marginBottom: 6, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 180 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, fontFamily: "'DM Mono', monospace", color: "#d6d3d1" }}>{fmtMoney(o.offer_price)}</span>
+                    <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 3, background: s.bg, color: s.color, border: "1px solid " + s.border, letterSpacing: "0.06em", textTransform: "uppercase" }}>{o.status.replace(/-/g, ' ')}</span>
+                    <span style={{ fontSize: 11, color: "#a8a29e" }}>{o.investor_name || o.access?.investor_name || '—'}</span>
+                  </div>
+                  {o.response_note && <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, fontStyle: "italic" }}>"{o.response_note}"</div>}
+                </div>
+                <div style={{ fontSize: 10, color: "#57534e", flexShrink: 0 }}>
+                  {o.responded_at ? new Date(o.responded_at).toLocaleDateString() : new Date(o.submitted_at).toLocaleDateString()}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 // Cross-deal inbox for walkthrough requests. Opens from the nav button.
 function WalkthroughRequestsModal({ onClose, userId, onJumpToDeal }) {
   const [rows, setRows] = useState([]);
@@ -2989,12 +3155,26 @@ function InvestorDetailsEditor({ deal, onUpdateDeal }) {
       </div>
 
       {sect === 'pricing' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-          <InvNumField {...fp} label="Asking price" k="askingPrice" step={1000} placeholder="200000" />
-          <InvNumField {...fp} label="ARV estimate" k="arvEstimate" step={1000} placeholder="290000" />
-          <InvNumField {...fp} label="Rehab estimate" k="rehabEstimate" step={500} placeholder="15000" />
-          <InvSelField {...fp} label="Rehab tier" k="rehabTier" options={[{value:'light',label:'Light'},{value:'medium',label:'Medium'},{value:'heavy',label:'Heavy'}]} />
-          <InvSelField {...fp} label="Deal type" k="dealType" options={[{value:'wholesale',label:'Wholesale'},{value:'wholetail',label:'Wholetail'},{value:'fix-flip',label:'Fix & Flip'},{value:'fixed-price',label:'Fixed-price buy'}]} />
+        <div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
+            <InvNumField {...fp} label="Asking price" k="askingPrice" step={1000} placeholder="200000" />
+            <InvNumField {...fp} label="Starting price" k="startingPrice" step={1000} placeholder="195000" />
+            <InvNumField {...fp} label="Buy-it-now" k="buyItNowPrice" step={1000} placeholder="210000" />
+            <InvNumField {...fp} label="ARV estimate" k="arvEstimate" step={1000} placeholder="290000" />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12, marginBottom: 14 }}>
+            <InvNumField {...fp} label="Rehab (low)" k="rehabCostLow" step={500} placeholder="10000" />
+            <InvNumField {...fp} label="Rehab (high)" k="rehabCostHigh" step={500} placeholder="25000" />
+            <InvNumField {...fp} label="Rehab (single est.)" k="rehabEstimate" step={500} placeholder="15000" />
+            <InvSelField {...fp} label="Rehab scope" k="rehabScope" options={[{value:'turnkey',label:'Turnkey'},{value:'light',label:'Light'},{value:'major',label:'Major'},{value:'full',label:'Full gut'}]} />
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+            <InvSelField {...fp} label="Deal type" k="dealType" options={[{value:'wholesale',label:'Wholesale'},{value:'wholetail',label:'Wholetail'},{value:'fix-flip',label:'Fix & Flip'},{value:'fixed-price',label:'Fixed-price buy'}]} />
+            <InvDateField {...fp} label="Accept offers until" k="acceptOffersUntil" />
+          </div>
+          <div style={{ fontSize: 10, color: "#57534e", marginTop: 10, lineHeight: 1.5 }}>
+            Leave Starting / Buy-it-now blank to just show the Asking price. Rehab low/high render as a range; fallback to single estimate if range is blank. Accept-offers-until puts a countdown on the buyer portal and forces decisions.
+          </div>
         </div>
       )}
 

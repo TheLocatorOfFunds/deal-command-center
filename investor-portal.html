@@ -272,6 +272,8 @@ function DealRoom({ data }) {
         </div>
       )}
 
+      <OfferSection askingPrice={askingPrice} acceptOffersUntil={inv.acceptOffersUntil} investorName={investor_name} />
+
       <div className="cta-bar">
         <a href="tel:+15139518855" className="cta-primary">📞 Call Nathan · (513) 951-8855</a>
         <a href="sms:+15139518855" className="cta-secondary">💬 Text</a>
@@ -488,6 +490,265 @@ function VideoBlock({ url }) {
   if (vimeo) return <div className="video-wrap"><iframe src={`https://player.vimeo.com/video/${vimeo[1]}`} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen /></div>;
   if (/\.(mp4|mov|webm)$/i.test(url)) return <div className="video-wrap"><video src={url} controls /></div>;
   return <a href={url} target="_blank" rel="noreferrer" className="btn-gold">Open walkthrough video</a>;
+}
+
+function OfferCountdown({ deadline }) {
+  if (!deadline) return null;
+  const d = new Date(deadline);
+  const ms = d.getTime() - Date.now();
+  if (ms < 0) return (
+    <div className="auction-card" style={{ marginTop: 0, marginBottom: 14 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#991b1b', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>Offer window closed</div>
+      <div style={{ fontFamily: "'Fraunces',serif", fontSize: 18, color: '#991b1b' }}>This deal stopped accepting offers on {d.toLocaleDateString()}</div>
+    </div>
+  );
+  const hrs = Math.floor(ms / (60*60*1000));
+  const days = Math.floor(hrs / 24);
+  const remHrs = hrs % 24;
+  const urgent = hrs <= 48;
+  return (
+    <div className="auction-card" style={{ marginTop: 0, marginBottom: 14, background: urgent ? '#fef2f2' : 'var(--gold-soft)', borderColor: urgent ? '#fecaca' : 'var(--gold)', borderLeftColor: urgent ? 'var(--red)' : 'var(--gold)' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: urgent ? '#991b1b' : 'var(--amber)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+        ⏱ Accepting offers until {d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+      </div>
+      <div style={{ fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 500, color: urgent ? '#991b1b' : 'var(--navy)', letterSpacing: '-0.015em' }}>
+        {days > 0 ? `${days} day${days===1?'':'s'} ${remHrs}h remaining` : `${hrs} hour${hrs===1?'':'s'} remaining`}
+      </div>
+      <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+        Submit your offer before this deadline. Multiple offers may be reviewed simultaneously.
+      </div>
+    </div>
+  );
+}
+
+function OfferSection({ askingPrice, acceptOffersUntil, investorName }) {
+  const [stats, setStats] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [submitted, setSubmitted] = useState(null);
+
+  const loadStats = async () => {
+    const { data } = await sb.rpc('get_investor_offer_stats', { p_token: TOKEN });
+    setStats(data || {});
+    // If this investor already has a pending offer, jump to the status view
+    const latest = data?.this_investor_latest;
+    if (latest && !submitted) {
+      setSubmitted({ ...latest, ownPrior: true });
+    }
+  };
+
+  useEffect(() => {
+    loadStats();
+    // Poll lightly so count updates while they're viewing
+    const i = setInterval(loadStats, 30000);
+    return () => clearInterval(i);
+    // eslint-disable-next-line
+  }, []);
+
+  const closed = acceptOffersUntil && new Date(acceptOffersUntil).getTime() < Date.now();
+
+  if (submitted) {
+    return (
+      <div className="card" style={{ borderLeft: '4px solid var(--gold)', marginBottom: 18 }}>
+        <p className="card-title">{submitted.ownPrior ? 'Your offer' : 'Offer submitted'}</p>
+        <div style={{ fontFamily: "'Fraunces',serif", fontSize: 24, color: 'var(--navy)', marginBottom: 6 }}>
+          ${Number(submitted.offer_price).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 10 }}>
+          Status: <b style={{ color: offerStatusColor(submitted.status) }}>{offerStatusLabel(submitted.status)}</b>
+          {' · '}Submitted {new Date(submitted.submitted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.55, marginBottom: 12 }}>
+          {submitted.status === 'new' && 'Nathan will review shortly. You\'ll hear back by phone or text within one business day.'}
+          {submitted.status === 'pof-requested' && 'Nathan would like to verify proof of funds before proceeding. Please email your POF statement to Nathan.'}
+          {submitted.status === 'accepted' && '🎉 Your offer has been accepted. Nathan will coordinate closing with you.'}
+          {submitted.status === 'countered' && 'Nathan has countered your offer. Call or text to discuss terms.'}
+          {submitted.status === 'declined' && 'This offer wasn\'t accepted. Feel free to submit a revised offer below.'}
+        </div>
+        {(submitted.status === 'declined' || submitted.status === 'countered') && (
+          <button onClick={() => { setSubmitted(null); setShowForm(true); }} className="btn-gold">Submit new offer</button>
+        )}
+      </div>
+    );
+  }
+
+  if (closed) {
+    return (
+      <div className="card" style={{ borderLeft: '4px solid var(--red)', marginBottom: 18, background: '#fef2f2' }}>
+        <p className="card-title" style={{ color: '#991b1b' }}>Offer window closed</p>
+        <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.55 }}>
+          This deal stopped accepting offers on {new Date(acceptOffersUntil).toLocaleDateString()}. Call Nathan if you're still interested — he may be able to revive it.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card" style={{ borderLeft: '4px solid var(--gold)', marginBottom: 18 }}>
+      <OfferCountdown deadline={acceptOffersUntil} />
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div>
+          <p className="card-title" style={{ marginBottom: 6 }}>Make an offer</p>
+          {askingPrice > 0 && (
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.55 }}>
+              Asking <b style={{ color: 'var(--navy)' }}>${askingPrice.toLocaleString('en-US')}</b>. Offers accepted at or near ask move fastest.
+            </div>
+          )}
+        </div>
+        {stats?.total > 0 && (
+          <div style={{ background: 'var(--bg-card-alt)', border: '1px solid var(--border-strong)', padding: '6px 12px', borderRadius: 8, textAlign: 'center', flexShrink: 0 }}>
+            <div style={{ fontFamily: "'Fraunces',serif", fontSize: 22, color: 'var(--navy)', fontWeight: 500 }}>{stats.total}</div>
+            <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>offer{stats.total === 1 ? '' : 's'} received</div>
+          </div>
+        )}
+      </div>
+
+      {!showForm ? (
+        <button onClick={() => setShowForm(true)} className="btn-gold" style={{ padding: '10px 20px', fontSize: 14 }}>💰 Make offer</button>
+      ) : (
+        <OfferForm
+          askingPrice={askingPrice}
+          investorName={investorName}
+          onCancel={() => setShowForm(false)}
+          onSubmitted={(result) => { setSubmitted(result); setShowForm(false); loadStats(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function OfferForm({ askingPrice, investorName, onCancel, onSubmitted }) {
+  const [form, setForm] = useState({
+    offer_price: '',
+    financing_type: 'cash',
+    emd_amount: '',
+    closing_days: '21',
+    title_company: '',
+    contingencies: '',
+    notes: '',
+    phone: '',
+    email: '',
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr(null);
+    const price = parseFloat(form.offer_price);
+    if (!price || price <= 0) { setErr('Enter your offer amount.'); return; }
+    setSubmitting(true);
+    try {
+      const { data: offer_id, error } = await sb.rpc('submit_investor_offer', {
+        p_token: TOKEN,
+        p_offer_price: price,
+        p_financing_type: form.financing_type || null,
+        p_emd_amount: form.emd_amount ? parseFloat(form.emd_amount) : null,
+        p_closing_days: form.closing_days ? parseInt(form.closing_days) : null,
+        p_title_company: form.title_company.trim() || null,
+        p_contingencies: form.contingencies.trim() || null,
+        p_notes: form.notes.trim() || null,
+        p_investor_phone: form.phone.trim() || null,
+        p_investor_email: form.email.trim() || null,
+      });
+      if (error) throw error;
+      // Fire-and-forget SMS to Nathan
+      fetch(SUPABASE_URL + '/functions/v1/notify-investor-offer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ offer_id }),
+      }).catch(() => {});
+      onSubmitted({
+        id: offer_id,
+        offer_price: price,
+        status: 'new',
+        submitted_at: new Date().toISOString(),
+      });
+    } catch (ex) {
+      setErr(ex.message || 'Could not submit. Try again or call Nathan.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const inputStyle = { padding: '9px 11px', border: '1px solid var(--border-strong)', borderRadius: 6, fontSize: 14, fontFamily: 'inherit', background: 'var(--bg-card)', width: '100%' };
+
+  return (
+    <form onSubmit={submit} style={{ marginTop: 6 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 10 }}>
+        <label>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Your offer *</div>
+          <input type="number" value={form.offer_price} onChange={e => setForm({ ...form, offer_price: e.target.value })} placeholder={askingPrice > 0 ? askingPrice.toString() : '200000'} style={{ ...inputStyle, fontSize: 18, fontWeight: 600, fontFamily: "'Fraunces',serif", color: 'var(--navy)' }} required />
+        </label>
+        <label>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Financing</div>
+          <select value={form.financing_type} onChange={e => setForm({ ...form, financing_type: e.target.value })} style={inputStyle}>
+            <option value="cash">Cash</option>
+            <option value="lender">Conventional lender</option>
+            <option value="hard-money">Hard money</option>
+            <option value="seller">Seller financing</option>
+            <option value="subject-to">Subject-to</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <label>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>EMD amount</div>
+          <input type="number" value={form.emd_amount} onChange={e => setForm({ ...form, emd_amount: e.target.value })} placeholder="2500" style={inputStyle} />
+        </label>
+        <label>
+          <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Close in (days)</div>
+          <input type="number" value={form.closing_days} onChange={e => setForm({ ...form, closing_days: e.target.value })} placeholder="21" style={inputStyle} />
+        </label>
+      </div>
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Your title company (optional)</div>
+        <input value={form.title_company} onChange={e => setForm({ ...form, title_company: e.target.value })} placeholder="Stewart Title, First American, etc." style={inputStyle} />
+      </label>
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Contingencies (optional)</div>
+        <textarea value={form.contingencies} onChange={e => setForm({ ...form, contingencies: e.target.value })} rows={2} placeholder="Inspection contingency, financing contingency, etc." style={{ ...inputStyle, resize: 'vertical', minHeight: 50 }} />
+      </label>
+      <label style={{ display: 'block', marginBottom: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Notes to Nathan (optional)</div>
+        <textarea value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} rows={2} placeholder="Anything Nathan should know? Cash-strong buyer, need quick close, etc." style={{ ...inputStyle, resize: 'vertical', minHeight: 50 }} />
+      </label>
+      {!investorName && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 10, marginBottom: 10 }}>
+          <label>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Your phone</div>
+            <input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} placeholder="(513) 555-0100" style={inputStyle} />
+          </label>
+          <label>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Your email</div>
+            <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} placeholder="you@email.com" style={inputStyle} />
+          </label>
+        </div>
+      )}
+      {err && <div style={{ color: 'var(--red)', fontSize: 13, marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button type="button" onClick={onCancel} className="btn-ghost">Cancel</button>
+        <button type="submit" disabled={submitting} className="btn-gold">{submitting ? 'Submitting…' : 'Submit offer'}</button>
+      </div>
+    </form>
+  );
+}
+
+function offerStatusLabel(s) {
+  return ({
+    'new': 'New — Nathan is reviewing',
+    'pof-requested': 'Proof of funds requested',
+    'pof-confirmed': 'POF confirmed — under review',
+    'accepted': '✓ Accepted',
+    'declined': 'Declined',
+    'countered': 'Counter offer sent',
+    'withdrawn': 'Withdrawn',
+    'expired': 'Expired',
+  })[s] || s;
+}
+function offerStatusColor(s) {
+  if (s === 'accepted') return '#15803d';
+  if (s === 'declined' || s === 'expired') return '#991b1b';
+  if (s === 'countered') return '#d97706';
+  return 'var(--navy)';
 }
 
 function WalkthroughRequestButton({ investorName }) {
