@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1f3a">
+<title>Investor Deal Room — RefundLocators</title>
+<link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbf8f1;
+    --bg-card: #ffffff;
+    --bg-card-alt: #f4ecdc;
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --gold: #c9a24a;
+    --gold-light: #d8b560;
+    --gold-soft: #ede5cf;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
+    --border: #e5dfd0;
+    --border-strong: #c9bea3;
+    --green: #2d7a4f;
+    --amber: #a5731c;
+    --red: #a83232;
+    --shadow: 0 1px 2px rgba(11,31,58,.06), 0 8px 24px rgba(11,31,58,.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Inter',-apple-system,BlinkMacSystemFont,sans-serif; background: var(--bg); color: var(--text); line-height: 1.55; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+  .serif { font-family: 'Fraunces',Georgia,serif; font-weight: 500; letter-spacing: -0.01em; }
+  .mono { font-family: 'DM Mono',monospace; }
+  .container { max-width: 920px; margin: 0 auto; padding: 24px 20px 80px; }
+  .centered-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 18px; }
+  .card-title { font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 16px; }
+
+  header.portal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-top: 8px; gap: 12px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: 'Fraunces',serif; font-weight: 700; font-size: 20px; color: var(--navy); letter-spacing: -0.01em; }
+  .brand-dot { width: 9px; height: 9px; background: var(--gold); border-radius: 50%; }
+  .brand-tag { font-family: 'Inter',sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--text-muted); text-transform: uppercase; margin-left: 6px; padding-top: 3px; }
+
+  .hero-photo { width: 100%; aspect-ratio: 16 / 9; background: var(--bg-card-alt) center center / cover no-repeat; border-radius: 14px; margin-bottom: 22px; border: 1px solid var(--border); }
+  .hero-photo-placeholder { display: flex; align-items: center; justify-content: center; color: var(--text-subtle); font-size: 14px; }
+
+  h1.deal-name { font-family: 'Fraunces',serif; font-weight: 500; font-size: 32px; line-height: 1.15; color: var(--navy); margin: 0 0 4px; letter-spacing: -0.02em; }
+  .deal-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 6px; }
+  .deal-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 22px; }
+  .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .pill-gold { background: var(--gold-soft); color: var(--amber); }
+  .pill-navy { background: #e6edf7; color: var(--navy-mid); }
+  .pill-green { background: #dff3e6; color: var(--green); }
+  .pill-red { background: #fde4e4; color: var(--red); }
+
+  .num-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .num-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .num-tile.hero { background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%); border-color: var(--gold); }
+  .num-tile-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+  .num-tile-value { font-family: 'Fraunces',serif; font-size: 22px; font-weight: 500; color: var(--navy); letter-spacing: -0.015em; }
+  .num-tile.hero .num-tile-value { font-size: 28px; }
+  .num-tile-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  .auction-card { background: #fef2f2; border: 1px solid #fecaca; border-left: 4px solid var(--red); border-radius: 12px; padding: 16px 18px; margin-bottom: 18px; }
+  .auction-card.soft { background: var(--gold-soft); border-color: var(--gold); border-left-color: var(--gold); }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 20px; }
+  .stat { }
+  .stat-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .stat-value { font-size: 15px; color: var(--text); margin-top: 2px; font-weight: 500; }
+  .stat-value.muted { color: var(--text-subtle); font-style: italic; }
+
+  .photos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .photo-thumb { aspect-ratio: 4/3; background: var(--bg-card-alt) center center / cover no-repeat; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; transition: transform .12s; }
+  .photo-thumb:hover { transform: scale(1.02); }
+  .video-wrap { aspect-ratio: 16/9; border-radius: 12px; overflow: hidden; background: #000; border: 1px solid var(--border); }
+  .video-wrap iframe, .video-wrap video { width: 100%; height: 100%; border: 0; display: block; }
+
+  .doc-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .doc-row:last-child { border-bottom: none; }
+  .doc-name { font-size: 13px; color: var(--navy); font-weight: 500; }
+  .doc-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .btn-gold { background: var(--navy); color: #fffcf5; padding: 8px 16px; border: none; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-block; }
+  .btn-gold:hover { background: var(--navy-mid); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text-muted); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .btn-ghost:hover { border-color: var(--navy); color: var(--navy); }
+
+  .cta-bar { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 22px; }
+  .cta-primary { background: var(--navy); color: #fffcf5; padding: 14px 22px; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+  .cta-primary:hover { background: var(--navy-mid); }
+  .cta-secondary { background: var(--bg-card); color: var(--navy); padding: 14px 22px; border: 1px solid var(--border-strong); border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+
+  .fineprint { font-size: 12px; color: var(--text-subtle); }
+  .empty { color: var(--text-muted); font-size: 13px; font-style: italic; padding: 16px 0; }
+
+  .lightbox { position: fixed; inset: 0; background: rgba(11,31,58,.85); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 100; cursor: zoom-out; }
+  .lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+
+  @media (max-width: 520px) {
+    h1.deal-name { font-size: 24px; }
+    .num-tile.hero .num-tile-value { font-size: 22px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Token comes from ?t=UUID in the URL
+const url = new URL(window.location.href);
+const TOKEN = url.searchParams.get('t') || url.searchParams.get('token');
+
+const fmtMoney = v => {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.-]/g,''));
+  if (Number.isNaN(n) || n === 0) return null;
+  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+};
+const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' }) : null;
+const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+const DEAL_TYPE_LABEL = {
+  wholesale: 'Wholesale',
+  wholetail: 'Wholetail',
+  'fix-flip': 'Fix & Flip',
+  'fixed-price': 'Fixed-price buy',
+};
+
+function App() {
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+
+  useEffect(() => {
+    (async () => {
+      if (!TOKEN) { setState({ loading: false, data: null, error: 'no-token' }); return; }
+      const { data, error } = await sb.rpc('get_investor_deal_by_token', { p_token: TOKEN });
+      if (error) { setState({ loading: false, data: null, error: error.message }); return; }
+      if (!data) { setState({ loading: false, data: null, error: 'invalid-token' }); return; }
+      setState({ loading: false, data, error: null });
+    })();
+  }, []);
+
+  if (state.loading) return <LoaderFull />;
+  if (state.error || !state.data) return <InvalidLink error={state.error} />;
+
+  return <DealRoom data={state.data} />;
+}
+
+function LoaderFull() {
+  return <div className="centered-shell"><div className="card" style={{ padding: 40, textAlign: 'center' }}>
+    <div className="brand" style={{ justifyContent: 'center', marginBottom: 20 }}>
+      <span className="brand-dot"></span>
+      RefundLocators
+      <span className="brand-tag">Investor Deal Room</span>
+    </div>
+    <div className="fineprint">Loading deal…</div>
+  </div></div>;
+}
+
+function InvalidLink({ error }) {
+  const msg = error === 'no-token' ? 'This link is missing its access code. Check the full URL you received.' :
+              error === 'invalid-token' ? 'This link is no longer valid. It may have been revoked or expired. Contact Nathan for a refreshed link.' :
+              'We couldn\'t load this deal. Please try again or contact Nathan.';
+  return <div className="centered-shell"><div className="card" style={{ padding: 40, maxWidth: 480, textAlign: 'center' }}>
+    <div className="brand" style={{ justifyContent: 'center', marginBottom: 20 }}>
+      <span className="brand-dot"></span>
+      RefundLocators
+      <span className="brand-tag">Investor Deal Room</span>
+    </div>
+    <h1 className="serif" style={{ fontSize: 20, color: 'var(--navy)', marginBottom: 12 }}>Link not active</h1>
+    <p style={{ color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.55, marginBottom: 20 }}>{msg}</p>
+    <a href="tel:+15139518855" className="btn-gold">📞 Call Nathan · (513) 951-8855</a>
+  </div></div>;
+}
+
+function DealRoom({ data }) {
+  const { deal, documents, access_id, investor_name } = data;
+  const inv = deal.investor || {};
+  const address = inv.propertyAddress || deal.headline_address;
+  const county = deal.county;
+  const [coverUrl, setCoverUrl] = useState(null);
+  const [photoUrls, setPhotoUrls] = useState({});
+  const [lightbox, setLightbox] = useState(null);
+
+  // All docs flagged is_photo=true OR image extension
+  const photos = (documents || []).filter(d => isPhoto(d));
+  const files = (documents || []).filter(d => !isPhoto(d));
+  const coverDoc = photos.find(p => p.is_cover) || photos[0];
+
+  useEffect(() => {
+    if (!coverDoc) return;
+    (async () => {
+      const url = await resolveAssetUrl(coverDoc.id);
+      if (url) setCoverUrl(url);
+    })();
+  }, [coverDoc?.id]);
+
+  useEffect(() => {
+    (async () => {
+      const m = {};
+      for (const p of photos) {
+        if (p.id === coverDoc?.id) continue;
+        const u = await resolveAssetUrl(p.id);
+        if (u) m[p.id] = u;
+      }
+      setPhotoUrls(m);
+    })();
+  }, [photos.length]);
+
+  async function resolveAssetUrl(document_id) {
+    try {
+      const r = await fetch(SUPABASE_URL + '/functions/v1/investor-asset-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ token: TOKEN, document_id }),
+      });
+      const j = await r.json();
+      return j.url || null;
+    } catch { return null; }
+  }
+
+  const askingPrice   = Number(inv.askingPrice) || 0;
+  const arvEstimate   = Number(inv.arvEstimate) || 0;
+  const rehabEstimate = Number(inv.rehabEstimate) || 0;
+  const spread        = arvEstimate > 0 && askingPrice > 0 ? arvEstimate - askingPrice - (rehabEstimate || 0) : null;
+
+  const auctionDate = inv.auctionDate || inv.sale_date || inv.auction_date;
+
+  return (
+    <div className="container">
+      <header className="portal-header">
+        <div className="brand">
+          <span className="brand-dot"></span>
+          RefundLocators
+          <span className="brand-tag">Investor Deal Room</span>
+        </div>
+        {investor_name && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Shared with <b style={{ color: 'var(--navy)' }}>{investor_name}</b></div>}
+      </header>
+
+      <div className="hero-photo" style={coverUrl ? { backgroundImage: `url(${coverUrl})` } : {}}>
+        {!coverUrl && <div className="hero-photo-placeholder">Photos coming</div>}
+      </div>
+
+      <h1 className="deal-name">{address || deal.name}</h1>
+      <div className="deal-sub">{county && <>{county} County · </>}Ohio</div>
+
+      <div className="deal-tags">
+        {inv.dealType && <span className="pill pill-navy">{DEAL_TYPE_LABEL[inv.dealType] || cap(inv.dealType)}</span>}
+        {inv.occupancy && <span className="pill pill-gold">{cap(inv.occupancy)}</span>}
+        {inv.rehabTier && <span className="pill pill-gold">{cap(inv.rehabTier)} rehab</span>}
+      </div>
+
+      <AuctionCountdown auctionDate={auctionDate} />
+
+      {(askingPrice || arvEstimate || rehabEstimate) > 0 && (
+        <div className="num-tiles">
+          {askingPrice > 0 && <Tile label="Asking" value={fmtMoney(askingPrice)} hero />}
+          {arvEstimate > 0 && <Tile label="ARV" value={fmtMoney(arvEstimate)} />}
+          {rehabEstimate > 0 && <Tile label="Est. Rehab" value={fmtMoney(rehabEstimate)} sub={inv.rehabTier ? cap(inv.rehabTier) : null} />}
+          {spread != null && <Tile label="Projected Spread" value={fmtMoney(spread)} sub="ARV − Asking − Rehab" />}
+        </div>
+      )}
+
+      <div className="cta-bar">
+        <a href="tel:+15139518855" className="cta-primary">📞 Call Nathan · (513) 951-8855</a>
+        <a href="sms:+15139518855" className="cta-secondary">💬 Text</a>
+      </div>
+
+      {/* Property stats */}
+      <div className="card">
+        <p className="card-title">The property</p>
+        <div className="stat-grid" style={{ marginBottom: 14 }}>
+          <Stat label="Address" value={address} />
+          {inv.beds        && <Stat label="Beds" value={inv.beds} />}
+          {inv.baths       && <Stat label="Baths" value={inv.baths} />}
+          {inv.sqft        && <Stat label="Sqft" value={Number(inv.sqft).toLocaleString('en-US')} />}
+          {inv.yearBuilt   && <Stat label="Year built" value={inv.yearBuilt} />}
+          {inv.lotSize     && <Stat label="Lot" value={inv.lotSize} />}
+          {inv.parcelId    && <Stat label="Parcel" value={inv.parcelId} />}
+          {inv.occupancy   && <Stat label="Occupancy" value={cap(inv.occupancy)} />}
+          {inv.accessNotes && <Stat label="Access" value={inv.accessNotes} />}
+        </div>
+        {inv.investorNotes && (
+          <div style={{ marginTop: 14, padding: 14, background: 'var(--bg-card-alt)', borderRadius: 8, fontSize: 13, lineHeight: 1.55, color: 'var(--text)' }}>
+            {inv.investorNotes}
+          </div>
+        )}
+      </div>
+
+      {/* Condition / mechanicals */}
+      {hasAny(inv.roof, inv.hvac, inv.waterHeater, inv.electrical, inv.plumbing, inv.windows, inv.exterior, inv.basement, inv.foundation, inv.knownIssues) && (
+        <div className="card">
+          <p className="card-title">Condition & mechanicals</p>
+          <div className="stat-grid">
+            <ConditionRow label="Roof"         data={inv.roof} />
+            <ConditionRow label="HVAC"         data={inv.hvac} />
+            <ConditionRow label="Water heater" data={inv.waterHeater} />
+            <ConditionRow label="Electrical"   data={inv.electrical} />
+            <ConditionRow label="Plumbing"     data={inv.plumbing} />
+            <ConditionRow label="Windows"      data={inv.windows} />
+            <ConditionRow label="Exterior"     data={inv.exterior} />
+            <ConditionRow label="Basement"     data={inv.basement} />
+            <ConditionRow label="Foundation"   data={inv.foundation} />
+          </div>
+          {inv.knownIssues && (
+            <div style={{ marginTop: 14, padding: 14, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, fontSize: 13, lineHeight: 1.55, color: 'var(--text)' }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--red)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>Known issues</div>
+              {inv.knownIssues}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Photos */}
+      {photos.length > 1 && (
+        <div className="card">
+          <p className="card-title">Photos · {photos.length}</p>
+          <div className="photos-grid">
+            {photos.map(p => (
+              <div
+                key={p.id}
+                className="photo-thumb"
+                style={(p.id === coverDoc?.id ? coverUrl : photoUrls[p.id]) ? { backgroundImage: `url(${p.id === coverDoc?.id ? coverUrl : photoUrls[p.id]})` } : {}}
+                onClick={() => setLightbox(p.id === coverDoc?.id ? coverUrl : photoUrls[p.id])}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Video */}
+      {inv.videoUrl && (
+        <div className="card">
+          <p className="card-title">Walkthrough</p>
+          <VideoBlock url={inv.videoUrl} />
+        </div>
+      )}
+
+      {/* Closing */}
+      {hasAny(inv.titleCompany, inv.targetCloseDate, inv.earnestMoneyAmount, inv.inspectionDays) && (
+        <div className="card">
+          <p className="card-title">Closing</p>
+          <div className="stat-grid">
+            {inv.titleCompany && <Stat label="Title company" value={inv.titleCompany} />}
+            {inv.titleContactName && <Stat label="Coordinator" value={inv.titleContactName} />}
+            {inv.titleContactPhone && <Stat label="Title phone" value={<a href={`tel:${inv.titleContactPhone}`}>{inv.titleContactPhone}</a>} />}
+            {inv.titleContactEmail && <Stat label="Title email" value={<a href={`mailto:${inv.titleContactEmail}`}>{inv.titleContactEmail}</a>} />}
+            {inv.targetCloseDate && <Stat label="Target close" value={fmtDate(inv.targetCloseDate)} />}
+            {inv.earnestMoneyAmount > 0 && <Stat label="Earnest deposit" value={fmtMoney(inv.earnestMoneyAmount)} />}
+            {inv.inspectionDays && <Stat label="Inspection period" value={`${inv.inspectionDays} days from contract`} />}
+          </div>
+        </div>
+      )}
+
+      {/* Foreclosure context (preforeclosure deals only) */}
+      {hasAny(inv.caseNumber, inv.auctionDate, inv.judgmentAmount, inv.lienPayoff) && (
+        <div className="card">
+          <p className="card-title">Foreclosure context</p>
+          <div className="stat-grid">
+            {inv.caseNumber && <Stat label="Case" value={inv.caseNumber} />}
+            {county && <Stat label="Court" value={`${county} County Common Pleas`} />}
+            {auctionDate && <Stat label="Auction" value={fmtDate(auctionDate)} />}
+            {inv.judgmentAmount > 0 && <Stat label="Judgment" value={fmtMoney(inv.judgmentAmount)} />}
+            {inv.lienPayoff > 0 && <Stat label="Lien payoff" value={fmtMoney(inv.lienPayoff)} />}
+          </div>
+          <div className="fineprint" style={{ marginTop: 12, lineHeight: 1.55 }}>
+            Public record data. Verify independently before writing an offer. Payoff is an estimate until the lender issues a current statement.
+          </div>
+        </div>
+      )}
+
+      {/* Documents */}
+      {files.length > 0 && (
+        <div className="card">
+          <p className="card-title">Documents · {files.length}</p>
+          {files.map(f => <DocRow key={f.id} doc={f} />)}
+        </div>
+      )}
+
+      {/* Contact */}
+      <div className="card">
+        <p className="card-title">Your contact</p>
+        <div style={{ fontFamily: "'Fraunces',serif", fontSize: 18, color: 'var(--navy)', marginBottom: 4 }}>Nathan Johnson</div>
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 10 }}>Principal, RefundLocators</div>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <a href="tel:+15139518855" className="btn-gold">📞 (513) 951-8855</a>
+          <a href="mailto:nathan@fundlocators.com" className="btn-ghost">nathan@fundlocators.com</a>
+        </div>
+      </div>
+
+      <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
+        Shared via a private link. Revoke access anytime.
+      </p>
+
+      {lightbox && <div className="lightbox" onClick={() => setLightbox(null)}>
+        <img src={lightbox} alt="" />
+      </div>}
+    </div>
+  );
+}
+
+function hasAny(...vals) { return vals.some(v => {
+  if (v == null || v === '') return false;
+  if (typeof v === 'object') return Object.values(v).some(x => x != null && x !== '');
+  return true;
+}); }
+
+function isPhoto(doc) {
+  const name = (doc.name || '').toLowerCase();
+  return name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.png') || name.endsWith('.webp') || name.endsWith('.heic') || name.endsWith('.gif');
+}
+
+function Tile({ label, value, sub, hero }) {
+  return (
+    <div className={'num-tile ' + (hero ? 'hero' : '')}>
+      <div className="num-tile-label">{label}</div>
+      <div className="num-tile-value">{value || '—'}</div>
+      {sub && <div className="num-tile-sub">{sub}</div>}
+    </div>
+  );
+}
+
+function Stat({ label, value }) {
+  return (
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className={'stat-value' + (value == null || value === '' ? ' muted' : '')}>{value != null && value !== '' ? value : '—'}</div>
+    </div>
+  );
+}
+
+function ConditionRow({ label, data }) {
+  if (!data || typeof data !== 'object') {
+    if (!data) return null;
+    return <Stat label={label} value={data} />;
+  }
+  const bits = [];
+  if (data.age) bits.push(`${data.age} yr${data.age === 1 ? '' : 's'} old`);
+  if (data.year) bits.push(`installed ${data.year}`);
+  if (data.updated) bits.push(`updated ${data.updated}`);
+  if (data.material) bits.push(data.material);
+  if (data.type) bits.push(data.type);
+  if (data.condition) bits.push(cap(data.condition));
+  if (data.notes) bits.push(data.notes);
+  if (bits.length === 0) return null;
+  return <Stat label={label} value={bits.join(' · ')} />;
+}
+
+function AuctionCountdown({ auctionDate }) {
+  if (!auctionDate) return null;
+  const d = new Date(auctionDate);
+  const ms = d.getTime() - Date.now();
+  const days = Math.ceil(ms / (24*60*60*1000));
+  if (days < 0) return null;
+  const urgent = days <= 30;
+  return (
+    <div className={'auction-card' + (urgent ? '' : ' soft')}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: urgent ? '#991b1b' : 'var(--amber)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+        {urgent ? '⚠ Auction approaching' : 'Auction on calendar'}
+      </div>
+      <div style={{ fontFamily: "'Fraunces',serif", fontSize: 20, fontWeight: 500, color: urgent ? '#991b1b' : 'var(--navy)', letterSpacing: '-0.015em' }}>
+        {days === 0 ? 'Sheriff sale is today' : days === 1 ? '1 day to sheriff sale' : `${days} days to sheriff sale`}
+      </div>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginTop: 2 }}>
+        {fmtDate(auctionDate)} — close before this date to cancel the auction.
+      </div>
+    </div>
+  );
+}
+
+function VideoBlock({ url }) {
+  // Detect YouTube / Vimeo / direct video
+  const yt = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]+)/);
+  const vimeo = url.match(/vimeo\.com\/(\d+)/);
+  if (yt) return <div className="video-wrap"><iframe src={`https://www.youtube.com/embed/${yt[1]}`} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen /></div>;
+  if (vimeo) return <div className="video-wrap"><iframe src={`https://player.vimeo.com/video/${vimeo[1]}`} allow="autoplay; fullscreen; picture-in-picture" allowFullScreen /></div>;
+  if (/\.(mp4|mov|webm)$/i.test(url)) return <div className="video-wrap"><video src={url} controls /></div>;
+  return <a href={url} target="_blank" rel="noreferrer" className="btn-gold">Open walkthrough video</a>;
+}
+
+function DocRow({ doc }) {
+  const [loading, setLoading] = useState(false);
+  const open = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(SUPABASE_URL + '/functions/v1/investor-asset-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY },
+        body: JSON.stringify({ token: TOKEN, document_id: doc.id }),
+      });
+      const j = await r.json();
+      if (j.url) window.open(j.url, '_blank');
+    } finally { setLoading(false); }
+  };
+  return (
+    <div className="doc-row">
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="doc-name">{doc.name}</div>
+        <div className="doc-meta">{doc.document_type ? cap(doc.document_type.replace(/_/g,' ')) : 'Document'}{doc.size ? ` · ${(doc.size/1024/1024).toFixed(1)} MB` : ''}</div>
+      </div>
+      <button onClick={open} disabled={loading} className="btn-ghost">{loading ? '…' : 'Open'}</button>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

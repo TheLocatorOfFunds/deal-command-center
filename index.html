@@ -2281,6 +2281,8 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
             <CourtPullButton dealId={deal.id} caseNumber={m.courtCase} county={m.county} userId={userId} />
           </Card>
         )}
+        <InvestorDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
+        <InvestorPortalCard deal={deal} userId={userId} />
         <Card title="Progress" style={{ marginTop: 16 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
@@ -2596,6 +2598,271 @@ function ClientPortalCard({ deal, logAct }) {
 }
 
 // ─── Welcome Video Card (DCC side) ──────────────────
+// ─── Investor Portal cards (flip deals) ──────────────────────────────
+// Two cards: InvestorPortalCard manages token-based share links;
+// InvestorDetailsEditor fills out the buyer-facing deal fields that
+// investor-portal.html reads from meta.investor jsonb.
+function InvestorPortalCard({ deal, userId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
+  const [copiedId, setCopiedId] = useState(null);
+
+  const base = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+  const buildLink = (token) => base + 'investor-portal.html?t=' + token;
+
+  const load = async () => {
+    const { data } = await sb.from('investor_deal_access')
+      .select('*')
+      .eq('deal_id', deal.id)
+      .order('invited_at', { ascending: false });
+    setRows(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [deal.id]);
+
+  const add = async () => {
+    if (!form.name.trim() && !form.email.trim() && !form.phone.trim()) {
+      alert('Add at least a name, email, or phone so we know who this link is for.');
+      return;
+    }
+    setAdding(true);
+    const { error } = await sb.from('investor_deal_access').insert({
+      deal_id: deal.id,
+      investor_name: form.name.trim() || null,
+      investor_email: form.email.trim() || null,
+      investor_phone: form.phone.trim() || null,
+      invited_by: userId,
+    });
+    setAdding(false);
+    if (error) { alert('Could not add: ' + error.message); return; }
+    setForm({ name: '', email: '', phone: '' });
+    load();
+  };
+
+  const revoke = async (row) => {
+    if (!confirm(`Revoke ${row.investor_name || row.investor_email || 'this link'}? They won't be able to view the deal anymore.`)) return;
+    await sb.from('investor_deal_access')
+      .update({ enabled: false, revoked_at: new Date().toISOString() })
+      .eq('id', row.id);
+    load();
+  };
+
+  const reenable = async (row) => {
+    await sb.from('investor_deal_access')
+      .update({ enabled: true, revoked_at: null })
+      .eq('id', row.id);
+    load();
+  };
+
+  const copy = async (row) => {
+    const link = buildLink(row.token);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedId(row.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch { window.prompt('Copy this link:', link); }
+  };
+
+  return (
+    <Card title="Investor Portal" style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.55 }}>
+        Generate a share link for a buyer. They click the link — no signup — and see the Investor Details you fill in below (asking price, ARV, rehab, condition, photos, closing). Revoke anytime.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 10 }}>
+        <Field label="Buyer name"><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inputStyle} placeholder="Who is this?" /></Field>
+        <Field label="Email"><input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
+        <Field label="Phone"><input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
+      </div>
+      <button onClick={add} disabled={adding} style={btnPrimary}>
+        {adding ? 'Generating…' : '+ Generate share link'}
+      </button>
+
+      <div style={{ marginTop: 16 }}>
+        {loading ? null : rows.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic", padding: 12 }}>No investor links yet. Fill in the details above + click generate.</div>
+        ) : (
+          rows.map(r => {
+            const link = buildLink(r.token);
+            const dead = !r.enabled || r.revoked_at;
+            return (
+              <div key={r.id} style={{ padding: "10px 12px", marginBottom: 8, background: "#0c0a09", border: "1px solid " + (dead ? "#292524" : "#44403c"), borderRadius: 6, opacity: dead ? 0.55 : 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#fafaf9" }}>{r.investor_name || r.investor_email || r.investor_phone || 'Unnamed buyer'}</div>
+                    <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                      {[r.investor_email, r.investor_phone].filter(Boolean).join(' · ')}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 2 }}>
+                      Invited {new Date(r.invited_at).toLocaleDateString()}
+                      {r.view_count > 0 && <> · {r.view_count} view{r.view_count === 1 ? '' : 's'}</>}
+                      {r.last_viewed_at && <> · last seen {new Date(r.last_viewed_at).toLocaleDateString()}</>}
+                      {dead && <span style={{ color: "#ef4444", marginLeft: 6 }}>· Revoked</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {!dead && <button onClick={() => copy(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: copiedId === r.id ? "#6ee7b7" : "#fbbf24" }}>{copiedId === r.id ? '✓ Copied' : '📋 Copy link'}</button>}
+                    {!dead ? (
+                      <button onClick={() => revoke(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5" }}>Revoke</button>
+                    ) : (
+                      <button onClick={() => reenable(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#6ee7b7" }}>Re-enable</button>
+                    )}
+                  </div>
+                </div>
+                {!dead && (
+                  <div style={{ fontSize: 10, color: "#57534e", marginTop: 6, fontFamily: "'DM Mono', monospace", wordBreak: "break-all" }}>{link}</div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function InvestorDetailsEditor({ deal, onUpdateDeal }) {
+  const m = deal.meta || {};
+  const inv = m.investor || {};
+  const updateInvestor = (patch) => onUpdateDeal({ meta: { ...m, investor: { ...inv, ...patch } } });
+  const updateNested = (key, patch) => updateInvestor({ [key]: { ...(inv[key] || {}), ...patch } });
+  const [sect, setSect] = useState('pricing'); // pricing | property | condition | closing | other
+
+  const sectionBtn = (id, label) => (
+    <button key={id} onClick={() => setSect(id)} style={{ background: sect === id ? '#292524' : 'transparent', color: sect === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (sect === id ? '#44403c' : 'transparent'), padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
+  );
+
+  const NumField = ({ label, k, step = 1, placeholder }) => (
+    <Field label={label}>
+      <input type="number" step={step} value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value === '' ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder={placeholder} />
+    </Field>
+  );
+  const TxtField = ({ label, k, placeholder }) => (
+    <Field label={label}>
+      <input value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={inputStyle} placeholder={placeholder} />
+    </Field>
+  );
+  const DateField = ({ label, k }) => (
+    <Field label={label}>
+      <input type="date" value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={inputStyle} />
+    </Field>
+  );
+  const SelField = ({ label, k, options }) => (
+    <Field label={label}>
+      <select value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
+        <option value="">—</option>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </Field>
+  );
+  const CondGroup = ({ label, k, fields = ['age', 'condition'] }) => {
+    const data = inv[k] || {};
+    return (
+      <Field label={label}>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${fields.length}, 1fr)`, gap: 6 }}>
+          {fields.map(f => (
+            <input
+              key={f}
+              value={data[f] || ''}
+              onChange={e => updateNested(k, { [f]: e.target.value || null })}
+              style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
+              placeholder={f}
+            />
+          ))}
+        </div>
+      </Field>
+    );
+  };
+
+  return (
+    <Card title="Investor-Facing Details" style={{ marginTop: 16 }}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, flexWrap: 'wrap' }}>
+        {sectionBtn('pricing', 'Pricing')}
+        {sectionBtn('property', 'Property')}
+        {sectionBtn('condition', 'Condition')}
+        {sectionBtn('closing', 'Closing')}
+        {sectionBtn('other', 'Other')}
+      </div>
+
+      {sect === 'pricing' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+          <NumField label="Asking price" k="askingPrice" step={1000} placeholder="200000" />
+          <NumField label="ARV estimate" k="arvEstimate" step={1000} placeholder="290000" />
+          <NumField label="Rehab estimate" k="rehabEstimate" step={500} placeholder="15000" />
+          <SelField label="Rehab tier" k="rehabTier" options={[{value:'light',label:'Light'},{value:'medium',label:'Medium'},{value:'heavy',label:'Heavy'}]} />
+          <SelField label="Deal type" k="dealType" options={[{value:'wholesale',label:'Wholesale'},{value:'wholetail',label:'Wholetail'},{value:'fix-flip',label:'Fix & Flip'},{value:'fixed-price',label:'Fixed-price buy'}]} />
+        </div>
+      )}
+
+      {sect === 'property' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
+          <TxtField label="Address (portal)" k="propertyAddress" placeholder={deal.address || '123 Main St'} />
+          <NumField label="Beds" k="beds" placeholder="4" />
+          <NumField label="Baths" k="baths" step={0.5} placeholder="2.5" />
+          <NumField label="Sqft" k="sqft" placeholder="2140" />
+          <NumField label="Year built" k="yearBuilt" placeholder="1998" />
+          <TxtField label="Lot size" k="lotSize" placeholder="0.24 acres" />
+          <TxtField label="Parcel #" k="parcelId" placeholder="M5620-096-000-007" />
+          <SelField label="Occupancy" k="occupancy" options={[{value:'vacant',label:'Vacant'},{value:'owner-occupied',label:'Owner-occupied'},{value:'tenant-occupied',label:'Tenant-occupied'}]} />
+          <TxtField label="Access notes" k="accessNotes" placeholder="Call Nathan 24h ahead" />
+        </div>
+      )}
+
+      {sect === 'condition' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+          <CondGroup label="Roof" k="roof" fields={['age','condition','material']} />
+          <CondGroup label="HVAC" k="hvac" fields={['age','condition']} />
+          <CondGroup label="Water heater" k="waterHeater" fields={['age','condition']} />
+          <CondGroup label="Electrical" k="electrical" fields={['updated','condition']} />
+          <CondGroup label="Plumbing" k="plumbing" fields={['updated','condition']} />
+          <CondGroup label="Windows" k="windows" fields={['age','condition']} />
+          <CondGroup label="Exterior" k="exterior" fields={['type','age','condition']} />
+          <CondGroup label="Basement" k="basement" fields={['type','condition']} />
+          <CondGroup label="Foundation" k="foundation" fields={['condition','notes']} />
+          <Field label="Known issues" style={{ gridColumn: '1 / -1' }}>
+            <textarea value={inv.knownIssues || ''} onChange={e => updateInvestor({ knownIssues: e.target.value || null })} style={{ ...inputStyle, minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Anything the buyer should know: roof leaks, foundation cracks, settlement, mold history, pending permits…" />
+          </Field>
+        </div>
+      )}
+
+      {sect === 'closing' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <TxtField label="Title company" k="titleCompany" placeholder="Stewart Title Cincinnati" />
+          <TxtField label="Title contact" k="titleContactName" placeholder="Jen Smith" />
+          <TxtField label="Title phone" k="titleContactPhone" placeholder="(513) 555-0100" />
+          <TxtField label="Title email" k="titleContactEmail" placeholder="jen@stewart.com" />
+          <DateField label="Target close" k="targetCloseDate" />
+          <NumField label="Earnest $" k="earnestMoneyAmount" step={500} placeholder="2500" />
+          <NumField label="Inspection days" k="inspectionDays" placeholder="7" />
+          <DateField label="Auction date (foreclosure)" k="auctionDate" />
+          <NumField label="Judgment amount" k="judgmentAmount" step={1000} placeholder="141697" />
+          <NumField label="Lien payoff" k="lienPayoff" step={500} placeholder="147500" />
+          <TxtField label="Case number" k="caseNumber" placeholder={m.courtCase || 'CV 2022 08 1416'} />
+        </div>
+      )}
+
+      {sect === 'other' && (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
+          <TxtField label="Walkthrough video URL (YouTube / Vimeo / .mp4)" k="videoUrl" placeholder="https://youtu.be/..." />
+          <Field label="Cover photo path">
+            <input value={inv.coverPhotoPath || ''} onChange={e => updateInvestor({ coverPhotoPath: e.target.value || null })} style={inputStyle} placeholder="Set from Documents tab — mark a photo investor-visible + click ★ to pick cover" />
+          </Field>
+          <Field label="Notes for investors">
+            <textarea value={inv.investorNotes || ''} onChange={e => updateInvestor({ investorNotes: e.target.value || null })} style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Why this deal? Story, timeline, any special terms. Shown on the portal under property stats." />
+          </Field>
+        </div>
+      )}
+
+      <div style={{ fontSize: 10, color: "#57534e", marginTop: 12, lineHeight: 1.5 }}>
+        All fields save live. What you type here shows up on any active investor link within 1-2 seconds.
+      </div>
+    </Card>
+  );
+}
+
 function WelcomeVideoCard({ deal, logAct, onUpdateDeal }) {
   const m = deal.meta || {};
   const wv = m.welcome_video;
@@ -4193,7 +4460,28 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                   {doc.extracted?.summary && ` · ${doc.extracted.summary}`}
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+              <div style={{ display: "flex", gap: 6, flexShrink: 0, alignItems: "center" }}>
+                {/* Investor visibility toggle + cover-photo picker. Flip deals only benefit from these,
+                    but we show on all deal types so any shared content can route through the investor portal. */}
+                <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: doc.investor_visible ? "#fbbf24" : "#57534e", cursor: "pointer", padding: "4px 8px", border: "1px solid " + (doc.investor_visible ? "#92400e" : "#292524"), borderRadius: 4, background: doc.investor_visible ? "#78350f22" : "transparent" }} title="Show this document on the Investor Portal">
+                  <input type="checkbox" checked={!!doc.investor_visible} onChange={async (e) => {
+                    await sb.from('documents').update({ investor_visible: e.target.checked }).eq('id', doc.id);
+                    await reload();
+                  }} style={{ margin: 0 }} />
+                  👤 Investor
+                </label>
+                {doc.investor_visible && /\.(jpg|jpeg|png|webp|heic|gif)$/i.test(doc.name) && (
+                  <button
+                    onClick={async () => {
+                      const isCover = (deal.meta?.investor?.coverPhotoPath === doc.path);
+                      const newInv = { ...(deal.meta?.investor || {}), coverPhotoPath: isCover ? null : doc.path };
+                      await sb.from('deals').update({ meta: { ...(deal.meta || {}), investor: newInv } }).eq('id', deal.id);
+                      await reload();
+                    }}
+                    title={deal.meta?.investor?.coverPhotoPath === doc.path ? "Cover photo — click to unset" : "Set as cover photo"}
+                    style={{ ...btnGhost, fontSize: 12, padding: "3px 8px", color: deal.meta?.investor?.coverPhotoPath === doc.path ? "#fbbf24" : "#57534e", borderColor: deal.meta?.investor?.coverPhotoPath === doc.path ? "#92400e" : "#292524" }}
+                  >★</button>
+                )}
                 {status === 'done' && hasFields && (
                   <button onClick={() => setExpanded(prev => ({ ...prev, [doc.id]: !isExpanded }))} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{isExpanded ? 'Hide fields' : 'Show fields'}</button>
                 )}
