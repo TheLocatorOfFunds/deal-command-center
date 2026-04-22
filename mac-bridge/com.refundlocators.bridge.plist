@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  launchd agent — auto-starts the DCC iMessage bridge on login.
+
+  SETUP (run once in Terminal):
+    1. Edit the two EDIT_ME paths below to match where you cloned the repo
+    2. cp com.refundlocators.bridge.plist ~/Library/LaunchAgents/
+    3. launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist
+    4. launchctl start com.refundlocators.bridge
+
+  To stop:
+    launchctl stop com.refundlocators.bridge
+    launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist
+
+  Logs:
+    tail -f /tmp/dcc-bridge.log
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.refundlocators.bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <!-- EDIT_ME: full path to node binary — run `which node` in Terminal to find it -->
+    <string>/usr/local/bin/node</string>
+    <!-- EDIT_ME: full path to bridge.js -->
+    <string>/Users/YOURUSERNAME/Documents/deal-command-center/mac-bridge/bridge.js</string>
+  </array>
+
+  <!-- Restart automatically if it crashes -->
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Start at login -->
+  <key>RunAtLoad</key>
+  <true/>
+
+  <!-- Working directory (so .env and .watermark resolve correctly) -->
+  <key>WorkingDirectory</key>
+  <!-- EDIT_ME: same directory as bridge.js -->
+  <string>/Users/YOURUSERNAME/Documents/deal-command-center/mac-bridge</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/dcc-bridge.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/dcc-bridge.log</string>
+</dict>
+</plist>

@@ -24,3 +24,6 @@ INFRASTRUCTURE_MAP.md
 .vscode/
 .idea/
 *.swp
+mac-bridge/.env
+mac-bridge/.watermark
+mac-bridge/node_modules/
