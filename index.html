@@ -372,13 +372,15 @@ function Root() {
   const [session, setSession]       = useState(null);
   const [profile, setProfile]       = useState(null);
   const [checking, setChecking]     = useState(true);
-  const [recovering, setRecovering] = useState(false);
+  // Detect recovery link synchronously before any async calls resolve
+  const [recovering, setRecovering] = useState(() => window.location.hash.includes('type=recovery'));
 
   useEffect(() => {
     sb.auth.getSession().then(({ data }) => { setSession(data.session); setChecking(false); });
     const { data: sub } = sb.auth.onAuthStateChange((evt, s) => {
       if (evt === "PASSWORD_RECOVERY") { setSession(s); setRecovering(true); }
-      else { setSession(s); setRecovering(false); }
+      else if (evt === "USER_UPDATED")  { setRecovering(false); }
+      else { setSession(s); }
     });
     return () => sub.subscription.unsubscribe();
   }, []);
