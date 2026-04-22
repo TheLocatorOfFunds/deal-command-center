@@ -731,6 +731,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("pipeline", "🧭 Pipeline", 0)}
+          {viewBtn("tasks", "✓ Tasks", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
           {viewBtn("hygiene", "🩺 Hygiene", 0)}
@@ -743,8 +744,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today / Analytics / Hygiene / Pipeline views) */}
-      {view !== "today" && view !== "analytics" && view !== "hygiene" && view !== "pipeline" && (
+      {/* Search / Filter / Layout toggle bar (hidden on Today / Analytics / Hygiene / Pipeline / Tasks views) */}
+      {view !== "today" && view !== "analytics" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -763,7 +764,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "analytics" || view === "pipeline") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "analytics" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -773,6 +774,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <HygieneDashboard deals={deals} onSelect={onSelect} />
           ) : view === "pipeline" ? (
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} />
+          ) : view === "tasks" ? (
+            <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -815,7 +818,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "analytics" && view !== "pipeline" && <div>
+        {view !== "analytics" && view !== "pipeline" && view !== "tasks" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -960,6 +963,295 @@ function DealCardName({ deal }) {
   );
 }
 
+// Global /tasks view — Nathan's + Eric's morning queue. Shows tasks across
+// every deal sorted by tier priority (A → 30DTS → B → C → unscored) then
+// due-date asc. Overdue in red. One-click mark-done + jump-to-deal.
+function GlobalTasksView({ deals, onJumpToDeal }) {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('open'); // open | overdue | today | week | done
+  const [updating, setUpdating] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('tasks')
+      .select('*')
+      .order('due_date', { ascending: true, nullsLast: true })
+      .order('created_at', { ascending: true })
+      .limit(200);
+    setTasks(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    const ch = sb.channel('tasks-global')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const markDone = async (t, done) => {
+    setUpdating(t.id);
+    await sb.from('tasks').update({ done }).eq('id', t.id);
+    setUpdating(null);
+    load();
+  };
+
+  const dealsById = {};
+  deals.forEach(d => { dealsById[d.id] = d; });
+  const today = new Date().toISOString().slice(0, 10);
+  const weekFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  const enriched = tasks.map(t => {
+    const d = dealsById[t.deal_id];
+    return {
+      ...t,
+      deal: d,
+      tierOrder: d?.is_30dts ? 0.5 : ({ A: 0, B: 2, C: 3 }[d?.lead_tier] ?? 4),
+      isOverdue: t.due_date && !t.done && t.due_date < today,
+    };
+  });
+
+  let filtered;
+  if (filter === 'done') filtered = enriched.filter(t => t.done);
+  else if (filter === 'overdue') filtered = enriched.filter(t => t.isOverdue);
+  else if (filter === 'today') filtered = enriched.filter(t => !t.done && t.due_date === today);
+  else if (filter === 'week') filtered = enriched.filter(t => !t.done && t.due_date && t.due_date <= weekFromNow && t.due_date >= today);
+  else filtered = enriched.filter(t => !t.done);
+
+  filtered.sort((a, b) => {
+    if (a.tierOrder !== b.tierOrder) return a.tierOrder - b.tierOrder;
+    if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
+    if (a.due_date) return -1;
+    if (b.due_date) return 1;
+    return 0;
+  });
+
+  const counts = {
+    open: enriched.filter(t => !t.done).length,
+    overdue: enriched.filter(t => t.isOverdue).length,
+    today: enriched.filter(t => !t.done && t.due_date === today).length,
+    week: enriched.filter(t => !t.done && t.due_date && t.due_date <= weekFromNow && t.due_date >= today).length,
+    done: enriched.filter(t => t.done).length,
+  };
+
+  const chip = (id, label) => (
+    <button key={id} onClick={() => setFilter(id)} style={{
+      fontSize: 12, padding: '6px 14px', borderRadius: 6,
+      background: filter === id ? '#292524' : 'transparent',
+      color: filter === id ? '#fafaf9' : '#78716c',
+      border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'),
+      fontWeight: filter === id ? 700 : 500, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+    }}>{label} · {counts[id]}</button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, padding: 16, background: "#1c1917", border: "1px solid #292524", borderRadius: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase' }}>✓ Tasks</div>
+            <div style={{ fontSize: 13, color: '#a8a29e', marginTop: 4, lineHeight: 1.5 }}>
+              {counts.overdue > 0 ? <><span style={{ color: '#fca5a5', fontWeight: 700 }}>{counts.overdue} overdue</span> · </> : null}
+              {counts.today} due today · {counts.week} this week · sorted A → 30DTS → B → C
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap' }}>
+          {chip('overdue', 'Overdue')}
+          {chip('today', 'Today')}
+          {chip('week', 'This week')}
+          {chip('open', 'All open')}
+          {chip('done', 'Done')}
+        </div>
+      </div>
+
+      {loading && <div style={{ padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 }}>Loading…</div>}
+      {!loading && filtered.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>
+          {filter === 'overdue' ? '🎉 No overdue tasks.' : filter === 'today' ? 'Nothing due today.' : 'No tasks match this filter.'}
+        </div>
+      )}
+
+      {filtered.map(t => {
+        const d = t.deal;
+        return (
+          <div key={t.id} style={{ marginBottom: 8, padding: "10px 14px", background: '#1c1917', border: '1px solid ' + (t.isOverdue ? '#7f1d1d' : '#292524'), borderLeft: '3px solid ' + (t.isOverdue ? '#ef4444' : d?.lead_tier === 'A' ? '#d8b560' : d?.is_30dts ? '#ef4444' : d?.lead_tier === 'B' ? '#8b5cf6' : '#44403c'), borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <input type="checkbox" checked={!!t.done} onChange={e => markDone(t, e.target.checked)} disabled={updating === t.id} style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontSize: 13, color: t.done ? '#78716c' : '#fafaf9', textDecoration: t.done ? 'line-through' : 'none', marginBottom: 2 }}>{t.title}</div>
+              <div style={{ fontSize: 10, color: '#78716c', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                {d && <span style={{ color: '#d6d3d1', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => onJumpToDeal(d.id)}>{(d.name || '').split(' - ')[0]}</span>}
+                {d && d.lead_tier && <TierBadge deal={d} />}
+                {d && d.is_30dts && <DTSCountdown days={d.days_to_sale} />}
+                {t.assigned_to && <span style={{ color: '#a8a29e' }}>· {t.assigned_to}</span>}
+                {t.due_date && <span style={{ color: t.isOverdue ? '#ef4444' : '#a8a29e', fontFamily: "'DM Mono', monospace", fontWeight: t.isOverdue ? 700 : 400 }}>· {t.isOverdue ? 'OVERDUE ' : ''}due {new Date(t.due_date + 'T00:00:00').toLocaleDateString()}</span>}
+              </div>
+            </div>
+            {d && <button onClick={() => onJumpToDeal(d.id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Send Intro Text modal — loads an SMS template matching the deal's
+// lead_tier (or 30DTS track), substitutes merge variables, lets Eric
+// review/edit, sends via send-sms Edge Function (Twilio today; swap to
+// iMessage bridge when Justin ships it). On success logs structured
+// activity + flips sales_stage to 'texted'.
+function SendIntroTextModal({ deal, onClose, onSent }) {
+  const [templates, setTemplates] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  const [body, setBody] = useState('');
+  const [fromNumber, setFromNumber] = useState('');
+  const [sending, setSending] = useState(false);
+  const [err, setErr] = useState(null);
+  const [phoneNumbers, setPhoneNumbers] = useState([]);
+
+  const m = deal.meta || {};
+  const toNumber = m.homeownerPhone;
+  const firstName = ((m.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there';
+  const ownerName = (m.homeownerName || deal.name || '').split(' - ')[0];
+  const county = m.county || '';
+  const saleDate = deal.days_to_sale != null
+    ? new Date(Date.now() + deal.days_to_sale * 24 * 60 * 60 * 1000).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
+    : '';
+  const token = deal.refundlocators_token || '';
+
+  useEffect(() => {
+    (async () => {
+      const { data: t } = await sb.from('sms_templates').select('*').eq('active', true);
+      setTemplates(t || []);
+      // Pick starting template: prefer 30DTS if deal is_30dts, else match tier
+      const preferredTier = deal.is_30dts ? '30DTS' : (deal.lead_tier || 'A');
+      const match = (t || []).find(x => x.tier === preferredTier) || (t || [])[0];
+      if (match) {
+        setSelectedId(match.id);
+        setBody(renderTemplate(match.body_template));
+      }
+      const { data: pn } = await sb.from('phone_numbers').select('*').eq('active', true);
+      setPhoneNumbers(pn || []);
+      if ((pn || []).length > 0) setFromNumber(pn[0].number);
+    })();
+    // eslint-disable-next-line
+  }, []);
+
+  function renderTemplate(tpl) {
+    return (tpl || '')
+      .replace(/\[FirstName\]/g, firstName)
+      .replace(/\[OwnerName\]/g, ownerName)
+      .replace(/\[sale_date\]/g, saleDate || '[sale date not set]')
+      .replace(/\[token\]/g, token || '[token-pending]')
+      .replace(/\[County\]/g, county);
+  }
+
+  const pickTemplate = (id) => {
+    setSelectedId(id);
+    const t = templates.find(x => x.id === id);
+    if (t) setBody(renderTemplate(t.body_template));
+  };
+
+  const missingToken = !token;
+  const missingPhone = !toNumber;
+
+  const send = async () => {
+    if (!toNumber) { setErr('Homeowner phone not set on this deal'); return; }
+    if (!body.trim()) { setErr('Empty message'); return; }
+    setSending(true); setErr(null);
+    try {
+      const { data, error } = await sb.functions.invoke('send-sms', {
+        body: { to: toNumber, body: body.trim(), deal_id: deal.id, from_number: fromNumber || undefined },
+      });
+      if (error) {
+        let msg = error.message;
+        try { const body = await error.context?.json?.(); msg = body?.error || body?.message || msg; } catch {}
+        throw new Error(msg);
+      }
+      if (data?.status === 'failed') throw new Error(data.error_message || 'Twilio error');
+
+      // Structured activity + flip sales_stage
+      await sb.rpc('log_deal_activity', {
+        p_deal_id: deal.id,
+        p_type: 'text',
+        p_outcome: 'sent',
+        p_body: body.trim(),
+        p_next_followup_date: null,
+        p_next_followup_note: null,
+      });
+      const stageField = deal.is_30dts ? 'sales_stage_30dts' : 'sales_stage';
+      await sb.from('deals').update({ [stageField]: 'texted' }).eq('id', deal.id);
+
+      onSent && onSent();
+      onClose();
+    } catch (e) { setErr(e.message); }
+    finally { setSending(false); }
+  };
+
+  const charCount = body.length;
+  const bubbleCount = Math.ceil(charCount / 160);
+
+  return (
+    <Modal onClose={onClose} title="💬 Send Intro Text" wide>
+      <div style={{ marginBottom: 12, fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>
+        Sending to <b style={{ color: '#fbbf24' }}>{ownerName || 'homeowner'}</b>
+        {toNumber && <> at <span style={{ fontFamily: "'DM Mono', monospace", color: '#d6d3d1' }}>{toNumber}</span></>}
+        {deal.lead_tier && <> · <TierBadge deal={deal} /></>}
+        {deal.is_30dts && <> · <DTSCountdown days={deal.days_to_sale} /></>}
+      </div>
+
+      {missingPhone && (
+        <div style={{ padding: 12, background: '#7f1d1d22', border: '1px solid #7f1d1d', borderRadius: 6, fontSize: 12, color: '#fca5a5', marginBottom: 12 }}>
+          ⚠ No phone number on file. Add homeowner phone to deal.meta.homeownerPhone first.
+        </div>
+      )}
+      {missingToken && (
+        <div style={{ padding: 12, background: '#78350f22', border: '1px solid #d97706', borderRadius: 6, fontSize: 12, color: '#fbbf24', marginBottom: 12 }}>
+          ⚠ No refundlocators.com token on this deal yet. Castle generates these after scoring. Text will send with placeholder <code>[token-pending]</code> — edit the link manually or wait for Castle to backfill.
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10, marginBottom: 12 }}>
+        <Field label="Template">
+          <select value={selectedId || ''} onChange={e => pickTemplate(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
+            {templates.map(t => <option key={t.id} value={t.id}>[{t.tier}] {t.label}</option>)}
+          </select>
+        </Field>
+        {phoneNumbers.length > 0 && (
+          <Field label="Send from">
+            <select value={fromNumber} onChange={e => setFromNumber(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
+              {phoneNumbers.map(p => <option key={p.number} value={p.number}>{p.label || p.number}</option>)}
+            </select>
+          </Field>
+        )}
+      </div>
+
+      <Field label="Message body">
+        <textarea value={body} onChange={e => setBody(e.target.value)} rows={10}
+          style={{ ...inputStyle, width: '100%', resize: 'vertical', minHeight: 200, fontFamily: "inherit", fontSize: 13, lineHeight: 1.55 }} />
+      </Field>
+      <div style={{ fontSize: 10, color: '#78716c', marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <span>{charCount} chars · ~{bubbleCount} SMS segment{bubbleCount === 1 ? '' : 's'} (iMessage ignores this)</span>
+        <span>Variables: [FirstName] [OwnerName] [sale_date] [token] [County]</span>
+      </div>
+
+      {err && <div style={{ padding: 10, background: '#7f1d1d22', border: '1px solid #7f1d1d', borderRadius: 4, fontSize: 12, color: '#fca5a5', marginTop: 12 }}>{err}</div>}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16, paddingTop: 12, borderTop: '1px solid #292524' }}>
+        <button onClick={onClose} style={btnGhost}>Cancel</button>
+        <button onClick={send} disabled={sending || missingPhone} style={btnPrimary}>
+          {sending ? 'Sending…' : '💬 Send'}
+        </button>
+      </div>
+      <div style={{ fontSize: 10, color: '#57534e', marginTop: 8, textAlign: 'right' }}>
+        Sending via Twilio (iMessage bridge TBD). On send → logs activity + moves stage to 'texted'.
+      </div>
+    </Modal>
+  );
+}
+
 function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   const [track, setTrack] = useState('surplus'); // 'surplus' | '30dts'
   const [tierFilter, setTierFilter] = useState({ A: true, B: true, C: true, other: true });
@@ -967,6 +1259,7 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   const [search, setSearch] = useState('');
   const [dragId, setDragId] = useState(null);
   const [dragOverStage, setDragOverStage] = useState(null);
+  const [textingDeal, setTextingDeal] = useState(null);
 
   const stageField = track === 'surplus' ? 'sales_stage' : 'sales_stage_30dts';
   const stages = track === 'surplus' ? SURPLUS_STAGES : DTS_STAGES;
@@ -1191,6 +1484,19 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
                           )}
                           <StalenessTag lastContactedAt={d.last_contacted_at} />
                         </div>
+                        {/* Send Intro Text button: only in 'new' stage + has phone + token ready */}
+                        {d[stageField] === 'new' && d.meta?.homeownerPhone && (
+                          <button
+                            onClick={e => { e.stopPropagation(); setTextingDeal(d); }}
+                            style={{ marginTop: 8, width: '100%', padding: '5px 10px', background: '#064e3b', color: '#6ee7b7', border: '1px solid #065f46', borderRadius: 5, fontSize: 10, fontWeight: 700, cursor: 'pointer', letterSpacing: '0.04em', textTransform: 'uppercase' }}
+                          >💬 Send Intro Text</button>
+                        )}
+                        {d[stageField] !== 'new' && d.meta?.homeownerPhone && (
+                          <button
+                            onClick={e => { e.stopPropagation(); setTextingDeal(d); }}
+                            style={{ marginTop: 8, width: '100%', padding: '4px 10px', background: 'transparent', color: '#78716c', border: '1px solid #292524', borderRadius: 5, fontSize: 9, fontWeight: 600, cursor: 'pointer', letterSpacing: '0.04em', textTransform: 'uppercase' }}
+                          >↻ Resend / Follow up</button>
+                        )}
                       </div>
                     );
                   })}
@@ -1215,6 +1521,14 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
             : 'No active surplus deals in the sales pipeline. Add a lead + set its stage, or wait for the homepage search to send one in.'
           }
         </div>
+      )}
+
+      {textingDeal && (
+        <SendIntroTextModal
+          deal={textingDeal}
+          onClose={() => setTextingDeal(null)}
+          onSent={() => { /* realtime on deals will reload */ }}
+        />
       )}
     </div>
   );
@@ -2525,7 +2839,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "vendors" && <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />}
       {tab === "documents" && <Documents items={documents} dealId={deal.id} deal={deal} userId={userId} logAct={logAct} reload={loadAll} />}
       {tab === "notes" && <Notes items={notes} dealId={deal.id} userId={userId} userName={userName} reload={loadAll} />}
-      {tab === "activity" && <Activity items={activity} />}
+      {tab === "activity" && <Activity items={activity} dealId={deal.id} reload={loadAll} />}
       {tab === "sms" && <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />}
 
       {showPostUpdate && (
@@ -5619,18 +5933,274 @@ const personColor = (name) => {
   let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
   return palette[h % palette.length];
 };
-function Activity({ items }) {
+// Log Activity form — types structured entries that write to `activity` via
+// log_deal_activity RPC. Picks verb (Called/Texted/Emailed/Note/...),
+// captures outcome + body + optional next-follow-up date. Follow-up date
+// creates a task automatically. tg_bump_last_contacted picks up contact
+// verbs so staleness sorting on the pipeline stays accurate.
+function LogActivityForm({ dealId, onLogged }) {
+  const [type, setType] = useState('call');
+  const [outcome, setOutcome] = useState('');
+  const [body, setBody] = useState('');
+  const [followupDate, setFollowupDate] = useState('');
+  const [followupNote, setFollowupNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  const OUTCOME_OPTIONS = {
+    call:    ['connected', 'voicemail', 'no answer', 'callback requested', 'not interested', 'wrong number'],
+    text:    ['sent', 'replied', 'no reply'],
+    sms:     ['sent', 'replied', 'no reply'],
+    email:   ['sent', 'opened', 'replied', 'bounced'],
+    note:    [],
+    meeting: ['completed', 'scheduled', 'no-show'],
+  };
+
+  const submit = async () => {
+    if (!body.trim() && type === 'note') { alert('Add a note body'); return; }
+    setSubmitting(true);
+    try {
+      const { error } = await sb.rpc('log_deal_activity', {
+        p_deal_id: dealId,
+        p_type: type,
+        p_outcome: outcome || null,
+        p_body: body.trim() || null,
+        p_next_followup_date: followupDate || null,
+        p_next_followup_note: followupNote.trim() || null,
+      });
+      if (error) throw error;
+      setType('call'); setOutcome(''); setBody(''); setFollowupDate(''); setFollowupNote('');
+      setExpanded(false);
+      onLogged && onLogged();
+    } catch (e) { alert('Could not save: ' + e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  if (!expanded) {
+    return (
+      <div style={{ marginBottom: 14, padding: "10px 14px", background: "#1c1917", border: "1px solid #292524", borderRadius: 8, display: "flex", alignItems: "center", gap: 10 }}>
+        <button onClick={() => { setType('call'); setExpanded(true); }} style={{ ...btnGhost, fontSize: 11, color: "#93c5fd" }}>📞 Log call</button>
+        <button onClick={() => { setType('text'); setExpanded(true); }} style={{ ...btnGhost, fontSize: 11, color: "#6ee7b7" }}>💬 Log text</button>
+        <button onClick={() => { setType('email'); setExpanded(true); }} style={{ ...btnGhost, fontSize: 11, color: "#fbbf24" }}>✉ Log email</button>
+        <button onClick={() => { setType('note'); setExpanded(true); }} style={{ ...btnGhost, fontSize: 11, color: "#c4b5fd" }}>📝 Log note</button>
+        <button onClick={() => { setType('meeting'); setExpanded(true); }} style={{ ...btnGhost, fontSize: 11 }}>🤝 Log meeting</button>
+      </div>
+    );
+  }
+
   return (
-    <Card title="Recent Activity">
-      {items.length === 0 && <div style={{ color: "#78716c", fontSize: 13, padding: 12 }}>No activity yet.</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {items.map((a, i) => {
-          const who = a.profiles?.name || "Unknown";
+    <div style={{ marginBottom: 14, padding: 14, background: "#1c1917", border: "1px solid #44403c", borderRadius: 8 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <select value={type} onChange={e => { setType(e.target.value); setOutcome(''); }} style={{ ...inputStyle, fontSize: 12, padding: "5px 10px", width: 'auto' }}>
+          <option value="call">📞 Call</option>
+          <option value="text">💬 Text</option>
+          <option value="email">✉ Email</option>
+          <option value="note">📝 Note</option>
+          <option value="meeting">🤝 Meeting</option>
+        </select>
+        {OUTCOME_OPTIONS[type]?.length > 0 && (
+          <select value={outcome} onChange={e => setOutcome(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: "5px 10px", width: 'auto' }}>
+            <option value="">Outcome…</option>
+            {OUTCOME_OPTIONS[type].map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+        )}
+      </div>
+      <textarea value={body} onChange={e => setBody(e.target.value)} rows={3}
+        placeholder={type === 'note' ? "What did you note?" : "Summary of the conversation / what was said / any commitments"}
+        style={{ ...inputStyle, width: "100%", resize: "vertical", minHeight: 60, fontFamily: "inherit", marginBottom: 10 }} />
+      <div style={{ display: "grid", gridTemplateColumns: "200px 1fr", gap: 10, marginBottom: 10 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>Follow up on</div>
+          <input type="date" value={followupDate} onChange={e => setFollowupDate(e.target.value)} style={{ ...inputStyle, fontSize: 12 }} />
+        </div>
+        {followupDate && (
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>Follow-up note</div>
+            <input value={followupNote} onChange={e => setFollowupNote(e.target.value)} style={inputStyle} placeholder="What to do when following up" />
+          </div>
+        )}
+      </div>
+      {followupDate && (
+        <div style={{ fontSize: 11, color: "#fbbf24", marginBottom: 10, padding: "6px 10px", background: "#78350f22", borderRadius: 4 }}>
+          → Will auto-create a task due {new Date(followupDate + 'T00:00:00').toLocaleDateString()}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <button onClick={() => setExpanded(false)} style={btnGhost}>Cancel</button>
+        <button onClick={submit} disabled={submitting} style={btnPrimary}>{submitting ? 'Saving…' : 'Log'}</button>
+      </div>
+    </div>
+  );
+}
+
+// Unified Timeline — merges activity, docket events, messages, SMS,
+// walkthroughs + offers into one chronological feed with filter chips.
+// Replaces the old read-only Activity tab. Log Activity form at the top.
+function Activity({ items, dealId, reload }) {
+  const [filter, setFilter] = useState('all'); // all | actions | court | messages | system
+  const [extra, setExtra] = useState({ docket: [], messages: [], sms: [], walkthroughs: [], offers: [] });
+  const [loading, setLoading] = useState(true);
+
+  const loadExtra = async () => {
+    if (!dealId) { setLoading(false); return; }
+    const [dk, msgs, sms, wt, offers] = await Promise.all([
+      sb.from('docket_events').select('id, event_type, event_date, description, is_backfill, acknowledged_at, created_at:received_at').eq('deal_id', dealId).order('received_at', { ascending: false }).limit(200),
+      sb.from('messages').select('id, sender_role, sender_name, body, subject, audience, created_at').eq('deal_id', dealId).order('created_at', { ascending: false }).limit(100),
+      sb.from('messages_outbound').select('id, direction, body, to_number, from_number, status, created_at').eq('deal_id', dealId).order('created_at', { ascending: false }).limit(100),
+      sb.from('walkthrough_requests').select('id, investor_name, preferred_time, investor_note, status, created_at').eq('deal_id', dealId).order('created_at', { ascending: false }).limit(50),
+      sb.from('investor_offers').select('id, investor_name, offer_price, financing_type, status, submitted_at').eq('deal_id', dealId).order('submitted_at', { ascending: false }).limit(50),
+    ]);
+    setExtra({ docket: dk.data || [], messages: msgs.data || [], sms: sms.data || [], walkthroughs: wt.data || [], offers: offers.data || [] });
+    setLoading(false);
+  };
+
+  useEffect(() => { loadExtra(); /* eslint-disable-next-line */ }, [dealId]);
+
+  useEffect(() => {
+    if (!dealId) return;
+    const ch = sb.channel('timeline-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, loadExtra)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `deal_id=eq.${dealId}` }, loadExtra)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, loadExtra)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests', filter: `deal_id=eq.${dealId}` }, loadExtra)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers', filter: `deal_id=eq.${dealId}` }, loadExtra)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId]);
+
+  // Merge everything into a single sorted feed with a normalized shape
+  const merged = [
+    ...(items || []).map(a => ({
+      kind: 'activity',
+      bucket: ['call','text','sms','email','meeting','note'].includes(a.activity_type) ? 'actions'
+             : a.activity_type === 'system' || /created|status|stage|flagged|deleted/i.test(a.action || '') ? 'system'
+             : 'actions',
+      id: a.id, ts: a.created_at,
+      who: a.profiles?.name || 'System',
+      icon: ({ call: '📞', text: '💬', sms: '💬', email: '✉', note: '📝', meeting: '🤝' })[a.activity_type] || '•',
+      title: a.action,
+      sub: a.outcome ? 'Outcome: ' + a.outcome : null,
+      body: a.body,
+      followup: a.next_followup_date,
+    })),
+    ...extra.docket.map(e => ({
+      kind: 'docket',
+      bucket: 'court',
+      id: 'dk-' + e.id, ts: e.created_at,
+      who: 'Court',
+      icon: (EVENT_TYPE_META[e.event_type]?.icon) || '⚖',
+      title: (EVENT_TYPE_META[e.event_type]?.label || e.event_type) + (e.event_date ? ` · ${new Date(e.event_date + 'T00:00:00').toLocaleDateString()}` : ''),
+      sub: e.is_backfill ? 'backfill' : null,
+      body: e.description,
+    })),
+    ...extra.messages.map(m => ({
+      kind: 'message',
+      bucket: 'messages',
+      id: 'msg-' + m.id, ts: m.created_at,
+      who: m.sender_name || m.sender_role || 'Unknown',
+      icon: m.sender_role === 'client' ? '👤' : m.sender_role === 'attorney' ? '⚖' : '💬',
+      title: (m.sender_role === 'client' ? 'Client' : m.sender_role === 'attorney' ? 'Counsel' : 'Team') + ' message' + (m.subject ? ` — ${m.subject}` : ''),
+      body: m.body,
+    })),
+    ...extra.sms.map(s => ({
+      kind: 'sms',
+      bucket: 'messages',
+      id: 'sms-' + s.id, ts: s.created_at,
+      who: s.direction === 'inbound' ? 'Inbound SMS' : 'Outbound SMS',
+      icon: s.direction === 'inbound' ? '📲' : '📤',
+      title: (s.direction === 'inbound' ? 'Inbound' : 'Outbound') + ' SMS' + (s.status && s.status !== 'sent' ? ` · ${s.status}` : ''),
+      body: s.body,
+      sub: s.direction === 'inbound' ? `From ${s.to_number || '?'}` : `To ${s.to_number || '?'}`,
+    })),
+    ...extra.walkthroughs.map(w => ({
+      kind: 'walkthrough',
+      bucket: 'system',
+      id: 'wt-' + w.id, ts: w.created_at,
+      who: w.investor_name || 'Investor',
+      icon: '🏠',
+      title: `Walkthrough request · ${w.status}`,
+      sub: w.preferred_time ? `Prefers: ${w.preferred_time}` : null,
+      body: w.investor_note,
+    })),
+    ...extra.offers.map(o => ({
+      kind: 'offer',
+      bucket: 'system',
+      id: 'of-' + o.id, ts: o.submitted_at,
+      who: o.investor_name || 'Investor',
+      icon: '💰',
+      title: `Offer ${o.status} · $${Number(o.offer_price).toLocaleString('en-US', { maximumFractionDigits: 0 })}`,
+      sub: o.financing_type ? o.financing_type.toUpperCase() : null,
+    })),
+  ].filter(x => x.ts).sort((a, b) => new Date(b.ts) - new Date(a.ts));
+
+  const filtered = filter === 'all' ? merged : merged.filter(m => m.bucket === filter);
+
+  const counts = {
+    all: merged.length,
+    actions: merged.filter(m => m.bucket === 'actions').length,
+    court: merged.filter(m => m.bucket === 'court').length,
+    messages: merged.filter(m => m.bucket === 'messages').length,
+    system: merged.filter(m => m.bucket === 'system').length,
+  };
+
+  const chip = (id, label) => (
+    <button key={id} onClick={() => setFilter(id)} style={{
+      fontSize: 11, padding: '5px 12px', borderRadius: 5,
+      background: filter === id ? '#292524' : 'transparent',
+      color: filter === id ? '#fafaf9' : '#78716c',
+      border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'),
+      fontWeight: filter === id ? 700 : 500, cursor: 'pointer',
+    }}>{label} · {counts[id]}</button>
+  );
+
+  return (
+    <Card title="Timeline" action={
+      <div style={{ fontSize: 11, color: "#78716c" }}>{merged.length} entr{merged.length === 1 ? 'y' : 'ies'}</div>
+    }>
+      {dealId && <LogActivityForm dealId={dealId} onLogged={() => { reload && reload(); loadExtra(); }} />}
+
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap' }}>
+        {chip('all', 'All')}
+        {chip('actions', '📞 Actions')}
+        {chip('court', '⚖ Court')}
+        {chip('messages', '💬 Messages')}
+        {chip('system', '⚙ System')}
+      </div>
+
+      {loading && <div style={{ padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 }}>Loading timeline…</div>}
+
+      {!loading && filtered.length === 0 && (
+        <div style={{ padding: 30, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 8, fontSize: 13, fontStyle: 'italic' }}>
+          {filter === 'all' ? 'No timeline entries yet. Log a call, note, or wait for events to land.' : `Nothing in the ${filter} bucket yet.`}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {filtered.map(m => {
+          const bucketColor = {
+            actions: '#3b82f6',
+            court: '#8b5cf6',
+            messages: '#d97706',
+            system: '#78716c',
+          }[m.bucket] || '#44403c';
           return (
-            <div key={a.id || i} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, display: "flex", gap: 12, alignItems: "center" }}>
-              <span style={{ padding: "2px 8px", background: personColor(who), color: "#fafaf9", borderRadius: 4, fontSize: 10, fontWeight: 700, minWidth: 60, textAlign: "center" }}>{who}</span>
-              <span style={{ flex: 1, fontSize: 13 }}>{a.action}</span>
-              <span style={{ fontSize: 10, color: "#78716c", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap" }}>{new Date(a.created_at).toLocaleString()}</span>
+            <div key={m.kind + '-' + m.id} style={{ padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid " + bucketColor, borderRadius: 6, display: "flex", gap: 10, alignItems: "flex-start" }}>
+              <span style={{ fontSize: 14, flexShrink: 0, width: 20, textAlign: 'center' }}>{m.icon}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "1px 6px", background: personColor(m.who), color: "#fafaf9", borderRadius: 3, letterSpacing: "0.04em" }}>{m.who}</span>
+                  <span style={{ fontSize: 13, color: "#fafaf9", fontWeight: 500 }}>{m.title}</span>
+                </div>
+                {m.sub && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{m.sub}</div>}
+                {m.body && <div style={{ fontSize: 12, color: "#d6d3d1", marginTop: 4, lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>{m.body}</div>}
+                {m.followup && <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 4 }}>🔔 Follow up on {new Date(m.followup + 'T00:00:00').toLocaleDateString()}</div>}
+              </div>
+              <span style={{ fontSize: 10, color: "#57534e", fontFamily: "'DM Mono', monospace", whiteSpace: "nowrap", flexShrink: 0 }}>
+                {new Date(m.ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                {' '}
+                {new Date(m.ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+              </span>
             </div>
           );
         })}
