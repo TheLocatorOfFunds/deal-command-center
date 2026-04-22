@@ -21,11 +21,9 @@ Template:
 
 ## Nathan's session
 
-**Status**: Active
-**Working on**: Phase 3 Library — PR 3 DocuSign send-for-signature
-**Touching**: migration `docusign_envelopes` table · Edge Functions `docusign-send-envelope` + `docusign-webhook` · DCC "📝 Send for signature" button on DealDetail Documents + modal (template picker · merge-value review · recipient · optional SMS toggle) · `library_documents.docusign_template_id` utilization · activity row integration
-**ETA**: Done today (Nathan needs to add DocuSign Integration Key + RSA key to Supabase secrets before first live send)
+**Status**: Idle
 **Last updated**: Apr 22, 2026
+**Last done**: Phase 3 Library PR 3 shipped — DocuSign send-for-signature pipeline. Migration `docusign_envelopes` table (full state machine: sending → sent → delivered → signed → completed → void/declined/failed, RLS for 4 roles). Edge Function `docusign-send-envelope` (JWT Grant, PKCS8 key import, merge-value resolution, creates envelope via REST API). Edge Function `docusign-webhook` (receives DocuSign Connect events, optional HMAC validation, downloads signed PDF on completion, files to deal-docs with from_library_id provenance, writes client-visible "✅ Signed" activity). DCC "📝 Send for signature" button on DealDetail Documents + DocuSignSendModal (template picker filtered to docusign_template_id-set docs · recipient + SMS fields pre-filled from client_access · merge-value review · subject override). Envelope-status tracker card with realtime updates. `DOCUSIGN_SETUP.md` complete 9-step admin guide pushed to repo. Awaiting Nathan to complete DocuSign admin config + add 6 secrets to Supabase before first live test send.
 
 <!--
 Template:

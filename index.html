@@ -2931,7 +2931,26 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [showLibraryPicker, setShowLibraryPicker] = useState(false);
   const [pickerMode, setPickerMode] = useState('attach'); // 'attach' | 'pin'
   const [pins, setPins] = useState([]);
+  const [envelopes, setEnvelopes] = useState([]);
+  const [showDocuSign, setShowDocuSign] = useState(false);
   const fileRef = useRef(null);
+
+  const loadEnvelopes = async () => {
+    const { data } = await sb.from('docusign_envelopes')
+      .select('*, library_documents(title)')
+      .eq('deal_id', dealId)
+      .order('created_at', { ascending: false });
+    setEnvelopes(data || []);
+  };
+  useEffect(() => { loadEnvelopes(); }, [dealId]);
+
+  // Realtime — envelope status updates from webhook appear live
+  useEffect(() => {
+    const ch = sb.channel('ds-envelopes-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docusign_envelopes', filter: `deal_id=eq.${dealId}` }, loadEnvelopes)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
 
   const loadPins = async () => {
     const { data } = await sb.from('deal_library_pins')
@@ -3052,6 +3071,9 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   return (
     <Card title={`Documents (${items.length}${pins.length > 0 ? ' · ' + pins.length + ' pinned' : ''})`} action={
       <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+        <button onClick={() => setShowDocuSign(true)} title="Send a library template via DocuSign for e-signature (email + optional SMS)" style={{ ...btnGhost, fontSize: 11, color: "#d97706", borderColor: "#78350f" }}>
+          📝 Send for signature
+        </button>
         <button onClick={() => { setPickerMode('pin'); setShowLibraryPicker(true); }} title="Expose a library doc on this deal's client or attorney portal without copying" style={{ ...btnGhost, fontSize: 11 }}>
           📌 Pin from library
         </button>
@@ -3075,6 +3097,63 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
           onAttached={async () => { await reload(); setShowLibraryPicker(false); }}
           onPinned={async () => { await loadPins(); setShowLibraryPicker(false); }}
         />
+      )}
+
+      {showDocuSign && (
+        <DocuSignSendModal
+          deal={deal}
+          dealId={dealId}
+          onClose={() => setShowDocuSign(false)}
+          onSent={async () => { await loadEnvelopes(); setShowDocuSign(false); }}
+        />
+      )}
+
+      {/* Active envelope status cards — realtime */}
+      {envelopes.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #d97706", borderRadius: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+            📝 DocuSign envelopes ({envelopes.length})
+          </div>
+          {envelopes.map(env => {
+            const statusColor = env.status === 'completed' ? "#10b981"
+              : env.status === 'declined' || env.status === 'voided' || env.status === 'failed' ? "#ef4444"
+              : env.status === 'signed' ? "#10b981"
+              : env.status === 'delivered' ? "#3b82f6"
+              : env.status === 'sent' || env.status === 'sending' ? "#f59e0b"
+              : "#78716c";
+            const statusLabel = env.status === 'sending' ? 'Queuing…'
+              : env.status === 'sent' ? 'Waiting for signature'
+              : env.status === 'delivered' ? 'Opened by signer'
+              : env.status === 'signed' ? 'Signed'
+              : env.status === 'completed' ? 'Completed · filed to docs'
+              : env.status === 'declined' ? 'Declined by signer'
+              : env.status === 'voided' ? 'Voided'
+              : env.status === 'failed' ? 'Send failed'
+              : env.status;
+            return (
+              <div key={env.id} style={{ padding: "8px 0", borderBottom: "1px solid #1c1917" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 14 }}>📝</span>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#fafaf9" }}>
+                      {env.library_documents?.title || 'Document'}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                      {env.recipient_name} · {env.recipient_email}{env.send_sms ? ' · + SMS' : ''}
+                      {env.sent_at && <> · sent {new Date(env.sent_at).toLocaleString()}</>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 3, background: statusColor + '22', color: statusColor, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                    {statusLabel}
+                  </span>
+                </div>
+                {env.ds_error && (
+                  <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{env.ds_error}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
 
       {/* Pinned library docs — visible on client/attorney portals per pin audience */}
@@ -5324,6 +5403,252 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, mode = 'attach', o
               <div style={{ background: "#0c0a09", border: "1px dashed #292524", borderRadius: 8, padding: 24, textAlign: "center", fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
                 Pick a file from the list above to {mode === 'pin' ? 'pin' : 'attach'} to <b style={{ color: "#a8a29e" }}>{(deal.name || '').split(' - ')[0]}</b>.
               </div>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── DocuSign Send Modal (PR 3) ─────────────────────────
+// Sends a library template via DocuSign with deal-merged fields. Recipient
+// defaults pull from client_access (portal email + SMS phone) falling back
+// to deal.meta. Edge Function `docusign-send-envelope` handles the JWT Grant
+// + API call. Status card back on the deal auto-updates via realtime when
+// the webhook receives DocuSign Connect events.
+function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [mergeOverrides, setMergeOverrides] = useState({});
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [sendSms, setSendSms] = useState(false);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  // Load ONLY library docs that have a DocuSign template_id wired up
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from('library_documents')
+        .select('id, title, kind, template_fields, docusign_template_id, description')
+        .not('docusign_template_id', 'is', null)
+        .order('created_at', { ascending: false });
+      setTemplates(data || []);
+      setLoading(false);
+    })();
+  }, []);
+
+  // Pre-fill recipient defaults once (from client_access or deal.meta)
+  useEffect(() => {
+    (async () => {
+      const clientName = (deal.name || '').split(' - ')[0];
+      setRecipientName(clientName);
+      // try client_access for the canonical contact email + notification phone
+      const { data: ca } = await sb.from('client_access')
+        .select('email, prefs')
+        .eq('deal_id', dealId)
+        .eq('enabled', true)
+        .maybeSingle();
+      if (ca?.email) setRecipientEmail(ca.email);
+      else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
+      if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
+      else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+    })();
+  }, [dealId]);
+
+  // When template is picked, compute merge defaults from deal data
+  useEffect(() => {
+    if (!selectedDoc) { setMergeOverrides({}); return; }
+    const fields = selectedDoc.template_fields || {};
+    const initial = {};
+    for (const [k, path] of Object.entries(fields)) {
+      initial[k] = resolveDealPath(deal, path);
+    }
+    setMergeOverrides(initial);
+    setEmailSubject(`Please sign: ${selectedDoc.title}`);
+  }, [selectedDoc]);
+
+  const send = async () => {
+    if (!selectedDoc || !recipientEmail || !recipientName) {
+      setMsg({ type: 'error', text: 'Pick a template, confirm recipient email + name.' });
+      return;
+    }
+    if (sendSms && !recipientPhone) {
+      setMsg({ type: 'error', text: 'SMS is on — enter a phone number or turn off SMS.' });
+      return;
+    }
+    setSending(true); setMsg(null);
+    try {
+      const { data, error } = await sb.functions.invoke('docusign-send-envelope', {
+        body: {
+          deal_id: dealId,
+          library_document_id: selectedDoc.id,
+          recipient_email: recipientEmail.trim(),
+          recipient_name: recipientName.trim(),
+          recipient_phone: recipientPhone.trim() || null,
+          send_sms: sendSms,
+          email_subject_override: emailSubject.trim() || null,
+          merge_overrides: mergeOverrides,
+        },
+      });
+      if (error) throw error;
+      if (data?.error) {
+        // Edge function returned structured error
+        if (data.error === 'docusign_not_configured') {
+          setMsg({ type: 'error', text: '⚠ DocuSign not configured yet — see setup instructions. (Admin: add DOCUSIGN_* secrets to the Edge Function.)' });
+        } else if (data.error === 'not_a_docusign_template') {
+          setMsg({ type: 'error', text: 'This template has no docusign_template_id set. SQL-update the library row with the DocuSign template UUID first.' });
+        } else {
+          setMsg({ type: 'error', text: data.message || JSON.stringify(data) });
+        }
+        setSending(false);
+        return;
+      }
+      setMsg({ type: 'success', text: `Envelope sent. DocuSign ID: ${data.envelope_id}` });
+      setTimeout(() => { onSent?.(); }, 800);
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Send failed' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const mergeFieldKeys = selectedDoc ? Object.keys(selectedDoc.template_fields || {}) : [];
+  const clientName = (deal.name || '').split(' - ')[0];
+
+  return (
+    <Modal onClose={onClose} title={`📝 Send for signature → ${clientName}`} wide>
+      {loading ? (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading templates…</div>
+      ) : templates.length === 0 ? (
+        <div style={{ padding: 18, background: "#1c1917", border: "1px dashed #44403c", borderRadius: 8, color: "#a8a29e", fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", marginBottom: 8 }}>No DocuSign-ready templates yet.</div>
+          <p style={{ margin: "6px 0" }}>To send something for signature, the library doc needs <code style={{ background: "#0c0a09", padding: "2px 6px", borderRadius: 3 }}>docusign_template_id</code> set to a real DocuSign template UUID.</p>
+          <p style={{ margin: "6px 0" }}>Workflow:</p>
+          <ol style={{ margin: "6px 0", paddingLeft: 20 }}>
+            <li>Create the template in DocuSign admin (add merge-field text tabs named <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>ClientName</code>, <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>CaseNumber</code>, etc.)</li>
+            <li>Copy the DocuSign template ID</li>
+            <li>Upload the same source PDF to DCC Library → mark it as <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>kind='template'</code></li>
+            <li>SQL-update: <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>update library_documents set docusign_template_id = '...' where id = '...'</code></li>
+            <li>Refresh this modal — the template will appear</li>
+          </ol>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 280px) 1fr", gap: 14 }} className="library-panes">
+          {/* LEFT — template picker */}
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, maxHeight: 520, overflowY: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", padding: "4px 8px 8px" }}>
+              DocuSign-ready templates
+            </div>
+            {templates.map(t => {
+              const isSel = selectedDoc?.id === t.id;
+              const fieldCount = Object.keys(t.template_fields || {}).length;
+              return (
+                <button key={t.id} onClick={() => setSelectedDoc(t)} style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "10px 12px", marginBottom: 3, borderRadius: 5, cursor: "pointer",
+                  background: isSel ? "#292524" : "transparent",
+                  border: "1px solid " + (isSel ? "#44403c" : "transparent"),
+                  color: isSel ? "#fafaf9" : "#a8a29e",
+                  fontSize: 12, fontFamily: "inherit",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16 }}>📝</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.title}</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                        {fieldCount > 0 ? `${fieldCount} merge field${fieldCount === 1 ? '' : 's'}` : 'no merge fields'}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* RIGHT — send form */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {!selectedDoc ? (
+              <div style={{ background: "#0c0a09", border: "1px dashed #292524", borderRadius: 8, padding: 32, textAlign: "center", fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
+                Pick a template on the left to configure the send.
+              </div>
+            ) : (
+              <>
+                {/* Recipient */}
+                <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                    Recipient
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Name</div>
+                      <input value={recipientName} onChange={e => setRecipientName(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Email</div>
+                      <input type="email" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: sendSms ? "#064e3b" : "#1c1917", border: "1px solid " + (sendSms ? "#10b981" : "#292524"), borderRadius: 5, cursor: "pointer", marginBottom: sendSms ? 8 : 0 }}>
+                    <input type="checkbox" checked={sendSms} onChange={e => setSendSms(e.target.checked)} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send via SMS (Business DocuSign)</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a text with a one-tap signing link. Requires phone + template configured for SMS delivery in DocuSign.</div>
+                    </div>
+                  </label>
+                  {sendSms && (
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone (US; +1 assumed)</div>
+                      <input type="tel" value={recipientPhone} onChange={e => setRecipientPhone(e.target.value)} placeholder="(614) 555-1234" style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                  )}
+                </div>
+
+                {/* Merge fields */}
+                {mergeFieldKeys.length > 0 && (
+                  <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                      Merge fields · pre-filled from this deal
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                      {mergeFieldKeys.map(key => (
+                        <div key={key}>
+                          <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>{key}</div>
+                          <input value={mergeOverrides[key] || ''} onChange={e => setMergeOverrides(v => ({ ...v, [key]: e.target.value }))} style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} placeholder="—" />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 8 }}>
+                      These map to DocuSign template "text tabs" by label. Double-check the tab labels match your DocuSign template exactly.
+                    </div>
+                  </div>
+                )}
+
+                {/* Email subject */}
+                <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                    Email subject
+                  </div>
+                  <input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                </div>
+
+                {msg && (
+                  <div style={{ padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+                    {msg.text}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <button onClick={onClose} style={{ ...btnGhost, fontSize: 12 }}>Cancel</button>
+                  <button onClick={send} disabled={sending} style={{ ...btnPrimary, fontSize: 12 }}>
+                    {sending ? 'Sending to DocuSign…' : '📝 Send for signature'}
+                  </button>
+                </div>
+              </>
             )}
           </div>
         </div>
