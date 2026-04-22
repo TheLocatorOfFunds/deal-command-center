@@ -227,14 +227,24 @@ function Shell({ children }) {
   );
 }
 
-// ─── Login (magic link) ──────────────────────────────────────────────
+// ─── Login ───────────────────────────────────────────────────────────
 function Login() {
-  const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [email, setEmail]       = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode]         = useState("password"); // "password" | "magic" | "reset"
+  const [sent, setSent]         = useState(false);
+  const [err, setErr]           = useState("");
+  const [busy, setBusy]         = useState(false);
 
-  const send = async () => {
+  const signInWithPassword = async () => {
+    if (!email || !password) return;
+    setBusy(true); setErr("");
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    setBusy(false);
+    if (error) { setErr(error.message); }
+  };
+
+  const sendMagicLink = async () => {
     if (!email) return;
     setBusy(true); setErr("");
     const { error } = await sb.auth.signInWithOtp({
@@ -246,22 +256,69 @@ function Login() {
     setSent(true);
   };
 
+  const sendReset = async () => {
+    if (!email) return;
+    setBusy(true); setErr("");
+    const { error } = await sb.auth.resetPasswordForEmail(email, {
+      redirectTo: window.location.origin + window.location.pathname
+    });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    setSent(true);
+  };
+
+  const linkStyle = { background: "none", border: "none", color: "#a8a29e", fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: 0 };
+
   return (
     <Shell>
       <div style={{ maxWidth: 420, margin: "120px auto", textAlign: "center" }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>RefundLocators</div>
         <div style={{ fontSize: 32, fontWeight: 700, marginTop: 6 }}>Deal Command Center</div>
-        <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 8, marginBottom: 32 }}>Sign in with your work email — we'll send you a magic link.</div>
+        <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 8, marginBottom: 32 }}>
+          {mode === "password" && "Sign in with your email and password."}
+          {mode === "magic"    && "We'll email you a sign-in link."}
+          {mode === "reset"    && "Enter your email to set or reset your password."}
+        </div>
         {sent ? (
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
             <div style={{ fontSize: 14, fontWeight: 600 }}>Check your email</div>
-            <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 8 }}>Click the link in <b>{email}</b> to sign in. You can close this tab.</div>
+            <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 8 }}>
+              {mode === "reset"
+                ? <>A password reset link was sent to <b>{email}</b>.</>
+                : <>Click the link in <b>{email}</b> to sign in.</>}
+            </div>
           </div>
         ) : (
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 22 }}>
-            <input type="email" autoFocus value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="you@refundlocators.com" style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }} />
-            <button onClick={send} disabled={busy || !email} style={{ ...btnPrimary, width: "100%", padding: "10px 14px", fontSize: 13, marginTop: 12, opacity: busy||!email ? 0.5 : 1 }}>{busy ? "Sending..." : "Send magic link"}</button>
+            <input
+              type="email" autoFocus value={email}
+              onChange={e => setEmail(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && mode === "password" && document.getElementById("dcc-pw-input")?.focus()}
+              placeholder="you@refundlocators.com"
+              style={{ ...inputStyle, fontSize: 14, padding: "10px 12px" }}
+            />
+            {mode === "password" && (
+              <input
+                id="dcc-pw-input" type="password" value={password}
+                onChange={e => setPassword(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && signInWithPassword()}
+                placeholder="Password"
+                style={{ ...inputStyle, fontSize: 14, padding: "10px 12px", marginTop: 10 }}
+              />
+            )}
+            <button
+              onClick={mode === "password" ? signInWithPassword : mode === "magic" ? sendMagicLink : sendReset}
+              disabled={busy || !email || (mode === "password" && !password)}
+              style={{ ...btnPrimary, width: "100%", padding: "10px 14px", fontSize: 13, marginTop: 12, opacity: busy || !email || (mode === "password" && !password) ? 0.5 : 1 }}
+            >
+              {busy ? "..." : mode === "password" ? "Sign in" : mode === "magic" ? "Send magic link" : "Send reset link"}
+            </button>
             {err && <div style={{ fontSize: 11, color: "#fca5a5", marginTop: 10 }}>{err}</div>}
+            <div style={{ marginTop: 16, display: "flex", justifyContent: "center", gap: 16 }}>
+              {mode !== "password" && <button style={linkStyle} onClick={() => { setMode("password"); setErr(""); }}>Sign in with password</button>}
+              {mode !== "magic"    && <button style={linkStyle} onClick={() => { setMode("magic");    setErr(""); }}>Send magic link</button>}
+              {mode !== "reset"    && <button style={linkStyle} onClick={() => { setMode("reset");    setErr(""); }}>Forgot password?</button>}
+            </div>
           </div>
         )}
       </div>
