@@ -2910,6 +2910,60 @@ function InvestorPortalCard({ deal, userId }) {
   );
 }
 
+// Helpers live at module level so React doesn't recreate them on every
+// InvestorDetailsEditor render. (Defining them inside the parent function
+// made the input lose focus on every keystroke because React sees a new
+// component type each render and unmounts/remounts the DOM node.)
+function InvNumField({ label, k, step = 1, placeholder, inv, updateInvestor }) {
+  return (
+    <Field label={label}>
+      <input type="number" step={step} value={inv[k] ?? ''} onChange={e => updateInvestor({ [k]: e.target.value === '' ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder={placeholder} />
+    </Field>
+  );
+}
+function InvTxtField({ label, k, placeholder, inv, updateInvestor }) {
+  return (
+    <Field label={label}>
+      <input value={inv[k] ?? ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={inputStyle} placeholder={placeholder} />
+    </Field>
+  );
+}
+function InvDateField({ label, k, inv, updateInvestor }) {
+  return (
+    <Field label={label}>
+      <input type="date" value={inv[k] ?? ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={inputStyle} />
+    </Field>
+  );
+}
+function InvSelField({ label, k, options, inv, updateInvestor }) {
+  return (
+    <Field label={label}>
+      <select value={inv[k] ?? ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
+        <option value="">—</option>
+        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </Field>
+  );
+}
+function InvCondGroup({ label, k, fields = ['age', 'condition'], inv, updateNested }) {
+  const data = inv[k] || {};
+  return (
+    <Field label={label}>
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${fields.length}, 1fr)`, gap: 6 }}>
+        {fields.map(f => (
+          <input
+            key={f}
+            value={data[f] ?? ''}
+            onChange={e => updateNested(k, { [f]: e.target.value || null })}
+            style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
+            placeholder={f}
+          />
+        ))}
+      </div>
+    </Field>
+  );
+}
+
 function InvestorDetailsEditor({ deal, onUpdateDeal }) {
   const m = deal.meta || {};
   const inv = m.investor || {};
@@ -2921,47 +2975,8 @@ function InvestorDetailsEditor({ deal, onUpdateDeal }) {
     <button key={id} onClick={() => setSect(id)} style={{ background: sect === id ? '#292524' : 'transparent', color: sect === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (sect === id ? '#44403c' : 'transparent'), padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
   );
 
-  const NumField = ({ label, k, step = 1, placeholder }) => (
-    <Field label={label}>
-      <input type="number" step={step} value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value === '' ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder={placeholder} />
-    </Field>
-  );
-  const TxtField = ({ label, k, placeholder }) => (
-    <Field label={label}>
-      <input value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={inputStyle} placeholder={placeholder} />
-    </Field>
-  );
-  const DateField = ({ label, k }) => (
-    <Field label={label}>
-      <input type="date" value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={inputStyle} />
-    </Field>
-  );
-  const SelField = ({ label, k, options }) => (
-    <Field label={label}>
-      <select value={inv[k] || ''} onChange={e => updateInvestor({ [k]: e.target.value || null })} style={{ ...inputStyle, padding: "8px 10px" }}>
-        <option value="">—</option>
-        {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-    </Field>
-  );
-  const CondGroup = ({ label, k, fields = ['age', 'condition'] }) => {
-    const data = inv[k] || {};
-    return (
-      <Field label={label}>
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${fields.length}, 1fr)`, gap: 6 }}>
-          {fields.map(f => (
-            <input
-              key={f}
-              value={data[f] || ''}
-              onChange={e => updateNested(k, { [f]: e.target.value || null })}
-              style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }}
-              placeholder={f}
-            />
-          ))}
-        </div>
-      </Field>
-    );
-  };
+  // Shared prop bag so each field call stays tidy
+  const fp = { inv, updateInvestor, updateNested };
 
   return (
     <Card title="Investor-Facing Details" style={{ marginTop: 16 }}>
@@ -2975,69 +2990,69 @@ function InvestorDetailsEditor({ deal, onUpdateDeal }) {
 
       {sect === 'pricing' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
-          <NumField label="Asking price" k="askingPrice" step={1000} placeholder="200000" />
-          <NumField label="ARV estimate" k="arvEstimate" step={1000} placeholder="290000" />
-          <NumField label="Rehab estimate" k="rehabEstimate" step={500} placeholder="15000" />
-          <SelField label="Rehab tier" k="rehabTier" options={[{value:'light',label:'Light'},{value:'medium',label:'Medium'},{value:'heavy',label:'Heavy'}]} />
-          <SelField label="Deal type" k="dealType" options={[{value:'wholesale',label:'Wholesale'},{value:'wholetail',label:'Wholetail'},{value:'fix-flip',label:'Fix & Flip'},{value:'fixed-price',label:'Fixed-price buy'}]} />
+          <InvNumField {...fp} label="Asking price" k="askingPrice" step={1000} placeholder="200000" />
+          <InvNumField {...fp} label="ARV estimate" k="arvEstimate" step={1000} placeholder="290000" />
+          <InvNumField {...fp} label="Rehab estimate" k="rehabEstimate" step={500} placeholder="15000" />
+          <InvSelField {...fp} label="Rehab tier" k="rehabTier" options={[{value:'light',label:'Light'},{value:'medium',label:'Medium'},{value:'heavy',label:'Heavy'}]} />
+          <InvSelField {...fp} label="Deal type" k="dealType" options={[{value:'wholesale',label:'Wholesale'},{value:'wholetail',label:'Wholetail'},{value:'fix-flip',label:'Fix & Flip'},{value:'fixed-price',label:'Fixed-price buy'}]} />
         </div>
       )}
 
       {sect === 'property' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-          <TxtField label="Address (portal)" k="propertyAddress" placeholder={deal.address || '123 Main St'} />
-          <NumField label="Beds" k="beds" placeholder="4" />
-          <NumField label="Baths" k="baths" step={0.5} placeholder="2.5" />
-          <NumField label="Sqft" k="sqft" placeholder="2140" />
-          <NumField label="Year built" k="yearBuilt" placeholder="1998" />
-          <TxtField label="Lot size" k="lotSize" placeholder="0.24 acres" />
-          <TxtField label="Parcel #" k="parcelId" placeholder="M5620-096-000-007" />
-          <SelField label="Occupancy" k="occupancy" options={[{value:'vacant',label:'Vacant'},{value:'owner-occupied',label:'Owner-occupied'},{value:'tenant-occupied',label:'Tenant-occupied'}]} />
-          <TxtField label="Access notes" k="accessNotes" placeholder="Call Nathan 24h ahead" />
+          <InvTxtField {...fp} label="Address (portal)" k="propertyAddress" placeholder={deal.address || '123 Main St'} />
+          <InvNumField {...fp} label="Beds" k="beds" placeholder="4" />
+          <InvNumField {...fp} label="Baths" k="baths" step={0.5} placeholder="2.5" />
+          <InvNumField {...fp} label="Sqft" k="sqft" placeholder="2140" />
+          <InvNumField {...fp} label="Year built" k="yearBuilt" placeholder="1998" />
+          <InvTxtField {...fp} label="Lot size" k="lotSize" placeholder="0.24 acres" />
+          <InvTxtField {...fp} label="Parcel #" k="parcelId" placeholder="M5620-096-000-007" />
+          <InvSelField {...fp} label="Occupancy" k="occupancy" options={[{value:'vacant',label:'Vacant'},{value:'owner-occupied',label:'Owner-occupied'},{value:'tenant-occupied',label:'Tenant-occupied'}]} />
+          <InvTxtField {...fp} label="Access notes" k="accessNotes" placeholder="Call Nathan 24h ahead" />
         </div>
       )}
 
       {sect === 'condition' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-          <CondGroup label="Roof" k="roof" fields={['age','condition','material']} />
-          <CondGroup label="HVAC" k="hvac" fields={['age','condition']} />
-          <CondGroup label="Water heater" k="waterHeater" fields={['age','condition']} />
-          <CondGroup label="Electrical" k="electrical" fields={['updated','condition']} />
-          <CondGroup label="Plumbing" k="plumbing" fields={['updated','condition']} />
-          <CondGroup label="Windows" k="windows" fields={['age','condition']} />
-          <CondGroup label="Exterior" k="exterior" fields={['type','age','condition']} />
-          <CondGroup label="Basement" k="basement" fields={['type','condition']} />
-          <CondGroup label="Foundation" k="foundation" fields={['condition','notes']} />
+          <InvCondGroup {...fp} label="Roof" k="roof" fields={['age','condition','material']} />
+          <InvCondGroup {...fp} label="HVAC" k="hvac" fields={['age','condition']} />
+          <InvCondGroup {...fp} label="Water heater" k="waterHeater" fields={['age','condition']} />
+          <InvCondGroup {...fp} label="Electrical" k="electrical" fields={['updated','condition']} />
+          <InvCondGroup {...fp} label="Plumbing" k="plumbing" fields={['updated','condition']} />
+          <InvCondGroup {...fp} label="Windows" k="windows" fields={['age','condition']} />
+          <InvCondGroup {...fp} label="Exterior" k="exterior" fields={['type','age','condition']} />
+          <InvCondGroup {...fp} label="Basement" k="basement" fields={['type','condition']} />
+          <InvCondGroup {...fp} label="Foundation" k="foundation" fields={['condition','notes']} />
           <Field label="Known issues" style={{ gridColumn: '1 / -1' }}>
-            <textarea value={inv.knownIssues || ''} onChange={e => updateInvestor({ knownIssues: e.target.value || null })} style={{ ...inputStyle, minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Anything the buyer should know: roof leaks, foundation cracks, settlement, mold history, pending permits…" />
+            <textarea value={inv.knownIssues ?? ''} onChange={e => updateInvestor({ knownIssues: e.target.value || null })} style={{ ...inputStyle, minHeight: 70, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Anything the buyer should know: roof leaks, foundation cracks, settlement, mold history, pending permits…" />
           </Field>
         </div>
       )}
 
       {sect === 'closing' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <TxtField label="Title company" k="titleCompany" placeholder="Stewart Title Cincinnati" />
-          <TxtField label="Title contact" k="titleContactName" placeholder="Jen Smith" />
-          <TxtField label="Title phone" k="titleContactPhone" placeholder="(513) 555-0100" />
-          <TxtField label="Title email" k="titleContactEmail" placeholder="jen@stewart.com" />
-          <DateField label="Target close" k="targetCloseDate" />
-          <NumField label="Earnest $" k="earnestMoneyAmount" step={500} placeholder="2500" />
-          <NumField label="Inspection days" k="inspectionDays" placeholder="7" />
-          <DateField label="Auction date (foreclosure)" k="auctionDate" />
-          <NumField label="Judgment amount" k="judgmentAmount" step={1000} placeholder="141697" />
-          <NumField label="Lien payoff" k="lienPayoff" step={500} placeholder="147500" />
-          <TxtField label="Case number" k="caseNumber" placeholder={m.courtCase || 'CV 2022 08 1416'} />
+          <InvTxtField  {...fp} label="Title company" k="titleCompany" placeholder="Stewart Title Cincinnati" />
+          <InvTxtField  {...fp} label="Title contact" k="titleContactName" placeholder="Jen Smith" />
+          <InvTxtField  {...fp} label="Title phone" k="titleContactPhone" placeholder="(513) 555-0100" />
+          <InvTxtField  {...fp} label="Title email" k="titleContactEmail" placeholder="jen@stewart.com" />
+          <InvDateField {...fp} label="Target close" k="targetCloseDate" />
+          <InvNumField  {...fp} label="Earnest $" k="earnestMoneyAmount" step={500} placeholder="2500" />
+          <InvNumField  {...fp} label="Inspection days" k="inspectionDays" placeholder="7" />
+          <InvDateField {...fp} label="Auction date (foreclosure)" k="auctionDate" />
+          <InvNumField  {...fp} label="Judgment amount" k="judgmentAmount" step={1000} placeholder="141697" />
+          <InvNumField  {...fp} label="Lien payoff" k="lienPayoff" step={500} placeholder="147500" />
+          <InvTxtField  {...fp} label="Case number" k="caseNumber" placeholder={m.courtCase || 'CV 2022 08 1416'} />
         </div>
       )}
 
       {sect === 'other' && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12 }}>
-          <TxtField label="Walkthrough video URL (YouTube / Vimeo / .mp4)" k="videoUrl" placeholder="https://youtu.be/..." />
+          <InvTxtField {...fp} label="Walkthrough video URL (YouTube / Vimeo / .mp4)" k="videoUrl" placeholder="https://youtu.be/..." />
           <Field label="Cover photo path">
-            <input value={inv.coverPhotoPath || ''} onChange={e => updateInvestor({ coverPhotoPath: e.target.value || null })} style={inputStyle} placeholder="Set from Documents tab — mark a photo investor-visible + click ★ to pick cover" />
+            <input value={inv.coverPhotoPath ?? ''} onChange={e => updateInvestor({ coverPhotoPath: e.target.value || null })} style={inputStyle} placeholder="Set from Documents tab — mark a photo investor-visible + click ★ to pick cover" />
           </Field>
           <Field label="Notes for investors">
-            <textarea value={inv.investorNotes || ''} onChange={e => updateInvestor({ investorNotes: e.target.value || null })} style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Why this deal? Story, timeline, any special terms. Shown on the portal under property stats." />
+            <textarea value={inv.investorNotes ?? ''} onChange={e => updateInvestor({ investorNotes: e.target.value || null })} style={{ ...inputStyle, minHeight: 80, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Why this deal? Story, timeline, any special terms. Shown on the portal under property stats." />
           </Field>
         </div>
       )}
