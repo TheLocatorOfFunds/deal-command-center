@@ -201,7 +201,30 @@ using ((select role from public.profiles where id = auth.uid()) = 'admin')
 
 ### Email templates brand rule
 All email copy says **RefundLocators**, never FundLocators.
-Sender: `RefundLocators <hello@refundlocators.com>`
+Sender: `RefundLocators <hello@refundlocators.com>` (Resend-verified via DKIM).
+
+### Inbound email reality (Apr 22, 2026)
+`refundlocators.com` has **no MX records** — Nathan doesn't have a real mailbox
+at `nathan@refundlocators.com`. Notifications + reply-to use **`nathan@fundlocators.com`**
+(Google Workspace, MX-backed). See trigger functions `dispatch_message_notifications`
+and `send_daily_digest`, plus `mailto:` links in `portal.html` and `lead-intake.html`.
+
+**Future cleanup to get `nathan@refundlocators.com` reachable** (Nathan wants this
+eventually): Cloudflare Email Routing is the intended path. It's blocked right now
+because the apex `refundlocators.com` has a proxied CNAME → `refundlocators.pages.dev`
+(the public marketing site), and Email Routing refuses to add MX records at an apex
+that already has a proxied CNAME (error: "Duplicated Zone rule"). The fix is to move
+the marketing site off the apex:
+
+1. Delete the apex `CNAME refundlocators.com → refundlocators.pages.dev` in Cloudflare DNS
+2. Keep `CNAME www → refundlocators.pages.dev`
+3. Add a **Bulk Redirect** rule in Cloudflare: `refundlocators.com/*` → `https://www.refundlocators.com/$1` (301)
+4. Enable Cloudflare Email Routing (Email → Email Routing → Get started): custom address `nathan` → destination `nathan@fundlocators.com`, then also add a catch-all `*@refundlocators.com → nathan@fundlocators.com`
+5. Revert the trigger functions + mailto links in one commit back to `nathan@refundlocators.com`
+
+Do NOT delete `TXT resend._domainkey` or `TXT _dmarc` under any circumstance —
+those are the active outbound sending config. SES leftovers (`MX send` and `TXT send`
+with `include:amazonses.com`) were deleted Apr 22, 2026 and do not need to come back.
 
 ## When asking an AI to change this
 
