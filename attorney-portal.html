@@ -872,10 +872,15 @@ function CaseDetail({ dealId, session, profile, isPreview }) {
 }
 
 // ─── Messages thread ──────────────────────────────────
+// Two threads in one card:
+//   1) With RefundLocators (private) — audience=['attorney']; client never sees
+//   2) With Client (supervised) — audience=['client','attorney']; team watching
+// Attorney picks the tab; composer stamps the right audience on send.
 function MessagesThread({ dealId, session, senderName, isPreview }) {
+  const [thread, setThread] = useState('team'); // 'team' | 'client'
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [text, setText] = useState("");
+  const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const endRef = React.useRef(null);
 
@@ -902,37 +907,93 @@ function MessagesThread({ dealId, session, senderName, isPreview }) {
 
   useEffect(() => {
     if (endRef.current) endRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages]);
+  }, [messages, thread]);
+
+  // Filter by active thread. Team thread = messages where audience is
+  // ['attorney'] (no client). Client thread = messages where audience
+  // includes BOTH 'attorney' and 'client' (joint).
+  const threadMessages = messages.filter(m => {
+    const aud = m.audience || ['client'];
+    const inTeamThread = aud.includes('attorney') && !aud.includes('client');
+    const inClientThread = aud.includes('attorney') && aud.includes('client');
+    // Attorney's own messages: visible in whichever thread they were sent to
+    if (thread === 'team') return inTeamThread || (m.sender_role === 'attorney' && !aud.includes('client'));
+    return inClientThread || (m.sender_role === 'attorney' && aud.includes('client'));
+  });
 
   const send = async () => {
     const body = text.trim();
     if (!body || sending) return;
     if (isPreview) { alert('Preview mode — message not sent.'); return; }
     setSending(true);
+    const audience = thread === 'team' ? ['attorney'] : ['client', 'attorney'];
     const { error } = await sb.from('messages').insert({
       deal_id: dealId,
       sender_id: session.user.id,
       sender_role: 'attorney',
       sender_name: senderName || session.user.email,
+      audience,
       body,
     });
     setSending(false);
     if (error) { alert('Could not send: ' + error.message); return; }
-    setText("");
+    setText('');
   };
+
+  const counts = {
+    team: messages.filter(m => {
+      const aud = m.audience || ['client'];
+      return aud.includes('attorney') && !aud.includes('client');
+    }).length,
+    client: messages.filter(m => {
+      const aud = m.audience || ['client'];
+      return aud.includes('attorney') && aud.includes('client');
+    }).length,
+  };
+
+  const tabBtn = (key, label, sub) => (
+    <button onClick={() => setThread(key)} style={{
+      flex: 1,
+      padding: '10px 12px',
+      background: thread === key ? 'var(--navy)' : 'transparent',
+      color: thread === key ? '#fffcf5' : 'var(--text-muted)',
+      border: '1px solid ' + (thread === key ? 'var(--navy)' : 'var(--border-strong)'),
+      borderRadius: 8,
+      fontFamily: 'inherit',
+      fontSize: 13,
+      fontWeight: 600,
+      cursor: 'pointer',
+      textAlign: 'left',
+      transition: 'all .12s',
+    }}>
+      <div>{label} {counts[key] > 0 && <span style={{ marginLeft: 6, fontSize: 10, opacity: 0.85 }}>{counts[key]}</span>}</div>
+      <div style={{ fontSize: 10, fontWeight: 400, opacity: 0.8, marginTop: 2 }}>{sub}</div>
+    </button>
+  );
+
+  const placeholder = thread === 'team'
+    ? 'Private message to the RefundLocators team — client won\'t see this.'
+    : 'Message to the client — RefundLocators team is also on this thread.';
 
   return (
     <div className="card">
-      <p className="card-title">Messages with RefundLocators team</p>
+      <p className="card-title">Messages</p>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+        {tabBtn('team', '🔒 With RefundLocators', 'Private — client cannot see')}
+        {tabBtn('client', '💬 With Client', 'Team-supervised thread')}
+      </div>
+
       {loading ? (
         <div className="empty" style={{ padding: '12px 0' }}>Loading…</div>
-      ) : messages.length === 0 ? (
-        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, padding: '8px 0 16px' }}>
-          No messages yet. Send the team a message here — separate from formal case updates (those go to the activity feed). Use this for quick questions, clarifications, coordination.
+      ) : threadMessages.length === 0 ? (
+        <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.6, padding: '8px 0 16px', background: 'var(--bg-card-alt)', borderRadius: 6, padding: 12 }}>
+          {thread === 'team'
+            ? 'No messages in the private thread yet. Use this for quick questions, coordination, clarifications — the client will not see anything you send here.'
+            : 'No messages with the client yet. The RefundLocators team sees this thread too — everything here is for the client\'s benefit and transparent to the team.'}
         </div>
       ) : (
         <div style={{ maxHeight: 420, overflowY: 'auto', marginBottom: 12 }}>
-          {messages.map(m => {
+          {threadMessages.map(m => {
             const fromMe = m.sender_role === 'attorney';
             const fromClient = m.sender_role === 'client';
             return (
@@ -966,7 +1027,7 @@ function MessagesThread({ dealId, session, senderName, isPreview }) {
           value={text}
           onChange={e => setText(e.target.value)}
           onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && text.trim()) send(); }}
-          placeholder="Quick message to the team…"
+          placeholder={placeholder}
           rows={2}
           style={{
             flex: 1,
@@ -987,7 +1048,9 @@ function MessagesThread({ dealId, session, senderName, isPreview }) {
         </button>
       </div>
       <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 6 }}>
-        ⌘/Ctrl + Enter to send
+        {thread === 'team'
+          ? '🔒 Private — only the RefundLocators team reads this thread. ⌘/Ctrl + Enter to send.'
+          : '💬 Client + team see this thread. ⌘/Ctrl + Enter to send.'}
       </div>
     </div>
   );

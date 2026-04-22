@@ -1777,10 +1777,6 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
 
       <PreforeclosureTracker stage={stage} />
 
-      {stage !== 'closed' && stage !== 'dead' && (
-        <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} isPreview={isPreview} />
-      )}
-
       {/* Minimal property & case reference — low-prominence, for transparency */}
       <div className="card">
         <p className="card-title">Your property</p>
@@ -1935,7 +1931,6 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
           <StatusIntel status={deal.status} filedAt={filedAt} />
           <TimelineExpectation filedAt={filedAt} status={deal.status} />
           <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} />
-          <EmpathyCheckin prefs={access.prefs} dealStatus={deal.status} isPreview={isPreview} />
         </>
       )}
 
