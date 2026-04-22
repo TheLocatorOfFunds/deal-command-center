@@ -21,9 +21,11 @@ Template:
 
 ## Nathan's session
 
-**Status**: Idle
+**Status**: Active
+**Working on**: Messages-tab email composer upgrade — custom subject + audience picker (client/attorney) + template support
+**Touching**: migration `messages_subject_and_audience` (add `subject` + `audience` cols to messages) · update `dispatch_message_notifications` trigger (honor subject, fan out to attorneys when audience includes it) · DCC DealDetail Messages Tab composer (subject input, audience checkboxes)
+**ETA**: Done today
 **Last updated**: Apr 22, 2026
-**Last done**: Phase 3 Library PR 3 shipped — DocuSign send-for-signature pipeline. Migration `docusign_envelopes` table (full state machine: sending → sent → delivered → signed → completed → void/declined/failed, RLS for 4 roles). Edge Function `docusign-send-envelope` (JWT Grant, PKCS8 key import, merge-value resolution, creates envelope via REST API). Edge Function `docusign-webhook` (receives DocuSign Connect events, optional HMAC validation, downloads signed PDF on completion, files to deal-docs with from_library_id provenance, writes client-visible "✅ Signed" activity). DCC "📝 Send for signature" button on DealDetail Documents + DocuSignSendModal (template picker filtered to docusign_template_id-set docs · recipient + SMS fields pre-filled from client_access · merge-value review · subject override). Envelope-status tracker card with realtime updates. `DOCUSIGN_SETUP.md` complete 9-step admin guide pushed to repo. Awaiting Nathan to complete DocuSign admin config + add 6 secrets to Supabase before first live test send.
 
 <!--
 Template:
