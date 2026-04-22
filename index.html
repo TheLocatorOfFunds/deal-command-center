@@ -3972,7 +3972,7 @@ function Vendors({ items, dealId, logAct, reload }) {
               <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em", flexShrink: 0, alignSelf: "center" }}>{(v.status || "").toUpperCase()}</span>
               <button onClick={() => del(v.id)} style={{ ...btnGhost, flexShrink: 0, padding: "2px 6px", lineHeight: 1, fontSize: 16 }}>×</button>
             </div>
-            {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}>{v.phone}</div>}
+            {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}><a href={`tel:${v.phone}`} style={{ color: "inherit", textDecoration: "none" }}>{v.phone}</a></div>}
             {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
           </div>
         ))}
@@ -5304,7 +5304,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{activeContact.name}</div>
-            <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{activeContact.phone}{activeContact.role ? ` · ${activeContact.role}` : ''}</div>
+            <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}><a href={`tel:${activeContact.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{activeContact.phone}</a>{activeContact.role ? ` · ${activeContact.role}` : ''}</div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
             <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
@@ -5620,7 +5620,7 @@ function LeadsModal({ onClose, userName, onConverted }) {
                     )}
                   </div>
                   <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4, lineHeight: 1.5 }}>
-                    {l.email}{l.phone && ` · ${l.phone}`}<br/>
+                    {l.email}{l.phone && <> · <a href={`tel:${l.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.phone}</a></>}<br/>
                     {l.address && <>{l.address}<br/></>}
                     {l.county && <>{l.county} County</>}{l.case_number && ` · Case ${l.case_number}`}
                   </div>
@@ -5644,7 +5644,7 @@ function LeadsModal({ onClose, userName, onConverted }) {
                               <span style={{ fontSize: 10, padding: "1px 6px", borderRadius: 3, background: "#292524", color: scoreColor, fontWeight: 700 }}>{d.score}</span>
                             </div>
                             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 3, lineHeight: 1.5 }}>
-                              {d.kind === 'deal' ? <>ID: <code style={{ color: "#d6d3d1" }}>{d.id}</code></> : <>{d.email}{d.phone && ` · ${d.phone}`}</>}
+                              {d.kind === 'deal' ? <>ID: <code style={{ color: "#d6d3d1" }}>{d.id}</code></> : <>{d.email}{d.phone && <> · <a href={`tel:${d.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{d.phone}</a></>}</>}
                               {d.address && <><br/>{d.address}</>}
                               {d.case_number && <> · Case {d.case_number}</>}
                               {d.county && <> · {d.county} Co.</>}
@@ -6122,7 +6122,7 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
                       {c.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {c.company}</span>}
                     </div>
                     <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
-                      {c.email || '—'}{c.phone && ` · ${c.phone}`}
+                      {c.email || '—'}{c.phone && <> · <a href={`tel:${c.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{c.phone}</a></>}
                     </div>
                     {(c.tags || []).length > 0 && (
                       <div style={{ fontSize: 10, color: "#78716c", marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -6394,7 +6394,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                       {l.contacts?.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {l.contacts.company}</span>}
                     </div>
                     <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
-                      {l.contacts?.email || '—'}{l.contacts?.phone && ` · ${l.contacts.phone}`}
+                      {l.contacts?.email || '—'}{l.contacts?.phone && <> · <a href={`tel:${l.contacts.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.contacts.phone}</a></>}
                       {l.relationship && <> · {l.relationship}</>}
                     </div>
                   </div>
