@@ -21,9 +21,11 @@ Template:
 
 ## Nathan's session
 
-**Status**: Idle
-**Last updated**: Apr 21, 2026
-**Last done**: Phase 3 Library PR 4 shipped — migration `library_deal_pins` (new `deal_library_pins` table + 4 RLS policies + 2 extra policies on `library_documents` for pin-scoped attorney/client reads + 2 storage policies so attorneys/clients can signed-URL library files only when pinned to their assigned/own deal) + DCC "📌 Pin from library" button on Documents tab (audience checkboxes · optional label · unpin action · pinned-docs section with badges) + client portal + attorney portal rendering pinned docs alongside deal-scoped documents.
+**Status**: Active
+**Working on**: Phase 3 Library — PR 3 DocuSign send-for-signature
+**Touching**: migration `docusign_envelopes` table · Edge Functions `docusign-send-envelope` + `docusign-webhook` · DCC "📝 Send for signature" button on DealDetail Documents + modal (template picker · merge-value review · recipient · optional SMS toggle) · `library_documents.docusign_template_id` utilization · activity row integration
+**ETA**: Done today (Nathan needs to add DocuSign Integration Key + RSA key to Supabase secrets before first live send)
+**Last updated**: Apr 22, 2026
 
 <!--
 Template:
