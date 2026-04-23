@@ -356,7 +356,8 @@ async function syncFromChatDb() {
 
       dealId    = cached.dealId;
       fromPhone = isInbound ? (normalizePhone(row.sender_handle) || NATHAN_NUMBER) : NATHAN_NUMBER;
-      toPhone   = isInbound ? NATHAN_NUMBER : null; // no single recipient for group outbound
+      toPhone   = isInbound ? NATHAN_NUMBER
+                           : (cached.participants.find(p => !OUR_NUMBERS.has(p)) || NATHAN_NUMBER);
       threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, cached.participants);
 
     } else {
