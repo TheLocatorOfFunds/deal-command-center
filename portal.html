@@ -1390,44 +1390,56 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
       </div>
       {err && <div className="empathy-error">{err}</div>}
 
-      {/* Pinned library resources — documents Nathan's team has curated for every client */}
-      {pins.length > 0 && (
-        <>
-          {pins.map(pin => {
-            const d = pin.library_documents;
-            if (!d) return null;
-            const icon = d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄';
-            return (
-              <div className="doc-row" key={'pin-' + pin.id} onClick={() => openPinned(pin)} style={{ cursor: 'pointer' }}>
-                <div className="doc-icon" style={{ background: 'var(--gold-soft)', color: 'var(--amber)' }}>{icon}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="doc-name">{pin.label || d.title}</div>
-                  <div className="doc-size">
-                    {d.size ? Math.round(d.size / 1024) + ' KB · ' : ''}From RefundLocators
-                    {d.description && ` · ${d.description}`}
-                  </div>
-                </div>
-                <button className="doc-action" onClick={(e) => { e.stopPropagation(); openPinned(pin); }}>View</button>
-              </div>
-            );
-          })}
-        </>
-      )}
-
       {documents.length === 0 && pins.length === 0 ? (
         <div className="empty" style={{ padding: '12px 0' }}>No documents on file yet. Upload anything we've requested, or just save it here for your records.</div>
-      ) : (
-        documents.map(d => (
-          <div className="doc-row" key={d.id}>
-            <div className="doc-icon">📄</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="doc-name">{d.name}</div>
-              <div className="doc-size">{d.size ? Math.round(d.size / 1024) + ' KB' : ''} · Added {fmtDateShort(d.created_at)}</div>
+      ) : (() => {
+        // Contain the list in a fixed-height scroller once it gets long, so the
+        // overall page stays a reasonable length. Threshold picked to match
+        // "about a viewport" worth of rows.
+        const totalRows = pins.length + documents.length;
+        const scrollable = totalRows > 6;
+        const listStyle = scrollable ? { maxHeight: 460, overflowY: 'auto', paddingRight: 6 } : {};
+        return (
+          <>
+            {scrollable && (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6, fontStyle: 'italic' }}>
+                Scroll inside the box to browse all {totalRows} documents
+              </div>
+            )}
+            <div style={listStyle}>
+              {/* Pinned library resources — documents Nathan's team has curated for every client */}
+              {pins.map(pin => {
+                const d = pin.library_documents;
+                if (!d) return null;
+                const icon = d.kind === 'video' ? '🎥' : d.kind === 'image' ? '🖼' : d.kind === 'link' ? '🔗' : '📄';
+                return (
+                  <div className="doc-row" key={'pin-' + pin.id} onClick={() => openPinned(pin)} style={{ cursor: 'pointer' }}>
+                    <div className="doc-icon" style={{ background: 'var(--gold-soft)', color: 'var(--amber)' }}>{icon}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className="doc-name">{pin.label || d.title}</div>
+                      <div className="doc-size">
+                        {d.size ? Math.round(d.size / 1024) + ' KB · ' : ''}From RefundLocators
+                        {d.description && ` · ${d.description}`}
+                      </div>
+                    </div>
+                    <button className="doc-action" onClick={(e) => { e.stopPropagation(); openPinned(pin); }}>View</button>
+                  </div>
+                );
+              })}
+              {documents.map(d => (
+                <div className="doc-row" key={d.id}>
+                  <div className="doc-icon">📄</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="doc-name">{d.name}</div>
+                    <div className="doc-size">{d.size ? Math.round(d.size / 1024) + ' KB' : ''} · Added {fmtDateShort(d.created_at)}</div>
+                  </div>
+                  <button className="doc-action" onClick={() => open(d)}>View</button>
+                </div>
+              ))}
             </div>
-            <button className="doc-action" onClick={() => open(d)}>View</button>
-          </div>
-        ))
-      )}
+          </>
+        );
+      })()}
     </div>
   );
 }
