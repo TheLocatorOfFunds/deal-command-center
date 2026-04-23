@@ -7,15 +7,11 @@ every session so the other side knows what's in flight.
 
 ## Justin's session
 
-**Status**: Idle
-**Last updated**: Apr 21, 2026
-
-<!--
-Template:
-**Working on**: [feature name]
-**Touching**: [files / tables / migrations]
-**ETA**: [done today / ongoing]
--->
+**Status**: 🔨 Active
+**Working on**: Multi-contact conversation view (`justin/multi-contact-sms`)
+**Touching**: `messages_outbound`, new tables `message_groups` / `messages_outbound_unmatched` / `thread_hidden`, `receive-sms` edge function, `OutboundMessages` → `DealConversations` UI replacement
+**ETA**: ongoing
+**Last updated**: Apr 23, 2026
 
 ---
 

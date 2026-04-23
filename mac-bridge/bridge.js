@@ -76,20 +76,24 @@ function saveWatermark(rowid) { fs.writeFileSync(WATERMARK_FILE, String(rowid));
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
 
 function sendViaMessages(toPhone, body) {
-  // Write AppleScript to a temp file to avoid shell-escaping nightmares
+  // Use osascript -e flags to avoid buddy-lookup timeouts.
+  // We open/create the chat by phone number, then send — this works even
+  // when the recipient isn't in the Mac's Contacts / buddy list.
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const script  = [
+  const lines = [
     'tell application "Messages"',
-    `  set targetService to 1st service whose service type = iMessage`,
-    `  set targetBuddy to buddy "${toPhone}" of targetService`,
+    '  activate',
+    `  set targetPhone to "${toPhone}"`,
+    '  set targetService to 1st service whose service type = iMessage',
+    '  set targetBuddy to participant targetPhone of targetService',
     `  send "${escaped}" to targetBuddy`,
     'end tell',
-  ].join('\n');
+  ];
 
   const tmpPath = `/tmp/dcc_send_${Date.now()}.applescript`;
-  fs.writeFileSync(tmpPath, script);
+  fs.writeFileSync(tmpPath, lines.join('\n'));
   try {
-    execFileSync('osascript', [tmpPath]);
+    execFileSync('osascript', [tmpPath], { timeout: 30000 });
   } finally {
     fs.unlinkSync(tmpPath);
   }
