@@ -41,7 +41,7 @@ Deno.serve(async (req) => {
 
     const sb = createClient(supabaseUrl, serviceRoleKey)
 
-    const { to: toRaw, body, deal_id, from_number } = await req.json()
+    const { to: toRaw, body, deal_id, from_number, contact_id } = await req.json()
 
     if (!toRaw || !body) {
       return new Response(JSON.stringify({ error: 'Missing required fields: to, body' }), {
@@ -86,6 +86,13 @@ Deno.serve(async (req) => {
         status:      initialStatus,
         sent_by:     userId,
         deal_id:     deal_id ?? null,
+        contact_id:  contact_id ?? null,
+        channel:     gateway === 'mac_bridge' ? 'imessage' : 'sms',
+        thread_key:  deal_id
+          ? (contact_id
+              ? `${deal_id}:contact:${contact_id}`
+              : `${deal_id}:phone:${to}`)
+          : null,
       })
       .select()
       .single()
