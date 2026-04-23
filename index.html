@@ -6618,63 +6618,92 @@ function normalizePhone(p) {
 }
 
 function OutboundMessages({ dealId, vendors, deal }) {
-  const [msgs, setMsgs] = useState([]);
+  const [msgs, setMsgs]               = useState([]);
   const [phoneNumbers, setPhoneNumbers] = useState([]);
-  const [fromNumber, setFromNumber] = useState('');
-  const [body, setBody] = useState('');
-  const [sending, setSending] = useState(false);
-  const [sendErr, setSendErr] = useState(null);
-  // activeContact: { name, role, phone } | { name: phone, phone, _custom: true } | null
+  const [fromNumber, setFromNumber]   = useState('');
+  const [body, setBody]               = useState('');
+  const [sending, setSending]         = useState(false);
+  const [sendErr, setSendErr]         = useState(null);
   const [activeContact, setActiveContact] = useState(null);
-  // newMode: showing the "+ New" number entry form
-  const [newMode, setNewMode] = useState(false);
-  const [newPhone, setNewPhone] = useState('');
-  // extraContacts: contacts started via "+ New" not already in vendors
+  const [newMode, setNewMode]         = useState(false);
+  const [newPhone, setNewPhone]       = useState('');
   const [extraContacts, setExtraContacts] = useState([]);
+  const [dcContacts, setDcContacts]   = useState([]); // from contacts + contact_deals
+  const [unmatched, setUnmatched]     = useState([]); // messages_outbound_unmatched
+  const [hiddenThreads, setHiddenThreads] = useState(new Set());
   const threadRef = useRef(null);
 
-  const homeowner = deal?.meta?.homeownerPhone
-    ? [{ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: deal.meta.homeownerPhone, _homeowner: true }]
-    : [];
+  // ── Participant colors for group threads ──────────────────────────────────
+  const PARTICIPANT_COLORS = ['#d97706','#3b82f6','#22c55e','#a855f7','#ef4444','#06b6d4','#f59e0b'];
+  const participantColor = (nameOrPhone) => {
+    if (!nameOrPhone) return PARTICIPANT_COLORS[0];
+    let h = 0;
+    for (let i = 0; i < nameOrPhone.length; i++) h = (h * 31 + nameOrPhone.charCodeAt(i)) >>> 0;
+    return PARTICIPANT_COLORS[h % PARTICIPANT_COLORS.length];
+  };
 
-  const contacts = [
-    ...homeowner,
-    ...(vendors || []).filter(v => v.phone && v.phone !== deal?.meta?.homeownerPhone),
-    ...extraContacts,
-  ];
+  // ── Unified contact list ──────────────────────────────────────────────────
+  const contacts = React.useMemo(() => {
+    const seen = new Set();
+    const list = [];
+    const add = (c) => {
+      const key = normalizePhone(c.phone);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      list.push(c);
+    };
+    if (deal?.meta?.homeownerPhone)
+      add({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: deal.meta.homeownerPhone, _homeowner: true });
+    (vendors || []).filter(v => v.phone).forEach(v => add({ name: v.name, role: v.role || 'Vendor', phone: v.phone }));
+    dcContacts.filter(c => c.phone).forEach(c => add({ name: c.name, role: c.kind || 'Contact', phone: c.phone, contact_id: c.id }));
+    extraContacts.forEach(add);
+    return list;
+  }, [deal, vendors, dcContacts, extraContacts]);
 
+  // ── Load messages ─────────────────────────────────────────────────────────
   const load = async () => {
-    // Fetch all messages for this deal
     const { data: dealMsgs } = await sb.from('messages_outbound')
       .select('*').eq('deal_id', dealId)
       .order('created_at', { ascending: true }).limit(200);
 
-    // Also fetch inbound messages by contact phone number across ALL deals.
-    // This ensures replies show here even if they were auto-assigned to a
-    // different deal (e.g. the same contact phone exists in multiple deals).
-    const contactPhones = [
-      deal?.meta?.homeownerPhone,
-      ...(vendors || []).map(v => v.phone),
-    ].filter(Boolean).flatMap(p => [normalizePhone(p), p.replace(/\D/g,'')]).filter(Boolean);
+    // Pull inbound by contact phones for cross-deal replies
+    const contactPhones = contacts
+      .map(c => c.phone).filter(Boolean)
+      .flatMap(p => [normalizePhone(p), p.replace(/\D/g,'')]).filter(Boolean);
 
     let extra = [];
     if (contactPhones.length > 0) {
       const { data: inboundByPhone } = await sb.from('messages_outbound')
-        .select('*')
-        .eq('direction', 'inbound')
+        .select('*').eq('direction', 'inbound')
         .in('to_number', [...new Set(contactPhones)])
         .order('created_at', { ascending: true });
-      // Merge: keep any inbound not already in dealMsgs (different deal_id)
       const seen = new Set((dealMsgs || []).map(m => m.id));
       extra = (inboundByPhone || []).filter(m => !seen.has(m.id));
     }
 
-    const all = [...(dealMsgs || []), ...extra]
-      .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-    setMsgs(all);
+    setMsgs([...(dealMsgs || []), ...extra].sort((a,b) => new Date(a.created_at) - new Date(b.created_at)));
+  };
+
+  // ── Load contacts from contact_deals ─────────────────────────────────────
+  const loadDealContacts = async () => {
+    const { data } = await sb.from('contact_deals')
+      .select('contacts(id, name, phone, kind)')
+      .eq('deal_id', dealId);
+    if (data) setDcContacts(data.map(r => r.contacts).filter(Boolean));
+  };
+
+  // ── Load unmatched inbound for this deal ─────────────────────────────────
+  const loadUnmatched = async () => {
+    const phones = contacts.map(c => normalizePhone(c.phone)).filter(Boolean);
+    if (!phones.length) return;
+    const { data } = await sb.from('messages_outbound_unmatched')
+      .select('*').in('to_number', phones)
+      .is('resolved_at', null).eq('dismissed', false);
+    setUnmatched(data || []);
   };
 
   useEffect(() => {
+    loadDealContacts();
     load();
     sb.from('phone_numbers').select('*').eq('active', true).order('created_at').then(({ data }) => {
       const nums = data || [];
@@ -6684,22 +6713,40 @@ function OutboundMessages({ dealId, vendors, deal }) {
     const ch = sb.channel(`sms-${dealId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
-    // Polling fallback: inbound replies are inserted server-side via the Edge
-    // Function and can be silently dropped by Realtime's RLS filter. Poll every
-    // 6 s so new texts appear automatically without a manual refresh.
     const poll = setInterval(load, 6000);
     return () => { sb.removeChannel(ch); clearInterval(poll); };
   }, [dealId]);
 
-  // Auto-select first contact when contacts list becomes available
+  useEffect(() => { loadUnmatched(); }, [contacts.length]);
+
   useEffect(() => {
     if (contacts.length > 0 && !activeContact) setActiveContact(contacts[0]);
-  }, [vendors]);
+  }, [contacts.length]);
 
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [msgs, activeContact]);
 
+  // ── Thread messages for active contact ───────────────────────────────────
+  const threadMsgs = React.useMemo(() => {
+    if (!activeContact) return msgs;
+    const phone = normalizePhone(activeContact.phone);
+    const cid   = activeContact.contact_id;
+    return msgs.filter(m => {
+      if (m.thread_key && cid && m.thread_key === `${dealId}:contact:${cid}`) return true;
+      if (m.thread_key && m.thread_key === `${dealId}:phone:${phone}`) return true;
+      return normalizePhone(m.to_number) === phone || normalizePhone(m.from_number) === phone;
+    });
+  }, [msgs, activeContact, dealId]);
+
+  const days = threadMsgs.reduce((acc, m) => {
+    const day = new Date(m.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    if (!acc.length || acc[acc.length - 1].day !== day) acc.push({ day, items: [] });
+    acc[acc.length - 1].items.push(m);
+    return acc;
+  }, []);
+
+  // ── Send ─────────────────────────────────────────────────────────────────
   const activeTo = activeContact?.phone || '';
 
   const send = async () => {
@@ -6709,10 +6756,18 @@ function OutboundMessages({ dealId, vendors, deal }) {
     setMsgs(prev => [...prev, optimistic]);
     setBody('');
     try {
-      const { data, error } = await sb.functions.invoke('send-sms', { body: { to: activeTo.trim(), body: optimistic.body, deal_id: dealId, from_number: fromNumber || undefined } });
+      const { data, error } = await sb.functions.invoke('send-sms', {
+        body: {
+          to:          activeTo.trim(),
+          body:        optimistic.body,
+          deal_id:     dealId,
+          from_number: fromNumber || undefined,
+          contact_id:  activeContact?.contact_id || undefined,
+        }
+      });
       if (error) {
         let msg = error.message;
-        try { const body = await error.context?.json?.(); msg = body?.error || body?.message || JSON.stringify(body) || msg; } catch {}
+        try { const b = await error.context?.json?.(); msg = b?.error || b?.message || JSON.stringify(b) || msg; } catch {}
         throw new Error(msg);
       }
       if (data?.status === 'failed') throw new Error(data.error_message || 'Twilio error');
@@ -6725,65 +6780,87 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const startNew = () => {
     const phone = newPhone.trim();
     if (!phone) return;
-    const already = contacts.find(c => c.phone === phone);
+    const already = contacts.find(c => normalizePhone(c.phone) === normalizePhone(phone));
     if (already) { setActiveContact(already); }
     else {
       const c = { name: phone, phone, _custom: true };
       setExtraContacts(prev => [...prev, c]);
       setActiveContact(c);
     }
-    setNewMode(false);
-    setNewPhone('');
+    setNewMode(false); setNewPhone('');
   };
 
-  // Messages for the active contact's thread
-  const threadMsgs = activeContact
-    ? msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(activeContact.phone))
-    : msgs;
+  // ── Hide thread ───────────────────────────────────────────────────────────
+  const hideThread = async (c) => {
+    const key = c.contact_id ? `${dealId}:contact:${c.contact_id}` : `${dealId}:phone:${normalizePhone(c.phone)}`;
+    await sb.from('thread_hidden').upsert({ deal_id: dealId, thread_key: key });
+    setHiddenThreads(prev => new Set([...prev, normalizePhone(c.phone)]));
+    if (activeContact?.phone === c.phone) setActiveContact(contacts.find(x => x.phone !== c.phone) || null);
+  };
 
-  const days = threadMsgs.reduce((acc, m) => {
-    const day = new Date(m.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
-    if (!acc.length || acc[acc.length - 1].day !== day) acc.push({ day, items: [] });
-    acc[acc.length - 1].items.push(m);
-    return acc;
-  }, []);
+  // ── Resolve unmatched ─────────────────────────────────────────────────────
+  const dismissUnmatched = async (id) => {
+    await sb.from('messages_outbound_unmatched').update({ dismissed: true }).eq('id', id);
+    setUnmatched(prev => prev.filter(u => u.id !== id));
+  };
+
+  const visibleContacts = contacts.filter(c => !hiddenThreads.has(normalizePhone(c.phone)));
+  const msgCount = c => msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(c.phone) || normalizePhone(m.from_number) === normalizePhone(c.phone)).length;
 
   const bubbleBg = s => s === 'failed' ? '#2d0a0a' : s === 'queued' ? '#292524' : '#92400e';
   const statusIcon = s => s === 'sent' ? '✓' : s === 'failed' ? '✗' : '···';
   const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
 
-  const msgCount = c => msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(c.phone)).length;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
 
+      {/* Unmatched-contact banner */}
+      {unmatched.length > 0 && (
+        <div style={{ background: '#1c0a00', borderBottom: '1px solid #78350f', padding: '8px 14px', flexShrink: 0 }}>
+          {unmatched.map(u => (
+            <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: unmatched.length > 1 ? 6 : 0 }}>
+              <span style={{ fontSize: 14 }}>⚠️</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ fontSize: 12, color: '#fbbf24', fontWeight: 600 }}>Unknown contact texted this case · </span>
+                <span style={{ fontSize: 11, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{u.from_number}</span>
+                {u.body && <span style={{ fontSize: 11, color: '#78716c' }}> — "{u.body.slice(0, 60)}{u.body.length > 60 ? '…' : ''}"</span>}
+              </div>
+              <button onClick={() => dismissUnmatched(u.id)}
+                style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 5, padding: '3px 8px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}>
+                Dismiss
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Conversation tabs */}
       <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1c1917', background: '#0f0d0c', overflowX: 'auto', flexShrink: 0, scrollbarWidth: 'none' }}>
-        {contacts.map(c => {
+        {visibleContacts.map(c => {
           const active = activeContact?.phone === c.phone;
-          const count = msgCount(c);
+          const count  = msgCount(c);
+          const color  = participantColor(c.name);
           return (
             <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); }}
-              style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? '2px solid #d97706' : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? `2px solid ${color}` : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                   {c.name.split(' ')[0]}
                 </span>
                 {count > 0 && <span style={{ fontSize: 9, background: '#292524', color: '#a8a29e', borderRadius: 8, padding: '1px 5px', flexShrink: 0 }}>{count}</span>}
               </div>
-              <span style={{ fontSize: 9, color: active ? '#d97706' : '#44403c', textTransform: 'uppercase', letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
+              <span style={{ fontSize: 9, color: active ? color : '#44403c', textTransform: 'uppercase', letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
                 {c._custom ? c.phone : (c.role || 'Contact')}
               </span>
             </button>
           );
         })}
-        {/* + New button */}
         <button onClick={() => { setNewMode(true); setActiveContact(null); }}
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: newMode ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: newMode ? '#d97706' : '#44403c', fontSize: 18, fontWeight: 300 }}>
           ＋
         </button>
-        {contacts.length === 0 && !newMode && (
-          <span style={{ fontSize: 11, color: '#44403c', alignSelf: 'center', padding: '0 14px', whiteSpace: 'nowrap' }}>No contacts with phone numbers — add vendors first or click ＋</span>
+        {visibleContacts.length === 0 && !newMode && (
+          <span style={{ fontSize: 11, color: '#44403c', alignSelf: 'center', padding: '0 14px', whiteSpace: 'nowrap' }}>No contacts with phone numbers — add vendors or click ＋</span>
         )}
       </div>
 
@@ -6791,39 +6868,43 @@ function OutboundMessages({ dealId, vendors, deal }) {
       {newMode && (
         <div style={{ padding: '8px 12px', borderBottom: '1px solid #1c1917', background: '#141210', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           <input autoFocus value={newPhone} onChange={e => setNewPhone(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && startNew()}
-            placeholder="+1 (555) 000-0000"
+            onKeyDown={e => e.key === 'Enter' && startNew()} placeholder="+1 (555) 000-0000"
             style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
           <button onClick={startNew} disabled={!newPhone.trim()}
-            style={{ background: newPhone.trim() ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: newPhone.trim() ? 'pointer' : 'default' }}>
-            Start
-          </button>
-          <button onClick={() => { setNewMode(false); if (contacts.length > 0) setActiveContact(contacts[0]); }}
-            style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>
-            Cancel
-          </button>
+            style={{ background: newPhone.trim() ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: newPhone.trim() ? 'pointer' : 'default' }}>Start</button>
+          <button onClick={() => { setNewMode(false); if (visibleContacts.length > 0) setActiveContact(visibleContacts[0]); }}
+            style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
         </div>
       )}
 
       {/* Thread header */}
       {activeContact && (
         <div style={{ padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 30, height: 30, borderRadius: '50%', background: '#292524', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0 }}>
-            {activeContact._custom ? '📱' : '👤'}
+          <div style={{ width: 30, height: 30, borderRadius: '50%', background: participantColor(activeContact.name), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, flexShrink: 0, color: '#fff', fontWeight: 700 }}>
+            {(activeContact.name || '?')[0].toUpperCase()}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{activeContact.name}</div>
-            <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}><a href={`tel:${activeContact.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{activeContact.phone}</a>{activeContact.role ? ` · ${activeContact.role}` : ''}</div>
+            <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>
+              <a href={`tel:${activeContact.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{activeContact.phone}</a>
+              {activeContact.role ? ` · ${activeContact.role}` : ''}
+            </div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
-            <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
-            {phoneNumbers.length === 0
-              ? <span style={{ fontSize: 11, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>No numbers configured</span>
-              : <select value={fromNumber} onChange={e => setFromNumber(e.target.value)}
-                  style={{ background: '#1c1917', border: '1px solid #44403c', color: '#d97706', borderRadius: 6, padding: '3px 8px', fontSize: 12, fontFamily: "'DM Mono', monospace", cursor: 'pointer', outline: 'none' }}>
-                  {phoneNumbers.map(p => <option key={p.id} value={p.number}>{p.label} · {p.number}</option>)}
-                </select>
-            }
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+              <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
+              {phoneNumbers.length === 0
+                ? <span style={{ fontSize: 11, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>No numbers configured</span>
+                : <select value={fromNumber} onChange={e => setFromNumber(e.target.value)}
+                    style={{ background: '#1c1917', border: '1px solid #44403c', color: '#d97706', borderRadius: 6, padding: '3px 8px', fontSize: 12, fontFamily: "'DM Mono', monospace", cursor: 'pointer', outline: 'none' }}>
+                    {phoneNumbers.map(p => <option key={p.id} value={p.number}>{p.label} · {p.number}</option>)}
+                  </select>
+              }
+            </div>
+            <button title="Hide thread" onClick={() => hideThread(activeContact)}
+              style={{ background: 'transparent', border: '1px solid #292524', color: '#44403c', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
+              ✕
+            </button>
           </div>
         </div>
       )}
@@ -6851,18 +6932,27 @@ function OutboundMessages({ dealId, vendors, deal }) {
               <div style={{ flex: 1, height: 1, background: '#1c1917' }} />
             </div>
             {items.map((m, i) => {
-              const time = new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-              const showMeta = i === items.length - 1 || items[i + 1]?.to_number !== m.to_number;
+              const time      = new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
               const isInbound = m.direction === 'inbound';
+              const showMeta  = i === items.length - 1 || items[i+1]?.direction !== m.direction || items[i+1]?.from_number !== m.from_number;
+              // Resolve sender name for inbound messages
+              const senderContact = isInbound
+                ? contacts.find(c => normalizePhone(c.phone) === normalizePhone(m.to_number) || normalizePhone(c.phone) === normalizePhone(m.from_number))
+                : null;
+              const senderName  = senderContact?.name || m.from_number || 'Unknown';
+              const senderColor = participantColor(senderName);
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
-                  <div style={{ maxWidth: '78%', background: isInbound ? '#292524' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? '1px solid #44403c' : 'none' }}>
+                  <div style={{ maxWidth: '78%', background: isInbound ? '#1c1917' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? `1px solid ${senderColor}33` : 'none' }}>
                     <div style={{ fontSize: 14, color: '#fafaf9', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.body}</div>
                   </div>
                   {showMeta && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingLeft: isInbound ? 2 : 0, paddingRight: isInbound ? 0 : 2 }}>
                       {isInbound
-                        ? <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>received {time}</span>
+                        ? <>
+                            <span style={{ fontSize: 10, fontWeight: 600, color: senderColor }}>{senderName.split(' ')[0]}</span>
+                            <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>{time}</span>
+                          </>
                         : <>
                             {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>from {m.from_number}</span>}
                             <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
@@ -6887,10 +6977,8 @@ function OutboundMessages({ dealId, vendors, deal }) {
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
               placeholder={activeContact ? `Message ${activeContact.name.split(' ')[0]}…` : 'Enter a number above first'}
-              disabled={!activeContact}
-              rows={2}
-              style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5, opacity: activeContact ? 1 : 0.4 }}
-            />
+              disabled={!activeContact} rows={2}
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5, opacity: activeContact ? 1 : 0.4 }} />
             <button onClick={send} disabled={!activeContact || !body.trim() || sending}
               style={{ width: 34, height: 34, borderRadius: '50%', background: (activeContact && body.trim() && !sending) ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', fontSize: 17, cursor: (activeContact && body.trim() && !sending) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
               ↑
