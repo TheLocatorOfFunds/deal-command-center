@@ -85,7 +85,7 @@ console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
 // ─── Per-process chat resolution cache ───────────────────────────────────────
-// Maps apple chat_identifier → { dealId: string|null, isGroup: bool, participants: string[] }
+// Maps apple chat_identifier → { dealId: string|null, isGroup: bool, participants: string[], groupId: string|null }
 // null dealId means "skip this chat" (personal or unresolvable).
 // Cache survives across ticks so we only do the Supabase lookup once per chat.
 const chatCache = new Map();
@@ -118,6 +118,35 @@ async function findDealForPhone(phone) {
   const { data, error } = await sb.rpc('find_deal_by_phone', { phone_e164: phone, phone_bare: bare });
   if (error) { console.error('⚠️  find_deal_by_phone error:', error.message); return null; }
   return data?.[0]?.id || null;
+}
+
+/** Look up or create a message_groups row for an iMessage group chat.
+ *  The row is keyed by apple_chat_guid stored inside the participants jsonb array.
+ *  Returns the UUID string, or null on failure. */
+async function lookupOrCreateMessageGroup(chatId, dealId, phones, displayName) {
+  // Find existing row by apple_chat_guid embedded in participants jsonb.
+  const { data: existing, error: lookupErr } = await sb
+    .from('message_groups')
+    .select('id')
+    .eq('deal_id', dealId)
+    .contains('participants', JSON.stringify([{ apple_chat_guid: chatId }]))
+    .maybeSingle();
+  if (lookupErr) { console.error('⚠️  message_groups lookup error:', lookupErr.message); }
+  if (existing) return existing.id;
+
+  const label        = displayName || phones.join(' + ');
+  const participants = [
+    ...phones.map(p => ({ phone: p })),
+    { apple_chat_guid: chatId },
+  ];
+  const { data: created, error: insertErr } = await sb
+    .from('message_groups')
+    .insert({ deal_id: dealId, label, participants, channel: 'imessage' })
+    .select('id')
+    .single();
+  if (insertErr) { console.error('⚠️  message_groups insert error:', insertErr.message); return null; }
+  console.log(`📋 GROUP  created message_groups ${created.id}  label="${label}"`);
+  return created.id;
 }
 
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
@@ -181,7 +210,7 @@ async function syncFromChatDb() {
 
   const watermark = getWatermark();
   let rows;
-  // Map of chatIdentifier → [phone, ...] built while DB is still open
+  // Map of chatIdentifier → { phones: string[], displayName: string|null } built while DB is still open
   const participantsByChatId = new Map();
 
   try {
@@ -226,10 +255,11 @@ async function syncFromChatDb() {
         WHERE c.chat_identifier = ?
           AND h.id NOT LIKE '%@%'
       `).all(chatId);
-      participantsByChatId.set(
-        chatId,
-        parts.map(p => normalizePhone(p.phone)).filter(Boolean)
-      );
+      const displayName = rows.find(r => r.chat_identifier === chatId)?.chat_display_name || null;
+      participantsByChatId.set(chatId, {
+        phones: parts.map(p => normalizePhone(p.phone)).filter(Boolean),
+        displayName,
+      });
     }
   } finally {
     db.close();
@@ -239,9 +269,9 @@ async function syncFromChatDb() {
 
   // ── Resolve group chats not yet in cache ─────────────────────────────────
   // Must happen after DB close (async Supabase calls).
-  for (const [chatId, phones] of participantsByChatId) {
+  for (const [chatId, { phones, displayName }] of participantsByChatId) {
     if (phones.length === 0) {
-      chatCache.set(chatId, { dealId: null, isGroup: true, participants: [] });
+      chatCache.set(chatId, { dealId: null, isGroup: true, participants: [], groupId: null });
       continue;
     }
 
@@ -258,8 +288,11 @@ async function syncFromChatDb() {
     const resolved = allMatch && commonDeal ? commonDeal : null;
     if (!resolved) {
       console.log(`⏭ SKIP personal/unroutable group chat  id=${chatId}  phones=[${phones.join(',')}]`);
+      chatCache.set(chatId, { dealId: null, isGroup: true, participants: phones, groupId: null });
+      continue;
     }
-    chatCache.set(chatId, { dealId: resolved, isGroup: true, participants: phones });
+    const groupId = await lookupOrCreateMessageGroup(chatId, resolved, phones, displayName);
+    chatCache.set(chatId, { dealId: resolved, isGroup: true, participants: phones, groupId });
   }
 
   // ── Process each message row ──────────────────────────────────────────────
@@ -284,7 +317,7 @@ async function syncFromChatDb() {
       dealId    = cached.dealId;
       fromPhone = isInbound ? (normalizePhone(row.sender_handle) || NATHAN_NUMBER) : NATHAN_NUMBER;
       toPhone   = isInbound ? NATHAN_NUMBER : null; // no single recipient for group outbound
-      threadKey = `${dealId}:group:${chatId}`;
+      threadKey = cached.groupId ? `${dealId}:group:${cached.groupId}` : `${dealId}:group:${chatId}`;
 
     } else {
       // ── 1:1 chat ─────────────────────────────────────────────────────────
@@ -318,6 +351,7 @@ async function syncFromChatDb() {
       created_at:   appleTs(row.date),
       deal_id:      dealId,
       thread_key:   threadKey,
+      group_id:     isGroup ? (chatCache.get(chatId)?.groupId || null) : null,
     };
 
     const { error } = await sb.from('messages_outbound').upsert(msgData, {
