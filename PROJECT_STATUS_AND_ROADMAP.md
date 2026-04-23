@@ -81,7 +81,7 @@ Two public-facing brands (both d/b/a's of the LLC):
 | **RefundLocators** | refundlocators.com | The primary consumer brand. Everything surplus-recovery-related — top-of-funnel SMS intake, post-signing client work, DCC team tooling, attorney portal — is branded RefundLocators. DBA registration pending with Ohio SoS. |
 | **Defender Homeowner Advocates** | defenderha.com | Pre-auction / pre-sale deal activation. Work with homeowners *before* the foreclosure sale happens. Registered DBA. |
 
-Unified phone: **(513) 951-8855** (GHL-unified 2026-04-17). Any doc still showing 513-516-2306 or 513-253-1100 is stale.
+Primary phone: **(513) 516-2306** (Nathan's iPhone, as of 2026-04-22). The earlier GHL unified number (513) 951-8855 and legacy 513-253-1100 are stale.
 
 Legal footer pattern on every public-facing surface: *"RefundLocators, a d/b/a of FundLocators LLC"* (or equivalent) — keeps consumer brand forward, preserves legal entity.
 
@@ -152,7 +152,7 @@ Legal footer pattern on every public-facing surface: *"RefundLocators, a d/b/a o
 | Service | Purpose | Key location |
 |---|---|---|
 | Resend | Outbound email (digest, notifications, magic links) | Vault → `resend_api_key` |
-| GHL | SMS + unified phone (513) 951-8855 | Nathan's GHL account — API key NOT yet wired into DCC |
+| GHL | SMS + unified phone (513) 951-8855 — retired 2026-04-22 in favor of (513) 516-2306 | Nathan's GHL account — API key NOT yet wired into DCC |
 | 2Captcha | CAPTCHA solving for Castle's Butler + Warren counties | Nathan's 2Captcha account — balance funded |
 | Castle v2 | Python docket scraper | Runs on Nathan's machine; config/.env holds SUPABASE_SERVICE_KEY + DOCKET_WEBHOOK_SECRET |
 | GitHub | Source + auto-deploy via Pages | `TheLocatorOfFunds/deal-command-center` repo |
@@ -699,8 +699,8 @@ DCC uses **dark theme** (`#0c0a09`, `#1c1917` base). Portals use **cream/light t
 
 ### Phone (single source of truth)
 
-- **(513) 951-8855** (GHL unified)
-- Legacy numbers in older docs: 513-516-2306, 513-253-1100 — update when seen
+- **(513) 516-2306** (Nathan's iPhone, primary as of 2026-04-22)
+- Legacy numbers in older docs: 513-951-8855 (old GHL unified), 513-253-1100 — update when seen
 
 ---
 

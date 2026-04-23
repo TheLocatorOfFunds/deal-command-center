@@ -44,7 +44,7 @@ The long-term vision Nathan describes: *"one login, everything, sellable as a bu
 | **refundlocators.com** | Former homeowners (surplus recovery) + SEO | Primary brand. Top-of-funnel SMS, lead intake, client portal, attorney portal, DCC entry |
 | **defenderha.com** | Pre-auction homeowners | Pre-sale deal activation, help before the hammer drops |
 
-Both brands share one data infra (DCC's Supabase) and one phone number: **(513) 951-8855** (GHL-unified since 2026-04-17).
+Both brands share one data infra (DCC's Supabase) and one phone number: **(513) 516-2306** (Nathan's iPhone, primary as of 2026-04-22; supersedes the 2026-04-17 GHL-unified 513-951-8855).
 
 Unified STOP / opt-out compliance across both brands.
 
@@ -71,7 +71,7 @@ Legal footer pattern: *"RefundLocators, a d/b/a of FundLocators LLC"* — consum
 | **Castle** | Ohio county docket scrapers | Reads `public.deals` directly; pushes events to DCC webhook |
 | **Supabase** project `rcfaashkfpurkvtmsmeb` | Postgres DB + Auth + Realtime + Storage + Edge Functions | Backbone of DCC |
 | **Resend** | Outbound email (daily digest, docket notifications, magic links) | API key in Supabase Vault |
-| **GHL (GoHighLevel)** | Unified SMS + phone (513) 951-8855 | Outbound number; SMS not yet wired into DCC notifications |
+| **GHL (GoHighLevel)** | Prior unified SMS + phone (513) 951-8855 — retired 2026-04-22 in favor of Nathan's iPhone (513) 516-2306 | Outbound number; SMS not yet wired into DCC notifications |
 | **GitHub** (`TheLocatorOfFunds/deal-command-center`) | Source code + auto-deploy via GitHub Pages on push-to-main | Any commit to `main` triggers ~30s rebuild |
 | **Claude Desktop** + Supabase MCP | Nathan's primary development interface — NOT a deployed service | Nathan prompts, Claude applies migrations / deploys functions |
 
@@ -271,8 +271,8 @@ Postgres logical replication publishes to `supabase_realtime` on: `deals`, `mess
 - Fallback for magic-link if Resend fails: Supabase's default SMTP
 
 ### GHL (GoHighLevel)
-- Unified phone: (513) 951-8855
-- Previously fragmented: 513-516-2306 (old Nathan cell), 513-253-1100
+- Current primary phone (as of 2026-04-22): (513) 516-2306 (Nathan's iPhone)
+- Retired: 513-951-8855 (prior GHL unified), 513-253-1100
 - SMS gateway for all three brands
 - **Not yet wired into DCC notifications** — SMS preference in client portal logs a placeholder
 - Needs: GHL API key + location ID to wire. OR swap to Twilio.
@@ -346,8 +346,8 @@ Warm, knowledgeable, approachable. Smart friend who knows the system. Never call
 ### Phone
 
 Always tap-to-call:
-- Primary: **(513) 951-8855** (GHL unified)
-- Legacy numbers in older docs: 513-516-2306, 513-253-1100 — should be updated when found
+- Primary: **(513) 516-2306** (Nathan's iPhone, as of 2026-04-22)
+- Legacy numbers in older docs: 513-951-8855 (old GHL unified), 513-253-1100 — should be updated when found
 
 ### Compliance (refundlocators.com specifically)
 

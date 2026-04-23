@@ -8,7 +8,7 @@ const CORS = {
 };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 
-const NATHAN_PHONE = "+15139518855";
+const NATHAN_PHONE = "+15135162306";
 
 async function textNathan(message: string): Promise<boolean> {
   const sid = Deno.env.get("TWILIO_ACCOUNT_SID");

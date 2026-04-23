@@ -7696,7 +7696,7 @@ function LibraryModal({ onClose, isAdmin, userId }) {
     if (doc.kind === 'link' && doc.external_url) { window.open(doc.external_url, '_blank'); return; }
     if (!doc.path) return;
     const { data, error } = await sb.storage.from('library').createSignedUrl(doc.path, 600);
-    if (error || !data?.signedUrl) { alert("Couldn't open that file. Call Nathan (513) 951-8855."); return; }
+    if (error || !data?.signedUrl) { alert("Couldn't open that file. Call Nathan (513) 516-2306."); return; }
     window.open(data.signedUrl, '_blank');
   };
 

@@ -7,7 +7,7 @@ const CORS = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const NATHAN_PHONE = "+15139518855";
+const NATHAN_PHONE = "+15135162306";
 
 async function textNathan(message: string): Promise<void> {
   const sid = Deno.env.get("TWILIO_ACCOUNT_SID");

@@ -378,13 +378,13 @@ function statusIntel(status, filedAt) {
       icon: '📞', tone: 'info',
       headline: "Our team has reached out to you",
       body: "A RefundLocators specialist has contacted you to discuss your case. Please respond when you can — the sooner we can talk, the sooner we can begin your recovery.",
-      cta: "If you haven't heard from us, call Nathan at (513) 951-8855.",
+      cta: "If you haven't heard from us, call Nathan at (513) 516-2306.",
     },
     'awaiting-docs': {
       icon: '📄', tone: 'info',
       headline: "Waiting on a few documents",
       body: "We need a small set of documents from you to move forward (typically ID, proof of address, and any estate paperwork). Check your email for the specific list. As soon as we receive them, we'll prepare your claim for filing.",
-      cta: "Questions about what to send? Call Nathan at (513) 951-8855.",
+      cta: "Questions about what to send? Call Nathan at (513) 516-2306.",
     },
     'signed': {
       icon: '✍️', tone: 'progress',
@@ -426,7 +426,7 @@ function statusIntel(status, filedAt) {
       icon: '⚠️', tone: 'error',
       headline: "Case has been closed without recovery",
       body: "We were unable to complete the recovery of surplus funds for your case. This is uncommon. Please call Nathan directly to discuss what happened and whether there is anything further we can explore.",
-      cta: "Call Nathan at (513) 951-8855 to talk this through.",
+      cta: "Call Nathan at (513) 516-2306 to talk this through.",
     },
   };
 
@@ -500,7 +500,7 @@ function SurplusTracker({ status, filedAt }) {
       </div>
       {isDead && (
         <p style={{ fontSize: 12, color: 'var(--red)', textAlign: 'center', marginTop: 14, marginBottom: 0 }}>
-          Case closed without recovery — please call Nathan directly at (513) 951-8855.
+          Case closed without recovery — please call Nathan directly at (513) 516-2306.
         </p>
       )}
     </div>
@@ -632,7 +632,7 @@ function SignIn() {
             <div className="success-check">✓</div>
             <h1 className="serif">Check your email</h1>
             <p className="lead">We sent a secure sign-in link to <b>{email}</b>. Open the email and tap the button to access your case.</p>
-            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email within a minute, check your spam folder or contact Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.</p>
+            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email within a minute, check your spam folder or contact Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.</p>
           </div>
         ) : (
           <div>
@@ -652,7 +652,7 @@ function SignIn() {
             {error && <div className="error">{error}</div>}
             <p className="fineprint">
               This portal is invite-only. Please use the email address you provided when you signed your engagement agreement.
-              If you believe you should have access but can't sign in, contact Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.
+              If you believe you should have access but can't sign in, contact Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
             </p>
           </div>
         )}
@@ -1242,7 +1242,7 @@ function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
       <div className="empathy-card empathy-done">
         <div style={{ fontSize: 24, marginBottom: 8 }}>💌</div>
         <h3>Thank you.</h3>
-        <p>We read every check-in. {mood !== 'good' ? 'Nathan will reach out to you personally within one business day.' : 'Reach out anytime — (513) 951-8855.'}</p>
+        <p>We read every check-in. {mood !== 'good' ? 'Nathan will reach out to you personally within one business day.' : 'Reach out anytime — (513) 516-2306.'}</p>
       </div>
     );
   }
@@ -1321,7 +1321,7 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
     if (!d.path) return;
     const { data, error } = await sb.storage.from('library').createSignedUrl(d.path, 300);
     if (error || !data?.signedUrl) {
-      alert("Couldn't open that document. Please call Nathan at (513) 951-8855.");
+      alert("Couldn't open that document. Please call Nathan at (513) 516-2306.");
       return;
     }
     window.open(data.signedUrl, '_blank');
@@ -1364,7 +1364,7 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
   const open = async (doc) => {
     const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
     if (error || !data?.signedUrl) {
-      alert("We couldn't open that document. Please call Nathan at (513) 951-8855.");
+      alert("We couldn't open that document. Please call Nathan at (513) 516-2306.");
       return;
     }
     window.open(data.signedUrl, '_blank');
@@ -1573,7 +1573,7 @@ function WelcomeVideoBlock({ url }) {
         Your browser cannot play this video. <a href={url}>Download it instead.</a>
       </video>
       <div className="welcome-video-caption">
-        Nathan recorded this for you personally when your case came in. Questions anytime — <a href="tel:+15139518855">(513) 951-8855</a>.
+        Nathan recorded this for you personally when your case came in. Questions anytime — <a href="tel:+15135162306">(513) 516-2306</a>.
       </div>
     </div>
   );
@@ -1583,7 +1583,7 @@ function WelcomeVideoBlock({ url }) {
 function StickyCallButton() {
   return (
     <div className="sticky-call">
-      <a href="tel:+15139518855">
+      <a href="tel:+15135162306">
         <span className="call-icon">📞</span>
         Call Nathan directly
       </a>
@@ -1770,7 +1770,7 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
         <div className="card" style={{ marginTop: 18, padding: '18px 20px', background: 'var(--bg-card-alt)' }}>
           <p className="card-title" style={{ marginBottom: 8 }}>We're on it</p>
           <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.55 }}>
-            Nathan is pulling the court file and property data to put together an offer for you. You'll see the offer here as soon as it's ready — usually within one to two business days. Meanwhile, if you have questions or anything changes on your end, call or text Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.
+            Nathan is pulling the court file and property data to put together an offer for you. You'll see the offer here as soon as it's ready — usually within one to two business days. Meanwhile, if you have questions or anything changes on your end, call or text Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.
           </div>
         </div>
       )}
@@ -1813,7 +1813,7 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
             <div className="team-name">Nathan Johnson</div>
             <div className="team-role">Principal, RefundLocators</div>
             <div className="team-contact">
-              <a href="tel:+15139518855">(513) 951-8855</a> &middot;{' '}
+              <a href="tel:+15135162306">(513) 516-2306</a> &middot;{' '}
               <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>
             </div>
           </div>
@@ -1844,7 +1844,7 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
       <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} isPreview={isPreview} />
 
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
-        Questions? Call Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.<br/>
+        Questions? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your sale progresses.
       </p>
 
@@ -1983,7 +1983,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
             <div className="team-name">Nathan Johnson</div>
             <div className="team-role">Principal, RefundLocators</div>
             <div className="team-contact">
-              <a href="tel:+15139518855">(513) 951-8855</a> &middot;{' '}
+              <a href="tel:+15135162306">(513) 516-2306</a> &middot;{' '}
               <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>
             </div>
           </div>
@@ -2015,7 +2015,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
 
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
-        Questions about your case? Call Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a>.<br/>
+        Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your case progresses.
       </p>
 
@@ -2028,7 +2028,7 @@ async function openDocument(path) {
   if (!path) return;
   const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(path, 300);
   if (error || !data?.signedUrl) {
-    alert("We couldn't open that document. Please call Nathan at (513) 951-8855 and we'll send it over directly.");
+    alert("We couldn't open that document. Please call Nathan at (513) 516-2306 and we'll send it over directly.");
     return;
   }
   window.open(data.signedUrl, '_blank');
@@ -2047,7 +2047,7 @@ function NoAccess({ session }) {
         <h1 className="serif">We couldn't find your case</h1>
         <p className="lead">You're signed in as <b>{session.user.email}</b>, but we don't have a case linked to this email address.</p>
         <p className="fineprint">
-          If you believe this is an error, please contact Nathan directly at <a href="tel:+15139518855">(513) 951-8855</a> or <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>. We'll verify and get you access within the business day.
+          If you believe this is an error, please contact Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a> or <a href="mailto:nathan@fundlocators.com">nathan@fundlocators.com</a>. We'll verify and get you access within the business day.
         </p>
         <button className="btn-primary" onClick={() => sb.auth.signOut()} style={{ marginTop: 24 }}>
           Sign out and try a different email
@@ -2069,7 +2069,7 @@ function GenericError() {
         <h1 className="serif">Something went wrong</h1>
         <p className="lead">We couldn't load your case right now. Please try refreshing the page.</p>
         <p className="fineprint">
-          If the problem continues, call Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.
+          If the problem continues, call Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
         </p>
         <button className="btn-primary" onClick={() => window.location.reload()} style={{ marginTop: 24 }}>
           Refresh

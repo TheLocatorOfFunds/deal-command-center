@@ -17,7 +17,7 @@ Write a 2-3 paragraph description that:
 - Names the city/county and 1-2 property highlights (bed/bath/sqft, year built, any standout feature)
 - Summarizes condition honestly: what's been updated, what needs work, and any known issues. No sugarcoating.
 - If preforeclosure: mention the auction deadline as urgency without being alarmist
-- Close with a strong one-line CTA like "Call Nathan at (513) 951-8855 for a walkthrough" or similar
+- Close with a strong one-line CTA like "Call Nathan at (513) 516-2306 for a walkthrough" or similar
 - Total length: 120-220 words
 - Tone: direct, credible, data-forward. Not flowery. No emoji. No hype words like "GEM" or "MUST SEE".
 - Numbers: format money as $XXX,XXX. Never show rehab as exact to-the-dollar; use ranges or approximate.

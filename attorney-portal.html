@@ -287,7 +287,7 @@ function SignIn() {
             <div className="success-check">✓</div>
             <h1 className="serif">Check your email</h1>
             <p className="lead">We sent a secure sign-in link to <b>{email}</b>.</p>
-            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email, check your spam folder or contact Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.</p>
+            <p className="fineprint">The link is good for one hour and can only be used once. If you don't see the email, check your spam folder or contact Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.</p>
           </div>
         ) : (
           <div>
@@ -304,7 +304,7 @@ function SignIn() {
             </button>
             {error && <div className="error">{error}</div>}
             <p className="fineprint">
-              Access is by invitation only. Use the email address Nathan provided when setting up your case assignment. If you believe you should have access but can't sign in, call <a href="tel:+15139518855">(513) 951-8855</a>.
+              Access is by invitation only. Use the email address Nathan provided when setting up your case assignment. If you believe you should have access but can't sign in, call <a href="tel:+15135162306">(513) 516-2306</a>.
             </p>
           </div>
         )}
@@ -344,7 +344,7 @@ function Authenticated({ session }) {
           <p className="fineprint">
             If you're a client, please use <a href="portal.html">the client portal</a> instead.<br/><br/>
             If you're a team member, go to <a href="/deal-command-center/">DCC</a>.<br/><br/>
-            If you believe this is an error, call Nathan at <a href="tel:+15139518855">(513) 951-8855</a>.
+            If you believe this is an error, call Nathan at <a href="tel:+15135162306">(513) 516-2306</a>.
           </p>
           <button className="btn-full" onClick={() => sb.auth.signOut()} style={{ marginTop: 20 }}>
             Sign out
@@ -1285,7 +1285,7 @@ function DocumentsSection({ dealId, documents, onChange, isPreview }) {
   const open = async (doc) => {
     const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 600);
     if (error || !data?.signedUrl) {
-      alert('Could not open document. Call Nathan at (513) 951-8855.');
+      alert('Could not open document. Call Nathan at (513) 516-2306.');
       return;
     }
     window.open(data.signedUrl, '_blank');
