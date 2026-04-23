@@ -6941,6 +6941,8 @@ function normalizePhone(p) {
 
 function OutboundMessages({ dealId, vendors, deal }) {
   const [msgs, setMsgs]               = useState([]);
+  const [calls, setCalls]             = useState([]);
+  const [dealNotes, setDealNotes]     = useState([]);
   const [phoneNumbers, setPhoneNumbers] = useState([]);
   const [fromNumber, setFromNumber]   = useState('');
   const [body, setBody]               = useState('');
@@ -6950,9 +6952,10 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [newMode, setNewMode]         = useState(false);
   const [newPhone, setNewPhone]       = useState('');
   const [extraContacts, setExtraContacts] = useState([]);
-  const [dcContacts, setDcContacts]   = useState([]); // from contacts + contact_deals
-  const [unmatched, setUnmatched]     = useState([]); // messages_outbound_unmatched
+  const [dcContacts, setDcContacts]   = useState([]);
+  const [unmatched, setUnmatched]     = useState([]);
   const [hiddenThreads, setHiddenThreads] = useState(new Set());
+  const [channelFilter, setChannelFilter] = useState('all'); // 'all' | 'sms' | 'calls' | 'notes'
   const threadRef = useRef(null);
 
   // ── Participant colors for group threads ──────────────────────────────────
@@ -6982,17 +6985,27 @@ function OutboundMessages({ dealId, vendors, deal }) {
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
 
-  // ── Load messages ─────────────────────────────────────────────────────────
+  // ── Load messages + calls + notes for this deal ──────────────────────────
   const load = async () => {
     // Only fetch messages explicitly assigned to this deal.
     // Cross-deal phone matching was removed: it amplified group-chat leaks
     // by showing any message whose to_number matched a contact, regardless
     // of which deal it was routed to.
-    const { data: dealMsgs } = await sb.from('messages_outbound')
-      .select('*').eq('deal_id', dealId)
-      .order('created_at', { ascending: true }).limit(200);
-
-    setMsgs(dealMsgs || []);
+    const [msgsRes, callsRes, notesRes] = await Promise.all([
+      sb.from('messages_outbound')
+        .select('*').eq('deal_id', dealId)
+        .order('created_at', { ascending: true }).limit(200),
+      sb.from('call_logs')
+        .select('*').eq('deal_id', dealId)
+        .order('started_at', { ascending: true }).limit(200),
+      sb.from('deal_notes')
+        .select('id, title, body, author_id, created_at, updated_at')
+        .eq('deal_id', dealId)
+        .order('created_at', { ascending: true }).limit(100),
+    ]);
+    setMsgs(msgsRes.data || []);
+    setCalls(callsRes.data || []);
+    setDealNotes(notesRes.data || []);
   };
 
   // ── Load contacts from contact_deals ─────────────────────────────────────
@@ -7021,8 +7034,10 @@ function OutboundMessages({ dealId, vendors, deal }) {
       setPhoneNumbers(nums);
       if (nums.length > 0 && !fromNumber) setFromNumber(nums[0].number);
     });
-    const ch = sb.channel(`sms-${dealId}`)
+    const ch = sb.channel(`comms-${dealId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs',         filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes',        filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
     const poll = setInterval(load, 6000);
     return () => { sb.removeChannel(ch); clearInterval(poll); };
@@ -7074,12 +7089,62 @@ function OutboundMessages({ dealId, vendors, deal }) {
     });
   }, [msgs, activeContact, dealId]);
 
-  const days = threadMsgs.reduce((acc, m) => {
-    const day = new Date(m.created_at).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  // Merge messages + calls + notes for the active contact into one sorted
+  // stream. Calls are filtered to the contact's phone (or contact_id match).
+  // Notes are deal-wide — they appear on every contact tab because they're
+  // context about the whole case, not one conversation.
+  const threadItems = React.useMemo(() => {
+    const items = [];
+    // Messages
+    threadMsgs.forEach(m => items.push({ _kind: 'message', _ts: m.created_at, ...m }));
+    // Calls — relevant to the active contact only (no group-call concept yet)
+    if (activeContact && !activeContact._group) {
+      const phone = normalizePhone(activeContact.phone);
+      const cid   = activeContact.contact_id;
+      calls.forEach(c => {
+        const matchesContact = cid && c.contact_id === cid;
+        const matchesPhone   = normalizePhone(c.from_number) === phone || normalizePhone(c.to_number) === phone;
+        if (matchesContact || matchesPhone) {
+          items.push({ _kind: 'call', _ts: c.started_at || c.created_at, ...c });
+        }
+      });
+    }
+    // Notes — deal-wide, surface in every thread
+    dealNotes.forEach(n => items.push({ _kind: 'note', _ts: n.created_at, ...n }));
+
+    // Channel filter
+    const filtered = items.filter(i => {
+      if (channelFilter === 'all') return true;
+      if (channelFilter === 'sms')   return i._kind === 'message';
+      if (channelFilter === 'calls') return i._kind === 'call';
+      if (channelFilter === 'notes') return i._kind === 'note';
+      return true;
+    });
+
+    return filtered.sort((a, b) => new Date(a._ts).getTime() - new Date(b._ts).getTime());
+  }, [threadMsgs, calls, dealNotes, activeContact, channelFilter]);
+
+  const days = threadItems.reduce((acc, m) => {
+    const day = new Date(m._ts).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
     if (!acc.length || acc[acc.length - 1].day !== day) acc.push({ day, items: [] });
     acc[acc.length - 1].items.push(m);
     return acc;
   }, []);
+
+  // Counts for the channel chips (across this contact's thread)
+  const chipCounts = React.useMemo(() => ({
+    sms: threadMsgs.length,
+    calls: (activeContact && !activeContact._group)
+      ? calls.filter(c => {
+          const phone = normalizePhone(activeContact.phone);
+          const cid   = activeContact.contact_id;
+          return (cid && c.contact_id === cid)
+              || normalizePhone(c.from_number) === phone
+              || normalizePhone(c.to_number) === phone;
+        }).length
+      : 0,
+    notes: dealNotes.length,
+  }), [threadMsgs, calls, dealNotes, activeContact]);
 
   // ── Send ─────────────────────────────────────────────────────────────────
   const activeTo = activeContact?.phone || '';
@@ -7262,6 +7327,35 @@ function OutboundMessages({ dealId, vendors, deal }) {
         </div>
       )}
 
+      {/* Channel filter chips */}
+      {activeContact && (
+        <div style={{ display: 'flex', gap: 6, padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#0f0d0c', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          {[
+            { key: 'all',   label: 'All',           icon: '☰', count: chipCounts.sms + chipCounts.calls + chipCounts.notes },
+            { key: 'sms',   label: 'Messages',      icon: '💬', count: chipCounts.sms },
+            { key: 'calls', label: 'Calls',         icon: '📞', count: chipCounts.calls },
+            { key: 'notes', label: 'Internal notes', icon: '🔒', count: chipCounts.notes },
+          ].map(chip => {
+            const active = channelFilter === chip.key;
+            return (
+              <button key={chip.key} onClick={() => setChannelFilter(chip.key)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '3px 10px', fontSize: 11, fontWeight: 600,
+                  background: active ? '#d97706' : 'transparent',
+                  color: active ? '#0c0a09' : '#78716c',
+                  border: `1px solid ${active ? '#d97706' : '#292524'}`,
+                  borderRadius: 999, cursor: 'pointer', fontFamily: 'inherit',
+                  whiteSpace: 'nowrap', transition: 'all 0.12s',
+                }}>
+                <span>{chip.icon}</span> {chip.label}
+                {chip.count > 0 && <span style={{ fontSize: 10, opacity: 0.85, fontFamily: "'DM Mono', monospace" }}>{chip.count}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Thread */}
       <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 0 }}>
         {!activeContact && !newMode && (
@@ -7270,11 +7364,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
             <div>Select a contact above or tap ＋ to start a new conversation</div>
           </div>
         )}
-        {activeContact && threadMsgs.length === 0 && (
+        {activeContact && threadItems.length === 0 && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13, gap: 6, paddingTop: 60 }}>
             <div style={{ fontSize: 32 }}>💬</div>
-            <div>No messages with {activeContact.name.split(' ')[0]} yet</div>
-            <div style={{ fontSize: 11 }}>Type below to start the conversation</div>
+            <div>No conversation with {activeContact.name.split(' ')[0]} yet</div>
+            <div style={{ fontSize: 11 }}>Type below to start, or wait for a call to land here</div>
           </div>
         )}
         {days.map(({ day, items }) => (
@@ -7285,7 +7379,58 @@ function OutboundMessages({ dealId, vendors, deal }) {
               <div style={{ flex: 1, height: 1, background: '#1c1917' }} />
             </div>
             {items.map((m, i) => {
-              const time      = new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+              const time = new Date(m._ts).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+              // ─── Call bubble ──────────────────────────────────────────
+              if (m._kind === 'call') {
+                const isInbound = m.direction === 'inbound';
+                const isMissed  = ['missed', 'no-answer', 'busy'].includes(m.status);
+                const durText   = m.duration_seconds > 0
+                  ? `${Math.floor(m.duration_seconds / 60)}m ${m.duration_seconds % 60}s`
+                  : m.status;
+                const label     = isMissed ? (isInbound ? '📵 Missed call' : '📵 Call unanswered')
+                                           : (isInbound ? '📞 Inbound call' : '📞 Outbound call');
+                const color     = isMissed ? '#a83232' : '#22c55e';
+                return (
+                  <div key={'c-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ maxWidth: '85%', background: '#1c1917', border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: m.recording_url ? 8 : 0 }}>
+                        <div>
+                          <span style={{ fontSize: 12, fontWeight: 700, color, letterSpacing: '0.04em' }}>{label}</span>
+                          <span style={{ fontSize: 11, color: '#78716c', marginLeft: 8 }}>· {durText}</span>
+                          {m.auto_sms_sent && <span style={{ fontSize: 10, color: '#6ee7b7', marginLeft: 8 }}>· auto-SMS sent</span>}
+                        </div>
+                        <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}</span>
+                      </div>
+                      {m.recording_url && (
+                        <audio controls src={m.recording_url} style={{ width: '100%', height: 32 }}>
+                          Your browser does not support audio playback.
+                        </audio>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              // ─── Internal note bubble ────────────────────────────────
+              if (m._kind === 'note') {
+                return (
+                  <div key={'n-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 10 }}>
+                    <div style={{ maxWidth: '85%', background: 'rgba(251, 191, 36, 0.05)', border: '1px dashed #78350f', borderRadius: 8, padding: '8px 12px', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: m.body ? 4 : 0 }}>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.08em', textTransform: 'uppercase' }}>🔒 Internal note</span>
+                        {m.title && <span style={{ fontSize: 12, fontWeight: 600, color: '#fafaf9' }}>· {m.title}</span>}
+                        <span style={{ fontSize: 10, color: '#78716c', marginLeft: 'auto', fontFamily: "'DM Mono', monospace" }}>{time}</span>
+                      </div>
+                      {m.body && (
+                        <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              // ─── Message bubble (existing behavior) ──────────────────
               const isInbound = m.direction === 'inbound';
               const showMeta  = i === items.length - 1 || items[i+1]?.direction !== m.direction || items[i+1]?.from_number !== m.from_number;
 
