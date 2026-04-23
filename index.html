@@ -3593,7 +3593,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   // Old tabs remain as components; they're just not wired into the tab bar.
   const tabs = isAdmin
     ? (isFlip
-        ? ["overview", "comms", "docket", "contacts", "expenses", "tasks", "files"]
+        ? ["overview", "comms", "docket", "contacts", "investor", "expenses", "tasks", "files"]
         : ["overview", "comms", "docket", "contacts", "tasks", "files"])
     : ["overview", "comms", "docket", "contacts", "tasks", "files"];
 
@@ -3718,7 +3718,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
             borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
           }}>
-            {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
+            {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id === "investor" ? "💵 Investor" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
           </button>
         ))}
       </div>
@@ -3744,10 +3744,24 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "contacts" && (
         <div>
           <ContactsTab dealId={deal.id} userId={userId} isAdmin={isAdmin} />
+          {isFlip && (
+            <div style={{ marginTop: 24 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>🏠 Homeowner intake</div>
+              <HomeownerIntakeCard deal={deal} userId={userId} />
+              <HomeownerIntakeResponses deal={deal} />
+            </div>
+          )}
           <div style={{ marginTop: 24 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>🔧 Vendors on this deal</div>
             <Vendors items={vendors} dealId={deal.id} logAct={logAct} reload={loadAll} />
           </div>
+        </div>
+      )}
+      {tab === "investor" && isFlip && isAdmin && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <InvestorDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
+          <InvestorOffersCard deal={deal} userId={userId} />
+          <InvestorPortalCard deal={deal} userId={userId} />
         </div>
       )}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
@@ -3920,18 +3934,10 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
             <CourtPullButton dealId={deal.id} caseNumber={m.courtCase} county={m.county} userId={userId} />
           </Card>
         )}
-        <InvestorDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
-        <HomeownerIntakeCard deal={deal} userId={userId} />
-        <HomeownerIntakeResponses deal={deal} />
-        <InvestorOffersCard deal={deal} userId={userId} />
-        <InvestorPortalCard deal={deal} userId={userId} />
-        <Card title="Progress" style={{ marginTop: 16 }}>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
-            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
-          </div>
-          <ProgressBar pct={tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0} />
-        </Card>
+        {/* Investor-facing details, Homeowner Intake, and Investor Portal moved:
+             • Investor stuff → new Investor tab
+             • Homeowner intake → Contacts tab (lives with the homeowner contact)
+             • Progress card removed — Tasks tab is the home for task tracking */}
         <Card title="Spend by Category" style={{ marginTop: 16 }}>
           {cats.length === 0 && <div style={{ fontSize: 12, color: "#78716c" }}>No expenses yet.</div>}
           {cats.map(([cat, amt]) => (
@@ -5578,14 +5584,8 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
         <WelcomeVideoCard deal={deal} logAct={logAct} onUpdateDeal={onUpdateDeal} />
       </div>
       <div>
-        <Card title="Progress">
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
-            <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
-            <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
-          </div>
-          <ProgressBar pct={tasksTotal > 0 ? (tasksDone / tasksTotal) * 100 : 0} />
-        </Card>
-        <Card title="Pipeline Stage" style={{ marginTop: 16 }}>
+        {/* Progress card removed — Tasks tab is the home for task tracking */}
+        <Card title="Pipeline Stage">
           {DEAL_STATUSES.surplus.filter(s => s !== "dead").map(s => {
             const active = s === deal.status;
             const done = DEAL_STATUSES.surplus.indexOf(s) < DEAL_STATUSES.surplus.indexOf(deal.status);
