@@ -7,10 +7,8 @@ every session so the other side knows what's in flight.
 
 ## Justin's session
 
-**Status**: 🔨 Active
-**Working on**: Multi-contact conversation view (`justin/multi-contact-sms`)
-**Touching**: `messages_outbound`, new tables `message_groups` / `messages_outbound_unmatched` / `thread_hidden`, `receive-sms` edge function, `OutboundMessages` → `DealConversations` UI replacement
-**ETA**: ongoing
+**Status**: Idle
+**Last done**: Multi-contact SMS — per-contact tabs, group chat routing, reaction pills, group-chat leak fix. Schema: `message_groups`, `messages_outbound_unmatched`, `thread_hidden`, new cols on `messages_outbound`. Edge functions `send-sms` + `receive-sms` redeployed. Mac Mini bridge updated + restarted.
 **Last updated**: Apr 23, 2026
 
 ---
