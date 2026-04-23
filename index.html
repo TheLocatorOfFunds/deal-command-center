@@ -3455,20 +3455,8 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
         </Card>}
       </div>
       <div>
-        <Card title="Homeowner Contact">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Name"><input value={m.homeownerName || ""} onChange={e => updateMeta({ homeownerName: e.target.value })} style={inputStyle} placeholder="Full name" /></Field>
-            <Field label="Phone">
-              <div style={{ display: "flex", gap: 6 }}>
-                <input value={m.homeownerPhone || ""} onChange={e => updateMeta({ homeownerPhone: e.target.value })} style={{ ...inputStyle, flex: 1 }} placeholder="+1 (555) 000-0000" />
-                {m.homeownerPhone && <a href={`tel:${m.homeownerPhone}`} style={{ display: "flex", alignItems: "center", padding: "0 8px", background: "#1c1917", border: "1px solid #44403c", borderRadius: 6, color: "#d97706", fontSize: 14, textDecoration: "none" }}>📞</a>}
-              </div>
-            </Field>
-            <Field label="Email" style={{ gridColumn: "1 / -1" }}><input type="email" value={m.homeownerEmail || ""} onChange={e => updateMeta({ homeownerEmail: e.target.value })} style={inputStyle} placeholder="owner@email.com" /></Field>
-          </div>
-        </Card>
         {(m.intake_type === 'preforeclosure' || m.courtCase || m.county) && (
-          <Card title="Foreclosure Context" style={{ marginTop: 16 }}>
+          <Card title="Foreclosure Context">
             <div style={{ fontSize: 11, color: "#78716c", marginBottom: 10, lineHeight: 1.5 }}>
               Flip deal from a preforeclosure lead. Fill in case + county to unlock docket monitoring and on-demand court pulls.
             </div>
@@ -5137,19 +5125,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
         <WelcomeVideoCard deal={deal} logAct={logAct} onUpdateDeal={onUpdateDeal} />
       </div>
       <div>
-        <Card title="Homeowner Contact">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Field label="Name"><input value={m.homeownerName || ""} onChange={e => updateMeta({ homeownerName: e.target.value })} style={inputStyle} placeholder="Full name" /></Field>
-            <Field label="Phone">
-              <div style={{ display: "flex", gap: 6 }}>
-                <input value={m.homeownerPhone || ""} onChange={e => updateMeta({ homeownerPhone: e.target.value })} style={{ ...inputStyle, flex: 1 }} placeholder="+1 (555) 000-0000" />
-                {m.homeownerPhone && <a href={`tel:${m.homeownerPhone}`} style={{ display: "flex", alignItems: "center", padding: "0 8px", background: "#1c1917", border: "1px solid #44403c", borderRadius: 6, color: "#d97706", fontSize: 14, textDecoration: "none" }}>📞</a>}
-              </div>
-            </Field>
-            <Field label="Email" style={{ gridColumn: "1 / -1" }}><input type="email" value={m.homeownerEmail || ""} onChange={e => updateMeta({ homeownerEmail: e.target.value })} style={inputStyle} placeholder="owner@email.com" /></Field>
-          </div>
-        </Card>
-        <Card title="Progress" style={{ marginTop: 16 }}>
+        <Card title="Progress">
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
             <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 32, fontWeight: 700 }}>{tasksDone}</span>
             <span style={{ fontSize: 14, color: "#a8a29e" }}>of {tasksTotal} tasks</span>
