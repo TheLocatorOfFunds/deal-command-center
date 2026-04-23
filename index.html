@@ -3481,6 +3481,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
         )}
         <InvestorDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
         <HomeownerIntakeCard deal={deal} userId={userId} />
+        <HomeownerIntakeResponses deal={deal} />
         <InvestorOffersCard deal={deal} userId={userId} />
         <InvestorPortalCard deal={deal} userId={userId} />
         <Card title="Progress" style={{ marginTop: 16 }}>
@@ -4143,6 +4144,103 @@ function HomeownerIntakeCard({ deal, userId }) {
             </div>
           );
         })}
+      </div>
+    </Card>
+  );
+}
+
+// Readable view of everything the homeowner submitted on the intake form.
+// Data lives in deal.meta.investor.homeowner_said (set by submit_homeowner_intake
+// RPC). Renders nothing until the homeowner has actually submitted — no blank
+// card on deals where intake was never sent.
+function HomeownerIntakeResponses({ deal }) {
+  const said = deal?.meta?.investor?.homeowner_said;
+  const submittedAt = deal?.meta?.investor?.homeowner_submitted_at;
+  if (!said || typeof said !== 'object' || Object.keys(said).length === 0) return null;
+
+  const HUMAN_LABELS = {
+    situation: 'Their situation',
+    situationDetails: 'Situation details',
+    timeline: 'Timeline / urgency',
+    mortgageLender: 'Mortgage lender',
+    mortgageBalance: 'Approx. mortgage balance',
+    monthlyPayment: 'Monthly payment',
+    monthsBehind: 'Months behind',
+    otherLiens: 'Other liens',
+    beds: 'Bedrooms',
+    baths: 'Bathrooms',
+    sqft: 'Square feet',
+    yearBuilt: 'Year built',
+    lotSize: 'Lot size',
+    occupancy: 'Who lives there',
+    accessNotes: 'How to access the property',
+    roof: 'Roof',
+    hvac: 'HVAC',
+    waterHeater: 'Water heater',
+    electrical: 'Electrical',
+    plumbing: 'Plumbing',
+    windows: 'Windows',
+    exterior: 'Exterior',
+    basement: 'Basement',
+    foundation: 'Foundation',
+    knownIssues: 'Known issues',
+    additionalNotes: 'Additional notes',
+    contactPreference: 'Prefers contact by',
+    bestTimeToCall: 'Best time to call',
+  };
+
+  const toLabel = (key) => HUMAN_LABELS[key] || key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase());
+  const formatValue = (v) => {
+    if (v == null || v === '') return <span style={{ color: "#57534e", fontStyle: "italic" }}>—</span>;
+    if (typeof v === 'object') return <pre style={{ margin: 0, fontFamily: "'DM Mono', monospace", fontSize: 11, color: "#d6d3d1", whiteSpace: "pre-wrap" }}>{JSON.stringify(v, null, 2)}</pre>;
+    const s = String(v);
+    return <span style={{ color: "#fafaf9", whiteSpace: "pre-wrap" }}>{s}</span>;
+  };
+
+  // Group entries for readable rendering: narrative first, then property stats,
+  // then condition/mechanicals, then catch-all. Unknown keys fall into 'other'.
+  const narrative = ['situation', 'situationDetails', 'timeline', 'additionalNotes'];
+  const mortgage = ['mortgageLender', 'mortgageBalance', 'monthlyPayment', 'monthsBehind', 'otherLiens'];
+  const property = ['beds', 'baths', 'sqft', 'yearBuilt', 'lotSize', 'occupancy', 'accessNotes'];
+  const condition = ['roof', 'hvac', 'waterHeater', 'electrical', 'plumbing', 'windows', 'exterior', 'basement', 'foundation', 'knownIssues'];
+  const contact = ['contactPreference', 'bestTimeToCall'];
+
+  const pickGroup = (keys) => keys.filter(k => said[k] != null && said[k] !== '').map(k => [k, said[k]]);
+  const knownKeys = new Set([...narrative, ...mortgage, ...property, ...condition, ...contact]);
+  const otherEntries = Object.entries(said).filter(([k, v]) => !knownKeys.has(k) && v != null && v !== '');
+
+  const groups = [
+    { label: '📖 Their story', entries: pickGroup(narrative) },
+    { label: '💰 Mortgage + liens', entries: pickGroup(mortgage) },
+    { label: '🏠 Property basics', entries: pickGroup(property) },
+    { label: '🔧 Condition + mechanicals', entries: pickGroup(condition) },
+    { label: '📞 How to reach them', entries: pickGroup(contact) },
+    { label: '📎 Other', entries: otherEntries },
+  ].filter(g => g.entries.length > 0);
+
+  const totalFields = groups.reduce((s, g) => s + g.entries.length, 0);
+
+  return (
+    <Card title="What the homeowner said" style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 14, lineHeight: 1.55 }}>
+        Verbatim from the intake form
+        {submittedAt && <> · submitted {new Date(submittedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</>}
+        {' '}· {totalFields} field{totalFields === 1 ? '' : 's'} answered
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        {groups.map(g => (
+          <div key={g.label}>
+            <div style={{ fontSize: 10, color: "#d97706", fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>{g.label}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: "8px 14px", alignItems: "start" }}>
+              {g.entries.map(([key, value]) => (
+                <React.Fragment key={key}>
+                  <div style={{ fontSize: 12, color: "#a8a29e", fontWeight: 600, paddingTop: 2 }}>{toLabel(key)}</div>
+                  <div style={{ fontSize: 13, lineHeight: 1.55 }}>{formatValue(value)}</div>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        ))}
       </div>
     </Card>
   );
