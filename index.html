@@ -7491,20 +7491,40 @@ function ActivityLogModal({ onClose, onJumpToDeal }) {
 }
 
 // ─── Contacts / CRM (Phase 2) ────────────────────────────────────────
+// Family/case-side kinds first (what you're tagging on a deal), then
+// business-side kinds (attorneys, title co., investors, etc.), then Other.
+// When kind === 'other', contacts.kind_other holds a free-text label that
+// replaces the generic "Other" pill in all display surfaces.
 const CONTACT_KINDS = [
+  { key: 'homeowner',       label: 'Homeowner',  icon: '🏠' },
+  { key: 'spouse',          label: 'Spouse',     icon: '💑' },
+  { key: 'child',           label: 'Child',      icon: '🧒' },
+  { key: 'sibling',         label: 'Sibling',    icon: '👫' },
+  { key: 'family',          label: 'Family',     icon: '👨‍👩‍👧' },
+  { key: 'neighbor',        label: 'Neighbor',   icon: '🏘' },
   { key: 'attorney',        label: 'Attorney',   icon: '⚖' },
   { key: 'title_company',   label: 'Title Co.',  icon: '🏢' },
   { key: 'investor',        label: 'Investor',   icon: '💵' },
   { key: 'referral_source', label: 'Referral',   icon: '🤝' },
   { key: 'partner',         label: 'Partner',    icon: '🧭' },
   { key: 'vendor',          label: 'Vendor',     icon: '🔧' },
-  { key: 'competitor',      label: 'Competitor', icon: '🎯' },
-  { key: 'press',           label: 'Press',      icon: '📰' },
   { key: 'other',           label: 'Other',      icon: '👤' },
 ];
-const kindMeta = (k) => CONTACT_KINDS.find(x => x.key === k) || CONTACT_KINDS[CONTACT_KINDS.length - 1];
-const kindLabel = (k) => kindMeta(k).label;
-const kindIcon  = (k) => kindMeta(k).icon;
+// Helpers accept either a kind string or a full contact object. When given
+// a contact with kind='other' and a kind_other label, kindLabel returns
+// that custom text instead of the generic "Other".
+const kindMeta = (contactOrKind) => {
+  const kind = typeof contactOrKind === 'string' ? contactOrKind : contactOrKind?.kind;
+  return CONTACT_KINDS.find(x => x.key === kind) || CONTACT_KINDS[CONTACT_KINDS.length - 1];
+};
+const kindLabel = (contactOrKind) => {
+  const meta = kindMeta(contactOrKind);
+  if (meta.key === 'other' && typeof contactOrKind === 'object' && contactOrKind?.kind_other) {
+    return contactOrKind.kind_other;
+  }
+  return meta.label;
+};
+const kindIcon  = (contactOrKind) => kindMeta(contactOrKind).icon;
 
 function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
   const [contacts, setContacts]   = useState([]);
@@ -7557,7 +7577,9 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
     setBusy(true); setMsg(null);
     const patch = {
       name: c.name, company: c.company || null, email: c.email || null, phone: c.phone || null,
-      kind: c.kind || 'other', tags: c.tags || [], notes: c.notes || null,
+      kind: c.kind || 'other',
+      kind_other: c.kind === 'other' ? ((c.kind_other || '').trim() || null) : null,
+      tags: c.tags || [], notes: c.notes || null,
     };
     if (isAdmin) patch.financial_notes = c.financial_notes || null;
     if (c.id) {
@@ -7624,7 +7646,7 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
                   padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524",
                   borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 12,
                 }}>
-                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(c.kind)}</div>
+                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(c)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 700 }}>
                       {c.name}
@@ -7639,7 +7661,7 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
                       </div>
                     )}
                   </div>
-                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(c.kind)}</span>
+                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(c)}</span>
                 </div>
               ))}
             </div>
@@ -7703,7 +7725,10 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
 
   const handleSave = () => {
     const finalTags = tagsInput.split(',').map(s => s.trim()).filter(Boolean);
-    onSave({ ...contact, tags: finalTags });
+    const finalKindOther = contact.kind === 'other'
+      ? ((contact.kind_other || '').trim() || null)
+      : null;
+    onSave({ ...contact, tags: finalTags, kind_other: finalKindOther });
   };
 
   const unlinkedDeals = (deals || []).filter(d => !links.some(l => l.deal_id === d.id));
@@ -7727,7 +7752,7 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginTop: 12 }}>
         <Field label="Type">
-          <select value={contact.kind || 'other'} onChange={e => onChange({ kind: e.target.value })} style={{ ...inputStyle, padding: "8px 10px" }}>
+          <select value={contact.kind || 'other'} onChange={e => onChange({ kind: e.target.value, ...(e.target.value !== 'other' ? { kind_other: null } : {}) })} style={{ ...inputStyle, padding: "8px 10px" }}>
             {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
           </select>
         </Field>
@@ -7737,6 +7762,14 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
             style={inputStyle} />
         </Field>
       </div>
+
+      {contact.kind === 'other' && (
+        <Field label="Describe type *" style={{ marginTop: 12 }}>
+          <input value={contact.kind_other || ''} onChange={e => onChange({ kind_other: e.target.value })}
+            placeholder="e.g. Church friend, probate administrator, court clerk…"
+            style={inputStyle} />
+        </Field>
+      )}
 
       <Field label="Notes" style={{ marginTop: 12 }}>
         <textarea value={contact.notes || ''} onChange={e => onChange({ notes: e.target.value })}
@@ -7816,7 +7849,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
   const [pick, setPick]               = useState('');
   const [rel, setRel]                 = useState('');
   const [showQuickNew, setShowQuickNew] = useState(false);
-  const [quickNew, setQuickNew]       = useState({ name: '', company: '', email: '', phone: '', kind: 'other', notes: '' });
+  const [quickNew, setQuickNew]       = useState({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', notes: '' });
   const [busy, setBusy]               = useState(false);
   const [err, setErr]                 = useState(null);
 
@@ -7824,10 +7857,10 @@ function ContactsTab({ dealId, userId, isAdmin }) {
     setLoading(true);
     const [linksRes, contactsRes] = await Promise.all([
       sb.from('contact_deals')
-        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, kind, tags)')
+        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, kind, kind_other, tags)')
         .eq('deal_id', dealId)
         .order('created_at', { ascending: false }),
-      sb.from('contacts').select('id, name, company, kind, email').order('name'),
+      sb.from('contacts').select('id, name, company, kind, kind_other, email').order('name'),
     ]);
     setLinks(linksRes.data || []);
     setAllContacts(contactsRes.data || []);
@@ -7861,16 +7894,21 @@ function ContactsTab({ dealId, userId, isAdmin }) {
 
   const createAndLink = async () => {
     if (!quickNew.name) return;
+    if (quickNew.kind === 'other' && !(quickNew.kind_other || '').trim()) {
+      setErr('Describe the "Other" type before saving.'); return;
+    }
     setBusy(true); setErr(null);
     const { data: c, error } = await sb.from('contacts').insert({
       name: quickNew.name, company: quickNew.company || null, email: quickNew.email || null,
-      phone: quickNew.phone || null, kind: quickNew.kind || 'other', notes: quickNew.notes || null,
+      phone: quickNew.phone || null, kind: quickNew.kind || 'other',
+      kind_other: quickNew.kind === 'other' ? (quickNew.kind_other || '').trim() || null : null,
+      notes: quickNew.notes || null,
       owner_id: userId,
     }).select().single();
     if (error) { setErr(error.message); setBusy(false); return; }
     const linkErr = (await sb.from('contact_deals').insert({ contact_id: c.id, deal_id: dealId, relationship: rel || null, created_by: userId })).error;
     if (linkErr) setErr(linkErr.message);
-    setQuickNew({ name: '', company: '', email: '', phone: '', kind: 'other', notes: '' });
+    setQuickNew({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', notes: '' });
     setShowQuickNew(false); setRel('');
     await load();
     setBusy(false);
@@ -7896,7 +7934,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
               {links.map(l => (
                 <div key={l.id} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(l.contacts?.kind)}</div>
+                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(l.contacts)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 14, fontWeight: 700 }}>
                       {l.contacts?.name}
@@ -7907,7 +7945,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                       {l.relationship && <> · {l.relationship}</>}
                     </div>
                   </div>
-                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(l.contacts?.kind)}</span>
+                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(l.contacts)}</span>
                   <button onClick={() => unlink(l.id)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Unlink</button>
                 </div>
               ))}
@@ -7956,12 +7994,19 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                 <Field label="Email"><input type="email" value={quickNew.email} onChange={e => setQuickNew(q => ({ ...q, email: e.target.value }))} style={inputStyle} /></Field>
                 <Field label="Phone"><input value={quickNew.phone} onChange={e => setQuickNew(q => ({ ...q, phone: e.target.value }))} style={inputStyle} /></Field>
                 <Field label="Type">
-                  <select value={quickNew.kind} onChange={e => setQuickNew(q => ({ ...q, kind: e.target.value }))} style={{ ...inputStyle, padding: "8px 10px" }}>
+                  <select value={quickNew.kind} onChange={e => setQuickNew(q => ({ ...q, kind: e.target.value, ...(e.target.value !== 'other' ? { kind_other: '' } : {}) }))} style={{ ...inputStyle, padding: "8px 10px" }}>
                     {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
                   </select>
                 </Field>
                 <Field label="Relationship on this deal"><input value={rel} onChange={e => setRel(e.target.value)} placeholder="e.g. attorney of record" style={inputStyle} /></Field>
               </div>
+              {quickNew.kind === 'other' && (
+                <Field label="Describe type *" style={{ marginTop: 12 }}>
+                  <input value={quickNew.kind_other} onChange={e => setQuickNew(q => ({ ...q, kind_other: e.target.value }))}
+                    placeholder="e.g. Church friend, probate administrator, court clerk…"
+                    style={inputStyle} />
+                </Field>
+              )}
               <Field label="Notes" style={{ marginTop: 12 }}>
                 <textarea value={quickNew.notes} onChange={e => setQuickNew(q => ({ ...q, notes: e.target.value }))} rows={2} style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }} />
               </Field>
