@@ -66,9 +66,31 @@
   .page-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
 
   /* Inbox rows */
-  .case-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; box-shadow: var(--shadow); cursor: pointer; transition: all 0.12s; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .case-row { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 22px; box-shadow: var(--shadow); cursor: pointer; transition: all 0.12s; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; position: relative; }
   .case-row + .case-row { margin-top: 12px; }
   .case-row:hover { border-color: var(--gold); transform: translateY(-1px); box-shadow: 0 2px 4px rgba(11, 31, 58, 0.1), 0 12px 30px rgba(11, 31, 58, 0.08); }
+  .case-row.is-hot { border-left: 4px solid #a83232; background: linear-gradient(90deg, rgba(168, 50, 50, 0.03) 0%, var(--bg-card) 60%); }
+  .case-row.is-hot:hover { border-left-color: #7a1f1f; }
+  .case-row.is-quiet { opacity: 0.78; }
+  .case-row .case-last-event { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; padding: 3px 9px; border-radius: 4px; margin-right: 4px; }
+  .case-group-header { display: flex; align-items: center; justify-content: space-between; margin: 26px 0 12px; padding: 8px 14px; border-radius: 6px; font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; }
+  .case-group-header.hot { background: linear-gradient(90deg, rgba(168, 50, 50, 0.1), rgba(168, 50, 50, 0.02)); color: #a83232; border-left: 3px solid #a83232; }
+  .case-group-header.active { background: rgba(11, 31, 58, 0.04); color: var(--navy); }
+  .case-group-header.quiet { background: rgba(107, 107, 107, 0.06); color: var(--text-muted); }
+  .case-group-header .count { font-size: 11px; font-weight: 600; opacity: 0.75; letter-spacing: 0.08em; }
+  .filter-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .filter-pill { padding: 7px 13px; border-radius: 999px; border: 1px solid var(--border-strong); background: var(--bg-card); font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; transition: all .12s; display: inline-flex; align-items: center; gap: 6px; font-family: inherit; }
+  .filter-pill:hover { border-color: var(--navy-mid); color: var(--navy-mid); }
+  .filter-pill.active { background: var(--navy); color: #fffcf5; border-color: var(--navy); }
+  .filter-pill.active.hot { background: #a83232; border-color: #a83232; }
+  .filter-pill .count { font-size: 10px; opacity: 0.75; margin-left: 2px; font-variant-numeric: tabular-nums; }
+  .search-wrap { position: relative; margin-bottom: 14px; }
+  .search-wrap input { width: 100%; padding: 11px 14px 11px 38px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--bg-card); font-family: inherit; font-size: 14px; color: var(--text); box-sizing: border-box; }
+  .search-wrap input:focus { outline: none; border-color: var(--navy-mid); }
+  .search-wrap .search-icon { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 14px; pointer-events: none; }
+  .stat.clickable { cursor: pointer; transition: all .12s; }
+  .stat.clickable:hover { border-color: var(--navy-mid); transform: translateY(-1px); }
+  .stat.clickable.active { border-color: var(--navy); box-shadow: 0 0 0 2px rgba(11, 31, 58, 0.15); }
   .case-name { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); margin-bottom: 4px; letter-spacing: -0.015em; line-height: 1.2; }
   .case-meta { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; }
   .case-badges { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -411,13 +433,24 @@ function Portal({ session, profile, isPreview }) {
 }
 
 // ─── Inbox: dashboard of assigned cases ────────────────
+// High-signal event types that pull a case into "Needs attention"
+const HOT_EVENT_TYPES = new Set([
+  'disbursement_ordered', 'disbursement_paid',
+  'objection_filed', 'notice_of_claim',
+  'judgment_entered', 'hearing_scheduled',
+]);
+
 // Loads assigned deals + recent activity / docket / messages to compute
-// per-case "last update" (color-coded) and live docket badges. Also shows
-// a combined Recent Docket Activity feed across every case at the bottom.
+// per-case urgency grouping (Hot / Active / Quiet), a last-event micro-
+// badge, and a global search + filter row so attorneys with many cases
+// can find what they need without scrolling. Combined Recent Docket
+// feed still anchors the bottom.
 function Inbox({ isPreview }) {
   const [cases, setCases] = useState(null);
   const [recentDocket, setRecentDocket] = useState([]);
   const [error, setError] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
 
   const load = async () => {
     let deals = [];
@@ -454,7 +487,6 @@ function Inbox({ isPreview }) {
         sb.from('messages').select('deal_id, created_at').in('deal_id', ids).gte('created_at', since30),
       ]);
 
-      // Per-deal aggregates: latest timestamp + docket counts
       const byDeal = {};
       for (const d of deals) {
         byDeal[d.id] = {
@@ -462,6 +494,7 @@ function Inbox({ isPreview }) {
           last: d.updated_at ? new Date(d.updated_at) : new Date(0),
           docket7d: 0,
           docketUnread: 0,
+          lastDocketEvent: null,
         };
       }
       const sevenDaysAgo = new Date(Date.now() - 7 * 86400000);
@@ -476,31 +509,56 @@ function Inbox({ isPreview }) {
         const t = new Date(row.created_at);
         if (t > b.last) b.last = t;
       }
+      // dockRes is already sorted by event_date desc + received_at desc, so the
+      // first non-backfill event we encounter per deal IS its most recent live
+      // event. No need to compare dates; just take the first.
       for (const ev of (dockRes.data || [])) {
         const b = byDeal[ev.deal_id]; if (!b) continue;
         const evDate = new Date(ev.event_date || ev.created_at);
         if (evDate > b.last) b.last = evDate;
-        // Skip backfill rows from live-activity counts: they're historical
-        // replays imported in one go, not fresh events worth badging. They
-        // still render in the per-case Docket tab on demand.
         if (ev.is_backfill) continue;
+        if (!b.lastDocketEvent) b.lastDocketEvent = ev;
         if (evDate > sevenDaysAgo) b.docket7d++;
         const lastSeen = seenMap[ev.deal_id] ? new Date(seenMap[ev.deal_id]) : null;
         if (lastSeen && ev.created_at && new Date(ev.created_at) > lastSeen) b.docketUnread++;
       }
 
-      const enriched = Object.values(byDeal).map(b => ({
-        ...b.deal,
-        _lastActivity: b.last.getTime() > 0 ? b.last.toISOString() : null,
-        _docket7d: b.docket7d,
-        _docketUnread: b.docketUnread,
-      })).sort((a, b) => new Date(b._lastActivity || 0) - new Date(a._lastActivity || 0));
+      const nowMs = Date.now();
+      const enriched = Object.values(byDeal).map(b => {
+        const lde = b.lastDocketEvent;
+        const isClosed = ['closed', 'recovered', 'dead'].includes(b.deal.status);
+        const daysSinceLast = b.last.getTime() > 0 ? Math.floor((nowMs - b.last.getTime()) / 86400000) : null;
+        const hasRecentHotEvent = lde
+          && HOT_EVENT_TYPES.has(lde.event_type)
+          && (nowMs - new Date(lde.event_date || lde.received_at).getTime()) < 30 * 86400000;
+        const futureHearing = lde
+          && lde.event_type === 'hearing_scheduled'
+          && lde.event_date
+          && new Date(lde.event_date) > new Date();
+        let urgency;
+        if (isClosed) urgency = 'closed';
+        else if (b.docketUnread > 0 || hasRecentHotEvent || futureHearing) urgency = 'hot';
+        else if (daysSinceLast != null && daysSinceLast <= 30) urgency = 'active';
+        else urgency = 'quiet';
+        return {
+          ...b.deal,
+          _lastActivity: b.last.getTime() > 0 ? b.last.toISOString() : null,
+          _docket7d: b.docket7d,
+          _docketUnread: b.docketUnread,
+          _lastDocketEvent: lde,
+          _urgency: urgency,
+        };
+      });
+
+      // Sort: hot first, then active (by recency), then quiet (by recency), closed handled separately
+      enriched.sort((a, b) => {
+        const rank = { hot: 0, active: 1, quiet: 2, closed: 3 };
+        if (rank[a._urgency] !== rank[b._urgency]) return rank[a._urgency] - rank[b._urgency];
+        return new Date(b._lastActivity || 0) - new Date(a._lastActivity || 0);
+      });
 
       setCases(enriched);
 
-      // Combined recent docket feed — latest 15 LIVE events across all
-      // cases. Backfill/historical events are excluded so Jeff's "what's
-      // new" stream doesn't get polluted with 12 months of replayed docket.
       const feed = (dockRes.data || [])
         .filter(ev => !ev.is_backfill)
         .slice(0, 15)
@@ -516,9 +574,6 @@ function Inbox({ isPreview }) {
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [isPreview]);
 
-  // Live updates: refresh the whole inbox if anything relevant to these
-  // cases changes on the server. Cheap because the refresh only hits
-  // ~4 queries and typically <20 cases.
   useEffect(() => {
     const ch = sb.channel('attorney-inbox-realtime')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, load)
@@ -532,14 +587,41 @@ function Inbox({ isPreview }) {
   if (error) return <div className="error">{error}</div>;
   if (cases === null) return <div className="loader">Loading your cases…</div>;
 
-  const active = cases.filter(c => !['closed', 'recovered', 'dead'].includes(c.status));
-  const closed = cases.filter(c => ['closed', 'recovered', 'dead'].includes(c.status));
-  const totalDocket7d = cases.reduce((s, c) => s + (c._docket7d || 0), 0);
+  const hot = cases.filter(c => c._urgency === 'hot');
+  const active = cases.filter(c => c._urgency === 'active');
+  const quiet = cases.filter(c => c._urgency === 'quiet');
+  const closed = cases.filter(c => c._urgency === 'closed');
+  const totalActive = hot.length + active.length + quiet.length;
   const totalDocketUnread = cases.reduce((s, c) => s + (c._docketUnread || 0), 0);
-  const staleCount = active.filter(c => {
-    const d = c._lastActivity ? daysSince(c._lastActivity) : 999;
-    return d != null && d >= 7;
-  }).length;
+
+  const searchMatch = (c) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase();
+    const hay = [
+      c.name, c.address, c.id,
+      c.meta?.county, c.meta?.courtCase,
+    ].filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  };
+
+  // Which group(s) to show based on filter pill
+  const shown = {
+    hot: (filter === 'all' || filter === 'hot') ? hot.filter(searchMatch) : [],
+    active: (filter === 'all' || filter === 'active') ? active.filter(searchMatch) : [],
+    quiet: (filter === 'all' || filter === 'quiet') ? quiet.filter(searchMatch) : [],
+    closed: (filter === 'all' || filter === 'closed') ? closed.filter(searchMatch) : [],
+  };
+  const totalShown = shown.hot.length + shown.active.length + shown.quiet.length + shown.closed.length;
+
+  const pill = (key, label, count, extraClass) => (
+    <button
+      type="button"
+      className={"filter-pill" + (filter === key ? ' active' : '') + (extraClass ? ' ' + extraClass : '')}
+      onClick={() => setFilter(key)}
+    >
+      {label} <span className="count">{count}</span>
+    </button>
+  );
 
   return (
     <div>
@@ -549,7 +631,7 @@ function Inbox({ isPreview }) {
           ? "You have no active case assignments yet."
           : (
             <>
-              {active.length} active · {closed.length} closed
+              {totalActive} active · {closed.length} closed
               {totalDocketUnread > 0 && <> · <b style={{ color: 'var(--green)' }}>{totalDocketUnread} new docket since your last visit</b></>}
             </>
           )
@@ -562,32 +644,102 @@ function Inbox({ isPreview }) {
         </div>
       ) : (
         <>
-          {/* Summary strip */}
-          <div className="stat-grid" style={{ marginBottom: 22 }}>
-            <div className="stat">
-              <div className="stat-label">Active cases</div>
-              <div className="stat-value">{active.length}</div>
+          {/* Summary strip — clickable, drives the filter pill selection */}
+          <div className="stat-grid" style={{ marginBottom: 18 }}>
+            <div
+              className={"stat clickable" + (filter === 'all' ? ' active' : '')}
+              onClick={() => setFilter('all')}
+            >
+              <div className="stat-label">All active</div>
+              <div className="stat-value">{totalActive}</div>
             </div>
-            <div className="stat" style={{ background: totalDocket7d > 0 ? 'var(--green-soft)' : undefined, borderColor: totalDocket7d > 0 ? '#c3e6d1' : undefined }}>
-              <div className="stat-label">Docket · last 7d</div>
-              <div className="stat-value" style={{ color: totalDocket7d > 0 ? 'var(--green)' : undefined }}>{totalDocket7d}</div>
+            <div
+              className={"stat clickable" + (filter === 'hot' ? ' active' : '')}
+              onClick={() => setFilter('hot')}
+              style={{ background: hot.length > 0 ? 'rgba(168, 50, 50, 0.06)' : undefined, borderColor: hot.length > 0 ? '#e5b9b9' : undefined }}
+            >
+              <div className="stat-label">🔔 Needs attention</div>
+              <div className="stat-value" style={{ color: hot.length > 0 ? '#a83232' : undefined }}>{hot.length}</div>
             </div>
-            <div className="stat" style={{ background: staleCount > 0 ? '#fef3c7' : undefined, borderColor: staleCount > 0 ? '#fcd34d' : undefined }}>
-              <div className="stat-label">Stale · ≥7d</div>
-              <div className="stat-value" style={{ color: staleCount > 0 ? '#a5731c' : undefined }}>{staleCount}</div>
+            <div
+              className={"stat clickable" + (filter === 'quiet' ? ' active' : '')}
+              onClick={() => setFilter('quiet')}
+              style={{ background: quiet.length > 0 ? '#fef3c7' : undefined, borderColor: quiet.length > 0 ? '#fcd34d' : undefined }}
+            >
+              <div className="stat-label">😴 Quiet</div>
+              <div className="stat-value" style={{ color: quiet.length > 0 ? '#a5731c' : undefined }}>{quiet.length}</div>
             </div>
-            <div className="stat">
+            <div
+              className={"stat clickable" + (filter === 'closed' ? ' active' : '')}
+              onClick={() => setFilter('closed')}
+            >
               <div className="stat-label">Closed</div>
               <div className="stat-value">{closed.length}</div>
             </div>
           </div>
 
-          {active.length > 0 && active.map(d => <CaseCard key={d.id} deal={d} />)}
+          {/* Search + filter pills */}
+          <div className="search-wrap">
+            <span className="search-icon">🔍</span>
+            <input
+              type="search"
+              placeholder="Search client name, address, county, or case number…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="filter-pills">
+            {pill('all', 'All', totalActive + closed.length)}
+            {pill('hot', '🔔 Needs attention', hot.length, hot.length > 0 ? 'hot' : '')}
+            {pill('active', '📅 Active', active.length)}
+            {pill('quiet', '😴 Quiet', quiet.length)}
+            {pill('closed', 'Closed', closed.length)}
+          </div>
 
-          {closed.length > 0 && (
+          {totalShown === 0 ? (
+            <div className="card empty" style={{ marginTop: 14 }}>
+              {search.trim()
+                ? `No cases match "${search}". Try a shorter search or switch filters.`
+                : 'No cases in this filter.'}
+            </div>
+          ) : (
             <>
-              <div style={{ margin: '24px 0 12px', fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Closed cases</div>
-              {closed.map(d => <CaseCard key={d.id} deal={d} closed />)}
+              {shown.hot.length > 0 && (
+                <>
+                  <div className="case-group-header hot">
+                    <span>🔔 Needs attention</span>
+                    <span className="count">{shown.hot.length} case{shown.hot.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {shown.hot.map(d => <CaseCard key={d.id} deal={d} />)}
+                </>
+              )}
+              {shown.active.length > 0 && (
+                <>
+                  <div className="case-group-header active">
+                    <span>📅 Active</span>
+                    <span className="count">{shown.active.length} case{shown.active.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {shown.active.map(d => <CaseCard key={d.id} deal={d} />)}
+                </>
+              )}
+              {shown.quiet.length > 0 && (
+                <>
+                  <div className="case-group-header quiet">
+                    <span>😴 Quiet · nothing from you needed</span>
+                    <span className="count">{shown.quiet.length} case{shown.quiet.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {shown.quiet.map(d => <CaseCard key={d.id} deal={d} />)}
+                </>
+              )}
+              {shown.closed.length > 0 && (
+                <>
+                  <div className="case-group-header quiet">
+                    <span>Closed cases</span>
+                    <span className="count">{shown.closed.length} case{shown.closed.length === 1 ? '' : 's'}</span>
+                  </div>
+                  {shown.closed.map(d => <CaseCard key={d.id} deal={d} closed />)}
+                </>
+              )}
             </>
           )}
         </>
@@ -661,12 +813,21 @@ function CaseCard({ deal, closed }) {
     : days === 0 ? 'Updated today'
     : days === 1 ? 'Updated 1d ago'
     : `Updated ${days}d ago`;
+  const urgency = deal._urgency;
+  const rowCls = 'case-row'
+    + (urgency === 'hot' && !closed ? ' is-hot' : '')
+    + (urgency === 'quiet' && !closed ? ' is-quiet' : '');
+  const lde = deal._lastDocketEvent;
+  const ldeMeta = lde ? (ATTORNEY_EVENT_META[lde.event_type] || { label: lde.event_type, color: '#6b6b6b', icon: '•' }) : null;
+  const addressLine = m.county
+    ? `${m.county} County${deal.address ? ' · ' + deal.address : ''}`
+    : (deal.address || '');
   return (
-    <div className="case-row" onClick={() => navigate('#/case/' + encodeURIComponent(deal.id))}>
+    <div className={rowCls} onClick={() => navigate('#/case/' + encodeURIComponent(deal.id))}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="case-name">{displayName(deal)}</div>
         <div className="case-meta">
-          {m.county ? `${m.county} County` : (deal.address || '')}
+          {addressLine}
           {m.courtCase && <> &nbsp;·&nbsp; Case {m.courtCase}</>}
         </div>
         <div className="case-badges">
@@ -679,6 +840,12 @@ function CaseCard({ deal, closed }) {
           )}
           {deal._docket7d > 0 && !deal._docketUnread && (
             <span className="badge b-muted">{deal._docket7d} docket · 7d</span>
+          )}
+          {ldeMeta && (
+            <span className="case-last-event" style={{ color: ldeMeta.color, background: ldeMeta.color + '1a' }}>
+              <span>{ldeMeta.icon}</span>
+              <span>Last: {ldeMeta.label}</span>
+            </span>
           )}
         </div>
       </div>
