@@ -54,6 +54,7 @@ const fs              = require('fs');
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const NATHAN_NUMBER  = '+15135162306';
+const OUR_NUMBERS    = new Set([NATHAN_NUMBER, '+15139985440']); // numbers we own — never a "contact"
 const SUPABASE_URL   = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
@@ -111,6 +112,19 @@ function getWatermark() {
 }
 function saveWatermark(rowid) { fs.writeFileSync(WATERMARK_FILE, String(rowid)); }
 
+/** Canonical thread_key for a message.
+ *  Always keys on the contact's number, never ours.
+ *  Uses 'group:' prefix only when multiple non-Nathan participants are present.
+ *  participants: array of phone strings (may include Nathan's numbers). */
+function canonicalThreadKey(dealId, fromPhone, toPhone, participants) {
+  const pool = participants && participants.length
+    ? participants
+    : [fromPhone, toPhone].filter(Boolean);
+  const contacts = pool.filter(p => !OUR_NUMBERS.has(p));
+  const kind = contacts.length > 1 ? 'group' : 'phone';
+  return `${dealId}:${kind}:${contacts[0] || fromPhone || toPhone}`;
+}
+
 /** Look up which deal a phone number belongs to via the existing Supabase RPC. */
 async function findDealForPhone(phone) {
   if (!phone) return null;
@@ -151,6 +165,8 @@ async function lookupOrCreateMessageGroup(chatId, dealId, phones, displayName) {
 
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
 
+let consecutiveOscriptTimeouts = 0; // auto-restart Messages.app after N consecutive hangs
+
 function sendViaMessages(toPhone, body) {
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const lines = [
@@ -184,10 +200,34 @@ async function processPendingOutbound() {
   for (const msg of pending) {
     try {
       sendViaMessages(msg.to_number, msg.body);
+      consecutiveOscriptTimeouts = 0;
       await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
       const preview = msg.body.length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
       console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
     } catch (err) {
+      if (err.message.includes('ETIMEDOUT')) {
+        consecutiveOscriptTimeouts++;
+        console.error(`⏱ TIMEOUT ${consecutiveOscriptTimeouts}/3  ${msg.to_number}`);
+        if (consecutiveOscriptTimeouts >= 3) {
+          console.error('🔄 Messages.app health: 3 consecutive timeouts — force-restarting');
+          try {
+            execFileSync('killall', ['-9', 'Messages'], { timeout: 5000 });
+          } catch (_) {}
+          try {
+            execFileSync('killall', ['-9', 'imagent'],  { timeout: 5000 });
+          } catch (_) {}
+          await new Promise(r => setTimeout(r, 4000));
+          try {
+            execFileSync('open', ['-a', 'Messages'], { timeout: 10000 });
+            console.log('✅ Messages.app restarted');
+          } catch (e) {
+            console.error('⚠️  Messages.app open failed:', e.message);
+          }
+          consecutiveOscriptTimeouts = 0;
+        }
+      } else {
+        consecutiveOscriptTimeouts = 0;
+      }
       await sb.from('messages_outbound')
         .update({ status: 'failed', error_message: err.message })
         .eq('id', msg.id);
@@ -317,7 +357,7 @@ async function syncFromChatDb() {
       dealId    = cached.dealId;
       fromPhone = isInbound ? (normalizePhone(row.sender_handle) || NATHAN_NUMBER) : NATHAN_NUMBER;
       toPhone   = isInbound ? NATHAN_NUMBER : null; // no single recipient for group outbound
-      threadKey = cached.groupId ? `${dealId}:group:${cached.groupId}` : `${dealId}:group:${chatId}`;
+      threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, cached.participants);
 
     } else {
       // ── 1:1 chat ─────────────────────────────────────────────────────────
@@ -337,7 +377,7 @@ async function syncFromChatDb() {
 
       fromPhone = isInbound ? contactPhone : NATHAN_NUMBER;
       toPhone   = isInbound ? NATHAN_NUMBER : contactPhone;
-      threadKey = `${dealId}:phone:${isInbound ? fromPhone : toPhone}`;
+      threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, null);
     }
 
     const msgData = {
@@ -351,7 +391,8 @@ async function syncFromChatDb() {
       created_at:   appleTs(row.date),
       deal_id:      dealId,
       thread_key:   threadKey,
-      group_id:     isGroup ? (chatCache.get(chatId)?.groupId || null) : null,
+      group_id:     (isGroup && (chatCache.get(chatId)?.participants || []).filter(p => !OUR_NUMBERS.has(p)).length > 1)
+                    ? (chatCache.get(chatId)?.groupId || null) : null,
     };
 
     const { error } = await sb.from('messages_outbound').upsert(msgData, {
