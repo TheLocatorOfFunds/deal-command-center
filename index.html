@@ -736,6 +736,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
           {viewBtn("hygiene", "🩺 Hygiene", 0)}
           {viewBtn("archive", "Closed Deals", archivedDeals.length)}
+          {isAdmin && viewBtn("reports", "📈 Reports", 0)}
           {isAdmin && viewBtn("analytics", "📊 Analytics", 0)}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -744,8 +745,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today / Analytics / Hygiene / Pipeline / Tasks views) */}
-      {view !== "today" && view !== "analytics" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
+      {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks views) */}
+      {view !== "today" && view !== "reports" && view !== "analytics" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -764,10 +765,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "analytics" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "reports" || view === "analytics" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
+          ) : view === "reports" ? (
+            <ReportsView deals={deals} onSelect={onSelect} />
           ) : view === "analytics" ? (
             <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : view === "hygiene" ? (
@@ -818,7 +821,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "analytics" && view !== "pipeline" && view !== "tasks" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "pipeline" && view !== "tasks" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -1663,6 +1666,388 @@ const expectedPayoutDate = (deal) => {
   if (filed) { const d = new Date(filed); if (!isNaN(d)) { d.setDate(d.getDate() + 120); return d; } }
   return null;
 };
+
+// ─── Reports View ───────────────────────────────────────────────
+// Operational dashboard: pipeline $ by Castle tier, surplus funnel with $ per
+// stage, Castle scraper health, ops velocity (activities/day, task burndown),
+// and client engagement. Complements AnalyticsView (which covers financial
+// forecasting + attorney/county performance).
+function ReportsView({ deals, onSelect }) {
+  const [loading, setLoading] = useState(true);
+  const [scrapeRuns, setScrapeRuns] = useState([]);
+  const [docketLive7d, setDocketLive7d] = useState(0);
+  const [docketLive30d, setDocketLive30d] = useState(0);
+  const [unmatchedCount, setUnmatchedCount] = useState(0);
+  const [activityByDay, setActivityByDay] = useState([]);
+  const [taskStats, setTaskStats] = useState({ open: 0, done: 0, overdue: 0 });
+  const [leadsLast90, setLeadsLast90] = useState([]);
+  const [clientSignedIn, setClientSignedIn] = useState(0);
+  const [clientTotal, setClientTotal] = useState(0);
+
+  useEffect(() => {
+    const load = async () => {
+      const now = Date.now();
+      const since7 = new Date(now - 7 * 86400000).toISOString();
+      const since14 = new Date(now - 14 * 86400000).toISOString();
+      const since30 = new Date(now - 30 * 86400000).toISOString();
+      const since90 = new Date(now - 90 * 86400000).toISOString();
+
+      const [runsRes, dock7Res, dock30Res, unmRes, actRes, tasksRes, leadsRes, clientRes] = await Promise.all([
+        sb.from('scrape_runs').select('*').order('started_at', { ascending: false }).limit(30),
+        sb.from('docket_events').select('id', { count: 'exact', head: true }).eq('is_backfill', false).gte('received_at', since7),
+        sb.from('docket_events').select('id', { count: 'exact', head: true }).eq('is_backfill', false).gte('received_at', since30),
+        sb.from('docket_events_unmatched').select('id', { count: 'exact', head: true }),
+        sb.from('activity').select('created_at').gte('created_at', since14),
+        sb.from('tasks').select('done, due_date'),
+        sb.from('leads').select('created_at, status, metadata').gte('created_at', since90),
+        sb.from('client_access').select('user_id, last_seen_at, enabled').eq('enabled', true),
+      ]);
+
+      setScrapeRuns(runsRes.data || []);
+      setDocketLive7d(dock7Res.count || 0);
+      setDocketLive30d(dock30Res.count || 0);
+      setUnmatchedCount(unmRes.count || 0);
+
+      // Activity per day, last 14 days
+      const buckets = {};
+      for (let i = 13; i >= 0; i--) {
+        const d = new Date(now - i * 86400000);
+        buckets[d.toISOString().slice(0, 10)] = 0;
+      }
+      (actRes.data || []).forEach(a => {
+        const key = (a.created_at || '').slice(0, 10);
+        if (buckets[key] !== undefined) buckets[key]++;
+      });
+      setActivityByDay(Object.entries(buckets).map(([date, count]) => ({ date, count })));
+
+      const nowDate = new Date().toISOString().slice(0, 10);
+      const allTasks = tasksRes.data || [];
+      setTaskStats({
+        open: allTasks.filter(t => !t.done).length,
+        done: allTasks.filter(t => t.done).length,
+        overdue: allTasks.filter(t => !t.done && t.due_date && t.due_date < nowDate).length,
+      });
+
+      setLeadsLast90(leadsRes.data || []);
+
+      const clients = clientRes.data || [];
+      setClientTotal(clients.length);
+      setClientSignedIn(clients.filter(c => c.user_id && c.last_seen_at).length);
+
+      setLoading(false);
+    };
+    load();
+  }, []);
+
+  const SectionHeader = ({ icon, label, sub }) => (
+    <div style={{ marginBottom: 12, marginTop: 24 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8 }}>
+        <span>{icon}</span>{label}
+      </div>
+      {sub && <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+
+  const ARCHIVE = ['closed', 'recovered', 'dead'];
+  const active = deals.filter(d => !ARCHIVE.includes(d.status));
+  const activeSurplus = active.filter(d => d.type === 'surplus');
+  const activeFlip = active.filter(d => d.type === 'flip');
+
+  // surplus_estimate is the column Castle populates; meta.estimatedSurplus is the hand-entered one
+  const dealSurplus = (d) => Number(d.surplus_estimate) || Number(d.meta?.estimatedSurplus) || 0;
+  const dealFlipValue = (d) => Number(d.meta?.listPrice) || Number(d.meta?.contractPrice) || 0;
+
+  const surplusPipeline = activeSurplus.reduce((s, d) => s + dealSurplus(d), 0);
+  const flipPipeline = activeFlip.reduce((s, d) => s + dealFlipValue(d), 0);
+
+  // ── Pipeline $ by Castle tier ──
+  const TIER_ORDER = ['A', 'B', 'C', '30DTS', 'Unscored'];
+  const tierGroups = { A: [], B: [], C: [], '30DTS': [], Unscored: [] };
+  activeSurplus.forEach(d => {
+    const key = d.lead_tier || (d.is_30dts ? '30DTS' : 'Unscored');
+    (tierGroups[key] || tierGroups.Unscored).push(d);
+  });
+  const tierStats = TIER_ORDER.map(tier => ({
+    tier,
+    count: tierGroups[tier].length,
+    total: tierGroups[tier].reduce((s, d) => s + dealSurplus(d), 0),
+  }));
+  const maxTierTotal = Math.max(1, ...tierStats.map(t => t.total));
+  const tierColor = { A: '#10b981', B: '#3b82f6', C: '#a8a29e', '30DTS': '#f59e0b', Unscored: '#57534e' };
+
+  // ── Surplus funnel with $ per stage ──
+  const SURPLUS_STAGES = ['new-lead', 'lead', 'signed', 'filed', 'awaiting-distribution', 'probate', 'closed'];
+  const stageStats = SURPLUS_STAGES.map(status => {
+    const at = deals.filter(d => d.type === 'surplus' && d.status === status);
+    return { status, count: at.length, total: at.reduce((s, d) => s + dealSurplus(d), 0) };
+  });
+  const maxStage = Math.max(1, ...stageStats.map(s => s.count));
+
+  // ── Conversion metrics ──
+  const signedCount = deals.filter(d => d.type === 'surplus' && !['new-lead', 'lead'].includes(d.status)).length;
+  const leadCount = deals.filter(d => d.type === 'surplus' && ['new-lead', 'lead'].includes(d.status)).length;
+  const totalSurplusEver = deals.filter(d => d.type === 'surplus').length;
+  const closedWon = deals.filter(d => d.type === 'surplus' && d.status === 'closed').length;
+  const signedRate = totalSurplusEver > 0 ? Math.round((signedCount / totalSurplusEver) * 100) : 0;
+  const winRate = totalSurplusEver > 0 ? Math.round((closedWon / totalSurplusEver) * 100) : 0;
+
+  const avgDaysCreatedToFiled = (() => {
+    const filed = deals.filter(d => d.filed_at && d.created_at);
+    if (!filed.length) return null;
+    return Math.round(filed.reduce((s, d) => s + (new Date(d.filed_at) - new Date(d.created_at)) / 86400000, 0) / filed.length);
+  })();
+  const avgDaysFiledToClose = (() => {
+    const closedDeals = deals.filter(d => d.closed_at && d.filed_at && d.status === 'closed');
+    if (!closedDeals.length) return null;
+    return Math.round(closedDeals.reduce((s, d) => s + (new Date(d.closed_at) - new Date(d.filed_at)) / 86400000, 0) / closedDeals.length);
+  })();
+
+  // ── Leads trend ──
+  const leads7d = leadsLast90.filter(l => new Date(l.created_at) > new Date(Date.now() - 7 * 86400000)).length;
+  const leads30d = leadsLast90.filter(l => new Date(l.created_at) > new Date(Date.now() - 30 * 86400000)).length;
+  const leadsBySource = {};
+  leadsLast90.forEach(l => {
+    const src = l.metadata?.source || l.metadata?.utm_source || 'direct';
+    leadsBySource[src] = (leadsBySource[src] || 0) + 1;
+  });
+  const leadSourceRows = Object.entries(leadsBySource).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+  // ── Castle scraper health ──
+  const lastRun = scrapeRuns[0];
+  const runsLast7d = scrapeRuns.filter(r => r.completed_at && new Date(r.completed_at) > new Date(Date.now() - 7 * 86400000));
+  const errorRuns7d = runsLast7d.filter(r => r.status === 'error').length;
+  const countiesCovered = new Set(scrapeRuns.map(r => r.county).filter(Boolean));
+
+  const maxActivity = Math.max(1, ...activityByDay.map(a => a.count));
+
+  if (loading) {
+    return <div style={{ padding: 40, textAlign: 'center', color: '#78716c' }}>Loading reports…</div>;
+  }
+
+  return (
+    <div>
+      {/* Top summary strip — mirrors Today's layout so it feels familiar */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 12, marginBottom: 20 }}>
+        <PortfolioStat label="Surplus pipeline $" value={fmt(surplusPipeline)} sub={`${activeSurplus.length} active case${activeSurplus.length === 1 ? '' : 's'}`} color="#10b981" />
+        <PortfolioStat label="Flip pipeline $" value={fmt(flipPipeline)} sub={`${activeFlip.length} active flip${activeFlip.length === 1 ? '' : 's'}`} color="#3b82f6" />
+        <PortfolioStat label="New leads · 30d" value={leads30d} sub={`${leads7d} this week`} color="#8b5cf6" />
+        <PortfolioStat label="Open tasks" value={taskStats.open} sub={taskStats.overdue > 0 ? `${taskStats.overdue} overdue` : 'on track'} color={taskStats.overdue > 0 ? '#ef4444' : '#a8a29e'} />
+        <PortfolioStat label="Live docket · 7d" value={docketLive7d} sub={`${docketLive30d} in 30d`} color="#f59e0b" />
+      </div>
+
+      <SectionHeader icon="🎯" label="Pipeline by Castle tier" sub="Surplus $ broken out by Castle's tier scoring. Unscored = Castle hasn't rated yet." />
+      <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+        {tierStats.every(t => t.count === 0) ? (
+          <div style={{ textAlign: "center", color: "#78716c", fontSize: 13, padding: 20 }}>
+            No surplus deals to rank yet. As Castle scores cases, A / B / C / 30DTS tiers populate here.
+          </div>
+        ) : (
+          tierStats.map(t => {
+            const pct = Math.round((t.total / maxTierTotal) * 100);
+            return (
+              <div key={t.tier} style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 5 }}>
+                  <span style={{ color: "#d6d3d1", fontWeight: 600 }}>
+                    <span style={{ display: "inline-block", width: 10, height: 10, background: tierColor[t.tier], borderRadius: 2, marginRight: 8, verticalAlign: "middle" }}></span>
+                    Tier {t.tier}
+                    <span style={{ color: "#78716c", marginLeft: 8, fontWeight: 400 }}>· {t.count} case{t.count === 1 ? '' : 's'}</span>
+                  </span>
+                  <span style={{ color: "#10b981", fontFamily: "'DM Mono', monospace", fontWeight: 700 }}>{fmt(t.total)}</span>
+                </div>
+                <div style={{ height: 8, background: "#0c0a09", borderRadius: 4, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${pct}%`, background: tierColor[t.tier], borderRadius: 4 }}></div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <SectionHeader icon="🧭" label="Surplus funnel" sub="Count + $ at each stage. Dollars = sum of surplus_estimate (Castle) or meta.estimatedSurplus (hand-entered)." />
+      <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={th}>Stage</th>
+              <th style={{ ...th, textAlign: "right" }}>Cases</th>
+              <th style={{ ...th, textAlign: "right" }}>$ in stage</th>
+              <th style={th}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {stageStats.map(s => {
+              const pct = Math.round((s.count / maxStage) * 100);
+              const color = STATUS_COLORS[s.status] || "#78716c";
+              return (
+                <tr key={s.status}>
+                  <td style={{ ...td, color: "#fafaf9", fontWeight: 600, textTransform: "capitalize", borderBottom: "1px solid #1c1917" }}>{s.status.replace(/-/g, ' ')}</td>
+                  <td style={{ ...td, textAlign: "right", color: "#d6d3d1", fontFamily: "'DM Mono', monospace", borderBottom: "1px solid #1c1917" }}>{s.count}</td>
+                  <td style={{ ...td, textAlign: "right", color: s.total > 0 ? "#10b981" : "#57534e", fontFamily: "'DM Mono', monospace", fontWeight: s.total > 0 ? 700 : 400, borderBottom: "1px solid #1c1917" }}>{s.total > 0 ? fmt(s.total) : '—'}</td>
+                  <td style={{ ...td, width: "40%", borderBottom: "1px solid #1c1917" }}>
+                    <div style={{ height: 6, background: "#0c0a09", borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: color, borderRadius: 3 }}></div>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginTop: 14 }}>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Signed rate</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{signedRate}%</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{signedCount} of {totalSurplusEver} surplus deals</div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Win rate</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#10b981", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{winRate}%</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{closedWon} closed won</div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Avg days · lead → filed</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{avgDaysCreatedToFiled != null ? avgDaysCreatedToFiled + 'd' : '—'}</div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Avg days · filed → closed</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{avgDaysFiledToClose != null ? avgDaysFiledToClose + 'd' : '—'}</div>
+        </div>
+      </div>
+
+      <SectionHeader icon="🐍" label="Castle scraper health" sub="County docket scraper heartbeat + ingestion throughput." />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Runs · last 7d</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{runsLast7d.length}</div>
+          <div style={{ fontSize: 11, color: errorRuns7d > 0 ? "#ef4444" : "#a8a29e", marginTop: 2 }}>
+            {errorRuns7d > 0 ? `${errorRuns7d} error${errorRuns7d === 1 ? '' : 's'}` : 'all healthy'}
+          </div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Counties covered</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{countiesCovered.size}</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+            {countiesCovered.size > 0 ? Array.from(countiesCovered).join(', ').slice(0, 40) : 'none yet'}
+          </div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Unmatched events</div>
+          <div style={{ fontSize: 24, fontWeight: 700, color: unmatchedCount > 0 ? "#f59e0b" : "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{unmatchedCount}</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+            {unmatchedCount > 0 ? 'needs Castle-side case mapping' : 'all matched to deals'}
+          </div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Last run</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", marginTop: 6 }}>
+            {lastRun ? (lastRun.county || 'unknown') : '—'}
+          </div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+            {lastRun && lastRun.completed_at
+              ? `${Math.max(0, Math.round((Date.now() - new Date(lastRun.completed_at).getTime()) / 3600000))}h ago · ${lastRun.status}`
+              : 'Castle has not checked in yet'}
+          </div>
+        </div>
+      </div>
+      {scrapeRuns.length > 0 && (
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: "pointer", fontSize: 12, color: "#a8a29e", padding: 6 }}>
+            Recent scrape runs · {scrapeRuns.length}
+          </summary>
+          <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, overflow: "hidden", marginTop: 8 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={th}>County</th>
+                  <th style={th}>Started</th>
+                  <th style={{ ...th, textAlign: "right" }}>Events</th>
+                  <th style={{ ...th, textAlign: "right" }}>New</th>
+                  <th style={th}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {scrapeRuns.slice(0, 15).map(r => (
+                  <tr key={r.id}>
+                    <td style={{ ...td, color: "#fafaf9", fontWeight: 600, borderBottom: "1px solid #0c0a09" }}>{r.county || '—'}</td>
+                    <td style={{ ...td, color: "#a8a29e", fontSize: 12, borderBottom: "1px solid #0c0a09" }}>{r.started_at ? new Date(r.started_at).toLocaleString() : '—'}</td>
+                    <td style={{ ...td, textAlign: "right", color: "#d6d3d1", fontFamily: "'DM Mono', monospace", borderBottom: "1px solid #0c0a09" }}>{r.events_found ?? 0}</td>
+                    <td style={{ ...td, textAlign: "right", color: r.events_new > 0 ? "#10b981" : "#57534e", fontFamily: "'DM Mono', monospace", fontWeight: r.events_new > 0 ? 700 : 400, borderBottom: "1px solid #0c0a09" }}>{r.events_new ?? 0}</td>
+                    <td style={{ ...td, color: r.status === 'ok' ? "#10b981" : r.status === 'error' ? "#ef4444" : "#a8a29e", fontWeight: 600, borderBottom: "1px solid #0c0a09" }}>{r.status || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
+
+      <SectionHeader icon="⚡" label="Ops velocity · last 14 days" sub="Activity logged per day (calls, notes, emails, status changes)." />
+      <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 120 }}>
+          {activityByDay.map(a => {
+            const pct = (a.count / maxActivity) * 100;
+            return (
+              <div key={a.date} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
+                <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+                  <div title={`${a.count} activities on ${a.date}`} style={{ width: "100%", height: `${pct}%`, background: a.count > 0 ? "#3b82f6" : "#292524", borderRadius: "3px 3px 0 0", minHeight: a.count > 0 ? 3 : 1 }}></div>
+                </div>
+                <div style={{ fontSize: 9, color: "#57534e", fontFamily: "'DM Mono', monospace" }}>{a.date.slice(5)}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 11, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>Tasks</div>
+          <div style={{ display: "flex", gap: 16 }}>
+            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#f59e0b", fontFamily: "'DM Mono', monospace" }}>{taskStats.open}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>open</div></div>
+            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#ef4444", fontFamily: "'DM Mono', monospace" }}>{taskStats.overdue}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>overdue</div></div>
+            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#10b981", fontFamily: "'DM Mono', monospace" }}>{taskStats.done}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>done</div></div>
+          </div>
+        </div>
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+          <div style={{ fontSize: 11, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>Client portal engagement</div>
+          <div style={{ display: "flex", gap: 16 }}>
+            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace" }}>{clientTotal}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>total invited</div></div>
+            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#10b981", fontFamily: "'DM Mono', monospace" }}>{clientSignedIn}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>signed in</div></div>
+            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#f59e0b", fontFamily: "'DM Mono', monospace" }}>{clientTotal - clientSignedIn}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>unactivated</div></div>
+          </div>
+        </div>
+      </div>
+
+      <SectionHeader icon="🧲" label="Lead intake · last 90 days" sub={`${leadsLast90.length} lead${leadsLast90.length === 1 ? '' : 's'} total · top sources`} />
+      {leadsLast90.length === 0 ? (
+        <div style={{ padding: 20, textAlign: "center", color: "#78716c", fontSize: 13, border: "1px dashed #292524", borderRadius: 10 }}>
+          No public leads in the last 90 days. Lead intake form at lead-intake.html → Supabase public.leads.
+        </div>
+      ) : (
+        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr><th style={th}>Source</th><th style={{ ...th, textAlign: "right" }}>Leads</th></tr>
+            </thead>
+            <tbody>
+              {leadSourceRows.map(([src, count]) => (
+                <tr key={src}>
+                  <td style={{ ...td, color: "#fafaf9", fontWeight: 600, borderBottom: "1px solid #0c0a09" }}>{src}</td>
+                  <td style={{ ...td, textAlign: "right", color: "#d6d3d1", fontFamily: "'DM Mono', monospace", borderBottom: "1px solid #0c0a09" }}>{count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ marginTop: 32, padding: 16, background: "#0c0a09", border: "1px dashed #292524", borderRadius: 10, fontSize: 12, color: "#78716c", lineHeight: 1.55 }}>
+        <b style={{ color: "#a8a29e" }}>About these reports</b><br/>
+        Live from the DB — no caching. Castle tier data fills in as the scorer runs. Activity sparkline reflects the last 14 days of Activity rows across every deal. Scraper health needs Castle to be running on cron to feel useful; today it shows 0 runs until Castle's daily job goes live.
+      </div>
+    </div>
+  );
+}
 
 // ─── Analytics View ─────────────────────────────────────────────
 function AnalyticsView({ deals, onSelect }) {
