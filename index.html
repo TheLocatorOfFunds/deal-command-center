@@ -3735,6 +3735,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
           </div>
           <div style={{ marginTop: 20 }}>
+            <CallRecordings dealId={deal.id} />
+          </div>
+          <div style={{ marginTop: 20 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>📜 Full activity log</div>
             <Activity items={activity} dealId={deal.id} reload={loadAll} />
           </div>
@@ -7112,6 +7115,122 @@ function LogActivityForm({ dealId, onLogged }) {
 // Unified Timeline — merges activity, docket events, messages, SMS,
 // walkthroughs + offers into one chronological feed with filter chips.
 // Replaces the old read-only Activity tab. Log Activity form at the top.
+// ─── Call Recordings ────────────────────────────────────────────────────────
+function CallRecordings({ dealId }) {
+  const [calls, setCalls]       = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [expanded, setExpanded] = useState({}); // id → bool (transcript open)
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await sb.from('call_recordings')
+      .select('*')
+      .eq('deal_id', dealId)
+      .order('called_at', { ascending: false })
+      .limit(50);
+    setCalls(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { load(); }, [dealId]);
+
+  const fmt = secs => {
+    if (!secs) return '—';
+    const m = Math.floor(secs / 60), s = secs % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const fmtDate = ts => new Date(ts).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+
+  if (loading) return null;
+  if (calls.length === 0) return null; // hide section entirely until there are calls
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>
+        📞 Call Recordings
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {calls.map(c => {
+          const isOpen = expanded[c.id];
+          const isIn   = c.direction === 'inbound';
+          return (
+            <div key={c.id} style={{ background: '#0f0d0c', border: '1px solid #1c1917', borderRadius: 10, overflow: 'hidden' }}>
+              {/* Header row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px' }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: isIn ? '#1c3a1c' : '#1c1a00', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15, flexShrink: 0 }}>
+                  {isIn ? '📲' : '📞'}
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9' }}>
+                    {isIn ? c.from_number : c.to_number}
+                    <span style={{ fontSize: 11, fontWeight: 400, color: '#57534e', marginLeft: 8 }}>
+                      {isIn ? 'inbound' : 'outbound'} · {fmt(c.duration_seconds)}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#44403c', marginTop: 1 }}>{fmtDate(c.called_at)}</div>
+                </div>
+                {/* AI summary pill */}
+                {c.ai_summary && (
+                  <div style={{ fontSize: 11, color: '#a8a29e', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 1 }}>
+                    {c.ai_summary}
+                  </div>
+                )}
+                {/* Expand button */}
+                {(c.transcript || c.ai_summary || c.recording_url) && (
+                  <button onClick={() => setExpanded(e => ({ ...e, [c.id]: !e[c.id] }))}
+                    style={{ background: 'transparent', border: '1px solid #292524', color: '#78716c', borderRadius: 6, padding: '4px 10px', fontSize: 11, cursor: 'pointer', flexShrink: 0 }}>
+                    {isOpen ? 'Less ▲' : 'More ▼'}
+                  </button>
+                )}
+              </div>
+
+              {/* Expanded: audio player + AI summary + transcript */}
+              {isOpen && (
+                <div style={{ borderTop: '1px solid #1c1917', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {/* Audio player */}
+                  {c.recording_url && (
+                    <audio controls src={c.recording_url}
+                      style={{ width: '100%', height: 36, accentColor: '#d97706' }} />
+                  )}
+
+                  {/* AI summary + action items */}
+                  {c.ai_summary && (
+                    <div style={{ background: '#1c1917', borderRadius: 8, padding: '10px 12px' }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>AI Summary</div>
+                      <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.6 }}>{c.ai_summary}</div>
+                      {c.ai_action_items && (
+                        <div style={{ marginTop: 10 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Action Items</div>
+                          {c.ai_action_items.split('\n').filter(Boolean).map((item, i) => (
+                            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 4 }}>
+                              <span style={{ color: '#d97706', flexShrink: 0 }}>→</span>
+                              <span style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>{item}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Full transcript */}
+                  {c.transcript && (
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>Transcript</div>
+                      <div style={{ fontSize: 12, color: '#78716c', lineHeight: 1.7, whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto', fontFamily: "'DM Mono', monospace" }}>
+                        {c.transcript}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Activity({ items, dealId, reload }) {
   const [filter, setFilter] = useState('all'); // all | actions | court | messages | system
   const [extra, setExtra] = useState({ docket: [], messages: [], sms: [], walkthroughs: [], offers: [] });
