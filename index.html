@@ -6425,6 +6425,68 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [showDocuSign, setShowDocuSign] = useState(false);
   const fileRef = useRef(null);
 
+  // Filing-date extractor. Every document Nathan uploads is a snapshot of
+  // something that already happened at the courthouse. We pull the court-
+  // action date from Claude Vision's extracted fields (falling through a
+  // priority list matched to real field names in production) so the card
+  // reflects "when it was filed" instead of "when it landed in DCC".
+  // Future-looking fields (expiration, maturity, interest_start) are
+  // explicitly skipped — they're not the court-action date.
+  const FILING_DATE_FIELDS = [
+    'filing_date', 'filed_date', 'filed_at',
+    'order_date', 'order_of_sale_date', 'order_of_sale_issued_date',
+    'confirmation_date',
+    'sale_date', 'scheduled_sale_date', 'auction_scheduled_date',
+    'effective_date',
+    'entered_date',
+    'signed_date', 'affidavit_date', 'date_signed',
+    'recording_date', 'mortgage_recording_date', 'mortgage_recorded_date',
+    'issue_date', 'issued_date',
+    'service_date', 'summons_date', 'notice_publication_date',
+    'mailing_date', 'delivery_date',
+    'date',
+  ];
+  const parseFlex = (v) => {
+    if (!v || typeof v !== 'string') return null;
+    if (/^\d{4}-\d{2}-\d{2}/.test(v)) {
+      const d = new Date(v + (v.length === 10 ? 'T00:00:00' : ''));
+      return isNaN(d) ? null : d;
+    }
+    const mdy = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdy) {
+      const d = new Date(`${mdy[3]}-${mdy[1].padStart(2,'0')}-${mdy[2].padStart(2,'0')}T00:00:00`);
+      return isNaN(d) ? null : d;
+    }
+    const d = new Date(v);
+    return isNaN(d) ? null : d;
+  };
+  const bestFilingDate = (fields) => {
+    if (!fields || typeof fields !== 'object') return null;
+    for (const key of FILING_DATE_FIELDS) {
+      const d = parseFlex(fields[key]);
+      if (d) return d;
+    }
+    // Last-resort: any _date field that's not in the blacklist
+    const blacklist = /expiration|maturity|interest_start|interest_accrual|publication_dates$/i;
+    for (const [k, v] of Object.entries(fields)) {
+      if (!/_date$|^date$/i.test(k)) continue;
+      if (blacklist.test(k)) continue;
+      const d = parseFlex(v);
+      if (d) return d;
+    }
+    return null;
+  };
+
+  // Sort documents by filing date (newest court action first), falling
+  // back to upload date for docs where extraction hasn't run yet.
+  const sortedItems = React.useMemo(() => {
+    return [...items].sort((a, b) => {
+      const ad = bestFilingDate(a.extracted?.fields) || new Date(a.created_at);
+      const bd = bestFilingDate(b.extracted?.fields) || new Date(b.created_at);
+      return bd.getTime() - ad.getTime();
+    });
+  }, [items]);
+
   const loadEnvelopes = async () => {
     const { data } = await sb.from('docusign_envelopes')
       .select('*, library_documents(title)')
@@ -6679,7 +6741,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
 
       {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
       {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload engagement agreements, distribution orders, sale confirmations, NODs, proof of claim, death certificates, IDs, deeds, or any court filing. Claude Vision reads each file and extracts key fields — surplus amounts, case numbers, dates, fee percentages — automatically.</div>}
-      {items.map(doc => {
+      {sortedItems.map(doc => {
         const status = doc.extraction_status;
         const isExtracting = extracting[doc.id] || status === 'processing';
         // Default to expanded so the AI analysis is visible without a click.
@@ -6687,6 +6749,8 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         const isExpanded = expanded[doc.id] !== false;
         const extractedFields = doc.extracted?.fields || {};
         const hasFields = Object.keys(extractedFields).length > 0;
+        const filingDate = bestFilingDate(extractedFields);
+        const uploadedDate = new Date(doc.created_at);
         return (
           <div key={doc.id} style={{ padding: "12px 0", borderBottom: "1px solid #292524" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
@@ -6708,7 +6772,18 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                   )}
                 </div>
                 <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
-                  {fmtSize(doc.size || 0)} · {new Date(doc.created_at).toLocaleDateString()}
+                  {fmtSize(doc.size || 0)}
+                  {filingDate ? (
+                    <>
+                      {' · '}<span style={{ color: '#fbbf24', fontWeight: 600 }}>Filed {filingDate.toLocaleDateString()}</span>
+                      <span style={{ color: '#44403c' }}> · uploaded {uploadedDate.toLocaleDateString()}</span>
+                    </>
+                  ) : (
+                    <>
+                      {' · '}<span>Uploaded {uploadedDate.toLocaleDateString()}</span>
+                      {status === 'done' && <span style={{ color: '#44403c' }}> · no filing date extracted</span>}
+                    </>
+                  )}
                   {doc.extracted?.summary && ` · ${doc.extracted.summary}`}
                 </div>
               </div>
