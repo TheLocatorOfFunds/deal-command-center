@@ -559,9 +559,13 @@ function DealCommandCenter({ session, profile }) {
             <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
               {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "RefundLocators Deal Hub"}
             </div>
-            <div className="page-title" style={{ fontSize: activeDeal ? 26 : 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
-              {activeDeal ? (activeDeal.name || '').split(' - ')[0] : "Deal Command Center"}
-            </div>
+            {activeDeal ? (
+              <InlineEditableName deal={activeDeal} canEdit={isTeam} onSave={(patch) => updateDealMeta(activeDeal.id, patch)} />
+            ) : (
+              <div className="page-title" style={{ fontSize: 32, fontWeight: 700, letterSpacing: "-0.02em", lineHeight: 1.1, marginTop: 4 }}>
+                Deal Command Center
+              </div>
+            )}
             {activeDeal && (() => {
               // Subtitle rebuilds from discrete data — cleaner for internal view than
               // legacy "Name - Address" string concatenation.
@@ -1617,6 +1621,78 @@ function KanbanBoard({ deals, statuses, onSelect, type, onMoveDeal }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Inline-editable deal name in the header. Click to turn into an input;
+// Enter or blur saves, Esc cancels. Preserves the legacy
+// "Client Name - Address" concatenation: only the client portion is
+// editable, the address tail stays intact.
+function InlineEditableName({ deal, canEdit, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const nameParts = (deal.name || '').split(' - ');
+  const clientName = nameParts[0] || deal.id;
+  const addressTail = nameParts.slice(1).join(' - ');
+
+  const startEdit = () => {
+    if (!canEdit) return;
+    setValue(clientName);
+    setEditing(true);
+  };
+
+  const commit = async () => {
+    if (saving) return;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === clientName) { setEditing(false); return; }
+    setSaving(true);
+    const newName = addressTail ? `${trimmed} - ${addressTail}` : trimmed;
+    await onSave({ name: newName });
+    setSaving(false);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={value}
+        disabled={saving}
+        onChange={e => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
+        }}
+        style={{
+          fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.1,
+          marginTop: 4, background: '#0c0a09', color: '#fafaf9',
+          border: '1px solid #44403c', borderRadius: 6, padding: '3px 10px',
+          fontFamily: 'inherit', minWidth: 320, maxWidth: '100%',
+        }}
+      />
+    );
+  }
+
+  return (
+    <div
+      className="page-title"
+      onClick={startEdit}
+      title={canEdit ? 'Click to edit the client name' : clientName}
+      style={{
+        fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.1,
+        marginTop: 4, cursor: canEdit ? 'pointer' : 'default',
+        padding: '3px 6px', margin: '4px -6px 0', borderRadius: 6,
+        transition: 'background 0.12s',
+      }}
+      onMouseEnter={e => { if (canEdit) e.currentTarget.style.background = '#1c1917'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+    >
+      {clientName}
+      {canEdit && <span style={{ fontSize: 11, color: '#57534e', marginLeft: 10, fontWeight: 400, letterSpacing: 0 }}>✎</span>}
     </div>
   );
 }
@@ -7852,6 +7928,8 @@ function ContactsTab({ dealId, userId, isAdmin }) {
   const [quickNew, setQuickNew]       = useState({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', notes: '' });
   const [busy, setBusy]               = useState(false);
   const [err, setErr]                 = useState(null);
+  const [editingLinkId, setEditingLinkId] = useState(null);
+  const [editDraft, setEditDraft]     = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -7914,6 +7992,41 @@ function ContactsTab({ dealId, userId, isAdmin }) {
     setBusy(false);
   };
 
+  const startEdit = (link) => {
+    const c = link.contacts || {};
+    setEditDraft({
+      name: c.name || '', company: c.company || '', email: c.email || '',
+      phone: c.phone || '', kind: c.kind || 'other', kind_other: c.kind_other || '',
+      relationship: link.relationship || '',
+    });
+    setEditingLinkId(link.id);
+    setErr(null);
+  };
+  const cancelEdit = () => { setEditingLinkId(null); setEditDraft(null); setErr(null); };
+  const saveEdit = async (link) => {
+    if (!editDraft || busy) return;
+    if (!editDraft.name.trim()) { setErr('Name required'); return; }
+    if (editDraft.kind === 'other' && !editDraft.kind_other.trim()) {
+      setErr('Describe the "Other" type before saving.'); return;
+    }
+    setBusy(true); setErr(null);
+    const contactPatch = {
+      name: editDraft.name.trim(),
+      company: editDraft.company.trim() || null,
+      email: editDraft.email.trim() || null,
+      phone: editDraft.phone.trim() || null,
+      kind: editDraft.kind,
+      kind_other: editDraft.kind === 'other' ? editDraft.kind_other.trim() || null : null,
+    };
+    const { error: cErr } = await sb.from('contacts').update(contactPatch).eq('id', link.contact_id);
+    if (cErr) { setErr(cErr.message); setBusy(false); return; }
+    const { error: lErr } = await sb.from('contact_deals').update({ relationship: editDraft.relationship.trim() || null }).eq('id', link.id);
+    if (lErr) { setErr(lErr.message); setBusy(false); return; }
+    await load();
+    setEditingLinkId(null); setEditDraft(null);
+    setBusy(false);
+  };
+
   const linkedIds = new Set(links.map(l => l.contact_id));
   const unlinkedContacts = allContacts.filter(c => !linkedIds.has(c.id));
 
@@ -7932,23 +8045,56 @@ function ContactsTab({ dealId, userId, isAdmin }) {
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
-              {links.map(l => (
-                <div key={l.id} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
-                  <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(l.contacts)}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700 }}>
-                      {l.contacts?.name}
-                      {l.contacts?.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {l.contacts.company}</span>}
+              {links.map(l => {
+                if (editingLinkId === l.id && editDraft) {
+                  return (
+                    <div key={l.id} style={{ padding: 14, background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>Editing contact</div>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                        <Field label="Name *"><input value={editDraft.name} onChange={e => setEditDraft(d => ({ ...d, name: e.target.value }))} style={inputStyle} /></Field>
+                        <Field label="Company"><input value={editDraft.company} onChange={e => setEditDraft(d => ({ ...d, company: e.target.value }))} style={inputStyle} /></Field>
+                        <Field label="Email"><input type="email" value={editDraft.email} onChange={e => setEditDraft(d => ({ ...d, email: e.target.value }))} style={inputStyle} /></Field>
+                        <Field label="Phone"><input value={editDraft.phone} onChange={e => setEditDraft(d => ({ ...d, phone: e.target.value }))} style={inputStyle} /></Field>
+                        <Field label="Type">
+                          <select value={editDraft.kind} onChange={e => setEditDraft(d => ({ ...d, kind: e.target.value, ...(e.target.value !== 'other' ? { kind_other: '' } : {}) }))} style={{ ...inputStyle, padding: "8px 10px" }}>
+                            {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
+                          </select>
+                        </Field>
+                        <Field label="Relationship on this deal"><input value={editDraft.relationship} onChange={e => setEditDraft(d => ({ ...d, relationship: e.target.value }))} placeholder="e.g. son of homeowner, attorney of record" style={inputStyle} /></Field>
+                      </div>
+                      {editDraft.kind === 'other' && (
+                        <Field label="Describe type *" style={{ marginTop: 10 }}>
+                          <input value={editDraft.kind_other} onChange={e => setEditDraft(d => ({ ...d, kind_other: e.target.value }))}
+                            placeholder="e.g. Church friend, probate administrator, court clerk…"
+                            style={inputStyle} />
+                        </Field>
+                      )}
+                      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 12 }}>
+                        <button onClick={cancelEdit} disabled={busy} style={btnGhost}>Cancel</button>
+                        <button onClick={() => saveEdit(l)} disabled={busy || !editDraft.name.trim()} style={btnPrimary}>{busy ? 'Saving…' : 'Save'}</button>
+                      </div>
                     </div>
-                    <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
-                      {l.contacts?.email || '—'}{l.contacts?.phone && <> · <a href={`tel:${l.contacts.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.contacts.phone}</a></>}
-                      {l.relationship && <> · {l.relationship}</>}
+                  );
+                }
+                return (
+                  <div key={l.id} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
+                    <div style={{ fontSize: 20, opacity: 0.8 }}>{kindIcon(l.contacts)}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>
+                        {l.contacts?.name}
+                        {l.contacts?.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {l.contacts.company}</span>}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+                        {l.contacts?.email || '—'}{l.contacts?.phone && <> · <a href={`tel:${l.contacts.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.contacts.phone}</a></>}
+                        {l.relationship && <> · {l.relationship}</>}
+                      </div>
                     </div>
+                    <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(l.contacts)}</span>
+                    <button onClick={() => startEdit(l)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Edit</button>
+                    <button onClick={() => unlink(l.id)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Unlink</button>
                   </div>
-                  <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(l.contacts)}</span>
-                  <button onClick={() => unlink(l.id)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Unlink</button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
