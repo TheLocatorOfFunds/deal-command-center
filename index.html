@@ -575,20 +575,50 @@ function DealCommandCenter({ session, profile }) {
               </div>
             )}
             {activeDeal && (() => {
-              // Subtitle rebuilds from discrete data — cleaner for internal view than
-              // legacy "Name - Address" string concatenation.
+              // Click any field to edit inline. Suppresses the address if it's
+              // just a duplicate of "[county] County" or "[county] County, OH"
+              // (common data-import artifact from Castle / manual entry).
               const m = activeDeal.meta || {};
               const nameParts = (activeDeal.name || '').split(' - ');
               const addressFromName = nameParts.slice(1).join(' - ');
               const address = activeDeal.address || addressFromName || '';
-              const courtCase = m.courtCase;
-              const county = m.county;
-              const bits = [courtCase, county ? `${county} County` : null, address].filter(Boolean);
-              return bits.length > 0 ? (
-                <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4 }}>
-                  {bits.join(' · ')}
+              const courtCase = m.courtCase || '';
+              const county = m.county || '';
+              const addrNorm = address.trim().toLowerCase();
+              const countyNorm = county.trim().toLowerCase();
+              const isRedundantAddress = countyNorm && (
+                addrNorm === `${countyNorm} county` ||
+                addrNorm === `${countyNorm} county, oh` ||
+                addrNorm === `${countyNorm} county, ohio`
+              );
+              const saveMeta = (patch) => updateDealMeta(activeDeal.id, { meta: { ...m, ...patch } });
+              const saveAddress = (v) => updateDealMeta(activeDeal.id, { address: v || null });
+              return (
+                <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <InlineEditableText value={courtCase} label="case #" placeholder="e.g. CV-25-116796" canEdit={isTeam} onSave={(v) => saveMeta({ courtCase: v || null })} />
+                  {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
+                  <InlineEditableText
+                    value={county ? `${county} County` : ''}
+                    label="county"
+                    placeholder="e.g. Cuyahoga"
+                    canEdit={isTeam}
+                    onSave={(v) => saveMeta({ county: v ? v.replace(/\s*County\s*$/i, '').trim() || null : null })}
+                  />
+                  {!isRedundantAddress && (
+                    <>
+                      {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
+                      <InlineEditableText value={address} label="address" placeholder="e.g. 121 Main St, Cleveland, OH" canEdit={isTeam} onSave={saveAddress} />
+                    </>
+                  )}
+                  {isRedundantAddress && isTeam && (
+                    <button
+                      onClick={() => saveAddress('')}
+                      title="Clear the redundant address (it just says the county again)"
+                      style={{ background: "transparent", border: "1px dashed #78350f", color: "#a5731c", padding: "1px 7px", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}
+                    >⚠ clear duplicate address</button>
+                  )}
                 </div>
-              ) : null;
+              );
             })()}
           </div>
         </div>
@@ -1702,6 +1732,73 @@ function InlineEditableName({ deal, canEdit, onSave }) {
       {clientName}
       {canEdit && <span style={{ fontSize: 11, color: '#57534e', marginLeft: 10, fontWeight: 400, letterSpacing: 0 }}>✎</span>}
     </div>
+  );
+}
+
+// Compact click-to-edit text for header subheader fields. Enter or blur
+// saves, Escape cancels. Empty field shows a "+ Add <label>" button so
+// missing data is easy to fill in without digging into the Case Details
+// card. Used for courtCase / county / address in the deal subheader.
+function InlineEditableText({ value, onSave, label, placeholder, canEdit = true }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => {
+    if (!canEdit) return;
+    setDraft(value || '');
+    setEditing(true);
+  };
+
+  const commit = async () => {
+    if (saving) return;
+    const trimmed = draft.trim();
+    if (trimmed === (value || '').trim()) { setEditing(false); return; }
+    setSaving(true);
+    await onSave(trimmed);
+    setSaving(false);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        disabled={saving}
+        placeholder={placeholder}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
+        }}
+        style={{
+          fontSize: 13, color: "#fafaf9", background: "#0c0a09",
+          border: "1px solid #44403c", borderRadius: 4, padding: "2px 6px",
+          fontFamily: "inherit", minWidth: 120, maxWidth: 260,
+        }}
+      />
+    );
+  }
+
+  if (!value) {
+    return canEdit ? (
+      <button
+        onClick={startEdit}
+        style={{ background: "transparent", border: "1px dashed #44403c", color: "#57534e", padding: "1px 7px", borderRadius: 4, fontSize: 12, cursor: "pointer", fontFamily: "inherit" }}
+      >+ {label}</button>
+    ) : null;
+  }
+
+  return (
+    <span
+      onClick={startEdit}
+      title={canEdit ? `Click to edit ${label}` : undefined}
+      style={{ cursor: canEdit ? "pointer" : "default", padding: "1px 4px", margin: "0 -4px", borderRadius: 3, transition: "background 0.12s" }}
+      onMouseEnter={e => { if (canEdit) e.currentTarget.style.background = "#1c1917"; }}
+      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+    >{value}</span>
   );
 }
 
