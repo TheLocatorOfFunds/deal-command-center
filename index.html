@@ -6662,26 +6662,15 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
   // ── Load messages ─────────────────────────────────────────────────────────
   const load = async () => {
+    // Only fetch messages explicitly assigned to this deal.
+    // Cross-deal phone matching was removed: it amplified group-chat leaks
+    // by showing any message whose to_number matched a contact, regardless
+    // of which deal it was routed to.
     const { data: dealMsgs } = await sb.from('messages_outbound')
       .select('*').eq('deal_id', dealId)
       .order('created_at', { ascending: true }).limit(200);
 
-    // Pull inbound by contact phones for cross-deal replies
-    const contactPhones = contacts
-      .map(c => c.phone).filter(Boolean)
-      .flatMap(p => [normalizePhone(p), p.replace(/\D/g,'')]).filter(Boolean);
-
-    let extra = [];
-    if (contactPhones.length > 0) {
-      const { data: inboundByPhone } = await sb.from('messages_outbound')
-        .select('*').eq('direction', 'inbound')
-        .in('to_number', [...new Set(contactPhones)])
-        .order('created_at', { ascending: true });
-      const seen = new Set((dealMsgs || []).map(m => m.id));
-      extra = (inboundByPhone || []).filter(m => !seen.has(m.id));
-    }
-
-    setMsgs([...(dealMsgs || []), ...extra].sort((a,b) => new Date(a.created_at) - new Date(b.created_at)));
+    setMsgs(dealMsgs || []);
   };
 
   // ── Load contacts from contact_deals ─────────────────────────────────────

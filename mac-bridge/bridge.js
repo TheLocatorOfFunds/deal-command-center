@@ -146,8 +146,10 @@ async function syncFromChatDb() {
         m.text,
         m.date,
         m.is_from_me,
+        m.associated_message_type,
         h.id            AS contact_id,
-        c.chat_identifier
+        c.chat_identifier,
+        c.style         AS chat_style
       FROM message m
       LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
       LEFT JOIN chat              c   ON cmj.chat_id = c.ROWID
@@ -155,6 +157,10 @@ async function syncFromChatDb() {
       WHERE m.ROWID > ?
         AND m.text IS NOT NULL
         AND m.text != ''
+        AND c.style != 45                   -- skip group chats (style 43 = 1:1, 45 = group)
+        AND (m.associated_message_type IS NULL
+             OR m.associated_message_type = 0
+             OR m.associated_message_type NOT BETWEEN 2000 AND 2099)  -- skip tapback reactions
       ORDER BY m.ROWID ASC
       LIMIT 100
     `).all(watermark);
@@ -168,18 +174,31 @@ async function syncFromChatDb() {
   for (const row of rows) {
     maxRowid = Math.max(maxRowid, row.ROWID);
 
-    const contactPhone = normalizePhone(row.contact_id || row.chat_identifier);
+    // Extra runtime guard: skip if chat_identifier looks like a group GUID (not a phone)
+    const chatId = row.chat_identifier || '';
+    if (chatId.startsWith('chat') && !/^\+?\d/.test(chatId)) {
+      console.log(`⏭ SKIP group chat  guid=${row.guid}  chat=${chatId}`);
+      continue;
+    }
+
+    // Determine the "other party" phone.
+    // For outbound (is_from_me=1): chat_identifier is the recipient's phone.
+    // For inbound (is_from_me=0): handle.id is the sender's phone.
+    const contactPhone = normalizePhone(
+      row.is_from_me === 1 ? row.chat_identifier : (row.contact_id || row.chat_identifier)
+    );
     if (!contactPhone) continue;
 
     const isInbound = row.is_from_me === 0;
     const guid      = `imsg_${row.guid}`;
 
     const { error } = await sb.from('messages_outbound').upsert({
-      to_number:   contactPhone,
-      from_number: NATHAN_NUMBER,
+      to_number:   isInbound ? NATHAN_NUMBER : contactPhone,  // "to" = message destination
+      from_number: isInbound ? contactPhone  : NATHAN_NUMBER, // "from" = actual sender
       body:        row.text,
       direction:   isInbound ? 'inbound' : 'outbound',
       status:      isInbound ? 'received' : 'sent',
+      channel:     'imessage',
       twilio_sid:  guid,
       created_at:  appleTs(row.date),
     }, { onConflict: 'twilio_sid', ignoreDuplicates: true });
