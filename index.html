@@ -3644,11 +3644,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <button onClick={() => setShowPostUpdate(true)} title="Post a case update to the client and/or attorney timeline" style={{ background: "#d97706", color: "#0c0a09", border: "none", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
               📢 Post Update
             </button>
-            {deal.meta?.homeownerPhone && (
-              <button onClick={() => setShowSendIntro(true)} title="Send a pre-filled intro text to the homeowner via the iMessage bridge" style={{ background: "#064e3b", color: "#6ee7b7", border: "1px solid #065f46", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                💬 Send Intro Text
-              </button>
-            )}
+            {/* Send Intro Text button moved into the Comms tab (see 📝 Send Intro button) */}
             {/* Overflow menu — infrequent admin actions (Flag, Bonus Due) */}
             <div style={{ position: "relative" }}>
               <button
@@ -7227,6 +7223,7 @@ function normalizePhone(p) {
 function OutboundMessages({ dealId, vendors, deal }) {
   const [msgs, setMsgs]               = useState([]);
   const [calls, setCalls]             = useState([]);
+  const [emails, setEmails]           = useState([]);
   const [dealNotes, setDealNotes]     = useState([]);
   const [phoneNumbers, setPhoneNumbers] = useState([]);
   const [fromNumber, setFromNumber]   = useState('');
@@ -7246,6 +7243,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [groupBody, setGroupBody] = useState('');
   const [groupSending, setGroupSending] = useState(false);
   const [groupErr, setGroupErr] = useState(null);
+  const [emailMode, setEmailMode] = useState(false);
+  const [emailForm, setEmailForm] = useState({ to: '', cc: '', subject: '', body: '', contact_id: null });
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailErr, setEmailErr] = useState(null);
+  const [showIntroModal, setShowIntroModal] = useState(false);
   const threadRef = useRef(null);
 
   // Virtual "Everyone" contact — shows every message / call / note on the
@@ -7291,13 +7293,16 @@ function OutboundMessages({ dealId, vendors, deal }) {
     // Cross-deal phone matching was removed: it amplified group-chat leaks
     // by showing any message whose to_number matched a contact, regardless
     // of which deal it was routed to.
-    const [msgsRes, callsRes, notesRes] = await Promise.all([
+    const [msgsRes, callsRes, emailsRes, notesRes] = await Promise.all([
       sb.from('messages_outbound')
         .select('*').eq('deal_id', dealId)
         .order('created_at', { ascending: true }).limit(200),
       sb.from('call_logs')
         .select('*').eq('deal_id', dealId)
         .order('started_at', { ascending: true }).limit(200),
+      sb.from('emails')
+        .select('*').eq('deal_id', dealId)
+        .order('created_at', { ascending: true }).limit(100),
       sb.from('deal_notes')
         .select('id, title, body, author_id, created_at, updated_at')
         .eq('deal_id', dealId)
@@ -7305,13 +7310,14 @@ function OutboundMessages({ dealId, vendors, deal }) {
     ]);
     setMsgs(msgsRes.data || []);
     setCalls(callsRes.data || []);
+    setEmails(emailsRes.data || []);
     setDealNotes(notesRes.data || []);
   };
 
   // ── Load contacts from contact_deals ─────────────────────────────────────
   const loadDealContacts = async () => {
     const { data } = await sb.from('contact_deals')
-      .select('contacts(id, name, phone, kind)')
+      .select('contacts(id, name, phone, email, kind)')
       .eq('deal_id', dealId);
     if (data) setDcContacts(data.map(r => r.contacts).filter(Boolean));
   };
@@ -7337,6 +7343,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
     const ch = sb.channel(`comms-${dealId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs',         filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'emails',            filter: `deal_id=eq.${dealId}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes',        filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
     const poll = setInterval(load, 6000);
@@ -7414,20 +7421,35 @@ function OutboundMessages({ dealId, vendors, deal }) {
         }
       });
     }
+    // Emails — Everyone shows all, otherwise filter by contact match
+    if (activeContact?._everyone) {
+      emails.forEach(e => items.push({ _kind: 'email', _ts: e.created_at, ...e }));
+    } else if (activeContact && !activeContact._group) {
+      const cid = activeContact.contact_id;
+      const contactEmail = activeContact.email || dcContacts.find(c => c.id === cid)?.email;
+      emails.forEach(e => {
+        const matchesContact = cid && e.contact_id === cid;
+        const matchesEmail   = contactEmail && (e.to_emails?.includes(contactEmail) || e.cc_emails?.includes(contactEmail) || e.from_email?.includes(contactEmail));
+        if (matchesContact || matchesEmail) {
+          items.push({ _kind: 'email', _ts: e.created_at, ...e });
+        }
+      });
+    }
     // Notes — deal-wide, surface in every thread
     dealNotes.forEach(n => items.push({ _kind: 'note', _ts: n.created_at, ...n }));
 
     // Channel filter
     const filtered = items.filter(i => {
-      if (channelFilter === 'all') return true;
-      if (channelFilter === 'sms')   return i._kind === 'message';
-      if (channelFilter === 'calls') return i._kind === 'call';
-      if (channelFilter === 'notes') return i._kind === 'note';
+      if (channelFilter === 'all')    return true;
+      if (channelFilter === 'sms')    return i._kind === 'message';
+      if (channelFilter === 'calls')  return i._kind === 'call';
+      if (channelFilter === 'email')  return i._kind === 'email';
+      if (channelFilter === 'notes')  return i._kind === 'note';
       return true;
     });
 
     return filtered.sort((a, b) => new Date(a._ts).getTime() - new Date(b._ts).getTime());
-  }, [threadMsgs, calls, dealNotes, activeContact, channelFilter]);
+  }, [threadMsgs, calls, emails, dealNotes, activeContact, channelFilter, dcContacts]);
 
   const days = threadItems.reduce((acc, m) => {
     const day = new Date(m._ts).toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
@@ -7450,8 +7472,18 @@ function OutboundMessages({ dealId, vendors, deal }) {
                 || normalizePhone(c.to_number) === phone;
           }).length
         : 0,
+    email: activeContact?._everyone
+      ? emails.length
+      : (activeContact && !activeContact._group)
+        ? emails.filter(e => {
+            const cid = activeContact.contact_id;
+            const em  = dcContacts.find(c => c.id === cid)?.email;
+            return (cid && e.contact_id === cid)
+                || (em && (e.to_emails?.includes(em) || e.cc_emails?.includes(em) || e.from_email?.includes(em)));
+          }).length
+        : 0,
     notes: dealNotes.length,
-  }), [threadMsgs, calls, dealNotes, activeContact]);
+  }), [threadMsgs, calls, emails, dealNotes, activeContact, dcContacts]);
 
   // ── Group compose ─────────────────────────────────────────────────────────
   const toggleGroupMember = (phone) => {
@@ -7460,6 +7492,76 @@ function OutboundMessages({ dealId, vendors, deal }) {
       if (next.has(phone)) next.delete(phone); else next.add(phone);
       return next;
     });
+  };
+
+  // ── Email send ────────────────────────────────────────────────────────────
+  // Templates keyed off the meta shortcuts Nathan most often needs.
+  const emailTemplates = {
+    payoff: {
+      label: 'Payoff + reinstatement request',
+      subject: (d) => `Payoff & reinstatement request — ${d?.meta?.homeownerName || d?.name || 'client'} — Case ${d?.meta?.courtCase || ''}`,
+      body: (d) => {
+        const m = d?.meta || {};
+        const name = m.homeownerName || (d?.name || '').split(' - ')[0] || 'my client';
+        const county = m.county ? `${m.county} County` : 'the county';
+        const caseNum = m.courtCase || '[case number]';
+        const propertyAddress = d?.address || m.propertyAddress || '[property address]';
+        return `Counsel,\n\nI represent ${name} on the above-referenced matter in ${county} (Case ${caseNum}, ${propertyAddress}). Please send me the following at your earliest convenience:\n\n  1. Current payoff figure, good through 30 days, with per-diem interest.\n  2. Reinstatement figure, good through 30 days, itemized (principal, interest, late fees, costs, escrow advances, attorney fees).\n  3. Any additional fees or costs that would be due at payoff or reinstatement, and whether either figure is currently accruing.\n\nPlease cc my client on this thread so they're in the loop. Happy to provide the signed engagement letter on request.\n\nAppreciate it,`;
+      }
+    },
+    intro: {
+      label: 'Intro to attorney',
+      subject: (d) => `New representation — ${d?.meta?.homeownerName || d?.name || ''} — Case ${d?.meta?.courtCase || ''}`,
+      body: (d) => {
+        const m = d?.meta || {};
+        const name = m.homeownerName || (d?.name || '').split(' - ')[0] || 'my client';
+        const caseNum = m.courtCase || '[case number]';
+        return `Counsel,\n\nI'm writing to let you know that ${name} has retained RefundLocators in connection with the above matter (Case ${caseNum}). Engagement letter attached / available on request.\n\nI'd like to open a line of communication for payoff, reinstatement, and any surplus-fund questions as the case progresses. Please cc my client on any reply so they stay in the loop.\n\nThanks,`;
+      }
+    },
+    blank: { label: 'Blank email', subject: () => '', body: () => '' },
+  };
+
+  const loadEmailTemplate = (key) => {
+    const t = emailTemplates[key];
+    if (!t) return;
+    // Attorney contact for To, client email for Cc
+    const attorneyContact = dcContacts.find(c => c.kind === 'attorney' && c.email) || {};
+    const m = deal?.meta || {};
+    const clientEmail = m.homeownerEmail || '';
+    setEmailForm({
+      to: attorneyContact.email || '',
+      cc: clientEmail || '',
+      subject: t.subject(deal),
+      body: t.body(deal),
+      contact_id: attorneyContact.id || null,
+    });
+  };
+
+  const sendEmail = async () => {
+    const toList = emailForm.to.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    const ccList = emailForm.cc.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    if (toList.length === 0 || !emailForm.subject.trim() || !emailForm.body.trim() || emailSending) return;
+    setEmailSending(true); setEmailErr(null);
+    try {
+      const { error } = await sb.functions.invoke('send-email', {
+        body: {
+          to: toList, cc: ccList.length ? ccList : undefined,
+          subject: emailForm.subject.trim(),
+          body: emailForm.body.trim(),
+          deal_id: dealId, contact_id: emailForm.contact_id || undefined,
+        }
+      });
+      if (error) {
+        let msg = error.message;
+        try { const b = await error.context?.json?.(); msg = b?.error || msg; } catch {}
+        throw new Error(msg);
+      }
+      setEmailMode(false);
+      setEmailForm({ to: '', cc: '', subject: '', body: '', contact_id: null });
+      await load();
+    } catch (e) { setEmailErr(e.message); }
+    setEmailSending(false);
   };
 
   const sendGroup = async () => {
@@ -7652,15 +7754,86 @@ function OutboundMessages({ dealId, vendors, deal }) {
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: newMode ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: newMode ? '#d97706' : '#44403c', fontSize: 18, fontWeight: 300 }}>
           ＋
         </button>
-        <button onClick={() => { setGroupMode(true); setNewMode(false); }}
+        <button onClick={() => { setGroupMode(true); setNewMode(false); setEmailMode(false); }}
           title="Send a message to two or more contacts at once"
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: groupMode ? '2px solid #22c55e' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: groupMode ? '#22c55e' : '#57534e', fontSize: 11, fontWeight: 600 }}>
           👥 Group
         </button>
+        <button onClick={() => { setEmailMode(true); setGroupMode(false); setNewMode(false); if (!emailForm.subject) loadEmailTemplate('payoff'); }}
+          title="Compose an email (from nathan@refundlocators.com, replies route to your Gmail)"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: emailMode ? '2px solid #3b82f6' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: emailMode ? '#3b82f6' : '#57534e', fontSize: 11, fontWeight: 600 }}>
+          📧 Email
+        </button>
+        {deal.meta?.homeownerPhone && (
+          <button onClick={() => setShowIntroModal(true)}
+            title="Send a pre-filled intro text to the homeowner"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: '#6ee7b7', fontSize: 11, fontWeight: 600 }}>
+            📝 Send Intro
+          </button>
+        )}
         {visibleContacts.length === 0 && groupThreads.length === 0 && !newMode && (
           <span style={{ fontSize: 11, color: '#44403c', alignSelf: 'center', padding: '0 14px', whiteSpace: 'nowrap' }}>No contacts with phone numbers — add vendors or click ＋</span>
         )}
       </div>
+
+      {/* Email compose panel */}
+      {emailMode && (
+        <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, maxHeight: '60%', overflowY: 'auto' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+              📧 Compose email · from nathan@refundlocators.com
+            </div>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {Object.entries(emailTemplates).map(([key, t]) => (
+                <button key={key} onClick={() => loadEmailTemplate(key)}
+                  style={{ background: 'transparent', border: '1px solid #292524', color: '#a8a29e', padding: '3px 9px', fontSize: 10, fontWeight: 600, borderRadius: 4, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '60px 1fr', gap: '6px 10px', alignItems: 'center', marginBottom: 8 }}>
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To:</label>
+            <input value={emailForm.to} onChange={e => setEmailForm(f => ({ ...f, to: e.target.value }))}
+              placeholder="attorney@lawfirm.com" list="deal-contact-emails"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit' }} />
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Cc:</label>
+            <input value={emailForm.cc} onChange={e => setEmailForm(f => ({ ...f, cc: e.target.value }))}
+              placeholder="client@email.com (comma-separated for multiple)" list="deal-contact-emails"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit' }} />
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Subject:</label>
+            <input value={emailForm.subject} onChange={e => setEmailForm(f => ({ ...f, subject: e.target.value }))}
+              placeholder="Subject line"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', fontWeight: 600 }} />
+          </div>
+          <datalist id="deal-contact-emails">
+            {dcContacts.filter(c => c.email).map(c => <option key={c.id} value={c.email}>{c.name}</option>)}
+            {deal?.meta?.homeownerEmail && <option value={deal.meta.homeownerEmail}>{deal.meta.homeownerName || 'Homeowner'}</option>}
+          </datalist>
+          <textarea value={emailForm.body} onChange={e => setEmailForm(f => ({ ...f, body: e.target.value }))}
+            placeholder="Message…" rows={10}
+            style={{ width: '100%', background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'vertical', outline: 'none', lineHeight: 1.55, boxSizing: 'border-box' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, gap: 8 }}>
+            <div style={{ fontSize: 10, color: '#57534e' }}>
+              Reply-To: nathan@fundlocators.com · Bcc: nathan@fundlocators.com (so your Gmail has a copy)
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => { setEmailMode(false); setEmailErr(null); }}
+                style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+              <button onClick={sendEmail}
+                disabled={emailSending || !emailForm.to.trim() || !emailForm.subject.trim() || !emailForm.body.trim()}
+                style={{ background: (emailForm.to.trim() && emailForm.subject.trim() && emailForm.body.trim() && !emailSending) ? '#3b82f6' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {emailSending ? 'Sending…' : '📧 Send email'}
+              </button>
+            </div>
+          </div>
+          {emailErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 6 }}>⚠ {emailErr}</div>}
+        </div>
+      )}
+
+      {showIntroModal && (
+        <SendIntroTextModal deal={deal} onClose={() => setShowIntroModal(false)} onSent={load} />
+      )}
 
       {/* Group compose panel */}
       {groupMode && (
@@ -7775,9 +7948,10 @@ function OutboundMessages({ dealId, vendors, deal }) {
       {activeContact && (
         <div style={{ display: 'flex', gap: 6, padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#0f0d0c', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           {[
-            { key: 'all',   label: 'All',           icon: '☰', count: chipCounts.sms + chipCounts.calls + chipCounts.notes },
-            { key: 'sms',   label: 'Messages',      icon: '💬', count: chipCounts.sms },
-            { key: 'calls', label: 'Calls',         icon: '📞', count: chipCounts.calls },
+            { key: 'all',   label: 'All',            icon: '☰',  count: chipCounts.sms + chipCounts.calls + chipCounts.email + chipCounts.notes },
+            { key: 'sms',   label: 'Messages',       icon: '💬', count: chipCounts.sms },
+            { key: 'calls', label: 'Calls',          icon: '📞', count: chipCounts.calls },
+            { key: 'email', label: 'Email',          icon: '📧', count: chipCounts.email },
             { key: 'notes', label: 'Internal notes', icon: '🔒', count: chipCounts.notes },
           ].map(chip => {
             const active = channelFilter === chip.key;
@@ -7851,6 +8025,38 @@ function OutboundMessages({ dealId, vendors, deal }) {
                           Your browser does not support audio playback.
                         </audio>
                       )}
+                    </div>
+                  </div>
+                );
+              }
+
+              // ─── Email bubble ────────────────────────────────────────
+              if (m._kind === 'email') {
+                const isInbound = m.direction === 'inbound';
+                const toLabel   = (m.to_emails || []).join(', ');
+                const ccLabel   = (m.cc_emails || []).filter(e => e && !e.includes('fundlocators.com')).join(', ');
+                return (
+                  <div key={'e-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ maxWidth: '90%', background: '#1c1917', border: '1px solid #1e3a8a33', borderLeft: '3px solid #3b82f6', borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', letterSpacing: '0.04em' }}>📧 {isInbound ? 'EMAIL RECEIVED' : 'EMAIL SENT'}</span>
+                          {m.status === 'failed' && <span style={{ fontSize: 10, fontWeight: 700, color: '#ef4444', marginLeft: 8 }}>· FAILED</span>}
+                        </div>
+                        <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}</span>
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 4, lineHeight: 1.4 }}>{m.subject || '(no subject)'}</div>
+                      <div style={{ fontSize: 11, color: '#a8a29e', marginBottom: 8, lineHeight: 1.5, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                        <span><span style={{ color: '#57534e' }}>to</span> {toLabel}</span>
+                        {ccLabel && <span><span style={{ color: '#57534e' }}>cc</span> {ccLabel}</span>}
+                      </div>
+                      <details style={{ fontSize: 13, color: '#d6d3d1' }}>
+                        <summary style={{ cursor: 'pointer', fontSize: 12, color: '#78716c', marginBottom: 6 }}>
+                          {(m.body_text || '').split('\n')[0].slice(0, 120)}{(m.body_text || '').length > 120 ? '…' : ''} — click to expand
+                        </summary>
+                        <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, marginTop: 8, paddingTop: 8, borderTop: '1px solid #292524' }}>{m.body_text}</div>
+                      </details>
+                      {m.error_message && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 6 }}>⚠ {m.error_message}</div>}
                     </div>
                   </div>
                 );
