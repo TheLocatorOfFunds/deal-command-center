@@ -6716,9 +6716,33 @@ function OutboundMessages({ dealId, vendors, deal }) {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [msgs, activeContact]);
 
+  // ── Group threads derived from loaded messages ────────────────────────────
+  // A group thread is any message whose thread_key contains ':group:'
+  const groupThreads = React.useMemo(() => {
+    const seen = new Map(); // threadKey → { key, participantPhones: Set }
+    msgs.forEach(m => {
+      if (!m.thread_key?.includes(':group:')) return;
+      if (!seen.has(m.thread_key)) seen.set(m.thread_key, { key: m.thread_key, phones: new Set() });
+      const entry = seen.get(m.thread_key);
+      if (m.from_number && m.from_number !== NATHAN_BRIDGE_NUMBER) entry.phones.add(normalizePhone(m.from_number));
+      if (m.to_number   && m.to_number   !== NATHAN_BRIDGE_NUMBER) entry.phones.add(normalizePhone(m.to_number));
+    });
+    return [...seen.values()].map(g => {
+      // Label: match phones to contact names
+      const names = [...g.phones]
+        .map(p => contacts.find(c => normalizePhone(c.phone) === p)?.name?.split(' ')[0] || p)
+        .filter(Boolean);
+      return { _group: true, thread_key: g.key, phone: g.key, name: names.join(' + ') || 'Group', role: 'Group', phones: [...g.phones] };
+    });
+  }, [msgs, contacts]);
+
   // ── Thread messages for active contact ───────────────────────────────────
+  const NATHAN_BRIDGE_NUMBER = '+15135162306';
   const threadMsgs = React.useMemo(() => {
     if (!activeContact) return msgs;
+    if (activeContact._group) {
+      return msgs.filter(m => m.thread_key === activeContact.thread_key);
+    }
     const phone = normalizePhone(activeContact.phone);
     const cid   = activeContact.contact_id;
     return msgs.filter(m => {
@@ -6844,11 +6868,29 @@ function OutboundMessages({ dealId, vendors, deal }) {
             </button>
           );
         })}
+        {/* Group thread tabs — one per apple group chat routed to this deal */}
+        {groupThreads.map(g => {
+          const active = activeContact?.thread_key === g.thread_key;
+          const count  = msgs.filter(m => m.thread_key === g.thread_key).length;
+          return (
+            <button key={g.thread_key} onClick={() => { setActiveContact(g); setNewMode(false); }}
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? '2px solid #22c55e' : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 100, maxWidth: 160, gap: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
+                <span style={{ fontSize: 11, marginRight: 1 }}>👥</span>
+                <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                  {g.name}
+                </span>
+                {count > 0 && <span style={{ fontSize: 9, background: '#292524', color: '#a8a29e', borderRadius: 8, padding: '1px 5px', flexShrink: 0 }}>{count}</span>}
+              </div>
+              <span style={{ fontSize: 9, color: active ? '#22c55e' : '#44403c', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Group · iMessage</span>
+            </button>
+          );
+        })}
         <button onClick={() => { setNewMode(true); setActiveContact(null); }}
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: newMode ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: newMode ? '#d97706' : '#44403c', fontSize: 18, fontWeight: 300 }}>
           ＋
         </button>
-        {visibleContacts.length === 0 && !newMode && (
+        {visibleContacts.length === 0 && groupThreads.length === 0 && !newMode && (
           <span style={{ fontSize: 11, color: '#44403c', alignSelf: 'center', padding: '0 14px', whiteSpace: 'nowrap' }}>No contacts with phone numbers — add vendors or click ＋</span>
         )}
       </div>
@@ -6924,12 +6966,34 @@ function OutboundMessages({ dealId, vendors, deal }) {
               const time      = new Date(m.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
               const isInbound = m.direction === 'inbound';
               const showMeta  = i === items.length - 1 || items[i+1]?.direction !== m.direction || items[i+1]?.from_number !== m.from_number;
+
+              // Detect tapback reactions — bridge normalises them to "👍 reacted to: '…'"
+              const reactionMatch = m.body?.match(/^([\u{1F600}-\u{1F9FF}‼️❓][\uFE0F]?) reacted to: "(.*)"$/u);
+              const isReaction = !!reactionMatch;
+              const reactionEmoji = reactionMatch?.[1] || '';
+              const reactionQuote = reactionMatch?.[2] || '';
+
               // Resolve sender name for inbound messages
               const senderContact = isInbound
-                ? contacts.find(c => normalizePhone(c.phone) === normalizePhone(m.to_number) || normalizePhone(c.phone) === normalizePhone(m.from_number))
+                ? contacts.find(c => normalizePhone(c.phone) === normalizePhone(m.from_number) || normalizePhone(c.phone) === normalizePhone(m.to_number))
                 : null;
               const senderName  = senderContact?.name || m.from_number || 'Unknown';
               const senderColor = participantColor(senderName);
+
+              if (isReaction) {
+                // Render as a compact reaction pill — no full bubble
+                return (
+                  <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 5, justifyContent: isInbound ? 'flex-start' : 'flex-end', marginBottom: 4 }}>
+                    <span style={{ fontSize: 18, lineHeight: 1 }}>{reactionEmoji}</span>
+                    <span style={{ fontSize: 11, color: '#57534e' }}>
+                      {isInbound ? <span style={{ color: senderColor, fontWeight: 600 }}>{senderName.split(' ')[0]}</span> : 'You'}
+                      {' '}· <span style={{ fontStyle: 'italic' }}>{reactionQuote.length > 40 ? reactionQuote.slice(0, 37) + '…' : reactionQuote}</span>
+                      {' '}· <span style={{ fontFamily: "'DM Mono', monospace", fontSize: 10 }}>{time}</span>
+                    </span>
+                  </div>
+                );
+              }
+
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
                   <div style={{ maxWidth: '78%', background: isInbound ? '#1c1917' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? `1px solid ${senderColor}33` : 'none' }}>
@@ -6943,7 +7007,6 @@ function OutboundMessages({ dealId, vendors, deal }) {
                             <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>{time}</span>
                           </>
                         : <>
-                            {m.from_number && m.from_number !== '…' && <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>from {m.from_number}</span>}
                             <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
                             <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
                           </>

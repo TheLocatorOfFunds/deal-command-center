@@ -12,15 +12,44 @@
  *   - Terminal granted Full Disk Access (System Settings → Privacy & Security)
  *   - Messages.app open and signed into Nathan's business Apple ID
  *   - Nathan's iPhone SMS Forwarding enabled to this Mac
+ *
+ * Group chat routing logic
+ * ─────────────────────────
+ * For each chat guid seen, the bridge classifies it once and caches the result:
+ *
+ *   1:1 chat (style=43): chat_identifier IS the other party's phone.
+ *      → look up deal via find_deal_by_phone RPC.
+ *      → if no match, skip (unroutable number).
+ *
+ *   Group chat (style=45): chat_identifier is an opaque Apple GUID.
+ *      → fetch all participant phones from chat_handle_join.
+ *      → call find_deal_by_phone for every non-Nathan participant.
+ *      → if ALL participants resolve to the SAME deal → route there.
+ *      → if ANY participant is unknown (personal contact) → skip.
+ *      → if participants split across multiple deals → skip (triage needed).
+ *
+ * This means: a group chat with (Nathan + brother + sister) where both are
+ * contacts on deal X → syncs to deal X.  Nathan's personal family group →
+ * skipped because the family members aren't DCC contacts.
+ *
+ * Since channel='imessage' rows bypass the tg_route_message_to_deal trigger
+ * (by design, to prevent phone-match leaks), the bridge sets deal_id and
+ * thread_key explicitly.
+ *
+ * Reactions (tapbacks)
+ * ─────────────────────
+ * Apple stores tapbacks with associated_message_type 2000-2005 and body text
+ * like 'Liked "original"'.  The bridge syncs them as regular messages; the UI
+ * renders them as compact reaction pills rather than full bubbles.
  */
 
 require('dotenv').config();
-const Database   = require('better-sqlite3');
+const Database        = require('better-sqlite3');
 const { createClient } = require('@supabase/supabase-js');
 const { execFileSync } = require('child_process');
-const path       = require('path');
-const os         = require('os');
-const fs         = require('fs');
+const path            = require('path');
+const os              = require('os');
+const fs              = require('fs');
 
 // ─── Config ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +60,9 @@ const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
 const WATERMARK_FILE = path.join(__dirname, '.watermark');
 const POLL_MS        = 5000;
 const APPLE_EPOCH    = 978307200; // Jan 1 2001 in Unix seconds
+
+// Reaction type → emoji mapping (Apple associated_message_type values)
+const REACTION_EMOJI = { 2000: '👍', 2001: '❤️', 2002: '👎', 2003: '‼️', 2004: '❓', 2005: '😂' };
 
 // ─── Startup checks ──────────────────────────────────────────────────────────
 
@@ -51,6 +83,12 @@ console.log(`    Nathan : ${NATHAN_NUMBER}`);
 console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
+
+// ─── Per-process chat resolution cache ───────────────────────────────────────
+// Maps apple chat_identifier → { dealId: string|null, isGroup: bool, participants: string[] }
+// null dealId means "skip this chat" (personal or unresolvable).
+// Cache survives across ticks so we only do the Supabase lookup once per chat.
+const chatCache = new Map();
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -73,12 +111,18 @@ function getWatermark() {
 }
 function saveWatermark(rowid) { fs.writeFileSync(WATERMARK_FILE, String(rowid)); }
 
+/** Look up which deal a phone number belongs to via the existing Supabase RPC. */
+async function findDealForPhone(phone) {
+  if (!phone) return null;
+  const bare = phone.replace(/^\+1/, '');
+  const { data, error } = await sb.rpc('find_deal_by_phone', { phone_e164: phone, phone_bare: bare });
+  if (error) { console.error('⚠️  find_deal_by_phone error:', error.message); return null; }
+  return data?.[0]?.id || null;
+}
+
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
 
 function sendViaMessages(toPhone, body) {
-  // Use osascript -e flags to avoid buddy-lookup timeouts.
-  // We open/create the chat by phone number, then send — this works even
-  // when the recipient isn't in the Mac's Contacts / buddy list.
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const lines = [
     'tell application "Messages"',
@@ -89,7 +133,6 @@ function sendViaMessages(toPhone, body) {
     `  send "${escaped}" to targetBuddy`,
     'end tell',
   ];
-
   const tmpPath = `/tmp/dcc_send_${Date.now()}.applescript`;
   fs.writeFileSync(tmpPath, lines.join('\n'));
   try {
@@ -138,6 +181,9 @@ async function syncFromChatDb() {
 
   const watermark = getWatermark();
   let rows;
+  // Map of chatIdentifier → [phone, ...] built while DB is still open
+  const participantsByChatId = new Map();
+
   try {
     rows = db.prepare(`
       SELECT
@@ -147,9 +193,11 @@ async function syncFromChatDb() {
         m.date,
         m.is_from_me,
         m.associated_message_type,
-        h.id            AS contact_id,
-        c.chat_identifier,
-        c.style         AS chat_style
+        m.associated_message_guid,
+        h.id              AS sender_handle,    -- who sent this specific message
+        c.chat_identifier,                     -- phone for 1:1, Apple GUID for groups
+        c.style           AS chat_style,       -- 43 = 1:1, 45 = group
+        c.display_name    AS chat_display_name -- group name if set
       FROM message m
       LEFT JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
       LEFT JOIN chat              c   ON cmj.chat_id = c.ROWID
@@ -157,58 +205,132 @@ async function syncFromChatDb() {
       WHERE m.ROWID > ?
         AND m.text IS NOT NULL
         AND m.text != ''
-        AND c.style != 45                   -- skip group chats (style 43 = 1:1, 45 = group)
-        AND (m.associated_message_type IS NULL
-             OR m.associated_message_type = 0
-             OR m.associated_message_type NOT BETWEEN 2000 AND 2099)  -- skip tapback reactions
       ORDER BY m.ROWID ASC
       LIMIT 100
     `).all(watermark);
+
+    // For group chats not yet cached, fetch participant list while DB is open.
+    const unseenGroupIds = [...new Set(
+      rows
+        .filter(r => r.chat_style === 45 && !chatCache.has(r.chat_identifier))
+        .map(r => r.chat_identifier)
+        .filter(Boolean)
+    )];
+
+    for (const chatId of unseenGroupIds) {
+      const parts = db.prepare(`
+        SELECT DISTINCT h.id AS phone
+        FROM chat_handle_join chj
+        JOIN handle h ON chj.handle_id = h.ROWID
+        JOIN chat   c ON chj.chat_id   = c.ROWID
+        WHERE c.chat_identifier = ?
+          AND h.id NOT LIKE '%@%'
+      `).all(chatId);
+      participantsByChatId.set(
+        chatId,
+        parts.map(p => normalizePhone(p.phone)).filter(Boolean)
+      );
+    }
   } finally {
     db.close();
   }
 
   if (rows.length === 0) return;
 
-  let maxRowid = watermark;
-  for (const row of rows) {
-    maxRowid = Math.max(maxRowid, row.ROWID);
-
-    // Extra runtime guard: skip if chat_identifier looks like a group GUID (not a phone)
-    const chatId = row.chat_identifier || '';
-    if (chatId.startsWith('chat') && !/^\+?\d/.test(chatId)) {
-      console.log(`⏭ SKIP group chat  guid=${row.guid}  chat=${chatId}`);
+  // ── Resolve group chats not yet in cache ─────────────────────────────────
+  // Must happen after DB close (async Supabase calls).
+  for (const [chatId, phones] of participantsByChatId) {
+    if (phones.length === 0) {
+      chatCache.set(chatId, { dealId: null, isGroup: true, participants: [] });
       continue;
     }
 
-    // Determine the "other party" phone.
-    // For outbound (is_from_me=1): chat_identifier is the recipient's phone.
-    // For inbound (is_from_me=0): handle.id is the sender's phone.
-    const contactPhone = normalizePhone(
-      row.is_from_me === 1 ? row.chat_identifier : (row.contact_id || row.chat_identifier)
-    );
-    if (!contactPhone) continue;
+    // Every non-Nathan participant must resolve to the SAME deal.
+    let commonDeal = null;
+    let allMatch   = true;
+    for (const phone of phones) {
+      const dealId = await findDealForPhone(phone);
+      if (!dealId) { allMatch = false; break; }
+      if (commonDeal === null) { commonDeal = dealId; }
+      else if (commonDeal !== dealId) { allMatch = false; break; }
+    }
 
+    const resolved = allMatch && commonDeal ? commonDeal : null;
+    if (!resolved) {
+      console.log(`⏭ SKIP personal/unroutable group chat  id=${chatId}  phones=[${phones.join(',')}]`);
+    }
+    chatCache.set(chatId, { dealId: resolved, isGroup: true, participants: phones });
+  }
+
+  // ── Process each message row ──────────────────────────────────────────────
+  let maxRowid = watermark;
+
+  for (const row of rows) {
+    maxRowid = Math.max(maxRowid, row.ROWID);
+
+    const chatId    = row.chat_identifier;
+    const isGroup   = row.chat_style === 45;
     const isInbound = row.is_from_me === 0;
     const guid      = `imsg_${row.guid}`;
+    const reactType = REACTION_EMOJI[row.associated_message_type] || null;
 
-    const { error } = await sb.from('messages_outbound').upsert({
-      to_number:   isInbound ? NATHAN_NUMBER : contactPhone,  // "to" = message destination
-      from_number: isInbound ? contactPhone  : NATHAN_NUMBER, // "from" = actual sender
-      body:        row.text,
-      direction:   isInbound ? 'inbound' : 'outbound',
-      status:      isInbound ? 'received' : 'sent',
-      channel:     'imessage',
-      twilio_sid:  guid,
-      created_at:  appleTs(row.date),
-    }, { onConflict: 'twilio_sid', ignoreDuplicates: true });
+    let fromPhone, toPhone, dealId, threadKey;
+
+    if (isGroup) {
+      // ── Group chat ────────────────────────────────────────────────────────
+      const cached = chatCache.get(chatId);
+      if (!cached || !cached.dealId) continue; // personal / unroutable
+
+      dealId    = cached.dealId;
+      fromPhone = isInbound ? (normalizePhone(row.sender_handle) || NATHAN_NUMBER) : NATHAN_NUMBER;
+      toPhone   = isInbound ? NATHAN_NUMBER : null; // no single recipient for group outbound
+      threadKey = `${dealId}:group:${chatId}`;
+
+    } else {
+      // ── 1:1 chat ─────────────────────────────────────────────────────────
+      const contactPhone = normalizePhone(
+        isInbound ? (row.sender_handle || chatId) : chatId
+      );
+      if (!contactPhone) continue;
+
+      // Resolve deal — must do this explicitly since channel='imessage' bypasses trigger.
+      if (chatCache.has(chatId)) {
+        dealId = chatCache.get(chatId)?.dealId || null;
+      } else {
+        dealId = await findDealForPhone(contactPhone);
+        chatCache.set(chatId, { dealId, isGroup: false, participants: [contactPhone] });
+      }
+      if (!dealId) continue; // unroutable number (personal 1:1)
+
+      fromPhone = isInbound ? contactPhone : NATHAN_NUMBER;
+      toPhone   = isInbound ? NATHAN_NUMBER : contactPhone;
+      threadKey = `${dealId}:phone:${isInbound ? fromPhone : toPhone}`;
+    }
+
+    const msgData = {
+      from_number:  fromPhone,
+      to_number:    toPhone,
+      body:         reactType ? `${reactType} reacted to: "${row.text.replace(/^(Liked|Loved|Disliked|Emphasized|Questioned|Laughed at) "/, '').replace(/"$/, '')}"` : row.text,
+      direction:    isInbound ? 'inbound' : 'outbound',
+      status:       isInbound ? 'received' : 'sent',
+      channel:      'imessage',
+      twilio_sid:   guid,
+      created_at:   appleTs(row.date),
+      deal_id:      dealId,
+      thread_key:   threadKey,
+    };
+
+    const { error } = await sb.from('messages_outbound').upsert(msgData, {
+      onConflict: 'twilio_sid',
+      ignoreDuplicates: true,
+    });
 
     if (error) {
       console.error(`⚠️  Supabase error (${guid}):`, error.message);
     } else {
-      const dir     = isInbound ? '⬇ IN ' : '⬆ OUT';
-      const preview = row.text.length > 60 ? row.text.slice(0, 57) + '…' : row.text;
-      console.log(`${dir}  ${contactPhone}  "${preview}"`);
+      const tag     = isGroup ? `GRP` : (isInbound ? '⬇ IN ' : '⬆ OUT');
+      const preview = msgData.body.length > 60 ? msgData.body.slice(0, 57) + '…' : msgData.body;
+      console.log(`${tag}  ${fromPhone || toPhone}  "${preview}"`);
     }
   }
 
