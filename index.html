@@ -3115,7 +3115,7 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Generation failed');
-    } catch (e) { setError(e.message); setIsGen(false); }
+    } catch (e) { setError(e.message); } finally { setIsGen(false); }
   }
 
   React.useEffect(() => {
