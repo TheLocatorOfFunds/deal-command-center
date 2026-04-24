@@ -5077,6 +5077,27 @@ function AttorneyAssignmentCard({ deal, logAct }) {
     setMsg({ type: 'success', text: 'Counsel portal URL copied.' });
   };
 
+  // Per-attorney invite link: ?email=&invite=1 pre-fills + auto-sends OTP.
+  const inviteLinkFor = (address) => {
+    if (!address) return attorneyPortalUrl();
+    return attorneyPortalUrl() + '?email=' + encodeURIComponent(address) + '&invite=1';
+  };
+
+  const copyInviteLink = async (row) => {
+    if (!row.email) {
+      setMsg({ type: 'error', text: "This attorney has already signed in — share the bare portal URL instead." });
+      return;
+    }
+    const link = inviteLinkFor(row.email);
+    try {
+      await navigator.clipboard.writeText(link);
+      setMsg({ type: 'success', text: `Invite link copied — paste into email/SMS for ${row.email}` });
+      if (logAct) logAct(`Counsel portal invite link copied for ${row.email}`);
+    } catch (e) {
+      setMsg({ type: 'error', text: 'Clipboard blocked. Link: ' + link });
+    }
+  };
+
   if (loading) return (<Card title="Counsel Portal" style={{ marginTop: 16 }}><div style={{ fontSize: 12, color: "#78716c" }}>Checking…</div></Card>);
 
   const titleSuffix = assignments.length > 0 ? ` · ${assignments.length} attorney${assignments.length === 1 ? '' : 's'}` : '';
@@ -5104,7 +5125,12 @@ function AttorneyAssignmentCard({ deal, logAct }) {
                   {row.last_seen_at && <span style={{ marginLeft: "auto", fontSize: 10, color: "#78716c" }}>seen {daysSince(row.last_seen_at)}d ago</span>}
                 </div>
                 <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                  {row.enabled && row.email && <button onClick={() => resend(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>Resend link</button>}
+                  {row.enabled && row.email && (
+                    <>
+                      <button onClick={() => copyInviteLink(row)} disabled={busy} title="Copy a one-tap invite link for email/SMS. Attorney clicks → portal auto-sends magic-link email." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy invite link</button>
+                      <button onClick={() => resend(row)} disabled={busy} title="Email the magic-link sign-in email to this attorney right now." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>📧 Email now</button>
+                    </>
+                  )}
                   <button onClick={() => toggleEnabled(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{row.enabled ? 'Disable' : 'Enable'}</button>
                   <button onClick={() => remove(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#ef4444" }}>Remove</button>
                 </div>
@@ -5213,6 +5239,29 @@ function ClientPortalCard({ deal, logAct }) {
     setMsg({ type: 'success', text: 'Portal URL copied.' });
   };
 
+  // Per-claimant invite link: ?email=&invite=1 pre-fills the portal sign-in
+  // and auto-fires the magic-link send on page load. Client experience is
+  // one tap from Nathan's SMS → "Check your email" → magic link.
+  const inviteLinkFor = (address) => {
+    if (!address) return portalUrl();
+    return portalUrl() + '?email=' + encodeURIComponent(address) + '&invite=1';
+  };
+
+  const copyInviteLink = async (row) => {
+    if (!row.email) {
+      setMsg({ type: 'error', text: "This claimant has already signed in — share the bare portal URL instead." });
+      return;
+    }
+    const link = inviteLinkFor(row.email);
+    try {
+      await navigator.clipboard.writeText(link);
+      setMsg({ type: 'success', text: `Invite link copied — paste into iMessage/SMS for ${row.email}` });
+      if (logAct) logAct(`Client portal invite link copied for ${row.email}`);
+    } catch (e) {
+      setMsg({ type: 'error', text: 'Clipboard blocked. Link: ' + link });
+    }
+  };
+
   if (loading) return (<Card title="Client Portal" style={{ marginTop: 16 }}><div style={{ fontSize: 12, color: "#78716c" }}>Checking…</div></Card>);
 
   const titleSuffix = accessList.length > 1 ? ` · ${accessList.length} claimants` : '';
@@ -5244,7 +5293,12 @@ function ClientPortalCard({ deal, logAct }) {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                  {row.enabled && row.email && <button onClick={() => resend(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>Resend link</button>}
+                  {row.enabled && row.email && (
+                    <>
+                      <button onClick={() => copyInviteLink(row)} disabled={busy} title="Copy a one-tap invite link for iMessage/SMS. Client taps it → portal auto-sends them the magic-link email." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy invite link</button>
+                      <button onClick={() => resend(row)} disabled={busy} title="Email the magic-link sign-in email to this claimant right now." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>📧 Email now</button>
+                    </>
+                  )}
                   <button onClick={() => toggleEnabled(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{row.enabled ? 'Disable' : 'Enable'}</button>
                   <button onClick={() => remove(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#ef4444" }}>Remove</button>
                 </div>

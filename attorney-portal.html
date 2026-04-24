@@ -280,21 +280,38 @@ function App() {
 }
 
 // ─── Sign-in ───────────────────────────────────────────
+// Supports invite-link flow: ?email= pre-fills, ?invite=1 auto-fires the
+// magic-link send so an attorney lands on "Check your email" in one tap.
+// DCC builds these links from the Counsel Portal card (Copy invite link).
 function SignIn() {
-  const [email, setEmail] = useState("");
+  const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
+  const initialEmail = (urlParams.get('email') || '').trim().toLowerCase();
+  const autoInvite = urlParams.get('invite') === '1' && !!initialEmail;
+
+  const [email, setEmail] = useState(initialEmail);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState(null);
 
-  const send = async () => {
+  const send = async (explicitEmail) => {
+    const target = (explicitEmail || email).trim().toLowerCase();
+    if (!target) return;
     setError(null); setSending(true);
+    // Strip query params from the redirect target so the auto-invite
+    // flag doesn't ping-pong after the magic-link click.
+    const redirect = window.location.href.split('?')[0].split('#')[0];
     const { error } = await sb.auth.signInWithOtp({
-      email: email.trim().toLowerCase(),
-      options: { emailRedirectTo: window.location.href.split('#')[0] },
+      email: target,
+      options: { emailRedirectTo: redirect },
     });
     setSending(false);
     if (error) setError(error.message); else setSent(true);
   };
+
+  useEffect(() => {
+    if (autoInvite) send(initialEmail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div className="centered-shell">
