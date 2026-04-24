@@ -3026,7 +3026,9 @@ function useOutreachQueue() {
       .channel('outreach_queue_all')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, load)
       .subscribe();
-    return () => { sb.removeChannel(sub); };
+    // Poll every 3s as Realtime fallback
+    const poll = setInterval(load, 3000);
+    return () => { sb.removeChannel(sub); clearInterval(poll); };
   }, [load]);
 
   return { items, deals, reload: load };
@@ -3054,7 +3056,9 @@ function useOutreachQueueForDeal(dealId) {
       .channel('outreach_queue_deal_' + dealId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, load)
       .subscribe();
-    return () => { sb.removeChannel(sub); };
+    // Poll every 3s as Realtime fallback — Realtime doesn't reliably fire on edge-function updates
+    const poll = setInterval(load, 3000);
+    return () => { sb.removeChannel(sub); clearInterval(poll); };
   }, [load, dealId]);
 
   return { item, reload: load };
