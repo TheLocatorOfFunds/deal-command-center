@@ -54,6 +54,7 @@ const fs              = require('fs');
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 const NATHAN_NUMBER  = '+15135162306';
+const OUR_NUMBERS    = new Set([NATHAN_NUMBER, '+15139985440']); // numbers we own — never a "contact"
 const SUPABASE_URL   = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
@@ -139,6 +140,15 @@ function getWatermark() {
 }
 function saveWatermark(rowid) { fs.writeFileSync(WATERMARK_FILE, String(rowid)); }
 
+/** Canonical thread_key: always keyed on the contact's phone, never ours.
+ *  'group:' prefix only when 2+ real (non-Nathan) participants. */
+function canonicalThreadKey(dealId, fromPhone, toPhone, participants) {
+  const pool     = (participants && participants.length) ? participants : [fromPhone, toPhone].filter(Boolean);
+  const contacts = pool.filter(p => !OUR_NUMBERS.has(p));
+  const kind     = contacts.length > 1 ? 'group' : 'phone';
+  return `${dealId}:${kind}:${contacts[0] || fromPhone || toPhone}`;
+}
+
 /** Look up which deal a phone number belongs to via the existing Supabase RPC. */
 async function findDealForPhone(phone) {
   if (!phone) return null;
@@ -149,6 +159,8 @@ async function findDealForPhone(phone) {
 }
 
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
+
+let consecutiveOscriptTimeouts = 0;
 
 function sendViaMessages(toPhone, body) {
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -188,10 +200,26 @@ async function processPendingOutbound() {
     sendingInFlight.add(msg.id);
     try {
       sendViaMessages(msg.to_number, msg.body);
+      consecutiveOscriptTimeouts = 0;
       await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
       const preview = msg.body.length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
       console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
     } catch (err) {
+      if (err.message.includes('ETIMEDOUT')) {
+        consecutiveOscriptTimeouts++;
+        console.error(`⏱ TIMEOUT ${consecutiveOscriptTimeouts}/3  ${msg.to_number}`);
+        if (consecutiveOscriptTimeouts >= 3) {
+          console.error('🔄 3 consecutive timeouts — force-restarting Messages.app');
+          try { execFileSync('killall', ['-9', 'Messages'], { timeout: 5000 }); } catch (_) {}
+          try { execFileSync('killall', ['-9', 'imagent'],  { timeout: 5000 }); } catch (_) {}
+          await new Promise(r => setTimeout(r, 4000));
+          try { execFileSync('open', ['-a', 'Messages'], { timeout: 10000 }); console.log('✅ Messages.app restarted'); }
+          catch (e) { console.error('⚠️  Messages.app open failed:', e.message); }
+          consecutiveOscriptTimeouts = 0;
+        }
+      } else {
+        consecutiveOscriptTimeouts = 0;
+      }
       await sb.from('messages_outbound')
         .update({ status: 'failed', error_message: err.message })
         .eq('id', msg.id);
@@ -318,8 +346,9 @@ async function syncFromChatDb() {
 
       dealId    = cached.dealId;
       fromPhone = isInbound ? (normalizePhone(row.sender_handle) || NATHAN_NUMBER) : NATHAN_NUMBER;
-      toPhone   = isInbound ? NATHAN_NUMBER : null; // no single recipient for group outbound
-      threadKey = `${dealId}:group:${chatId}`;
+      toPhone   = isInbound ? NATHAN_NUMBER
+                            : (cached.participants.find(p => !OUR_NUMBERS.has(p)) || NATHAN_NUMBER);
+      threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, cached.participants);
 
     } else {
       // ── 1:1 chat ─────────────────────────────────────────────────────────
@@ -339,7 +368,7 @@ async function syncFromChatDb() {
 
       fromPhone = isInbound ? contactPhone : NATHAN_NUMBER;
       toPhone   = isInbound ? NATHAN_NUMBER : contactPhone;
-      threadKey = `${dealId}:phone:${isInbound ? fromPhone : toPhone}`;
+      threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, null);
     }
 
     const msgData = {
