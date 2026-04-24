@@ -7317,11 +7317,26 @@ function DocketTab({ dealId }) {
                       {e.case_number && <span>Case {e.case_number}</span>}
                       {e.detected_at && <span>Detected {new Date(e.detected_at).toLocaleString()}</span>}
                     </div>
-                    {e.document_url && (
-                      <div style={{ marginTop: 8 }}>
-                        <a href={e.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#93c5fd", textDecoration: "none", fontWeight: 600 }}>
-                          📄 View court document →
-                        </a>
+                    {(e.document_url || e.document_ocr_id) && (
+                      <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+                        {e.document_ocr_id && (
+                          <button
+                            onClick={async () => {
+                              const { data: doc } = await sb.from('documents').select('path').eq('id', e.document_ocr_id).single();
+                              if (!doc?.path) { alert('PDF not found in storage.'); return; }
+                              const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
+                              if (error || !data?.signedUrl) { alert("Couldn't open PDF: " + (error?.message || 'unknown')); return; }
+                              window.open(data.signedUrl, '_blank');
+                            }}
+                            style={{ fontSize: 11, color: "#6ee7b7", background: "#064e3b22", border: "1px solid #065f46", borderRadius: 5, padding: "3px 10px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                            📎 Open attached PDF
+                          </button>
+                        )}
+                        {e.document_url && (
+                          <a href={e.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#93c5fd", textDecoration: "none", fontWeight: 600 }}>
+                            📄 View on court site →
+                          </a>
+                        )}
                       </div>
                     )}
                   </div>
