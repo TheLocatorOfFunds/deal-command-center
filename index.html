@@ -2990,6 +2990,7 @@ function AnalyticsView({ deals, onSelect }) {
 // Auto-triggers AI generation for 'queued' rows.
 // Shows approval cards with: draft, reasoning, coach input, regenerate + send.
 
+// ─── Outreach queue hook — Today view (all pending items) ─────────────────────
 function useOutreachQueue() {
   const [items, setItems] = React.useState([]);
   const [deals, setDeals] = React.useState({});
@@ -3004,13 +3005,11 @@ function useOutreachQueue() {
       .order('scheduled_for', { ascending: true });
     if (!data) return;
     setItems(data);
-
-    // Batch-load deals for any new deal_ids
     const ids = [...new Set(data.map(r => r.deal_id))];
     if (ids.length === 0) return;
     const { data: dealRows } = await sb
       .from('deals')
-      .select('id, name, address, meta, lead_tier, refundlocators_token')
+      .select('id, name, address, meta, lead_tier')
       .in('id', ids);
     if (dealRows) {
       setDeals(prev => {
@@ -3024,7 +3023,7 @@ function useOutreachQueue() {
   React.useEffect(() => {
     load();
     const sub = sb
-      .channel('outreach_queue_changes')
+      .channel('outreach_queue_all')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, load)
       .subscribe();
     return () => { sb.removeChannel(sub); };
@@ -3033,21 +3032,75 @@ function useOutreachQueue() {
   return { items, deals, reload: load };
 }
 
-function OutreachApprovalCard({ item, deal, onSent, onSkipped }) {
-  const [coachNote, setCoachNote]     = React.useState('');
-  const [isGenerating, setGenerating] = React.useState(false);
-  const [isSending, setSending]       = React.useState(false);
-  const [editMode, setEditMode]       = React.useState(false);
-  const [editBody, setEditBody]       = React.useState('');
-  const [error, setError]             = React.useState(null);
+// ─── Outreach queue hook — per-deal (for Comms tab) ───────────────────────────
+function useOutreachQueueForDeal(dealId) {
+  const [item, setItem] = React.useState(null);
+
+  const load = React.useCallback(async () => {
+    if (!dealId) return;
+    const { data } = await sb
+      .from('outreach_queue')
+      .select('*')
+      .eq('deal_id', dealId)
+      .in('status', ['queued', 'generating', 'pending'])
+      .order('scheduled_for', { ascending: true })
+      .limit(1);
+    setItem(data?.[0] || null);
+  }, [dealId]);
+
+  React.useEffect(() => {
+    load();
+    const sub = sb
+      .channel('outreach_queue_deal_' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(sub); };
+  }, [load, dealId]);
+
+  return { item, reload: load };
+}
+
+// ─── Shared button style helper ────────────────────────────────────────────────
+function btnStyle(variant) {
+  const base = { padding: '7px 14px', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600, border: '1px solid' };
+  if (variant === 'gold')    return { ...base, background: '#d8b560', borderColor: '#d8b560', color: '#0c0a09' };
+  if (variant === 'outline') return { ...base, background: 'transparent', borderColor: '#44403c', color: '#e7e5e4' };
+  if (variant === 'ghost')   return { ...base, background: 'transparent', borderColor: 'transparent', color: '#78716c' };
+  return base;
+}
+
+// ─── Full draft approval panel — lives inside Comms tab ───────────────────────
+function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
+  const [coachNote, setCoachNote] = React.useState('');
+  const [isGen, setIsGen]         = React.useState(false);
+  const [isSend, setIsSend]       = React.useState(false);
+  const [editMode, setEditMode]   = React.useState(false);
+  const [editBody, setEditBody]   = React.useState('');
+  const [fromNum, setFromNum]     = React.useState('+15135162306');
+  const [phoneNums, setPhoneNums] = React.useState([]);
+  const [error, setError]         = React.useState(null);
+  const [sentInfo, setSentInfo]   = React.useState(null);
 
   const meta      = deal?.meta || {};
-  const firstName = ((meta.homeownerName || deal?.name || '').split(' - ')[0].split(' ')[0]) || 'Homeowner';
+  const firstName = ((meta.homeownerName || deal?.name || '').split(' - ')[0].split(' ')[0]) || 'them';
   const surplus   = meta.estimatedSurplus ? '$' + Number(meta.estimatedSurplus).toLocaleString() : null;
   const county    = meta.county || null;
+  const toPhone   = item?.contact_phone || meta.homeownerPhone || '';
+
+  React.useEffect(() => {
+    sb.from('phone_numbers').select('number, label, gateway').then(({ data }) => {
+      if (data) setPhoneNums(data);
+    });
+  }, []);
+
+  function fmtPhone(p) {
+    const d = (p || '').replace(/\D/g, '').replace(/^1/, '');
+    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+    return p || '—';
+  }
 
   async function callGenerate(note) {
-    setGenerating(true); setError(null);
+    setIsGen(true); setError(null);
     try {
       const { data: sess } = await sb.auth.getSession();
       const token = sess?.session?.access_token;
@@ -3058,57 +3111,47 @@ function OutreachApprovalCard({ item, deal, onSent, onSkipped }) {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Generation failed');
-    } catch (e) { setError(e.message); setGenerating(false); }
-    // item will update via realtime subscription
+    } catch (e) { setError(e.message); setIsGen(false); }
   }
 
-  // Auto-generate when card mounts in 'queued' state
   React.useEffect(() => {
-    if (item.status === 'queued') callGenerate(null);
-  }, [item.id]); // eslint-disable-line
+    if (item?.status === 'queued') callGenerate(null);
+  }, [item?.id]); // eslint-disable-line
 
-  async function handleSend() {
-    setSending(true); setError(null);
+  async function handleSaveDraft() {
+    if (!editBody.trim()) return;
+    await sb.from('outreach_queue').update({ draft_body: editBody, status: 'pending' }).eq('id', item.id);
+    setEditMode(false);
+  }
+
+  async function handleSend(bodyOverride) {
+    setIsSend(true); setError(null);
     try {
-      const bodyToSend = editMode ? editBody : item.draft_body;
+      const bodyToSend = bodyOverride ?? (editMode ? editBody : item?.draft_body);
       const { data: sess } = await sb.auth.getSession();
       const token = sess?.session?.access_token;
-
-      // Fire send-sms (uses Nathan's iPhone via mac_bridge)
       const r = await fetch(SUPABASE_URL + '/functions/v1/send-sms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'Authorization': 'Bearer ' + (token || SUPABASE_KEY) },
-        body: JSON.stringify({
-          to: item.contact_phone,
-          body: bodyToSend,
-          deal_id: item.deal_id,
-          from_number: '+15135162306',  // Nathan's iPhone via mac_bridge
-        }),
+        body: JSON.stringify({ to: toPhone, body: bodyToSend, deal_id: item.deal_id, from_number: fromNum }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Send failed');
-
-      // Mark queue row sent + log activity
       const { data: authData } = await sb.auth.getUser();
       await sb.from('outreach_queue').update({
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-        message_id: j.id || null,
-        approved_by: authData?.user?.id || null,
+        status: 'sent', sent_at: new Date().toISOString(),
+        message_id: j.id || null, approved_by: authData?.user?.id || null,
         draft_body: bodyToSend,
       }).eq('id', item.id);
-
-      // Flip sales_stage → texted and log activity
       await sb.from('deals').update({ sales_stage: 'texted' }).eq('id', item.deal_id).eq('sales_stage', 'new');
       await sb.rpc('log_deal_activity', {
-        p_deal_id: item.deal_id,
-        p_type: 'sms',
-        p_outcome: 'sent',
+        p_deal_id: item.deal_id, p_type: 'sms', p_outcome: 'sent',
         p_body: '🤖 Auto-outreach sent: ' + bodyToSend.slice(0, 120),
       });
-
+      setSentInfo({ at: new Date(), from: fromNum, to: toPhone, body: bodyToSend });
+      setEditMode(false);
       onSent && onSent(item);
-    } catch (e) { setError(e.message); setSending(false); }
+    } catch (e) { setError(e.message); setIsSend(false); }
   }
 
   async function handleSkip() {
@@ -3116,29 +3159,60 @@ function OutreachApprovalCard({ item, deal, onSent, onSkipped }) {
     onSkipped && onSkipped(item);
   }
 
-  const charCount    = (editMode ? editBody : item.draft_body || '').length;
-  const isLoading    = item.status === 'queued' || item.status === 'generating' || isGenerating;
-  const cadenceLabel = item.cadence_day === 0 ? 'Intro' : `Day ${item.cadence_day} follow-up`;
+  const currentBody  = editMode ? editBody : (item?.draft_body || '');
+  const charCount    = currentBody.length;
+  const isLoading    = item?.status === 'queued' || item?.status === 'generating' || isGen;
+  const cadenceLabel = item?.cadence_day === 0 ? 'Day 0 · Intro' : `Day ${item?.cadence_day} · Follow-up`;
+
+  if (sentInfo) return (
+    <div style={{ background: '#0a1f14', border: '1px solid #10b981', borderRadius: 8, padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span style={{ fontSize: 18 }}>✅</span>
+      <div>
+        <div style={{ fontSize: 13, color: '#6ee7b7', fontWeight: 600 }}>
+          Text sent at {sentInfo.at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </div>
+        <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+          From {fmtPhone(sentInfo.from)} → To {fmtPhone(sentInfo.to)}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ background: '#1c1917', border: '1px solid #d8b560', borderLeft: '3px solid #d8b560', borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
-      {/* Header */}
-      <div style={{ padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid #292524' }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color: '#d8b560', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          🤖 {cadenceLabel}
-        </span>
-        <span style={{ fontSize: 13, fontWeight: 700, flex: 1 }}>{deal?.name || item.deal_id}</span>
-        {surplus && <span style={{ fontSize: 11, color: '#6ee7b7', fontWeight: 600 }}>{surplus}</span>}
+    <div style={{ background: '#1c1917', border: '1px solid #d8b560', borderLeft: '4px solid #d8b560', borderRadius: 8, marginBottom: 14, overflow: 'hidden' }}>
+
+      {/* Header — label + deal context */}
+      <div style={{ padding: '9px 14px', borderBottom: '1px solid #292524', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#d8b560', textTransform: 'uppercase', letterSpacing: '0.08em' }}>🤖 AI Draft · {cadenceLabel}</span>
+        <span style={{ flex: 1 }} />
         {county  && <span style={{ fontSize: 11, color: '#78716c' }}>{county} Co.</span>}
-        <span style={{ fontSize: 11, color: '#78716c' }}>{item.contact_phone}</span>
+        {surplus && <span style={{ fontSize: 11, color: '#6ee7b7', fontWeight: 600 }}>{surplus}</span>}
+        {deal?.address && <span style={{ fontSize: 10, color: '#57534e' }}>{deal.address}</span>}
+      </div>
+
+      {/* From / To routing with number selector */}
+      <div style={{ padding: '8px 14px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: '#161412' }}>
+        <span style={{ fontSize: 11, color: '#78716c', whiteSpace: 'nowrap' }}>📱 From:</span>
+        <select
+          value={fromNum}
+          onChange={e => setFromNum(e.target.value)}
+          style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '3px 7px', fontSize: 11, cursor: 'pointer', maxWidth: 220 }}>
+          <option value="+15135162306">Nathan's iPhone · (513) 516-2306</option>
+          {phoneNums.filter(p => p.number !== '+15135162306').map(p => (
+            <option key={p.number} value={p.number}>{p.label || p.number}</option>
+          ))}
+        </select>
+        <span style={{ fontSize: 11, color: '#57534e' }}>→</span>
+        <span style={{ fontSize: 11, color: '#e7e5e4', fontWeight: 600 }}>{fmtPhone(toPhone)}</span>
+        {toPhone && <span style={{ fontSize: 10, color: '#78716c' }}>({firstName})</span>}
       </div>
 
       {/* Draft body */}
       <div style={{ padding: '12px 14px' }}>
         {isLoading ? (
           <div style={{ color: '#78716c', fontSize: 13, fontStyle: 'italic', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: '50%', background: '#d8b560', animation: 'pulse 1.2s ease-in-out infinite' }} />
-            Claude is drafting a message for {firstName}…
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#d8b560', animation: 'pulse 1.2s ease-in-out infinite' }} />
+            Claude is drafting for {firstName}…
           </div>
         ) : editMode ? (
           <textarea
@@ -3148,67 +3222,62 @@ function OutreachApprovalCard({ item, deal, onSent, onSkipped }) {
             autoFocus
           />
         ) : (
-          <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
-            {item.draft_body || '—'}
+          <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+            {item?.draft_body || '—'}
           </div>
         )}
 
-        {/* Agent reasoning */}
-        {!isLoading && item.agent_reasoning && !editMode && (
-          <div style={{ marginTop: 8, fontSize: 11, color: '#78716c', fontStyle: 'italic' }}>
-            Why: {item.agent_reasoning}
+        {!isLoading && item?.agent_reasoning && !editMode && (
+          <div style={{ marginTop: 8, fontSize: 11, color: '#57534e', fontStyle: 'italic' }}>
+            Why Claude wrote this: {item.agent_reasoning}
           </div>
         )}
-
-        {/* Char count */}
         {!isLoading && (
           <div style={{ marginTop: 4, fontSize: 10, color: charCount > 160 ? '#fca5a5' : '#57534e', textAlign: 'right' }}>
-            {charCount}/160 chars{charCount > 160 ? ' ⚠ may split into 2 messages' : ''}
+            {charCount}/160{charCount > 160 ? ' ⚠ may split into 2 messages' : ''}
           </div>
         )}
       </div>
 
-      {/* Coach the AI */}
-      {!isLoading && !editMode && (
+      {/* Coach note + regenerate */}
+      {!isLoading && (
         <div style={{ padding: '0 14px 10px', display: 'flex', gap: 8 }}>
           <input
             type="text"
             value={coachNote}
             onChange={e => setCoachNote(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && coachNote.trim()) callGenerate(coachNote); }}
-            placeholder='Coach the AI — "mention the deadline", "make it shorter", "friendlier tone"…'
+            onKeyDown={e => { if (e.key === 'Enter' && coachNote.trim()) { callGenerate(coachNote); setCoachNote(''); } }}
+            placeholder='Coach: "make it shorter", "mention the auction date", "friendlier tone"…'
             style={{ flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#e7e5e4', padding: '7px 10px', fontSize: 12, outline: 'none' }}
           />
           <button
-            onClick={() => { if (coachNote.trim()) callGenerate(coachNote); }}
-            disabled={!coachNote.trim() || isGenerating}
+            onClick={() => { if (coachNote.trim()) { callGenerate(coachNote); setCoachNote(''); } }}
+            disabled={!coachNote.trim() || isGen}
             style={{ padding: '7px 12px', background: coachNote.trim() ? '#292524' : '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: coachNote.trim() ? '#e7e5e4' : '#57534e', fontSize: 12, cursor: coachNote.trim() ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>
             ↺ Regenerate
           </button>
         </div>
       )}
 
-      {/* Error */}
-      {error && (
-        <div style={{ padding: '0 14px 10px', fontSize: 12, color: '#fca5a5' }}>⚠ {error}</div>
-      )}
+      {error && <div style={{ padding: '0 14px 8px', fontSize: 12, color: '#fca5a5' }}>⚠ {error}</div>}
 
       {/* Action buttons */}
       {!isLoading && (
-        <div style={{ padding: '0 14px 12px', display: 'flex', gap: 8 }}>
+        <div style={{ padding: '0 14px 12px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           {editMode ? (
             <>
-              <button onClick={() => { setEditMode(false); }} style={btnStyle('ghost')}>Cancel</button>
-              <button onClick={() => { handleSend(); setEditMode(false); }} disabled={isSending || !editBody.trim()} style={btnStyle('gold')}>
-                {isSending ? 'Sending…' : '✓ Send edited'}
+              <button onClick={() => setEditMode(false)} style={btnStyle('ghost')}>Cancel</button>
+              <button onClick={handleSaveDraft} disabled={!editBody.trim()} style={btnStyle('outline')}>💾 Save Draft</button>
+              <button onClick={() => handleSend(editBody)} disabled={isSend || !editBody.trim()} style={btnStyle('gold')}>
+                {isSend ? 'Sending…' : '✓ Send'}
               </button>
             </>
           ) : (
             <>
               <button onClick={handleSkip} style={btnStyle('ghost')}>Skip</button>
-              <button onClick={() => { setEditBody(item.draft_body || ''); setEditMode(true); }} style={btnStyle('outline')}>Edit</button>
-              <button onClick={handleSend} disabled={isSending || !item.draft_body} style={btnStyle('gold')}>
-                {isSending ? 'Sending…' : '✓ Send to ' + firstName}
+              <button onClick={() => { setEditBody(item?.draft_body || ''); setEditMode(true); }} style={btnStyle('outline')}>✏ Edit</button>
+              <button onClick={() => handleSend()} disabled={isSend || !item?.draft_body} style={btnStyle('gold')}>
+                {isSend ? 'Sending…' : `✓ Send to ${firstName}`}
               </button>
             </>
           )}
@@ -3218,30 +3287,59 @@ function OutreachApprovalCard({ item, deal, onSent, onSkipped }) {
   );
 }
 
-function btnStyle(variant) {
-  const base = { padding: '7px 14px', borderRadius: 6, fontSize: 12, cursor: 'pointer', fontWeight: 600, border: '1px solid' };
-  if (variant === 'gold')    return { ...base, background: '#d8b560', borderColor: '#d8b560', color: '#0c0a09' };
-  if (variant === 'outline') return { ...base, background: 'transparent', borderColor: '#44403c', color: '#e7e5e4' };
-  if (variant === 'ghost')   return { ...base, background: 'transparent', borderColor: 'transparent', color: '#78716c' };
-  return base;
+// ─── Thin wrapper: loads the queue item for a specific deal ───────────────────
+function OutreachDraftPanelForDeal({ dealId, deal }) {
+  const { item } = useOutreachQueueForDeal(dealId);
+  if (!item) return null;
+  return <OutreachDraftPanel item={item} deal={deal} onSent={() => {}} onSkipped={() => {}} />;
 }
 
-function OutreachApprovalQueue({ onSelectDeal }) {
+// ─── Today-view Automations section — compact list, click → deal Comms ────────
+function AutomationsQueue({ onSelectDeal }) {
   const { items, deals } = useOutreachQueue();
   if (items.length === 0) return null;
 
+  function cadenceLabel(day) {
+    if (day === 0) return 'Intro draft ready';
+    return `Day ${day} follow-up ready`;
+  }
+
   return (
-    <div style={{ marginBottom: 22 }}>
-      <SectionLabel icon="✉️" label={`Needs Your Approval (${items.length})`} />
-      {items.map(item => (
-        <OutreachApprovalCard
-          key={item.id}
-          item={item}
-          deal={deals[item.deal_id]}
-          onSent={() => {}}
-          onSkipped={() => {}}
-        />
-      ))}
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: '#d8b560', textTransform: 'uppercase', letterSpacing: '0.08em' }}>🤖 Automations</span>
+        <span style={{ fontSize: 10, background: '#292524', color: '#d8b560', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>{items.length}</span>
+        <span style={{ fontSize: 11, color: '#57534e', marginLeft: 2 }}>· tap a deal to review &amp; send</span>
+      </div>
+      {items.map(item => {
+        const d = deals[item.deal_id];
+        const isLoading = item.status === 'queued' || item.status === 'generating';
+        const meta = d?.meta || {};
+        const county = meta.county;
+        return (
+          <div
+            key={item.id}
+            onClick={() => onSelectDeal && d && onSelectDeal(d, 'comms')}
+            style={{ background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid #d8b560', borderRadius: 7, padding: '10px 14px', marginBottom: 8, cursor: d ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 12 }}
+            onMouseEnter={e => { if (d) e.currentTarget.style.background = '#222018'; }}
+            onMouseLeave={e => e.currentTarget.style.background = '#1c1917'}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#e7e5e4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {d?.name || item.deal_id}
+              </div>
+              <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+                {isLoading ? '⏳ Claude is drafting…' : cadenceLabel(item.cadence_day)}
+                {county && !isLoading ? ` · ${county} Co.` : ''}
+              </div>
+            </div>
+            {!isLoading && (
+              <span style={{ fontSize: 11, color: '#d8b560', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                Review →
+              </span>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -3322,8 +3420,8 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
   return (
     <div>
-      {/* AI Outreach Approval Queue — always at the top */}
-      <OutreachApprovalQueue onSelectDeal={onSelect} />
+      {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
+      <AutomationsQueue onSelectDeal={onSelect} />
 
       {/* Monthly stats strip — each card is clickable */}
       <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(3, 1fr)" : "repeat(2, 1fr)", gap: 12, marginBottom: 20 }}>
@@ -4159,6 +4257,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {/* sections for now; Stage 3 merges into a single threaded GHL-style view. */}
       {tab === "comms" && (
         <div>
+          <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
           <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />
           <div style={{ marginTop: 20 }}>
             <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
