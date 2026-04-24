@@ -226,6 +226,32 @@ Do NOT delete `TXT resend._domainkey` or `TXT _dmarc` under any circumstance —
 those are the active outbound sending config. SES leftovers (`MX send` and `TXT send`
 with `include:amazonses.com`) were deleted Apr 22, 2026 and do not need to come back.
 
+## QA protocol — mandatory before declaring work done
+
+**Before saying a feature is ready, always browser-test the core user flows end to end.**
+Use the Claude-in-Chrome MCP tools to QA directly in the browser, not just by reading code.
+
+### Outreach / AI draft flow checklist
+1. Today view → AUTOMATIONS section shows deal with "Intro draft ready" and "Review →"
+2. Click Review → navigates to correct deal's Comms tab with AI Draft panel
+3. Draft panel shows: from/to numbers, clean draft text (no em dashes, no JSON garbage), char count, coach field, Regenerate + Edit + Send + Skip buttons
+4. **Regenerate with coach note** → spinner shows while generating, then clears and new draft appears (within ~15s). Spinner must NOT stay stuck after success.
+5. **Edit → type changes → Save Draft** → edit mode exits, new text persists, no SMS sent
+6. **Send** → AI Draft panel disappears, message appears in the thread as a sent bubble
+7. **Back to Today view** → AUTOMATIONS section is gone (or no longer shows that deal)
+
+### General QA rules
+- Always test the happy path + at least one "make another" variation (regenerate, re-edit)
+- Check char counter updates live as you type in edit mode
+- Verify split warning appears for messages > 160 chars ("will send as N texts")
+- If a spinner appears, wait for it to resolve — never declare pass while something is still loading
+- Check browser console for JS errors after every interaction (`read_console_messages` with `onlyErrors: true`)
+
+### Common bugs to watch for
+- `isGen` / `isSend` local state stuck `true` after success (missing `finally` reset) → spinner never clears
+- Realtime subscription not firing on edge-function DB writes → use polling fallback (3s interval already in place)
+- `firedRef` Set needed to prevent double-calling edge functions across React re-renders
+
 ## When asking an AI to change this
 
 Give it this file plus the specific task. Good prompts:
