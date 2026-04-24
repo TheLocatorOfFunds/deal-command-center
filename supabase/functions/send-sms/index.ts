@@ -5,6 +5,54 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
+/**
+ * Split a message into segments of at most `limit` characters.
+ * Splits preferentially at sentence-ending punctuation (. ! ?),
+ * then at any whitespace, and only hard-cuts at the limit as a last resort.
+ * A single-segment message is returned as-is without modification.
+ */
+function splitAtPunctuation(text: string, limit = 160): string[] {
+  const trimmed = text.trim()
+  if (trimmed.length <= limit) return [trimmed]
+
+  const segments: string[] = []
+  let remaining = trimmed
+
+  while (remaining.length > limit) {
+    const chunk = remaining.slice(0, limit)
+
+    // Search backwards for sentence-ending punctuation followed by a space or end-of-chunk
+    let splitIdx = -1
+    for (let i = chunk.length - 1; i >= 0; i--) {
+      const ch = chunk[i]
+      const next = chunk[i + 1]
+      if ((ch === '.' || ch === '!' || ch === '?') && (next === ' ' || next === undefined)) {
+        splitIdx = i + 1  // include the punctuation, split after it
+        break
+      }
+    }
+
+    // Fall back to last whitespace (word boundary)
+    if (splitIdx === -1) {
+      for (let i = chunk.length - 1; i >= 0; i--) {
+        if (chunk[i] === ' ' || chunk[i] === '\n') {
+          splitIdx = i
+          break
+        }
+      }
+    }
+
+    // Last resort: hard cut at limit
+    if (splitIdx === -1) splitIdx = limit
+
+    segments.push(remaining.slice(0, splitIdx).trim())
+    remaining = remaining.slice(splitIdx).trim()
+  }
+
+  if (remaining) segments.push(remaining)
+  return segments
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -72,71 +120,82 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Insert row — status depends on gateway:
-    //   twilio     → 'queued'      (Twilio call follows)
-    //   mac_bridge → 'pending_mac' (Mac Mini bridge picks it up and sends via Messages.app)
+    // Split body at punctuation boundaries if over 160 chars
+    const segments = splitAtPunctuation(body)
+    const isSplit  = segments.length > 1
+    const channel  = gateway === 'mac_bridge' ? 'imessage' : 'sms'
+    const threadKey = deal_id
+      ? (contact_id ? `${deal_id}:contact:${contact_id}` : `${deal_id}:phone:${to}`)
+      : null
+
+    // Insert a messages_outbound row for each segment
     const initialStatus = gateway === 'mac_bridge' ? 'pending_mac' : 'queued'
+    const insertedIds: string[] = []
 
-    const { data: msgRow, error: insertError } = await sb
-      .from('messages_outbound')
-      .insert({
-        to_number:   to,
-        from_number: resolvedFrom,
-        body,
-        status:      initialStatus,
-        sent_by:     userId,
-        deal_id:     deal_id ?? null,
-        contact_id:  contact_id ?? null,
-        channel:     gateway === 'mac_bridge' ? 'imessage' : 'sms',
-        thread_key:  deal_id
-          ? (contact_id
-              ? `${deal_id}:contact:${contact_id}`
-              : `${deal_id}:phone:${to}`)
-          : null,
-      })
-      .select()
-      .single()
+    for (const segment of segments) {
+      const { data: msgRow, error: insertError } = await sb
+        .from('messages_outbound')
+        .insert({
+          to_number:   to,
+          from_number: resolvedFrom,
+          body:        segment,
+          status:      initialStatus,
+          sent_by:     userId,
+          deal_id:     deal_id ?? null,
+          contact_id:  contact_id ?? null,
+          channel,
+          thread_key:  threadKey,
+        })
+        .select()
+        .single()
 
-    if (insertError) {
-      return new Response(JSON.stringify({ error: insertError.message }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      })
+      if (insertError) {
+        return new Response(JSON.stringify({ error: insertError.message }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      insertedIds.push(msgRow.id)
     }
 
     // ── mac_bridge path: return immediately, bridge handles delivery ──────────
     if (gateway === 'mac_bridge') {
       return new Response(
-        JSON.stringify({ id: msgRow.id, status: 'pending_mac' }),
+        JSON.stringify({ id: insertedIds[0], ids: insertedIds, parts: segments.length, status: 'pending_mac' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
-    // ── Twilio path ───────────────────────────────────────────────────────────
+    // ── Twilio path: send each segment sequentially ───────────────────────────
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`
-    const twilioRes = await fetch(twilioUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ To: to, From: resolvedFrom, Body: body }).toString(),
-    })
+    let lastStatus = 'sent'
 
-    const twilioData = await twilioRes.json()
+    for (let i = 0; i < segments.length; i++) {
+      const twilioRes = await fetch(twilioUrl, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ To: to, From: resolvedFrom, Body: segments[i] }).toString(),
+      })
 
-    const updateFields = twilioRes.ok
-      ? { status: 'sent', twilio_sid: twilioData.sid }
-      : {
-          status: 'failed',
-          error_code: String(twilioData.code ?? ''),
-          error_message: twilioData.message ?? 'Unknown Twilio error',
-        }
+      const twilioData = await twilioRes.json()
 
-    await sb.from('messages_outbound').update(updateFields).eq('id', msgRow.id)
+      const updateFields = twilioRes.ok
+        ? { status: 'sent', twilio_sid: twilioData.sid }
+        : {
+            status: 'failed',
+            error_code: String(twilioData.code ?? ''),
+            error_message: twilioData.message ?? 'Unknown Twilio error',
+          }
+
+      await sb.from('messages_outbound').update(updateFields).eq('id', insertedIds[i])
+      if (!twilioRes.ok) lastStatus = 'failed'
+    }
 
     return new Response(
-      JSON.stringify({ id: msgRow.id, ...updateFields }),
+      JSON.stringify({ id: insertedIds[0], ids: insertedIds, parts: segments.length, status: lastStatus }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 

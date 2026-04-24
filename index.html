@@ -3242,11 +3242,34 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
             Why Claude wrote this: {item.agent_reasoning}
           </div>
         )}
-        {!isLoading && (
-          <div style={{ marginTop: 4, fontSize: 10, color: charCount > 160 ? '#fca5a5' : '#57534e', textAlign: 'right' }}>
-            {charCount}/160{charCount > 160 ? ' ⚠ may split into 2 messages' : ''}
-          </div>
-        )}
+        {!isLoading && (() => {
+          // Mirror the server's splitAtPunctuation logic for the preview
+          function splitPreview(text, limit = 160) {
+            const t = (text || '').trim();
+            if (t.length <= limit) return [t];
+            const segs = []; let rem = t;
+            while (rem.length > limit) {
+              const chunk = rem.slice(0, limit);
+              let idx = -1;
+              for (let i = chunk.length - 1; i >= 0; i--) {
+                const c = chunk[i], n = chunk[i + 1];
+                if ((c === '.' || c === '!' || c === '?') && (n === ' ' || n === undefined)) { idx = i + 1; break; }
+              }
+              if (idx === -1) for (let i = chunk.length - 1; i >= 0; i--) { if (chunk[i] === ' ') { idx = i; break; } }
+              if (idx === -1) idx = limit;
+              segs.push(rem.slice(0, idx).trim()); rem = rem.slice(idx).trim();
+            }
+            if (rem) segs.push(rem);
+            return segs;
+          }
+          const parts = splitPreview(currentBody);
+          const over = charCount > 160;
+          return (
+            <div style={{ marginTop: 4, fontSize: 10, color: over ? '#fbbf24' : '#57534e', textAlign: 'right' }}>
+              {charCount} chars{over ? ` · will send as ${parts.length} texts, split at punctuation` : ' · fits in 1 text'}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Coach note + regenerate */}
