@@ -127,6 +127,43 @@
     /* Hide Lauren's desktop floating pill on mobile — she lives in the
        More sheet instead so she doesn't crowd the bottom nav. */
     .lauren-fab { display: none !important; }
+    /* ─── Comms: mobile-first rebuild ─────────────────────────────
+       Goal: iMessage-/LeadConnector-feel. Container takes the viewport
+       (minus the deal-detail chrome above it), composer is sticky at
+       the bottom (keyboard-safe via env(safe-area-inset-bottom)),
+       upper chrome compacts so the thread has real estate. */
+    .comms-container {
+      height: calc(100dvh - 280px) !important;
+      min-height: 440px !important;
+      border-radius: 8px !important;
+    }
+    .comms-container .contact-tab-btn {
+      padding: 7px 11px !important;
+      min-width: 68px !important;
+      max-width: 110px !important;
+    }
+    .comms-container .thread-header {
+      padding: 6px 12px !important;
+    }
+    .comms-container .thread-header-sub {
+      font-size: 9px !important;
+    }
+    .comms-container .thread-header-from {
+      display: none !important;  /* hide from-number selector on mobile; edit via deal settings */
+    }
+    .comms-container .channel-chips {
+      gap: 4px !important; padding: 6px 10px !important;
+    }
+    .comms-container .channel-chips button {
+      padding: 3px 9px !important; font-size: 10px !important;
+    }
+    .comms-container .composer {
+      padding: 8px 10px calc(8px + env(safe-area-inset-bottom)) !important;
+    }
+    .comms-container .bubble {
+      max-width: 82% !important;
+    }
+
     /* When Lauren's panel IS opened on mobile, it goes full-screen bottom-sheet. */
     .lauren-panel {
       bottom: 0 !important; right: 0 !important; left: 0 !important;
@@ -7976,7 +8013,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
+    <div className="comms-container" style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
 
       {/* Unmatched-contact banner */}
       {unmatched.length > 0 && (
@@ -7999,7 +8036,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
       )}
 
       {/* Conversation tabs */}
-      <div style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1c1917', background: '#0f0d0c', overflowX: 'auto', flexShrink: 0, scrollbarWidth: 'none' }}>
+      <div className="conversation-tabs" style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1c1917', background: '#0f0d0c', overflowX: 'auto', flexShrink: 0, scrollbarWidth: 'none' }}>
         {/* Everyone tab — first, shows every message/call/note on the deal */}
         {(() => {
           const active = activeContact?._everyone;
@@ -8215,7 +8252,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
       {/* Thread header */}
       {activeContact && (
-        <div style={{ padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+        <div className="thread-header" style={{ padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: '50%', background: activeContact._everyone ? '#d97706' : participantColor(activeContact.name), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0, color: '#fff', fontWeight: 700 }}>
             {activeContact._everyone ? '👨‍👩‍👧' : (activeContact.name || '?')[0].toUpperCase()}
           </div>
@@ -8229,7 +8266,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+            <div className="thread-header-from" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
               <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
               {phoneNumbers.length === 0
                 ? <span style={{ fontSize: 11, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>No numbers configured</span>
@@ -8249,7 +8286,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
       {/* Channel filter chips */}
       {activeContact && (
-        <div style={{ display: 'flex', gap: 6, padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#0f0d0c', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
+        <div className="channel-chips" style={{ display: 'flex', gap: 6, padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#0f0d0c', flexShrink: 0, overflowX: 'auto', scrollbarWidth: 'none' }}>
           {[
             { key: 'all',   label: 'All',            icon: '☰',  count: chipCounts.sms + chipCounts.calls + chipCounts.email + chipCounts.notes },
             { key: 'sms',   label: 'Messages',       icon: '💬', count: chipCounts.sms },
@@ -8460,7 +8497,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
           </button>
         </div>
       ) : (activeContact || newMode) && (
-        <div style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
+        <div className="composer" style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
               placeholder={activeContact ? `Message ${activeContact.name.split(' ')[0]}…` : 'Enter a number above first'}
