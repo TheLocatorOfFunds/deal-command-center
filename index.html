@@ -2032,9 +2032,15 @@ const expectedPayoutDate = (deal) => {
 function AttentionView({ deals, onSelect }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
+  const [clearing, setClearing] = useState(null); // null | 'all' | <deal_id>
 
+  // Hoist the user id so the clear handlers can upsert user_deal_views.
+  const [userId, setUserId] = useState(null);
   useEffect(() => {
-    const load = async () => {
+    sb.auth.getUser().then(({ data }) => setUserId(data?.user?.id || null));
+  }, []);
+
+  const load = React.useCallback(async () => {
       setLoading(true);
       const ARCHIVE = new Set(['closed', 'recovered', 'dead']);
       const active = deals.filter(d => !ARCHIVE.has(d.status));
@@ -2084,21 +2090,90 @@ function AttentionView({ deals, onSelect }) {
         .sort((a, b) => b.total - a.total);
       setRows(list);
       setLoading(false);
-    };
-    load();
   }, [deals]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Clear one deal — marks Comms + Docket seen-now for the current user and
+  // acknowledges all un-acked docket events on that deal. Does NOT touch
+  // pending outreach drafts; those clear only when Nathan sends or skips.
+  const clearDeal = async (dealId, unackDocketIds) => {
+    if (!userId || clearing) return;
+    setClearing(dealId);
+    const now = new Date().toISOString();
+    try {
+      await sb.from('user_deal_views').upsert([
+        { user_id: userId, deal_id: dealId, tab: 'comms',  last_seen_at: now },
+        { user_id: userId, deal_id: dealId, tab: 'docket', last_seen_at: now },
+      ], { onConflict: 'user_id,deal_id,tab' });
+      if (unackDocketIds && unackDocketIds.length > 0) {
+        await Promise.all(unackDocketIds.map(id =>
+          sb.rpc('acknowledge_docket_event', { p_event_id: id })
+        ));
+      }
+      await load();
+    } finally {
+      setClearing(null);
+    }
+  };
+
+  const clearAll = async () => {
+    if (!userId || clearing || rows.length === 0) return;
+    if (!window.confirm(`Mark everything seen across ${rows.length} deal${rows.length === 1 ? '' : 's'}? Pending outreach drafts are NOT cleared — those still need send or skip.`)) return;
+    setClearing('all');
+    const now = new Date().toISOString();
+    const views = rows.flatMap(r => [
+      { user_id: userId, deal_id: r.deal.id, tab: 'comms',  last_seen_at: now },
+      { user_id: userId, deal_id: r.deal.id, tab: 'docket', last_seen_at: now },
+    ]);
+    const docketIds = rows.flatMap(r => r.docket.map(d => d.id));
+    try {
+      if (views.length > 0) await sb.from('user_deal_views').upsert(views, { onConflict: 'user_id,deal_id,tab' });
+      if (docketIds.length > 0) await Promise.all(docketIds.map(id =>
+        sb.rpc('acknowledge_docket_event', { p_event_id: id })
+      ));
+      await load();
+    } finally {
+      setClearing(null);
+    }
+  };
 
   if (loading) return <div style={{ textAlign: 'center', padding: 40, color: '#78716c' }}>Loading…</div>;
 
   const totalAll = rows.reduce((s, r) => s + r.total, 0);
+  const totalDraftsOnly = rows.reduce((s, r) => s + (r.total === r.drafts_pending.length ? r.drafts_pending.length : 0), 0);
+
+  // Can we show a meaningful "Mark all seen" button? Only if there are
+  // any un-acked docket items OR unread comms. Drafts are not covered by it.
+  const clearableCount = rows.reduce((s, r) => s + r.docket.length + r.sms_unread.length + r.calls_unread.length + r.emails_unread.length, 0);
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0 }}>🔔 Attention</h2>
-        <div style={{ fontSize: 12, color: '#a8a29e' }}>
-          {totalAll === 0 ? 'Nothing needs attention across your active deals right now.' : `${totalAll} item${totalAll === 1 ? '' : 's'} across ${rows.length} deal${rows.length === 1 ? '' : 's'}`}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0 }}>🔔 Attention</h2>
+          <div style={{ fontSize: 12, color: '#a8a29e' }}>
+            {totalAll === 0 ? 'Nothing needs attention across your active deals right now.' : `${totalAll} item${totalAll === 1 ? '' : 's'} across ${rows.length} deal${rows.length === 1 ? '' : 's'}`}
+          </div>
         </div>
+        {clearableCount > 0 && (
+          <button
+            onClick={clearAll}
+            disabled={clearing !== null}
+            title="Mark everything (Comms + Docket) seen across all deals. Pending outreach drafts stay — those still need to be sent or skipped."
+            style={{
+              background: clearing === 'all' ? '#292524' : '#78350f',
+              color: '#fbbf24',
+              border: '1px solid #92400e',
+              padding: '6px 14px',
+              borderRadius: 6, fontSize: 12, fontWeight: 700,
+              cursor: clearing ? 'wait' : 'pointer',
+              letterSpacing: '0.06em',
+              fontFamily: 'inherit',
+            }}>
+            {clearing === 'all' ? '⏳ Clearing…' : `✓ Mark all ${clearableCount} seen`}
+          </button>
+        )}
       </div>
 
       {rows.length === 0 && (
@@ -2115,12 +2190,13 @@ function AttentionView({ deals, onSelect }) {
         if (r.emails_unread.length > 0)  parts.push({ label: `📧 ${r.emails_unread.length} email${r.emails_unread.length === 1 ? '' : 's'}`, tab: 'comms', color: '#06b6d4' });
         if (r.drafts_pending.length > 0) parts.push({ label: `📝 ${r.drafts_pending.length} draft${r.drafts_pending.length === 1 ? '' : 's'}`, tab: 'comms', color: '#22c55e' });
 
+        const rowHasClearable = r.docket.length + r.sms_unread.length + r.calls_unread.length + r.emails_unread.length > 0;
+        const isClearingThis = clearing === r.deal.id;
         return (
           <div key={r.deal.id}
-            onClick={() => onSelect(r.deal.id)}
-            style={{ padding: "12px 14px", marginBottom: 8, background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #d97706", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 14 }}>
+            style={{ padding: "12px 14px", marginBottom: 8, background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #d97706", borderRadius: 8, display: "flex", alignItems: "center", gap: 14 }}>
             <div style={{ fontSize: 18, fontWeight: 700, color: '#d97706', fontFamily: "'DM Mono', monospace", minWidth: 32, textAlign: "center" }}>{r.total}</div>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => onSelect(r.deal.id)}>
               <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 3 }}>
                 {r.deal.name || r.deal.id}
                 <span style={{ fontSize: 11, fontWeight: 400, color: '#78716c', marginLeft: 8 }}>· {r.deal.status}</span>
@@ -2132,7 +2208,21 @@ function AttentionView({ deals, onSelect }) {
                 ))}
               </div>
             </div>
-            <span style={{ fontSize: 11, color: '#78716c' }}>Open →</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {rowHasClearable && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); clearDeal(r.deal.id, r.docket.map(d => d.id)); }}
+                  disabled={clearing !== null}
+                  title="Mark Comms + Docket seen for this deal. Pending drafts (if any) stay."
+                  style={{ background: "transparent", border: "1px solid #292524", color: '#a8a29e', borderRadius: 5, padding: "4px 9px", fontSize: 10, fontWeight: 600, cursor: clearing ? 'wait' : 'pointer', letterSpacing: '0.04em', fontFamily: 'inherit' }}>
+                  {isClearingThis ? '⏳' : '✓ Clear'}
+                </button>
+              )}
+              <button onClick={() => onSelect(r.deal.id)}
+                style={{ background: "transparent", border: "none", color: '#78716c', fontSize: 11, cursor: 'pointer', padding: '4px 4px', fontFamily: 'inherit' }}>
+                Open →
+              </button>
+            </div>
           </div>
         );
       })}
