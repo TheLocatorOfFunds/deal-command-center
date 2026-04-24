@@ -58,6 +58,7 @@ const SUPABASE_URL   = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
 const WATERMARK_FILE = path.join(__dirname, '.watermark');
+const PID_FILE       = path.join(__dirname, '.bridge.pid');
 const POLL_MS        = 5000;
 const APPLE_EPOCH    = 978307200; // Jan 1 2001 in Unix seconds
 
@@ -65,6 +66,27 @@ const APPLE_EPOCH    = 978307200; // Jan 1 2001 in Unix seconds
 const REACTION_EMOJI = { 2000: '👍', 2001: '❤️', 2002: '👎', 2003: '‼️', 2004: '❓', 2005: '😂' };
 
 // ─── Startup checks ──────────────────────────────────────────────────────────
+
+// ─── Single-instance lock ─────────────────────────────────────────────────────
+// Prevents two bridge processes from running simultaneously (which causes every
+// message to be sent twice). Writes a PID file on start; exits if another
+// process already holds the lock.
+if (fs.existsSync(PID_FILE)) {
+  const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf8').trim(), 10);
+  try {
+    process.kill(existingPid, 0); // signal 0 = just check if process exists
+    console.error(`❌  Another bridge instance is already running (PID ${existingPid}). Exiting.`);
+    console.error(`    To force restart: rm ${PID_FILE} and try again.`);
+    process.exit(1);
+  } catch {
+    // Process doesn't exist — stale PID file, safe to overwrite
+    console.log(`⚠️  Stale PID file found (PID ${existingPid} is gone). Starting fresh.`);
+  }
+}
+fs.writeFileSync(PID_FILE, String(process.pid));
+process.on('exit', () => { try { fs.unlinkSync(PID_FILE); } catch {} });
+process.on('SIGTERM', () => process.exit(0));
+process.on('SIGINT',  () => process.exit(0));
 
 if (!SERVICE_KEY) {
   console.error('❌  SUPABASE_SERVICE_KEY not set. Copy .env.example → .env and add the key.');
