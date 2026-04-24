@@ -3353,17 +3353,23 @@ function AutomationsQueue({ onSelectDeal }) {
         const isDrafting = item.status === 'queued' || (item.status === 'generating' && !label.stuck);
         const isPending = item.status === 'pending';
 
+        function navToComms() {
+          if (!d || !onSelectDeal) return;
+          window.location.hash = `#/deal/${d.id}/comms`;
+          onSelectDeal(d.id);
+        }
+
         async function handleRetry(e) {
           e.stopPropagation();
           firedRef.current.delete(item.id); // allow re-fire
           await sb.from('outreach_queue').update({ status: 'queued' }).eq('id', item.id);
-          if (onSelectDeal && d) onSelectDeal(d, 'comms');
+          navToComms();
         }
 
         return (
           <div
             key={item.id}
-            onClick={() => d && onSelectDeal && onSelectDeal(d, 'comms')}
+            onClick={navToComms}
             style={{ background: '#1c1917', border: `1px solid ${label.stuck ? '#7f1d1d' : '#292524'}`, borderLeft: `3px solid ${label.stuck ? '#ef4444' : '#d8b560'}`, borderRadius: 7, padding: '10px 14px', marginBottom: 8, cursor: d ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 12 }}
             onMouseEnter={e => { if (d) e.currentTarget.style.background = '#222018'; }}
             onMouseLeave={e => e.currentTarget.style.background = '#1c1917'}>
