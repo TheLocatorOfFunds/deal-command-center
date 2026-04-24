@@ -3115,8 +3115,18 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   }
 
   React.useEffect(() => {
-    if (item?.status === 'queued') callGenerate(null);
-  }, [item?.id]); // eslint-disable-line
+    if (!item) return;
+    if (item.status === 'queued') {
+      callGenerate(null);
+    } else if (item.status === 'generating') {
+      // If stuck in 'generating' for > 3 minutes, reset to queued and retry
+      const staleMs = Date.now() - new Date(item.updated_at).getTime();
+      if (staleMs > 3 * 60 * 1000) {
+        sb.from('outreach_queue').update({ status: 'queued' }).eq('id', item.id)
+          .then(() => callGenerate(null));
+      }
+    }
+  }, [item?.id, item?.status, item?.updated_at]); // eslint-disable-line
 
   async function handleSaveDraft() {
     if (!editBody.trim()) return;
@@ -3313,26 +3323,42 @@ function AutomationsQueue({ onSelectDeal }) {
       </div>
       {items.map(item => {
         const d = deals[item.deal_id];
-        const isLoading = item.status === 'queued' || item.status === 'generating';
         const meta = d?.meta || {};
         const county = meta.county;
+        const staleMs = Date.now() - new Date(item.updated_at).getTime();
+        const isStuck = item.status === 'generating' && staleMs > 3 * 60 * 1000;
+        const isLoading = (item.status === 'queued' || item.status === 'generating') && !isStuck;
+
+        async function retryGeneration(e) {
+          e.stopPropagation();
+          await sb.from('outreach_queue').update({ status: 'queued' }).eq('id', item.id);
+          // Navigate to Comms tab where OutreachDraftPanel will auto-fire
+          if (onSelectDeal && d) onSelectDeal(d, 'comms');
+        }
+
         return (
           <div
             key={item.id}
-            onClick={() => onSelectDeal && d && onSelectDeal(d, 'comms')}
-            style={{ background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid #d8b560', borderRadius: 7, padding: '10px 14px', marginBottom: 8, cursor: d ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 12 }}
-            onMouseEnter={e => { if (d) e.currentTarget.style.background = '#222018'; }}
+            onClick={() => !isLoading && onSelectDeal && d && onSelectDeal(d, 'comms')}
+            style={{ background: '#1c1917', border: `1px solid ${isStuck ? '#7f1d1d' : '#292524'}`, borderLeft: `3px solid ${isStuck ? '#ef4444' : '#d8b560'}`, borderRadius: 7, padding: '10px 14px', marginBottom: 8, cursor: (!isLoading && d) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 12 }}
+            onMouseEnter={e => { if (!isLoading && d) e.currentTarget.style.background = '#222018'; }}
             onMouseLeave={e => e.currentTarget.style.background = '#1c1917'}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#e7e5e4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {d?.name || item.deal_id}
               </div>
-              <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
-                {isLoading ? '⏳ Claude is drafting…' : cadenceLabel(item.cadence_day)}
-                {county && !isLoading ? ` · ${county} Co.` : ''}
+              <div style={{ fontSize: 11, color: isStuck ? '#fca5a5' : '#78716c', marginTop: 2 }}>
+                {isLoading ? '⏳ Claude is drafting…' : isStuck ? '⚠ Draft timed out' : cadenceLabel(item.cadence_day)}
+                {county && !isLoading && !isStuck ? ` · ${county} Co.` : ''}
               </div>
             </div>
-            {!isLoading && (
+            {isStuck ? (
+              <button
+                onClick={retryGeneration}
+                style={{ padding: '4px 10px', background: '#7f1d1d', border: '1px solid #ef4444', borderRadius: 5, color: '#fca5a5', fontSize: 11, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                ↺ Retry
+              </button>
+            ) : !isLoading && (
               <span style={{ fontSize: 11, color: '#d8b560', fontWeight: 600, whiteSpace: 'nowrap', flexShrink: 0 }}>
                 Review →
               </span>
