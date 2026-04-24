@@ -41,6 +41,26 @@
          align-items: center; justify-content: center; line-height: 1; }
   .fab:active { transform: scale(0.94); }
 
+  /* ─── Bottom tab bar — mobile only, LeadConnector-style ─────── */
+  .bottom-nav { display: none; position: fixed; left: 0; right: 0; bottom: 0;
+    background: rgba(12, 10, 9, 0.96); backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-top: 1px solid #292524;
+    padding: 8px 4px calc(8px + env(safe-area-inset-bottom));
+    z-index: 100; }
+  .bottom-nav-inner { display: flex; justify-content: space-around; align-items: stretch; max-width: 540px; margin: 0 auto; }
+  .bottom-nav button { flex: 1; background: transparent; border: none;
+    color: #78716c; padding: 6px 4px; font-size: 10px; font-weight: 600;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    cursor: pointer; font-family: inherit; min-height: 48px; position: relative;
+    transition: color 0.12s; letter-spacing: 0.02em; }
+  .bottom-nav button .nav-icon { font-size: 20px; line-height: 1; }
+  .bottom-nav button.active { color: #d97706; }
+  .bottom-nav button .nav-badge { position: absolute; top: 4px; right: 50%;
+    transform: translateX(14px); background: #ef4444; color: #fff;
+    border-radius: 10px; padding: 1px 5px; font-size: 9px; font-weight: 700;
+    min-width: 16px; text-align: center; }
+
   /* ─── Tablet (≤768px) ──────────────────────────────────────── */
   @media (max-width: 768px) {
     .portfolio-stats { grid-template-columns: 1fr 1fr !important; }
@@ -101,8 +121,15 @@
     }
     @keyframes sheetUp { from { transform: translateY(40px); opacity: 0.7; } to { transform: translateY(0); opacity: 1; } }
 
-    /* Show FAB on phone */
-    .fab { display: inline-flex; }
+    /* Show FAB on phone (shifted up to clear the bottom nav) */
+    .fab { display: inline-flex; bottom: calc(78px + env(safe-area-inset-bottom)) !important; }
+
+    /* Show bottom-nav on phone + hide the redundant top view-controls */
+    .bottom-nav { display: block; }
+    .view-controls { display: none !important; }
+
+    /* Push shell content up so bottom nav never covers content */
+    .shell { padding-bottom: calc(88px + env(safe-area-inset-bottom)) !important; }
 
     /* Hide desktop "+ New Deal" button since FAB replaces it */
     .desktop-new-deal { display: none !important; }
@@ -427,6 +454,7 @@ function DealCommandCenter({ session, profile }) {
   const [showTeam, setShowTeam] = useState(false);
   const [showLeads, setShowLeads] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [pendingWalkthroughs, setPendingWalkthroughs] = useState([]);
@@ -685,6 +713,76 @@ function DealCommandCenter({ session, profile }) {
       {/* Mobile FAB — only visible on phone via CSS */}
       {!activeDeal && (
         <button className="fab" onClick={() => setShowNewDeal(true)} aria-label="Add new deal">+</button>
+      )}
+
+      {/* Mobile bottom-nav — LeadConnector-style. Hidden on deal detail
+          so the full viewport belongs to the conversation/content view. */}
+      {!activeDeal && (
+        <nav className="bottom-nav" aria-label="Primary navigation">
+          <div className="bottom-nav-inner">
+            <button className={view === 'today' ? 'active' : ''} onClick={() => setView('today')}>
+              <span className="nav-icon">📌</span>Today
+            </button>
+            <button className={view === 'pipeline' ? 'active' : ''} onClick={() => setView('pipeline')}>
+              <span className="nav-icon">🧭</span>Pipeline
+            </button>
+            <button className={view === 'tasks' ? 'active' : ''} onClick={() => setView('tasks')}>
+              <span className="nav-icon">✓</span>Tasks
+            </button>
+            <button className={view === 'active' ? 'active' : ''} onClick={() => setView('active')}>
+              <span className="nav-icon">📁</span>Deals
+            </button>
+            <button onClick={() => setShowMoreSheet(true)}>
+              <span className="nav-icon">⋯</span>More
+              {(newLeadCount + unackDocketCount) > 0 && <span className="nav-badge">{newLeadCount + unackDocketCount}</span>}
+            </button>
+          </div>
+        </nav>
+      )}
+
+      {/* Mobile More sheet — overflow of secondary views + modals */}
+      {showMoreSheet && (
+        <Modal onClose={() => setShowMoreSheet(false)} title="More">
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {[
+              { label: '⚑ Flagged',     onClick: () => setView('flagged'),  count: 0 },
+              { label: '🩺 Hygiene',    onClick: () => setView('hygiene'),  count: 0 },
+              { label: '📦 Closed',     onClick: () => setView('archive'),  count: 0 },
+              ...(isAdmin ? [
+                { label: '📈 Reports',   onClick: () => setView('reports'),   count: 0 },
+                { label: '📊 Analytics', onClick: () => setView('analytics'), count: 0 },
+              ] : []),
+              { sep: 'Quick access' },
+              { label: '📥 Leads',       onClick: () => setShowLeads(true),    count: newLeadCount },
+              { label: '⚖ Docket',       onClick: () => setShowDocket(true),   count: unackDocketCount, show: isTeam },
+              { label: '👥 Contacts',    onClick: () => setShowContacts(true), count: 0, show: isTeam },
+              { label: '📚 Library',     onClick: () => setShowLibrary(true),  count: 0, show: isTeam },
+              { label: '🔍 Search',      onClick: () => setShowSearch(true),   count: 0 },
+              ...(pendingWalkthroughs.length > 0 ? [{ label: '🏠 Walkthroughs', onClick: () => setShowWalkthroughs(true), count: pendingWalkthroughs.length }] : []),
+              { sep: 'Account' },
+              ...(isAdmin ? [{ label: '👤 Team',        onClick: () => setShowTeam(true),     count: 0 }] : []),
+              { label: '↪ Sign out',     onClick: signOut, count: 0, destructive: true },
+            ].filter(i => i.show !== false).map((item, idx) => {
+              if (item.sep) {
+                return <div key={'sep-' + idx} style={{ fontSize: 10, fontWeight: 700, color: '#57534e', letterSpacing: '0.12em', textTransform: 'uppercase', padding: '12px 8px 4px' }}>{item.sep}</div>;
+              }
+              return (
+                <button key={item.label} onClick={() => { item.onClick(); setShowMoreSheet(false); }}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    width: '100%', padding: '14px 12px', fontSize: 14, fontWeight: 600,
+                    background: 'transparent', border: 'none',
+                    borderBottom: '1px solid #1c1917',
+                    color: item.destructive ? '#fca5a5' : '#d6d3d1',
+                    cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit',
+                  }}>
+                  <span>{item.label}</span>
+                  {item.count > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 8px', fontSize: 11, fontWeight: 700 }}>{item.count}</span>}
+                </button>
+              );
+            })}
+          </div>
+        </Modal>
       )}
     </Shell>
   );
