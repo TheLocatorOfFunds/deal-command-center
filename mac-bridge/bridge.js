@@ -90,6 +90,12 @@ console.log('');
 // Cache survives across ticks so we only do the Supabase lookup once per chat.
 const chatCache = new Map();
 
+// ─── In-flight send guard ─────────────────────────────────────────────────────
+// Tracks message IDs currently being sent via AppleScript. If the poll fires
+// again before osascript returns (AppleScript can take >5s), this prevents the
+// same row from being picked up and sent a second time.
+const sendingInFlight = new Set();
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function normalizePhone(raw) {
@@ -153,6 +159,11 @@ async function processPendingOutbound() {
   if (!pending || pending.length === 0) return;
 
   for (const msg of pending) {
+    if (sendingInFlight.has(msg.id)) {
+      console.log(`⏭ SKIP  ${msg.to_number}  already sending (in-flight)`);
+      continue;
+    }
+    sendingInFlight.add(msg.id);
     try {
       sendViaMessages(msg.to_number, msg.body);
       await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
@@ -163,6 +174,8 @@ async function processPendingOutbound() {
         .update({ status: 'failed', error_message: err.message })
         .eq('id', msg.id);
       console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
+    } finally {
+      sendingInFlight.delete(msg.id);
     }
   }
 }
@@ -319,6 +332,31 @@ async function syncFromChatDb() {
       deal_id:      dealId,
       thread_key:   threadKey,
     };
+
+    // For outbound (is_from_me) messages: check if a DCC-originated row already
+    // exists with the same body + to_number sent within the last 10 minutes.
+    // DCC rows have no twilio_sid, so the upsert wouldn't conflict — this
+    // prevents a duplicate bubble appearing for every DCC-sent iMessage.
+    if (!isInbound) {
+      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: existing } = await sb
+        .from('messages_outbound')
+        .select('id')
+        .eq('to_number', msgData.to_number)
+        .eq('body', msgData.body)
+        .eq('direction', 'outbound')
+        .is('twilio_sid', null)
+        .gte('created_at', tenMinAgo)
+        .limit(1);
+      if (existing && existing.length > 0) {
+        // Stamp the DCC row with the chat.db guid so future syncs don't re-check
+        await sb.from('messages_outbound')
+          .update({ twilio_sid: guid })
+          .eq('id', existing[0].id);
+        maxRowid = Math.max(maxRowid, row.ROWID);
+        continue;  // skip inserting duplicate
+      }
+    }
 
     const { error } = await sb.from('messages_outbound').upsert(msgData, {
       onConflict: 'twilio_sid',
