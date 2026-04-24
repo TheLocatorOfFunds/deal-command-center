@@ -103,28 +103,64 @@ Also read before making any DCC change:
   the conversational intake spec for the consumer-facing Lauren you
   may eventually configure
 
-### 3.2 Your existing infrastructure (Justin built this)
+### 3.2 Your existing infrastructure — state as of 2026-04-24
 
-Three Supabase tables live in `public.*` that are YOURS:
+**What exists today (checked in the live Supabase project):**
 
 - **`lauren_conversations`** — every turn (user/assistant/tool) per
-  session. Linked to GHL `contact_id` historically; now being refactored
-  to DCC `deal_id` + `contact_id`.
-- **`lauren_knowledge`** — your knowledge base. Voice patterns, ORC
-  statutes, county rules, transcript chunks, Nathan's playbook. Uses
-  OpenAI `text-embedding-3-small` (1536 dim). NULL embedding = not yet
-  embedded, still full-text searchable.
-- **`lauren_sessions`** — session container.
+  session. Linked to GHL `contact_id` historically; now being
+  refactored to DCC `deal_id` + `contact_id`. ✅ live
 
-Two Edge Functions are yours:
-- **`lauren-chat`** — chat endpoint used by both DCC's Lauren widget and
-  refundlocators.com's `<LaurenChat>` component. Currently does simple
-  Q&A with pgvector retrieval.
-- **`lauren-internal`** — DCC-side chat, no pgvector, for Nathan's
+**What DOES NOT exist yet (per Justin's feedback on the 2-week plan):**
+
+- **`lauren_knowledge`** — this was described as already-built in an
+  earlier version of this charter. **Correction: it's not.** No
+  pgvector table, no chunking code, no embedding pipeline, no
+  retrieval function. Justin estimates ~4-6 hrs to build once Nathan's
+  playbook is written and finalized. Do not assume it's queryable.
+- **`lauren_sessions`** — ditto, not built yet.
+
+**Existing Edge Functions (two in place):**
+
+- **`lauren-chat`** — chat endpoint used by the refundlocators.com
+  widget. Currently does simple Q&A. Will upgrade to pgvector
+  retrieval once `lauren_knowledge` is built.
+- **`lauren-internal`** — DCC-side chat bubble, no pgvector, Nathan's
   direct use.
 
-You will extend these with tool-use. Do not replace them unless you
-have a reason you'd explain to a co-founder.
+**Related infrastructure built by Justin that you inherit and extend
+(not replace):**
+
+- **`outreach_queue` table** — human-in-the-loop AI outreach buffer
+  (merged via PR #12, 2026-04-24). Lifecycle:
+  queued → generating → pending → sent/skipped/failed. Has
+  `cadence_day` column for intro/day-3/day-7/etc., `draft_body`,
+  `coach_note`, `draft_history` jsonb for revision audit.
+- **`generate-outreach` Edge Function** — Claude Sonnet drafts a
+  personalized SMS for each queued row using deal context + prior
+  messages + coach feedback. This is the engine. Your Phase 3
+  inbound-reply drafting should reuse or extend this function,
+  not rebuild a parallel one.
+- **DCC UI: `AutomationsQueue`** (Today view) + `OutreachDraftPanelForDeal`
+  (inside Comms tab). Your Phase 3 work should surface through these
+  existing components — when an inbound homeowner reply lands and
+  `lauren_handles=true`, insert a row into `outreach_queue` and it
+  appears in AutomationsQueue automatically.
+
+**Build order that respects what's there:**
+
+1. Phase 1 — your read-only tools (find_deal, find_contact, query_dcc)
+2. Phase 2 — Lauren's `lauren_knowledge` table + pgvector ingestion
+   pipeline (the thing that doesn't exist). Chunking + embedding via
+   OpenAI text-embedding-3-small. Gated on Nathan's playbook.
+3. Phase 3 — Extend Justin's `generate-outreach` with a
+   `context_source='lauren_inbound_reply'` mode that pulls from
+   `lauren_knowledge` for the reply draft. Reuse `outreach_queue`
+   for the human-approval gate. Reuse the existing `AutomationsQueue`
+   UI so Nathan's review workflow is unchanged.
+4. Phase 4 — infrastructure-manager capabilities (digest, cron,
+   monitoring) — mostly read-only; extends the existing morning-sweep
+   if that's live.
 
 ---
 
@@ -162,8 +198,15 @@ have a reason you'd explain to a co-founder.
 **Phase 3 — Lauren the consumer-facing agent (supervised):**
 - The `receive-sms` Edge Function routes inbound replies to you (when
   a cadence is active)
-- You draft replies, they land in a human-review queue in DCC
-- After ~50 approved replies, Nathan loosens the gate per tier
+- You extend Justin's `generate-outreach` Edge Function with an
+  `inbound_reply` mode — it drafts a response using `lauren_knowledge`
+  retrieval + the inbound message context, writes the draft to a
+  NEW `outreach_queue` row (status='pending', cadence_day=-1 to
+  distinguish from outbound cadence rows), and surfaces in
+  Nathan's existing AutomationsQueue UI for approval
+- Nathan reviews, edits or coaches for regenerate, then approves → sends
+- After ~50 approved replies on a tier with ≥90% untouched-approval
+  rate, that tier can loosen to auto-send (per-tier, not global)
 - You never promise timing, pricing, or legal outcomes without
   checking `lauren_knowledge` for the canonical version
 

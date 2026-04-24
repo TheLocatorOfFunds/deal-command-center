@@ -1,9 +1,50 @@
 # Lead Funnel — 2-Week Ruthless Plan
 
 **Drafted:** 2026-04-23
+**Revised:** 2026-04-24 (after auditing Justin's shipped work — major overlap found,
+see **Update** block below)
 **Owner of this plan:** Nathan
 **Goal:** Smallest working system that handles 1 A-lead/week end-to-end reliably,
 with the data to know what to automate next.
+
+> **🔄 Update — 2026-04-24: Justin already shipped most of W1-2 and W2-2**
+>
+> Auditing the repo found that Justin merged PR #12 earlier today — the
+> `outreach_queue` + `generate-outreach` Edge Function + `AutomationsQueue` UI
+> + `OutreachDraftPanelForDeal` inside Comms. That's the human-in-the-loop AI
+> outreach system this plan proposed. DCC now has: Claude-drafted outreach
+> SMS per queued item, draft/coach/regenerate cycle, staleness retry,
+> auto-fire generation on Today view, one-tap navigation to Comms for
+> review → send.
+>
+> Ticket status after audit:
+>
+> | Ticket | Status |
+> |---|---|
+> | W1-1 · Auto-generate refundlocators_token | ❌ not built — still needed |
+> | W1-2 · Auto-SMS on new A-tier lead | 🟡 ~70% done — draft layer exists via outreach_queue. What's missing: a pg_cron job that ENQUEUES A-tier new-leads (status='new-lead' + phone set) into outreach_queue with cadence_day=0 |
+> | W1-3 · Twilio out of trial + A2P 10DLC | ✅ resolved (Nathan handled; 10DLC registration is in flight separately) |
+> | W1-4 · iMessage bridge running | ⚠️ Nathan's step — needs confirmation iMessage is logged in on the Mac Mini before 7-day clock starts (per Justin's feedback) |
+> | W1-5 · Hand-run 5 leads | 🟢 Nathan's lane — ongoing |
+> | W2-1 · Cadence v1 (Day 3 + Day 7 follow-up tasks) | 🟡 ~30% done — outreach_queue has `cadence_day` column already. What's missing: the pg_cron scheduler that inserts day-3 + day-7 queued rows for each deal that's been texted |
+> | W2-2 · Reply-detection pauses cadence + pings Nathan | 🟡 drafting layer done, detection layer still needed. What's missing: receive-sms needs to (a) ping Nathan SMS on inbound, (b) mark deal's queued outreach rows as `skipped` with reason "auto-completed by reply" |
+> | W2-3 · Needs Action dashboard | 🟡 partial — Justin's AutomationsQueue on Today covers pending drafts. Needs expansion to also show overdue tasks + stale no-reply leads in one card |
+> | W2-4 · Lauren playbook writeup | 🟢 Nathan's lane — unchanged, still the blocker for Phase 3 |
+> | W2-5 · Run 15 A-leads | 🟢 ongoing after W1-2 scheduler ships |
+>
+> **Revised ship order (what's actually left):**
+>
+> 1. **W1-1** token trigger on deal insert — ~30 min
+> 2. **W1-2 (remainder)** pg_cron enqueuer: every 60s, find A-tier `new-lead` deals with phone and no existing outreach_queue row, insert a cadence_day=0 queued row — ~1 hr
+> 3. **W2-2 (detection)** receive-sms extension: on inbound, ping Nathan + mark pending queue rows as skipped — ~1 hr
+> 4. **W2-1 (scheduler)** pg_cron inserts day-3 + day-7 queued rows for deals in `texted` stage — ~2 hr
+> 5. **W2-3** expand AutomationsQueue-or-sibling to merge drafts + overdue tasks + stale leads — ~2 hr
+>
+> Total remaining work: ~7 hours vs the original estimate of ~13. Justin's PR
+> #12 cut the scope roughly in half.
+>
+> **Do NOT rebuild:** the drafting engine, the approval UI, the outreach_queue
+> table, or the Comms draft panel. Those are Justin's. Extend them.
 
 ---
 

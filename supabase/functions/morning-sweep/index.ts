@@ -56,6 +56,22 @@ Deno.serve(async (req) => {
 
     const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
+    // 1b. Pull Justin's outreach_queue for pending drafts Nathan needs to
+    // review. This is the human-approval gate that lives in DCC's Today view
+    // via AutomationsQueue — we surface the same signal in the digest so
+    // Nathan knows at-a-glance how many are waiting.
+    const { data: pendingDrafts } = await db.from('outreach_queue')
+      .select('id, deal_id, contact_phone, cadence_day, draft_body, status, scheduled_for, updated_at, created_at, draft_version')
+      .in('status', ['queued', 'generating', 'pending'])
+      .lte('scheduled_for', new Date().toISOString())
+      .order('scheduled_for', { ascending: true });
+    const draftsByDeal = new Map<string, any[]>();
+    (pendingDrafts || []).forEach((d: any) => {
+      const list = draftsByDeal.get(d.deal_id) || [];
+      list.push(d);
+      draftsByDeal.set(d.deal_id, list);
+    });
+
     // 2. For each deal, detect overnight changes
     const classified: any[] = [];
     for (const deal of deals) {
@@ -68,8 +84,12 @@ Deno.serve(async (req) => {
         db.from('activity').select('id, action, created_at').eq('deal_id', deal.id).gte('created_at', sinceIso),
       ]);
 
+      const dealDrafts = draftsByDeal.get(deal.id) || [];
+      const hasPendingDraft = dealDrafts.length > 0;
       const changeCount = (msgs.data?.length || 0) + (calls.data?.length || 0) + (emails.data?.length || 0) + (events.data?.length || 0) + (notes.data?.length || 0) + (activity.data?.length || 0);
-      const hasActivity = changeCount > 0;
+      // A pending outreach draft (from Justin's outreach_queue) also counts
+      // as "needs attention" — Nathan has to approve/edit/send it.
+      const hasActivity = changeCount > 0 || hasPendingDraft;
       const isLate = LATE_STAGE.has(deal.status);
 
       let bucket: 'attention' | 'active_quiet' | 'late_quiet';
@@ -81,6 +101,7 @@ Deno.serve(async (req) => {
         deal,
         bucket,
         changeCount,
+        pendingDrafts: dealDrafts,
         overnight: {
           messages: msgs.data || [],
           calls: calls.data || [],
@@ -117,6 +138,7 @@ Deno.serve(async (req) => {
         attention: attention.length,
         active_quiet: activeQuiet.length,
         late_quiet: lateQuiet.length,
+        pending_drafts: (pendingDrafts || []).length,
       },
       attention: attention.map(c => ({
         deal_id: c.deal.id,
@@ -125,6 +147,16 @@ Deno.serve(async (req) => {
         tier: c.deal.lead_tier,
         county: c.deal.meta?.county,
         court_case: c.deal.meta?.courtCase,
+        // Pending outreach drafts flagged for review per deal (from
+        // outreach_queue, Justin's human-in-the-loop system).
+        pending_drafts: (c.pendingDrafts || []).map((d: any) => ({
+          id: d.id,
+          cadence_day: d.cadence_day,
+          status: d.status,
+          draft_body: d.draft_body ? d.draft_body.slice(0, 300) : null,
+          scheduled_for: d.scheduled_for,
+          draft_version: d.draft_version,
+        })),
         overnight_summary: {
           inbound_messages: c.overnight.messages.filter((m: any) => m.direction === 'inbound').map((m: any) => ({ body: (m.body || '').slice(0, 240), when: m.created_at })),
           outbound_messages: c.overnight.messages.filter((m: any) => m.direction === 'outbound').length,
@@ -155,6 +187,8 @@ For each deal with overnight activity, one block:
   - What happened (1-3 concrete facts — who messaged, what the attorney said, what court action, etc.)
   - What to do (1-2 concrete next actions — "reply to Russ Cope", "open Casey's thread", "log judgment update")
 Facts + actions only. No hedging. No filler. Money amounts when you know them. Tag time-sensitive items with ⏰.
+
+If a deal has pending_drafts, note them first in that deal's block — "📝 N AI draft(s) awaiting your review (day-X cadence)". Those are the highest-priority touch because they're one tap from sending.
 
 ### 📅 Active cases · quiet overnight
 One line each, most-recent-stage first. Just: name · stage · tier.
@@ -208,9 +242,13 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
     // 5. Send SMS (short summary) + email (full digest)
     const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
     const topNames = attention.slice(0, 3).map(c => (c.deal.name || '').split(' - ')[0]).filter(Boolean).join(', ');
+    const pendingDraftCount = (pendingDrafts || []).length;
+    const draftsSuffix = pendingDraftCount > 0
+      ? ` · 📝 ${pendingDraftCount} AI draft${pendingDraftCount === 1 ? '' : 's'} awaiting review`
+      : '';
     const smsBody = attention.length === 0
-      ? `🌅 ${dateStr} morning digest · quiet morning, no overnight activity across ${classified.length} active cases.`
-      : `🌅 ${dateStr} morning digest · ${attention.length} need${attention.length === 1 ? 's' : ''} attention${topNames ? ` (${topNames}${attention.length > 3 ? '…' : ''})` : ''} · ${activeQuiet.length} active quiet · ${lateQuiet.length} late-stage · full brief in email.`;
+      ? `🌅 ${dateStr} morning digest · quiet morning, no overnight activity across ${classified.length} active cases${draftsSuffix}.`
+      : `🌅 ${dateStr} morning digest · ${attention.length} need${attention.length === 1 ? 's' : ''} attention${topNames ? ` (${topNames}${attention.length > 3 ? '…' : ''})` : ''} · ${activeQuiet.length} active quiet · ${lateQuiet.length} late-stage${draftsSuffix} · full brief in email.`;
 
     let smsSent = false;
     if (twilioSid && twilioToken && twilioFrom) {
@@ -237,7 +275,10 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
         .replace(/^- (.+)$/gm, '<li>$1</li>')
         .replace(/\n\n/g, '</p><p>')
         .replace(/\n/g, '<br/>');
-      const fullHtml = `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#1a1a1a;background:#fbf8f1;"><div style="background:#fff;padding:24px 28px;border-radius:14px;border:1px solid #e5dfd0;"><div style="font-size:11px;font-weight:700;letter-spacing:.14em;color:#d8b560;text-transform:uppercase;margin-bottom:8px;">Morning Digest · ${dateStr}</div><p style="font-size:14px;line-height:1.6;">${htmlBody}</p><hr style="border:none;border-top:1px solid #e5dfd0;margin:24px 0 16px;"/><p style="font-size:11px;color:#888;">${classified.length} active deals · ${attention.length} with overnight activity · ${refreshedCount} AI summaries refreshed. Open DCC at <a href="https://app.refundlocators.com/" style="color:#17355e;">app.refundlocators.com</a>.</p></div></body></html>`;
+      const draftsFooter = pendingDraftCount > 0
+        ? ` · 📝 ${pendingDraftCount} outreach draft${pendingDraftCount === 1 ? '' : 's'} awaiting approval — review on the Today view`
+        : '';
+      const fullHtml = `<!DOCTYPE html><html><body style="font-family:-apple-system,sans-serif;max-width:680px;margin:0 auto;padding:24px;color:#1a1a1a;background:#fbf8f1;"><div style="background:#fff;padding:24px 28px;border-radius:14px;border:1px solid #e5dfd0;"><div style="font-size:11px;font-weight:700;letter-spacing:.14em;color:#d8b560;text-transform:uppercase;margin-bottom:8px;">Morning Digest · ${dateStr}</div><p style="font-size:14px;line-height:1.6;">${htmlBody}</p><hr style="border:none;border-top:1px solid #e5dfd0;margin:24px 0 16px;"/><p style="font-size:11px;color:#888;">${classified.length} active deals · ${attention.length} with overnight activity · ${refreshedCount} AI summaries refreshed${draftsFooter}. Open DCC at <a href="https://app.refundlocators.com/" style="color:#17355e;">app.refundlocators.com</a>.</p></div></body></html>`;
 
       try {
         const resp = await fetch('https://api.resend.com/emails', {
@@ -261,6 +302,7 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
       deals_active_quiet: activeQuiet.length,
       deals_late_quiet: lateQuiet.length,
       deals_refreshed: refreshedCount,
+      pending_drafts: pendingDraftCount,
       sms_sent: smsSent,
       email_sent: emailSent,
       digest_preview: digestText.slice(0, 400),
