@@ -7,8 +7,10 @@ const corsHeaders = {
 
 /**
  * Split a message into segments of at most `limit` characters.
- * Splits preferentially at sentence-ending punctuation (. ! ?),
- * then at any whitespace, and only hard-cuts at the limit as a last resort.
+ * Splits at sentence-ending punctuation (period or question mark) only —
+ * meaning the character after the punctuation must be a space followed by
+ * an uppercase letter, or end-of-text, to avoid splitting on abbreviations.
+ * Falls back to last whitespace (word boundary), then hard-cuts as last resort.
  * A single-segment message is returned as-is without modification.
  */
 function splitAtPunctuation(text: string, limit = 160): string[] {
@@ -21,12 +23,18 @@ function splitAtPunctuation(text: string, limit = 160): string[] {
   while (remaining.length > limit) {
     const chunk = remaining.slice(0, limit)
 
-    // Search backwards for sentence-ending punctuation followed by a space or end-of-chunk
+    // Search backwards for '. ' or '? ' where the next char is uppercase (sentence boundary)
+    // Also accept end-of-chunk as a valid boundary.
     let splitIdx = -1
     for (let i = chunk.length - 1; i >= 0; i--) {
-      const ch = chunk[i]
-      const next = chunk[i + 1]
-      if ((ch === '.' || ch === '!' || ch === '?') && (next === ' ' || next === undefined)) {
+      const ch   = chunk[i]
+      const next = chunk[i + 1]  // char immediately after punctuation
+      const after = chunk[i + 2] // char after the space
+      const isSentenceEnd = ch === '.' || ch === '?'
+      const followedByEndOrCapital =
+        next === undefined ||                            // end of chunk
+        (next === ' ' && (after === undefined || (after >= 'A' && after <= 'Z')))
+      if (isSentenceEnd && followedByEndOrCapital) {
         splitIdx = i + 1  // include the punctuation, split after it
         break
       }
