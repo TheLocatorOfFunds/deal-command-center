@@ -10655,7 +10655,8 @@ function LaurenDCC() {
         ),
         React.createElement('button', {
           onClick: () => setOpen(false),
-          style: { marginLeft: 'auto', background: 'none', border: 'none', color: '#78716c', fontSize: 22, lineHeight: 1, cursor: 'pointer', padding: '0 2px' }
+          'aria-label': 'Close chat',
+          style: { marginLeft: 'auto', background: '#292524', border: '1px solid #44403c', color: '#fafaf9', fontSize: 20, lineHeight: 1, cursor: 'pointer', borderRadius: 8, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: 'inherit', fontWeight: 400 }
         }, '×')
       ),
       // Messages
