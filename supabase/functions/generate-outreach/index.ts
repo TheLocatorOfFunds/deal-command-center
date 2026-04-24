@@ -164,10 +164,13 @@ Deno.serve(async (req) => {
     const aiData   = await aiRes.json()
     const rawText  = aiData?.content?.[0]?.text ?? ''
 
+    // Strip markdown code fences if Claude wrapped the JSON (e.g. ```json ... ```)
+    const cleanText = rawText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim()
+
     let parsed: { draft?: string; reasoning?: string } = {}
-    try { parsed = JSON.parse(rawText) } catch {
+    try { parsed = JSON.parse(cleanText) } catch {
       // If Claude returned plain text instead of JSON, treat it as the draft
-      parsed = { draft: rawText.trim(), reasoning: 'Direct response from Claude.' }
+      parsed = { draft: cleanText, reasoning: 'Direct response from Claude.' }
     }
 
     const draftBody     = parsed.draft     || rawText.trim()
