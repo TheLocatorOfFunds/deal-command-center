@@ -130,6 +130,49 @@
   .payout-label { font-size: 11px; font-weight: 700; color: var(--gold-light); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 8px; position: relative; }
   .payout-amount { font-family: 'Fraunces', serif; font-weight: 500; font-size: 42px; line-height: 1; letter-spacing: -0.02em; margin-bottom: 8px; position: relative; }
   .payout-sub { font-size: 13px; color: rgba(255, 252, 245, 0.75); position: relative; }
+
+  /* ── CaseHero: unified payout + status + what's-next ── */
+  .case-hero { border: 1px solid var(--border); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow); margin-bottom: 18px; background: var(--bg-card); }
+  .case-hero-payout { background: linear-gradient(135deg, var(--navy) 0%, var(--navy-mid) 100%); color: #fffcf5; padding: 28px 28px 24px; position: relative; overflow: hidden; }
+  .case-hero-payout::before { content: ''; position: absolute; top: -60px; right: -60px; width: 200px; height: 200px; background: var(--gold); opacity: 0.1; border-radius: 50%; }
+  .case-hero-payout::after { content: ''; position: absolute; bottom: -80px; left: -40px; width: 180px; height: 180px; background: var(--gold); opacity: 0.05; border-radius: 50%; }
+  .case-hero-label { font-size: 11px; font-weight: 700; color: var(--gold-light); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 8px; position: relative; }
+  .case-hero-amount { font-family: 'Fraunces', serif; font-weight: 500; font-size: 46px; line-height: 1; letter-spacing: -0.02em; color: #fffcf5; position: relative; font-variant-numeric: tabular-nums; }
+  .case-hero-sub { font-size: 13px; color: rgba(255, 252, 245, 0.78); margin-top: 10px; line-height: 1.55; position: relative; }
+  .case-hero-progress { margin-top: 22px; position: relative; }
+  .case-hero-progress-track { height: 6px; background: rgba(255, 252, 245, 0.15); border-radius: 3px; overflow: hidden; }
+  .case-hero-progress-fill { height: 100%; background: linear-gradient(90deg, var(--gold-light), var(--gold)); border-radius: 3px; transition: width 0.6s ease-out; box-shadow: 0 0 12px rgba(201, 162, 74, 0.5); }
+  .case-hero-progress-marks { display: flex; justify-content: space-between; font-size: 10px; color: rgba(255, 252, 245, 0.55); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 8px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .case-hero-progress-marks span:last-child { text-transform: none; letter-spacing: 0.02em; color: var(--gold-light); font-weight: 600; }
+  .case-hero-progress-label { font-size: 12px; color: rgba(255, 252, 245, 0.85); margin-top: 10px; font-variant-numeric: tabular-nums; line-height: 1.4; }
+
+  .case-hero-status { background: var(--bg-card-alt); padding: 22px 28px; display: flex; gap: 16px; border-top: 1px solid var(--border); align-items: flex-start; }
+  .case-hero-status-icon { font-size: 24px; flex-shrink: 0; width: 48px; height: 48px; background: var(--bg-card); border-radius: 12px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; line-height: 1; }
+  .case-hero-status-success .case-hero-status-icon { background: var(--green-soft); border-color: var(--green); }
+  .case-hero-status-celebration .case-hero-status-icon { background: var(--gold-soft); border-color: var(--gold); }
+  .case-hero-status-error .case-hero-status-icon { background: #fee2e2; border-color: var(--red); }
+  .case-hero-status-body { flex: 1; min-width: 0; }
+  .case-hero-status-sublabel { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 4px; }
+  .case-hero-status-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 19px; color: var(--navy); letter-spacing: -0.01em; line-height: 1.3; }
+  .case-hero-status-text { font-size: 13px; color: var(--text); margin-top: 6px; line-height: 1.6; }
+  .case-hero-status-cta { font-size: 12px; color: var(--navy-mid); font-weight: 600; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); line-height: 1.5; }
+
+  .case-hero-next { background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%); padding: 20px 28px; border-top: 1px solid var(--border); }
+  .case-hero-next-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px; }
+  .case-hero-next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); letter-spacing: -0.015em; margin-bottom: 6px; line-height: 1.25; }
+  .case-hero-next-estimate { font-size: 13px; font-weight: 600; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+  .case-hero-next-body { font-size: 13px; color: var(--text); line-height: 1.55; }
+
+  @media (max-width: 640px) {
+    .case-hero-payout { padding: 22px 20px 20px; }
+    .case-hero-amount { font-size: 36px; }
+    .case-hero-progress-marks { font-size: 9px; }
+    .case-hero-status { padding: 18px 20px; gap: 12px; }
+    .case-hero-status-icon { width: 42px; height: 42px; font-size: 22px; }
+    .case-hero-status-headline { font-size: 17px; }
+    .case-hero-next { padding: 18px 20px; }
+    .case-hero-next-headline { font-size: 18px; }
+  }
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
   .stat { background: var(--bg-card-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
   .stat-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
@@ -888,6 +931,89 @@ function TimelineExpectation({ filedAt, status }) {
   );
 }
 
+// ─── CaseHero ─────────────────────────────────────────
+// Unified hero card: Payout + Status + What's Next in one visually dynamic
+// block. Replaces the old NextMilestone + payout-hero + StatusIntel +
+// TimelineExpectation stack so the home view feels less like a list and more
+// like a single case snapshot.
+function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJointCase, claimantCount, perClaimantShare }) {
+  const info = statusIntel(status, filedAt);
+  const next = getNextMilestone(status, filedAt);
+  const w = payoutWindow(filedAt);
+
+  // Progress bar: % through the typical 90-180 day payout window.
+  // Anchored at filing (0%) → latest expected date (100%).
+  let progressPct = null;
+  let progressLabel = null;
+  let windowLabel = null;
+  if (w && !['recovered', 'dead'].includes(status)) {
+    const now = Date.now();
+    const filedMs = w.filed.getTime();
+    const earliestMs = w.earliest.getTime();
+    const latestMs = w.latest.getTime();
+    const totalRange = latestMs - filedMs;
+    const elapsed = now - filedMs;
+    progressPct = Math.max(2, Math.min(100, (elapsed / totalRange) * 100));
+    const daysSinceFiling = Math.floor(elapsed / 86400000);
+    const pastWindow = now > latestMs;
+    const inWindow = now >= earliestMs && now <= latestMs;
+    progressLabel = pastWindow
+      ? `Filed ${daysSinceFiling} days ago — past the typical window. Nathan is watching this closely.`
+      : inWindow
+      ? `Filed ${daysSinceFiling} days ago — you're in the typical payout window now.`
+      : `Filed ${daysSinceFiling} days ago — typical Ohio cases resolve in the window below.`;
+    windowLabel = `${fmtDateShort(w.earliest)} — ${fmtDateShort(w.latest)}`;
+  }
+
+  return (
+    <div className="case-hero">
+      {estimatedSurplus > 0 && (
+        <div className="case-hero-payout">
+          <div className="case-hero-label">
+            {isJointCase ? 'Estimated Share (All Claimants)' : 'Your Estimated Share'}
+          </div>
+          <div className="case-hero-amount">{fmt$2(clientShare)}</div>
+          <div className="case-hero-sub">
+            Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% contingency
+            {isJointCase && claimantCount > 1 && <> · ≈ {fmt$2(perClaimantShare)} per claimant</>}
+          </div>
+          {progressPct !== null && (
+            <div className="case-hero-progress">
+              <div className="case-hero-progress-track">
+                <div className="case-hero-progress-fill" style={{ width: progressPct + '%' }} />
+              </div>
+              <div className="case-hero-progress-marks">
+                <span>Filed</span>
+                <span>{windowLabel}</span>
+              </div>
+              <div className="case-hero-progress-label">{progressLabel}</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className={"case-hero-status case-hero-status-" + info.tone}>
+        <div className="case-hero-status-icon">{info.icon}</div>
+        <div className="case-hero-status-body">
+          <div className="case-hero-status-sublabel">Where your case stands</div>
+          <div className="case-hero-status-headline">{info.headline}</div>
+          <div className="case-hero-status-text">{info.body}</div>
+          {info.cta && <div className="case-hero-status-cta">{info.cta}</div>}
+        </div>
+      </div>
+
+      {next && (
+        <div className="case-hero-next">
+          <div className="case-hero-next-label">⏭ What's next</div>
+          <div className="case-hero-next-headline">{next.title}</div>
+          {next.estimate && <div className="case-hero-next-estimate">{next.estimate}</div>}
+          <div className="case-hero-next-body">{next.body}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Court Activity (client-facing docket events) ─────
 // RLS-scoped: client can only read client-facing event types on their own deal.
 // Just render what comes back — the policy does the filtering for us.
@@ -897,7 +1023,26 @@ const CLIENT_EVENT_META = {
   hearing_scheduled:    { label: "Hearing scheduled",           icon: "📅", tone: "info" },
   hearing_continued:    { label: "Hearing rescheduled",         icon: "📅", tone: "info" },
   judgment_entered:     { label: "Court judgment entered",      icon: "⚖",  tone: "info" },
+  motion_filed:         { label: "Motion filed",                icon: "📝", tone: "info" },
+  order_entered:        { label: "Court order entered",         icon: "📜", tone: "info" },
+  docket_updated:       { label: "New court filing",            icon: "📋", tone: "info" },
 };
+
+// Nice human label for any event_type that isn't explicitly mapped above.
+// Prefers the docket row's description as the primary title when present —
+// raw snake_case DB values should never reach the client portal.
+function clientEventTitle(e) {
+  const meta = CLIENT_EVENT_META[e.event_type];
+  if (meta) return meta.label;
+  // Fallback: title-case the event_type if description is empty
+  if (!e.description) {
+    return (e.event_type || 'Docket update')
+      .replace(/_/g, ' ')
+      .replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
+  }
+  // Generic filing — use description as title, no secondary type line needed
+  return 'New court filing';
+}
 
 function ClientDocketCard({ dealId, access, isPreview }) {
   const [events, setEvents] = React.useState({ live: [], history: [] });
@@ -972,26 +1117,41 @@ function ClientDocketCard({ dealId, access, isPreview }) {
               No new activity in the last few days. The <b>case history</b> below shows every docket entry we've pulled since the case was filed.
             </div>
           )}
-          {(events.live || []).map(e => {
-            const meta = CLIENT_EVENT_META[e.event_type] || { label: e.event_type, icon: '📋', tone: 'info' };
-            return (
-              <div key={e.id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: '1px solid var(--border)', alignItems: 'flex-start' }}>
-                <div style={{ fontSize: 22, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center' }}>{meta.icon}</div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500, fontSize: 16, color: 'var(--navy)', letterSpacing: '-0.005em', lineHeight: 1.3 }}>
-                    {meta.label}
-                  </div>
-                  <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 4, lineHeight: 1.5 }}>
-                    {e.description}
-                  </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
-                    {e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
-                    {e.court_system && <> · {e.court_system}</>}
+          {(events.live || []).length > 4 && (
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic', marginBottom: 6, textAlign: 'right' }}>
+              Scroll inside the box to browse all {events.live.length} updates
+            </div>
+          )}
+          <div style={{
+            maxHeight: (events.live || []).length > 4 ? 360 : 'none',
+            overflowY: (events.live || []).length > 4 ? 'auto' : 'visible',
+            paddingRight: (events.live || []).length > 4 ? 8 : 0,
+            borderRadius: 8,
+            background: (events.live || []).length > 4 ? 'var(--bg-card-alt)' : 'transparent',
+            border: (events.live || []).length > 4 ? '1px solid var(--border)' : 'none',
+            padding: (events.live || []).length > 4 ? '4px 14px' : 0,
+          }}>
+            {(events.live || []).map(e => {
+              const meta = CLIENT_EVENT_META[e.event_type] || { icon: '📋', tone: 'info' };
+              return (
+                <div key={e.id} style={{ display: 'flex', gap: 14, padding: '14px 0', borderBottom: '1px solid var(--border)', alignItems: 'flex-start' }}>
+                  <div style={{ fontSize: 22, lineHeight: 1, flexShrink: 0, width: 28, textAlign: 'center' }}>{meta.icon}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500, fontSize: 16, color: 'var(--navy)', letterSpacing: '-0.005em', lineHeight: 1.3 }}>
+                      {clientEventTitle(e)}
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--text)', marginTop: 4, lineHeight: 1.5 }}>
+                      {e.description}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6, fontVariantNumeric: 'tabular-nums' }}>
+                      {e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
+                      {e.court_system && <> · {e.court_system}</>}
+                    </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
 
           {(events.history || []).length > 0 && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: '2px solid var(--border)' }}>
@@ -1014,13 +1174,13 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                     These are docket entries from the court record that happened before we started watching live — the full history of what's happened on your case.
                   </p>
                   {(events.history || []).map(e => {
-                    const meta = CLIENT_EVENT_META[e.event_type] || { label: e.event_type, icon: '📋', tone: 'info' };
+                    const meta = CLIENT_EVENT_META[e.event_type] || { icon: '📋', tone: 'info' };
                     return (
                       <div key={e.id} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: '1px solid var(--border)', alignItems: 'flex-start', opacity: 0.88 }}>
                         <div style={{ fontSize: 16, lineHeight: 1, flexShrink: 0, width: 22, textAlign: 'center', marginTop: 2 }}>{meta.icon}</div>
                         <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--navy)', lineHeight: 1.3 }}>
-                            {meta.label}
+                            {clientEventTitle(e)}
                           </div>
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.45 }}>
                             {e.description}
@@ -1929,19 +2089,16 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
         <CelebrationHero clientShare={clientShare} address={deal.address} />
       ) : (
         <>
-          <NextMilestoneCard status={deal.status} filedAt={filedAt} />
-          {estimatedSurplus > 0 && (
-            <div className="payout-hero" style={{ marginTop: 18 }}>
-              <div className="payout-label">{isJointCase ? 'Total Estimated Share (All Claimants)' : 'Your Estimated Share'}</div>
-              <div className="payout-amount">{fmt$2(clientShare)}</div>
-              <div className="payout-sub">
-                Based on an estimated surplus of {fmt$(estimatedSurplus)} with our {feePct}% contingency fee.
-                {isJointCase ? ` This case has ${claimantCount} claimants — the court's distribution order will allocate shares, which often means each claimant receives approximately ${fmt$2(perClaimantShare)} after our fee (subject to the final court order and any differing ownership percentages).` : ` The final amount will be confirmed by the court's distribution order.`}
-              </div>
-            </div>
-          )}
-          <StatusIntel status={deal.status} filedAt={filedAt} />
-          <TimelineExpectation filedAt={filedAt} status={deal.status} />
+          <CaseHero
+            estimatedSurplus={estimatedSurplus}
+            clientShare={clientShare}
+            feePct={feePct}
+            filedAt={filedAt}
+            status={deal.status}
+            isJointCase={isJointCase}
+            claimantCount={claimantCount}
+            perClaimantShare={perClaimantShare}
+          />
           <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} />
         </>
       )}
