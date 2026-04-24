@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
 <title>Deal Command Center · RefundLocators</title>
 <link rel="manifest" href="manifest.json" />
 <meta name="theme-color" content="#0b1f3a" />
@@ -136,6 +136,11 @@
       height: calc(100dvh - 280px) !important;
       min-height: 440px !important;
       border-radius: 8px !important;
+      /* Keyboard-safe: when iOS opens the keyboard, visualViewport shrinks
+         and we set --keyboard-offset. The container shrinks by that amount
+         so the composer stays docked just above the keyboard's top edge. */
+      height: calc(100dvh - 280px - var(--keyboard-offset, 0px)) !important;
+      transition: height 0.18s ease;
     }
     .comms-container .contact-tab-btn {
       padding: 7px 11px !important;
@@ -7700,6 +7705,33 @@ function OutboundMessages({ dealId, vendors, deal }) {
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
   }, [msgs, activeContact]);
+
+  // Keyboard-safe composer on iOS. Track the visualViewport — when the
+  // keyboard opens, iOS shrinks vv.height; we translate the comms container
+  // up by the difference so the composer docks to the keyboard instead of
+  // being hidden behind it. Only runs on mobile; on desktop the listener
+  // is a no-op because vv.height ≈ window.innerHeight.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const keyboardOffset = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      document.documentElement.style.setProperty('--keyboard-offset', keyboardOffset + 'px');
+      // Scroll thread to bottom when keyboard opens so the latest message
+      // doesn't get buried above the newly-docked composer.
+      if (keyboardOffset > 0 && threadRef.current) {
+        threadRef.current.scrollTop = threadRef.current.scrollHeight;
+      }
+    };
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    update();
+    return () => {
+      vv.removeEventListener('resize', update);
+      vv.removeEventListener('scroll', update);
+      document.documentElement.style.removeProperty('--keyboard-offset');
+    };
+  }, []);
 
   // ── Group threads derived from loaded messages ────────────────────────────
   // A group thread is any message whose thread_key contains ':group:'
