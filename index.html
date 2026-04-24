@@ -122,7 +122,17 @@
     @keyframes sheetUp { from { transform: translateY(40px); opacity: 0.7; } to { transform: translateY(0); opacity: 1; } }
 
     /* Show FAB on phone (shifted up to clear the bottom nav) */
-    .fab { display: inline-flex; bottom: calc(78px + env(safe-area-inset-bottom)) !important; }
+    .fab { display: inline-flex; bottom: calc(92px + env(safe-area-inset-bottom)) !important; }
+
+    /* Hide Lauren's desktop floating pill on mobile — she lives in the
+       More sheet instead so she doesn't crowd the bottom nav. */
+    .lauren-fab { display: none !important; }
+    /* When Lauren's panel IS opened on mobile, it goes full-screen bottom-sheet. */
+    .lauren-panel {
+      bottom: 0 !important; right: 0 !important; left: 0 !important;
+      width: 100% !important; height: calc(100vh - 40px) !important;
+      border-radius: 16px 16px 0 0 !important;
+    }
 
     /* Show bottom-nav on phone + hide the redundant top view-controls */
     .bottom-nav { display: block; }
@@ -753,6 +763,7 @@ function DealCommandCenter({ session, profile }) {
                 { label: '📊 Analytics', onClick: () => setView('analytics'), count: 0 },
               ] : []),
               { sep: 'Quick access' },
+              { label: '🤖 Chat with Lauren', onClick: () => window.dispatchEvent(new Event('dcc:open-lauren')), count: 0 },
               { label: '📥 Leads',       onClick: () => setShowLeads(true),    count: newLeadCount },
               { label: '⚖ Docket',       onClick: () => setShowDocket(true),   count: unackDocketCount, show: isTeam },
               { label: '👥 Contacts',    onClick: () => setShowContacts(true), count: 0, show: isTeam },
@@ -10544,8 +10555,16 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
 // ── Lauren DCC — internal AI assistant ──────────────────────────
 const LAUREN_INTERNAL_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/lauren-internal';
 
+// Global event so callers outside this component can open Lauren's chat
+// (e.g. the mobile More sheet, which can't reach internal state directly).
+// Dispatch `window.dispatchEvent(new Event('dcc:open-lauren'))` to pop it.
 function LaurenDCC() {
   const [open, setOpen] = React.useState(false);
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    window.addEventListener('dcc:open-lauren', handler);
+    return () => window.removeEventListener('dcc:open-lauren', handler);
+  }, []);
   const [msgs, setMsgs] = React.useState([]);
   const [input, setInput] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -10607,6 +10626,7 @@ function LaurenDCC() {
     React.createElement('button', {
       onClick: () => setOpen(o => !o),
       style: btnStyle,
+      className: 'lauren-fab',
       title: 'Chat with Lauren'
     },
       React.createElement('svg', { width: 16, height: 16, fill: 'none', viewBox: '0 0 20 20' },
@@ -10615,6 +10635,7 @@ function LaurenDCC() {
       'Lauren'
     ),
     open && React.createElement('div', {
+      className: 'lauren-panel',
       style: {
         position: 'fixed', bottom: 80, right: 24, zIndex: 9001,
         width: 380, height: 520,
