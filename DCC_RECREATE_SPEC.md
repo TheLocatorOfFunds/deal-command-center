@@ -1,5 +1,21 @@
 # Deal Command Center — Full Recreation Spec
 
+> ⚠️ **DRIFT WARNING — read before trusting any detail in this doc**
+>
+> This file is a **point-in-time snapshot** (first written 2026-04-24). The DCC
+> codebase + Supabase schema evolve continuously; this doc doesn't auto-update.
+> By the time you read it, specifics (table columns, Edge Function names, tab
+> lists) may no longer match production.
+>
+> **Single source of truth is always the current codebase + live Supabase
+> project `rcfaashkfpurkvtmsmeb`.** If this doc disagrees with them, they win.
+>
+> **Nothing imports or executes this file.** It's reference-only. Safe to let
+> drift; safe to delete; safe to fork and modify. No code references break if
+> it goes stale or away.
+
+---
+
 **Purpose:** a complete, self-contained brief for a fresh Claude Code session to rebuild
 Nathan Johnson's Deal Command Center (DCC) from zero. Everything needed is in this file.
 No "see other doc X" — if it matters, it's in here.
