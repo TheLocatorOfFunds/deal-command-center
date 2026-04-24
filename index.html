@@ -3293,6 +3293,7 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const [isGen, setIsGen]         = React.useState(false);
   const [isSend, setIsSend]       = React.useState(false);
   const [editMode, setEditMode]   = React.useState(false);
+  const sendingRef                = React.useRef(false);
   const [editBody, setEditBody]   = React.useState('');
   const [fromNum, setFromNum]     = React.useState('+15135162306');
   const [phoneNums, setPhoneNums] = React.useState([]);
@@ -3353,6 +3354,8 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   }
 
   async function handleSend(bodyOverride) {
+    if (sendingRef.current) return;   // prevent double-send on fast double-click
+    sendingRef.current = true;
     setIsSend(true); setError(null);
     try {
       const bodyToSend = bodyOverride ?? (editMode ? editBody : item?.draft_body);
@@ -3379,7 +3382,8 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
       setSentInfo({ at: new Date(), from: fromNum, to: toPhone, body: bodyToSend });
       setEditMode(false);
       onSent && onSent(item);
-    } catch (e) { setError(e.message); setIsSend(false); }
+    } catch (e) { setError(e.message); }
+    finally { setIsSend(false); sendingRef.current = false; }
   }
 
   async function handleSkip() {
@@ -3717,15 +3721,15 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
   return (
     <div>
-      {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
-      <AutomationsQueue onSelectDeal={onSelect} />
-
       {/* Monthly stats strip — each card is clickable */}
       <div style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(3, 1fr)" : "repeat(2, 1fr)", gap: 12, marginBottom: 20 }}>
         <PortfolioStat onClick={() => setView && setView("active")}  label={`Deals Added · ${monthName}`} value={addedThisMonth.length} sub={addedThisMonth.length === 1 ? "1 new deal this month" : `${addedThisMonth.length} new deals this month`} color="#3b82f6" />
         {isAdmin && <PortfolioStat onClick={() => setView && setView("analytics")} label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />}
         <PortfolioStat onClick={() => setView && setView("active")}  label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
       </div>
+
+      {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
+      <AutomationsQueue onSelectDeal={onSelect} />
 
       {/* Priority queue */}
       {!hasAny && (
