@@ -936,6 +936,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
+          {viewBtn("attention", "🔔 Attention", 0)}
           {viewBtn("pipeline", "🧭 Pipeline", 0)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
@@ -953,7 +954,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       </div>
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks views) */}
-      {view !== "today" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
+      {view !== "today" && view !== "attention" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -972,10 +973,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
+          ) : view === "attention" ? (
+            <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "reports" ? (
             <ReportsView deals={deals} onSelect={onSelect} />
           ) : view === "analytics" ? (
@@ -2020,6 +2023,127 @@ const expectedPayoutDate = (deal) => {
 // stage, Castle scraper health, ops velocity (activities/day, task burndown),
 // and client engagement. Complements AnalyticsView (which covers financial
 // forecasting + attorney/county performance).
+// ─── Attention View ─────────────────────────────────────────────
+// Central dashboard of everything waiting on Nathan/Justin across ALL deals.
+// Per-deal counts: un-acknowledged docket events, inbound SMS not yet read
+// on Comms, missed/new calls, inbound emails, pending outreach drafts from
+// Justin's outreach_queue. Sorted most-urgent-first. One click jumps into
+// the deal with the right tab pre-selected.
+function AttentionView({ deals, onSelect }) {
+  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState([]);
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true);
+      const ARCHIVE = new Set(['closed', 'recovered', 'dead']);
+      const active = deals.filter(d => !ARCHIVE.has(d.status));
+      if (active.length === 0) { setRows([]); setLoading(false); return; }
+      const ids = active.map(d => d.id);
+
+      // Pull everything we need in parallel. Using per-deal grouping below.
+      const [docketUnack, inboundSms, allCalls, inboundEmail, pendingDrafts] = await Promise.all([
+        sb.from('docket_events').select('id, deal_id, event_type, description, event_date, received_at').in('deal_id', ids).eq('is_backfill', false).is('acknowledged_at', null),
+        sb.from('messages_outbound').select('id, deal_id, body, from_number, created_at').in('deal_id', ids).eq('direction', 'inbound').order('created_at', { ascending: false }).limit(500),
+        sb.from('call_logs').select('id, deal_id, direction, status, started_at, duration_seconds').in('deal_id', ids).order('started_at', { ascending: false }).limit(500),
+        sb.from('emails').select('id, deal_id, subject, from_email, created_at').in('deal_id', ids).eq('direction', 'inbound').order('created_at', { ascending: false }).limit(500),
+        sb.from('outreach_queue').select('id, deal_id, cadence_day, status, scheduled_for, draft_body').in('deal_id', ids).in('status', ['queued', 'generating', 'pending']),
+      ]);
+
+      // Use user_deal_views to know what's been seen per tab. For the
+      // Attention dashboard we don't want already-acknowledged items (for
+      // docket) or already-seen comms — so we subtract the user's seen time.
+      const { data: views } = await sb.from('user_deal_views').select('deal_id, tab, last_seen_at');
+      const seenByDeal = new Map();
+      (views || []).forEach(v => {
+        const cur = seenByDeal.get(v.deal_id) || {};
+        cur[v.tab] = v.last_seen_at;
+        seenByDeal.set(v.deal_id, cur);
+      });
+
+      const perDeal = new Map();
+      for (const d of active) {
+        const seen = seenByDeal.get(d.id) || {};
+        const commsSince = seen.comms || '1970-01-01T00:00:00Z';
+        perDeal.set(d.id, {
+          deal: d,
+          docket: (docketUnack.data || []).filter(r => r.deal_id === d.id),
+          sms_unread: (inboundSms.data || []).filter(r => r.deal_id === d.id && new Date(r.created_at) > new Date(commsSince)),
+          calls_unread: (allCalls.data || []).filter(r => r.deal_id === d.id && new Date(r.started_at) > new Date(commsSince)),
+          emails_unread: (inboundEmail.data || []).filter(r => r.deal_id === d.id && new Date(r.created_at) > new Date(commsSince)),
+          drafts_pending: (pendingDrafts.data || []).filter(r => r.deal_id === d.id),
+        });
+      }
+
+      const list = [...perDeal.values()]
+        .map(r => {
+          const total = r.docket.length + r.sms_unread.length + r.calls_unread.length + r.emails_unread.length + r.drafts_pending.length;
+          return { ...r, total };
+        })
+        .filter(r => r.total > 0)
+        .sort((a, b) => b.total - a.total);
+      setRows(list);
+      setLoading(false);
+    };
+    load();
+  }, [deals]);
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 40, color: '#78716c' }}>Loading…</div>;
+
+  const totalAll = rows.reduce((s, r) => s + r.total, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0 }}>🔔 Attention</h2>
+        <div style={{ fontSize: 12, color: '#a8a29e' }}>
+          {totalAll === 0 ? 'Nothing needs attention across your active deals right now.' : `${totalAll} item${totalAll === 1 ? '' : 's'} across ${rows.length} deal${rows.length === 1 ? '' : 's'}`}
+        </div>
+      </div>
+
+      {rows.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10, fontSize: 14 }}>
+          All clear. No unread Comms, no un-acknowledged docket events, no pending outreach drafts.
+        </div>
+      )}
+
+      {rows.map(r => {
+        const parts = [];
+        if (r.docket.length > 0)         parts.push({ label: `⚖ ${r.docket.length} docket`,           tab: 'docket', color: '#f59e0b' });
+        if (r.sms_unread.length > 0)     parts.push({ label: `💬 ${r.sms_unread.length} SMS`,          tab: 'comms',  color: '#3b82f6' });
+        if (r.calls_unread.length > 0)   parts.push({ label: `📞 ${r.calls_unread.length} call${r.calls_unread.length === 1 ? '' : 's'}`, tab: 'comms', color: '#8b5cf6' });
+        if (r.emails_unread.length > 0)  parts.push({ label: `📧 ${r.emails_unread.length} email${r.emails_unread.length === 1 ? '' : 's'}`, tab: 'comms', color: '#06b6d4' });
+        if (r.drafts_pending.length > 0) parts.push({ label: `📝 ${r.drafts_pending.length} draft${r.drafts_pending.length === 1 ? '' : 's'}`, tab: 'comms', color: '#22c55e' });
+
+        return (
+          <div key={r.deal.id}
+            onClick={() => onSelect(r.deal.id)}
+            style={{ padding: "12px 14px", marginBottom: 8, background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #d97706", borderRadius: 8, cursor: "pointer", display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#d97706', fontFamily: "'DM Mono', monospace", minWidth: 32, textAlign: "center" }}>{r.total}</div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 3 }}>
+                {r.deal.name || r.deal.id}
+                <span style={{ fontSize: 11, fontWeight: 400, color: '#78716c', marginLeft: 8 }}>· {r.deal.status}</span>
+                {r.deal.lead_tier && <span style={{ fontSize: 10, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 6px', borderRadius: 3, marginLeft: 6, letterSpacing: '0.05em' }}>TIER {r.deal.lead_tier}</span>}
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {parts.map(p => (
+                  <span key={p.label} style={{ fontSize: 10, fontWeight: 600, color: p.color, background: p.color + '1a', padding: '2px 8px', borderRadius: 4, letterSpacing: '0.04em' }}>{p.label}</span>
+                ))}
+              </div>
+            </div>
+            <span style={{ fontSize: 11, color: '#78716c' }}>Open →</span>
+          </div>
+        );
+      })}
+
+      <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        <b style={{ color: '#a8a29e' }}>How this works:</b> counts reflect per-user unread state. Opening a deal's Comms tab marks all Comms items seen for you; same for Docket. Justin's reads don't mark items seen for you, and vice versa. Docket items also clear when someone clicks Acknowledge on them. Pending drafts are from Justin's outreach_queue and clear when you send or skip from the AutomationsQueue on Today.
+      </div>
+    </div>
+  );
+}
+
 function ReportsView({ deals, onSelect }) {
   const [loading, setLoading] = useState(true);
   const [scrapeRuns, setScrapeRuns] = useState([]);
@@ -4114,10 +4238,56 @@ function Modal({ onClose, title, children, wide }) {
 // ─── Deal Detail ─────────────────────────────────────────────────────
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab }) {
   const [tab, setTab] = useState(initialTab || "overview");
+  const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
+
+  // Compute unread counts per tab based on this user's last_seen_at per tab.
+  // Docket = non-backfill events received after last docket view.
+  // Comms  = inbound SMS + inbound calls + inbound emails after last comms view.
+  const loadUnreadCounts = React.useCallback(async () => {
+    if (!userId || !deal?.id) return;
+    const { data: views } = await sb.from('user_deal_views')
+      .select('tab, last_seen_at')
+      .eq('deal_id', deal.id);
+    const viewMap = Object.fromEntries((views || []).map(v => [v.tab, v.last_seen_at]));
+    const docketSince = viewMap.docket || '1970-01-01T00:00:00Z';
+    const commsSince  = viewMap.comms  || '1970-01-01T00:00:00Z';
+    const [docket, msgs, calls, emails] = await Promise.all([
+      sb.from('docket_events').select('id', { count: 'exact', head: true })
+        .eq('deal_id', deal.id).eq('is_backfill', false).gt('received_at', docketSince),
+      sb.from('messages_outbound').select('id', { count: 'exact', head: true })
+        .eq('deal_id', deal.id).eq('direction', 'inbound').gt('created_at', commsSince),
+      sb.from('call_logs').select('id', { count: 'exact', head: true })
+        .eq('deal_id', deal.id).gt('started_at', commsSince),
+      sb.from('emails').select('id', { count: 'exact', head: true })
+        .eq('deal_id', deal.id).eq('direction', 'inbound').gt('created_at', commsSince),
+    ]);
+    setUnreadCounts({
+      docket: docket.count || 0,
+      comms: (msgs.count || 0) + (calls.count || 0) + (emails.count || 0),
+    });
+  }, [userId, deal?.id]);
+
+  useEffect(() => {
+    loadUnreadCounts();
+    const iv = setInterval(loadUnreadCounts, 60000);
+    return () => clearInterval(iv);
+  }, [loadUnreadCounts]);
+
+  // Upsert last_seen_at for the initial tab on mount so the badge clears
+  // the moment Nathan opens the deal on that tab.
+  useEffect(() => {
+    if (!userId || !deal?.id || !tab) return;
+    sb.from('user_deal_views').upsert({
+      user_id: userId, deal_id: deal.id, tab, last_seen_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,deal_id,tab' }).then(() => setTimeout(loadUnreadCounts, 300));
+    // eslint-disable-next-line
+  }, [userId, deal?.id, tab]);
 
   const switchTab = (t) => {
     setTab(t);
     window.location.hash = `#/deal/${deal.id}/${t}`;
+    // The mount-effect above will also handle upsert + refresh on tab state
+    // change, so no duplicate logic needed here.
   };
   const [expenses, setExpenses] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -4329,6 +4499,12 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
           }}>
             {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id === "investor" ? "💵 Investor" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
+            {/* Unread-since-last-seen badge for Comms + Docket — resets when the tab is opened */}
+            {((id === "comms" && unreadCounts.comms > 0) || (id === "docket" && unreadCounts.docket > 0)) && (
+              <span style={{ marginLeft: 6, display: "inline-block", background: "#ef4444", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 700, lineHeight: 1.3, verticalAlign: "middle" }}>
+                {id === "comms" ? unreadCounts.comms : unreadCounts.docket}
+              </span>
+            )}
           </button>
         ))}
       </div>
