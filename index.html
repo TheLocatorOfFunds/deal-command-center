@@ -154,7 +154,20 @@
       font-size: 9px !important;
     }
     .comms-container .thread-header-from {
-      display: none !important;  /* hide from-number selector on mobile; edit via deal settings */
+      /* Keep the number selector visible on mobile — Nathan needs to pick
+         which line an outbound text goes from. Compact it to a single
+         inline control so it doesn't stack in the header. */
+      flex-direction: row !important;
+      align-items: center !important;
+      gap: 5px !important;
+    }
+    .comms-container .thread-header-from > span:first-child {
+      font-size: 9px !important;  /* "FROM" kicker stays as a compact inline prefix */
+    }
+    .comms-container .thread-header-from select {
+      font-size: 11px !important;
+      padding: 2px 4px !important;
+      max-width: 130px !important;
     }
     .comms-container .channel-chips {
       gap: 4px !important; padding: 6px 10px !important;
