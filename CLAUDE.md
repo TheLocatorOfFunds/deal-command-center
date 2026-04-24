@@ -226,6 +226,28 @@ Do NOT delete `TXT resend._domainkey` or `TXT _dmarc` under any circumstance —
 those are the active outbound sending config. SES leftovers (`MX send` and `TXT send`
 with `include:amazonses.com`) were deleted Apr 22, 2026 and do not need to come back.
 
+## Mac Mini (Defender Mini) — SSH access
+
+Claude can SSH directly into the Mac Mini to deploy bridge fixes without any manual steps.
+
+```bash
+ssh defender-mini   # resolves to dealcommandcenter@defender-mini.local
+```
+
+**After any change to `mac-bridge/bridge.js`**, always run this to deploy:
+```bash
+ssh defender-mini "cd '/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center' && git pull && launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist && launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist && sleep 3 && tail -20 /tmp/dcc-bridge.log"
+```
+
+Check bridge logs anytime:
+```bash
+ssh defender-mini "tail -50 /tmp/dcc-bridge.log"
+```
+
+SSH key: `~/.ssh/defender_mini` (ed25519, already authorized on Mac Mini)
+Plist: `com.refundlocators.bridge`
+Bridge repo path: `/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
+
 ## QA protocol — mandatory before declaring work done
 
 **Before saying a feature is ready, always browser-test the core user flows end to end.**
