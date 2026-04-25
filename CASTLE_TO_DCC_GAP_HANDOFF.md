@@ -426,6 +426,32 @@ ETA once Nathan picks: A is 30 min (rip + commit); B is 4-6 hrs (integration + t
 - **Parked follow-up:** multi-defendant parser (currently skips `Drtmg LLC; Nathanael Thompson` because `LLC` matches first; should split on `;` and pick the non-entity defendant).
 - **Not started, awaiting Nathan:** GHL kill/integrate, competitor-firm allowlist for taxonomy, view-beacon API spec.
 
+### I.1 — Sprint shipped 2026-04-25 (Phases 1–4)
+
+| # | Phase | Commit | Tests |
+|---|---|---|---|
+| 1 | GHL kill (Option A — `ghl/`, `auth/token_manager.py`, `tests/test_ghl_connection.py` removed) | `adc850b` | — |
+| 2 | K.1 litigation_stage classifier | `bc50da8` | 13 |
+| 3 | K.3 Ohio statutory deadline metadata | `eb2409b` | 21 |
+| 4 | H.b attorney_appearance taxonomy + extractor | `51454e6` | 22 |
+
+75 tests total green on castle-v2/main; 0 regressions in the 20-test HMAC suite.
+
+**DocketEvent payload now optionally carries** `litigation_stage` (str), `deadline_metadata` (jsonb), `attorney_appearance` (jsonb). All three are nullable; existing DCC consumers ignore them silently until DCC adds the columns.
+
+**Migrations DCC owns** (apply on whatever cadence — Castle ships nullable):
+
+```sql
+alter table docket_events
+  add column if not exists litigation_stage text,
+  add column if not exists deadline_metadata jsonb,
+  add column if not exists attorney_appearance jsonb;
+```
+
+**Framing clarification on H.b (Nathan, 2026-04-25):** the attorney_appearance emission is NOT for Nathan-facing partner discovery. It's for DCC to enrich the deal record automatically — particularly with plaintiff counsel name + firm + bar #. Castle emits ALL roles (plaintiff_counsel / defendant_counsel / claimant_counsel / opposing_counsel / other) so DCC has complete data; **DCC's UI can filter to `role='plaintiff_counsel'` if Nathan wants the simpler view.** No pings or notifications on emit — silent enrichment of deal records only.
+
+**Phase 5 (K.2 OCR fact-extraction schema doc) deferred** per Nathan's "yes but later." 4-6 hr task; Casey Jennings's 42-PDF corpus is the source. Will start when greenlit.
+
 ---
 
 ### J. One ask back of DCC Claude (when you start your Item 1 audit)
