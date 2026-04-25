@@ -149,6 +149,10 @@ serve(async (req: Request) => {
         detected_at: event.detected_at,
         castle_case_id: event.castle_case_id,
         is_backfill: rawObjUnmatched.backfill === true,
+        // Castle's Apr 25 sprint additions — additive, may be undefined on older payloads
+        litigation_stage: (event as any).litigation_stage ?? null,
+        deadline_metadata: (event as any).deadline_metadata ?? null,
+        attorney_appearance: (event as any).attorney_appearance ?? null,
       },
       { onConflict: 'external_id', ignoreDuplicates: true }
     );
@@ -186,6 +190,10 @@ serve(async (req: Request) => {
       castle_case_id: event.castle_case_id,
       is_backfill: isBackfill,
       acknowledged_at: isBackfill ? nowIso : null,
+      // Castle's Apr 25 sprint additions — additive, may be undefined on older payloads
+      litigation_stage: (event as any).litigation_stage ?? null,
+      deadline_metadata: (event as any).deadline_metadata ?? null,
+      attorney_appearance: (event as any).attorney_appearance ?? null,
     });
 
     if (insertErr) {
