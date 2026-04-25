@@ -309,9 +309,16 @@ async function syncFromChatDb() {
     }
 
     // Every non-Nathan participant must resolve to the SAME deal.
+    // Filter out our own numbers first — Nathan's handle appears in chat_handle_join
+    // for group chats he created, and findDealForPhone would return null for it.
+    const contactPhones = phones.filter(p => !OUR_NUMBERS.has(p));
+    if (contactPhones.length === 0) {
+      chatCache.set(chatId, { dealId: null, isGroup: true, participants: phones });
+      continue;
+    }
     let commonDeal = null;
     let allMatch   = true;
-    for (const phone of phones) {
+    for (const phone of contactPhones) {
       const dealId = await findDealForPhone(phone);
       if (!dealId) { allMatch = false; break; }
       if (commonDeal === null) { commonDeal = dealId; }
