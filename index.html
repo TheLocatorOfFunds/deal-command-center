@@ -2184,6 +2184,87 @@ function ScraperHealthPanel() {
   );
 }
 
+// Cross-deal deadline alert strip — silent when no deal has any docket event
+// with a deadline_metadata countdown coming up in the next 14 days. Pinned at
+// the top of AttentionView next to the Castle scraper alerts. The data
+// comes from Castle's K.3 emission landing in docket_events.deadline_metadata.
+function DeadlineAlertStrip({ onSelect }) {
+  const [items, setItems] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      // Pull every event that has deadline_metadata + an event_date within the
+      // last ~120 days. Compute the deadline client-side and filter to "upcoming
+      // or just-expired" so Nathan gets a window of ~14 days forward + 3 days
+      // backward (in case he wants to chase a just-missed deadline).
+      const since = new Date(Date.now() - 120 * 86400000).toISOString().slice(0, 10);
+      const { data } = await sb.from('docket_events')
+        .select('id, deal_id, event_type, event_date, description, deadline_metadata')
+        .gte('event_date', since)
+        .not('deadline_metadata', 'is', null)
+        .eq('is_backfill', false);
+      if (!alive) return;
+
+      // Pull the matching deal names so the strip can show them
+      const dealIds = [...new Set((data || []).map(e => e.deal_id))];
+      let dealsById = {};
+      if (dealIds.length > 0) {
+        const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
+        dealsById = Object.fromEntries((deals || []).map(d => [d.id, d]));
+      }
+
+      const results = [];
+      for (const e of (data || [])) {
+        const d = eventDeadline(e);
+        if (!d) continue;
+        // Surface anything from -3 days (just expired, may still be salvageable)
+        // to +14 days (approaching). Skip the comfortable zone.
+        if (d.daysRemaining < -3 || d.daysRemaining > 14) continue;
+        results.push({ event: e, deadline: d, deal: dealsById[e.deal_id] || { id: e.deal_id, name: e.deal_id } });
+      }
+      results.sort((a, b) => a.deadline.daysRemaining - b.deadline.daysRemaining);
+      setItems(results);
+    };
+    load();
+    const id = setInterval(load, 5 * 60 * 1000); // refresh every 5 min
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  if (!items || items.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 14, padding: '10px 14px', background: '#1c1917', border: '1px solid #92400e', borderLeft: '3px solid #f59e0b', borderRadius: 8 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>
+        ⏳ Approaching deadlines · {items.length}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {items.map(({ event, deadline, deal }) => {
+          const c = deadlineColor(deadline.daysRemaining);
+          return (
+            <div key={event.id}
+              onClick={() => onSelect && onSelect(deal.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 10px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 5, cursor: 'pointer' }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: c, minWidth: 110, fontFamily: "'DM Mono', monospace" }}>
+                {deadlineLabel(deadline)}
+              </span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#fafaf9', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {deal.name || deal.id}
+              </span>
+              <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>
+                {deadlineKindLabel(deadline.kind)}
+              </span>
+              <span style={{ fontSize: 10, color: '#78716c', flexShrink: 0, fontFamily: "'DM Mono', monospace" }}>
+                {deadline.deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AttentionView({ deals, onSelect }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
@@ -2332,6 +2413,7 @@ function AttentionView({ deals, onSelect }) {
       </div>
 
       <ScraperAlertStrip />
+      <DeadlineAlertStrip onSelect={onSelect} />
 
       {rows.length === 0 && (
         <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10, fontSize: 14 }}>
@@ -7407,6 +7489,69 @@ const CRITICAL_EVENT_TYPES = new Set([
 ]);
 const isCriticalEvent = (t) => CRITICAL_EVENT_TYPES.has(t);
 
+// ─── Castle Apr 25 sprint additions: derived helpers ──────────────
+// litigation_stage = lifecycle bucket per docket event
+// deadline_metadata = statutory countdown info
+// attorney_appearance = attorney+firm extracted from court filings
+const LITIGATION_STAGE_META = {
+  pre_filing:           { label: "Pre-filing",     color: "#78716c" },
+  filed:                { label: "Filed",          color: "#3b82f6" },
+  service:              { label: "Service",        color: "#3b82f6" },
+  hearing_scheduled:    { label: "Hearing set",    color: "#8b5cf6" },
+  hearing_held:         { label: "Hearing held",   color: "#8b5cf6" },
+  order_entered:        { label: "Order entered",  color: "#a78bfa" },
+  distribution_ordered: { label: "Distrib. ordered", color: "#10b981" },
+  distribution_paid:    { label: "Distrib. paid",  color: "#10b981" },
+  closed:               { label: "Closed",         color: "#57534e" },
+};
+
+// Compute deadline countdown from a docket event with deadline_metadata.
+// Castle emits one of: appeal_window_days, response_due_in_days, redemption_period_days.
+// Returns null when no statutory window applies.
+function eventDeadline(e) {
+  const dm = e?.deadline_metadata;
+  if (!dm || !e.event_date) return null;
+  const days = Number(dm.appeal_window_days) || Number(dm.response_due_in_days) || Number(dm.redemption_period_days);
+  if (!days || isNaN(days)) return null;
+  const eventDate = new Date(e.event_date);
+  if (isNaN(eventDate.getTime())) return null;
+  const deadlineDate = new Date(eventDate);
+  deadlineDate.setDate(deadlineDate.getDate() + days);
+  const now = Date.now();
+  const dayMs = 86400000;
+  const daysSince = Math.floor((now - eventDate.getTime()) / dayMs);
+  const daysRemaining = Math.ceil((deadlineDate.getTime() - now) / dayMs);
+  let kind = 'response';
+  if (dm.appeal_window_days) kind = 'appeal';
+  else if (dm.redemption_period_days) kind = 'redemption';
+  return {
+    deadlineDate,
+    totalDays: days,
+    daysSince,
+    daysRemaining,
+    kind,
+    notes: dm.deadline_notes || null,
+  };
+}
+
+function deadlineColor(daysRemaining) {
+  if (daysRemaining < 0) return "#ef4444";       // expired
+  if (daysRemaining <= 2) return "#dc2626";      // critical
+  if (daysRemaining <= 7) return "#f59e0b";      // approaching
+  return "#10b981";                              // comfortable
+}
+
+function deadlineLabel(d) {
+  if (d.daysRemaining < 0) return `Expired ${Math.abs(d.daysRemaining)}d ago`;
+  if (d.daysRemaining === 0) return `Due TODAY`;
+  if (d.daysRemaining === 1) return `Due tomorrow`;
+  return `Day ${d.daysSince + 1} of ${d.totalDays} · ${d.daysRemaining}d remaining`;
+}
+
+function deadlineKindLabel(kind) {
+  return kind === 'appeal' ? 'Appeal window' : kind === 'redemption' ? 'Redemption period' : 'Response due';
+}
+
 function DocketTab({ dealId }) {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -7507,6 +7652,10 @@ function DocketTab({ dealId }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                       <span style={{ fontSize: 16 }}>{meta.icon}</span>
                       <span style={{ fontSize: 10, fontWeight: 700, color: meta.color, letterSpacing: "0.08em", textTransform: "uppercase", padding: "2px 8px", background: meta.color + "22", borderRadius: 3 }}>{meta.label}</span>
+                      {e.litigation_stage && (() => {
+                        const lm = LITIGATION_STAGE_META[e.litigation_stage] || { label: e.litigation_stage.replace(/_/g, ' '), color: '#78716c' };
+                        return <span title="Litigation stage (Castle-classified)" style={{ fontSize: 9, fontWeight: 700, color: lm.color, padding: "2px 7px", background: lm.color + "1a", border: `1px solid ${lm.color}66`, borderRadius: 3, letterSpacing: "0.06em", textTransform: "uppercase" }}>{lm.label}</span>;
+                      })()}
                       <span style={{ fontSize: 11, color: "#78716c", fontFamily: "'DM Mono', monospace" }}>{e.event_date}</span>
                       {isUnack && <span style={{ fontSize: 9, fontWeight: 700, color: "#fbbf24", padding: "2px 7px", border: "1px solid #78350f", borderRadius: 3, letterSpacing: "0.06em" }}>NEW</span>}
                     </div>
@@ -7518,6 +7667,33 @@ function DocketTab({ dealId }) {
                       {e.case_number && <span>Case {e.case_number}</span>}
                       {e.detected_at && <span>Detected {new Date(e.detected_at).toLocaleString()}</span>}
                     </div>
+                    {(() => {
+                      const d = eventDeadline(e);
+                      if (!d) return null;
+                      const c = deadlineColor(d.daysRemaining);
+                      return (
+                        <div style={{ marginTop: 10, padding: "8px 12px", background: c + "1a", border: `1px solid ${c}66`, borderLeft: `3px solid ${c}`, borderRadius: 5 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 11, fontWeight: 700, color: c, letterSpacing: "0.04em" }}>⏳ {deadlineLabel(d)}</span>
+                            <span style={{ fontSize: 10, color: "#a8a29e" }}>{deadlineKindLabel(d.kind)} · {d.deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                          </div>
+                          {d.notes && <div style={{ fontSize: 10, color: "#78716c", marginTop: 4, fontStyle: "italic" }}>{d.notes}</div>}
+                        </div>
+                      );
+                    })()}
+                    {e.attorney_appearance && (
+                      <div style={{ marginTop: 10, padding: "8px 12px", background: "#451a0322", border: "1px solid #92400e66", borderLeft: "3px solid #d97706", borderRadius: 5 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", fontSize: 12 }}>
+                          <span style={{ fontSize: 14 }}>👨‍⚖️</span>
+                          <span style={{ color: "#fbbf24", fontWeight: 700 }}>{e.attorney_appearance.attorney_name || 'Attorney appearance'}</span>
+                          {e.attorney_appearance.firm_name && <span style={{ color: "#a8a29e" }}>· {e.attorney_appearance.firm_name}</span>}
+                        </div>
+                        <div style={{ fontSize: 10, color: "#78716c", marginTop: 4, display: "flex", gap: 10, flexWrap: "wrap" }}>
+                          {e.attorney_appearance.role && <span style={{ textTransform: "capitalize" }}>{String(e.attorney_appearance.role).replace(/_/g, ' ')}</span>}
+                          {e.attorney_appearance.bar_number && <span>Bar #{e.attorney_appearance.bar_number}</span>}
+                        </div>
+                      </div>
+                    )}
                     {(e.document_url || e.document_ocr_id) && (
                       <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
                         {e.document_ocr_id && (
