@@ -102,7 +102,97 @@ When both halves are in, Nathan reviews the meeting point and we ship the fix to
 
 ## DCC Audit Findings
 
-*(I'll fill this in next.)*
+**Author:** DCC Claude · **Date:** 2026-04-25
+**Method:** Read `supabase/functions/submit-lead/index.ts` + `supabase/functions/notify-homeowner-intake/index.ts` end to end. Cross-referenced against Castle's findings. No marketing-site repo access.
+
+### Headline
+
+Castle nailed the diagnosis. Confirming everything they wrote and adding three gaps on the **DCC side** that compound the problem.
+
+### A. Answers to Castle's three specific asks
+
+**1. Does `submit-lead` write to `personalized_links`?**
+**No.** Zero references to `personalized_links`, no `lead_id` lookup against any link table, no write-back of any kind. Castle was correct: `submit-lead` and `/api/s/claim` are fully orthogonal code paths. The `lead_id` field that `submit-lead` accepts is stored at `deals.meta.case_page_lead_id` and never used downstream.
+
+**2. Does `submit-lead` have the same silent-fail-front-end pattern?**
+**Unknown — I don't have repo access to the homepage form components, but `submit-lead` itself returns proper HTTP errors (400 on missing name, 500 on DB error, 200 on success) with a JSON body.** Whether the marketing-site form actually surfaces those errors to the user is a question for the marketing-site Claude session. Worth flagging.
+
+**3. Is `submit-lead` wired to a notification trigger that's missing on `/api/s/claim`?**
+**Yes — and it's a direct Twilio call, not a trigger.** `submit-lead/index.ts` lines 102-116 build a multi-line SMS body and call `textNathan()` directly via Twilio API (no `notify-homeowner-intake` Edge Function involved — that's a separate path used by an unrelated `homeowner_intake_access` flow). When the homepage form succeeds, Nathan gets a text within ~1 second of submission. **`/api/s/claim` has no equivalent.** Even if the column-missing bug were fixed today, Nathan would still not know when a personalized-page claim landed unless he happened to spot the `activity` row.
+
+This is the asymmetry that makes the bug worse: tonight's 19-text personalized-link blast is the **higher-intent, more-targeted** outreach. Submissions there are probably 5-10× more valuable per claim than homepage tire-kickers. Yet that's the path with NO notification at all.
+
+### B. Three additional DCC-side gaps in `submit-lead`
+
+These compound Castle's bug findings and are worth fixing in the same sprint:
+
+**Gap 1 — `leads` table is bypassed entirely.**
+Per `CLAUDE.md`: *"Lead intake + dup detection | Nathan | `lead-intake.html`, `leads` table, `find_lead_duplicates` RPC."* The `leads` table is the documented canonical intake row. `submit-lead` skips it entirely and inserts straight into `deals`. Consequence: there's no `leads` row to dedupe against. Two submissions from the same person produce two deals.
+
+**Gap 2 — No dedup check.**
+`submit-lead` never calls `find_lead_duplicates()`. If the same homeowner submits the homepage form twice (fat-finger, page reload) or hits both the homepage AND the personalized link, you get N deals for one person. The deal IDs include `Date.now().toString(36)` precisely because the function expects collisions on the slug — but that solves *uniqueness*, not *duplication*. Two `sf-jennings-moa9iqzt` and `sf-jennings-moa9irab` rows are still two leads to chase.
+
+**Gap 3 — No `activity` row inserted.**
+`/api/s/claim` (the personalized path) DOES write an activity row with `type='claim_submitted'`. `submit-lead` (the homepage path) does NOT. So the same intake event has different audit trails depending on which form was used. If we ever need a unified "where did this lead come from" timeline, the homepage path is invisible.
+
+### C. The two divergent paths summarized
+
+| Action | Homepage form (`submit-lead` Edge Function) | Personalized link (`/api/s/claim` Next.js route) |
+|---|---|---|
+| Insert into `deals` | ✅ direct insert | ✅ via UPDATE of existing deal (or no-op if orphan link) |
+| Insert into `leads` | ❌ skipped | ❌ skipped |
+| Dedup check | ❌ none | ❌ none |
+| Update `personalized_links` | ❌ no | ✅ tries to, but column missing → silent fail |
+| Insert `activity` row | ❌ no | ✅ yes (`type='claim_submitted'`) |
+| Notify Nathan (SMS) | ✅ direct Twilio call | ❌ no — silent |
+
+Both paths leak. Different leaks. Net: **right now the canonical `leads` table is empty, no submission has dedup applied, and the more-valuable personalized-link path notifies nobody.**
+
+### D. Proposed fix (DCC owns)
+
+I'm shipping a single migration that closes the column-missing bug AND wires Nathan's notification onto a trigger so both paths get treated equally. One file:
+
+`supabase/migrations/20260425000000_personalized_links_claim_columns.sql`:
+
+1. `ALTER TABLE personalized_links` — add `mailing_address text` + `claim_submitted_at timestamptz`. Closes Castle's Bug #1.
+2. `CREATE OR REPLACE FUNCTION notify_personalized_claim_submitted()` — fires on `personalized_links` UPDATE when `claim_submitted_at` flips from NULL to NOT NULL. Calls `pg_net.http_post()` to a small `notify-claim-submitted` Edge Function that sends an SMS via Twilio + an email via Resend, mirroring `submit-lead`'s notification body.
+3. `CREATE TRIGGER tg_notify_personalized_claim_submitted` on `personalized_links`.
+
+This means:
+- Castle's bug is fixed.
+- Marketing-site session still owns surfacing the 500 error to the user (their lane, not mine).
+- Both intake paths now alert Nathan (homepage via direct Twilio call in `submit-lead`; personalized via DB trigger).
+- No need to refactor `/api/s/claim` at all — just give it a working schema to write to.
+
+Migration + edge function will land in commit immediately after this audit append.
+
+### E. Out of scope here, flagged for a future PR
+
+The three DCC-side gaps in section B (no `leads` row, no dedup, no activity from homepage) are a separate workstream — refactoring `submit-lead` to write to `leads` first, dedupe, then create the deal. Castle, you don't need to do anything for this. I'll spec it as a separate handoff doc.
+
+### F. Test plan once both halves ship
+
+1. Apply migration in Supabase SQL editor.
+2. Deploy `notify-claim-submitted` Edge Function with verify_jwt=false + secret in env.
+3. Pick any of tonight's 19 tokens (e.g. `JsgBlTHV` for Hannah Church).
+4. Hit `https://refundlocators.com/s/JsgBlTHV` on a phone, submit the modal with placeholder data.
+5. Within ~5 seconds:
+   - Nathan's phone gets a text: "🎯 PERSONALIZED CLAIM from Hannah Church · ..."
+   - SQL: `select claim_submitted_at, mailing_address from personalized_links where token = 'JsgBlTHV';` returns timestamps + address (not NULL).
+   - DCC `activity` table has a `type='claim_submitted'` row for Hannah's deal.
+6. Marketing-site session separately fixes the silent-fail try/catch so user errors surface.
+
+---
+
+### G. Acknowledgments on Castle's ownership confirmations
+
+- **(a) Personalized-link page analytics** — agree with Castle's split. Castle specs `/api/s/view`, marketing-site session implements, DCC surfaces "viewed not submitted" cohort in Reply Inbox once the schema column starts populating.
+- **(b) Competitor watch — taxonomy** — accepted. **Nathan: Castle is blocked on a competitor-firm allowlist from you.** Provide a list of known surplus-recovery competitor firms (or law-firm names that file notices of appearance against your interests) so Castle can scaffold the regex.
+- **(c) GHL kill or integrate** — Castle's read is "Option A — KILL" unless Nathan has a concrete GHL workflow planned. **Nathan: pick A / B / C.** My read agrees with Castle's: A.
+
+### H. One ask back of Castle (low priority, do whenever)
+
+The Castle multi-defendant parser bug (skips `Drtmg LLC; Nathanael Thompson` because LLC matches first) is yours. Just flagging that it was mentioned in your "parked follow-up" — when you fix it, please backfill the 19-row tonight set so any rows skipped because of this bug get a personalized link.
 
 ## Castle Audit Findings
 
