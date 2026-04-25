@@ -10477,6 +10477,133 @@ const kindLabel = (contactOrKind) => {
 };
 const kindIcon  = (contactOrKind) => kindMeta(contactOrKind).icon;
 
+// Partner Attorney directory — surfaces attorneys Castle has discovered on
+// monitored dockets that aren't yet in `contacts`. Renders inside ContactsModal
+// when filter is 'all' or 'attorney'. One-click promotion to contacts row +
+// auto-link to the deals where Castle saw them. Per CLAUDE.md: contacts →
+// attorney_assignments sync via trigger, so promoting also gives the attorney
+// portal access to those deals.
+function AttorneyDirectoryFromDockets({ contacts, onPromoted, userId }) {
+  const [discovered, setDiscovered] = useState(null);
+  const [busy, setBusy] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const load = async () => {
+    // Pull every docket event Castle has tagged with attorney_appearance.
+    const { data: events } = await sb.from('docket_events')
+      .select('deal_id, event_date, attorney_appearance')
+      .not('attorney_appearance', 'is', null);
+    if (!events) { setDiscovered([]); return; }
+
+    // Group by canonicalized attorney name + firm
+    const byKey = new Map();
+    for (const e of events) {
+      const ap = e.attorney_appearance || {};
+      const name = (ap.attorney_name || '').trim();
+      if (!name) continue;
+      const firm = (ap.firm_name || '').trim();
+      const key = (name + '|' + firm).toLowerCase();
+      const cur = byKey.get(key) || { attorney_name: name, firm_name: firm, role: ap.role, bar_number: ap.bar_number, count: 0, deal_ids: new Set(), latest_event_date: null };
+      cur.count++;
+      if (e.deal_id) cur.deal_ids.add(e.deal_id);
+      if (!cur.latest_event_date || e.event_date > cur.latest_event_date) cur.latest_event_date = e.event_date;
+      byKey.set(key, cur);
+    }
+
+    // Filter out attorneys already in contacts (case-insensitive name match).
+    const existingNames = new Set((contacts || [])
+      .filter(c => c.kind === 'attorney')
+      .map(c => (c.name || '').trim().toLowerCase()));
+
+    const list = [...byKey.values()]
+      .filter(a => !existingNames.has(a.attorney_name.toLowerCase()))
+      .map(a => ({ ...a, deal_ids: [...a.deal_ids] }))
+      .sort((a, b) => b.count - a.count);
+
+    setDiscovered(list);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [contacts]);
+
+  const promote = async (a) => {
+    if (busy) return;
+    setBusy(a.attorney_name); setMsg(null);
+    try {
+      // 1. Create the contact
+      const notes = `Discovered via docket. Seen ${a.count} time${a.count === 1 ? '' : 's'} on ${a.deal_ids.length} deal${a.deal_ids.length === 1 ? '' : 's'}. Latest: ${a.latest_event_date}.${a.bar_number ? ` Bar #${a.bar_number}.` : ''}${a.role ? ` Role: ${String(a.role).replace(/_/g, ' ')}.` : ''}`;
+      const { data: contact, error: cErr } = await sb.from('contacts').insert({
+        name: a.attorney_name,
+        company: a.firm_name || null,
+        kind: 'attorney',
+        notes,
+        tags: ['from-docket'],
+        owner_id: userId,
+      }).select().single();
+      if (cErr) throw cErr;
+      // 2. Link to each deal Castle saw them on. attorney_assignments auto-syncs via trigger.
+      if (contact && a.deal_ids.length > 0) {
+        const links = a.deal_ids.map(deal_id => ({
+          contact_id: contact.id,
+          deal_id,
+          relationship: a.role ? String(a.role).replace(/_/g, ' ') : 'attorney',
+        }));
+        await sb.from('contact_deals').insert(links);
+      }
+      setMsg({ type: 'success', text: `Added ${a.attorney_name} to Contacts + linked to ${a.deal_ids.length} deal${a.deal_ids.length === 1 ? '' : 's'}` });
+      if (onPromoted) onPromoted();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  if (discovered === null) return null;
+  if (discovered.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 16, padding: '14px 16px', background: '#1c1917', border: '1px solid #92400e', borderLeft: '3px solid #d97706', borderRadius: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+            👨‍⚖️ Attorneys discovered on dockets · {discovered.length} new
+          </div>
+          <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 4, lineHeight: 1.5 }}>
+            Castle saw these attorneys filing on cases you're monitoring. Add any of them to Contacts to start tracking — promotes to <code style={{ color: '#fbbf24' }}>kind=attorney</code> + auto-links to the deals where they appeared.
+          </div>
+        </div>
+      </div>
+      {msg && (
+        <div style={{ padding: '6px 10px', borderRadius: 5, marginBottom: 10, fontSize: 12, background: msg.type === 'success' ? '#14532d' : '#7f1d1d', color: msg.type === 'success' ? '#bbf7d0' : '#fecaca' }}>{msg.text}</div>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {discovered.map(a => (
+          <div key={a.attorney_name + '|' + a.firm_name} style={{ padding: '10px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: 1, minWidth: 200 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>
+                {a.attorney_name}
+                {a.firm_name && <span style={{ color: '#78716c', fontWeight: 500 }}> · {a.firm_name}</span>}
+              </div>
+              <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 3, display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {a.role && <span style={{ textTransform: 'capitalize' }}>{String(a.role).replace(/_/g, ' ')}</span>}
+                {a.bar_number && <span>Bar #{a.bar_number}</span>}
+                <span style={{ color: '#78716c' }}>· seen {a.count}× on {a.deal_ids.length} deal{a.deal_ids.length === 1 ? '' : 's'}</span>
+                <span style={{ color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· latest {a.latest_event_date}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => promote(a)}
+              disabled={busy !== null}
+              style={{ ...btnGhost, fontSize: 11, padding: '6px 12px', borderColor: '#92400e', color: '#fbbf24', cursor: busy ? 'wait' : 'pointer', whiteSpace: 'nowrap' }}>
+              {busy === a.attorney_name ? '⏳ Adding…' : '+ Add to Contacts'}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
   const [contacts, setContacts]   = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -10581,6 +10708,10 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
             </select>
             <button onClick={openNew} style={{ ...btnPrimary, marginLeft: "auto" }}>+ New Contact</button>
           </div>
+
+          {(kindFilter === 'all' || kindFilter === 'attorney') && (
+            <AttorneyDirectoryFromDockets contacts={contacts} userId={userId} onPromoted={load} />
+          )}
 
           {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
           {!loading && filtered.length === 0 && (
