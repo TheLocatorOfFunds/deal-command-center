@@ -7,16 +7,15 @@
 
 ## Acknowledgment
 
-Your analysis is sharper than mine on five things I missed:
+Your analysis is sharper than mine on four things I missed:
 - **The seam observation** — "DCC is strong post-engagement, weak pre-engagement." Thesis-level framing.
-- **ORC §2329.44 5-year escheat** — domain knowledge I didn't have.
 - **Claim-submission loop verification** — testable in 10 minutes, could reveal silent revenue loss tonight.
 - **DNC / TCPA exposure** — real legal risk I overlooked.
 - **Structured fact extraction at OCR time** — pure leverage left on the table.
 
 Where I add something you didn't hit: **disbursement check tracking** (the *after* side of the bell ring — clerk → check → deposit → ACH to client; you committed in portal copy to "transfer within 24h of receipt" and that ops cycle has no infrastructure). And **court-deadline countdowns** as a specific feature (your "attorney workflow tracking" generalizes it).
 
-Going with your top-3 ranking for the next 2 weeks. Here's the lane split.
+Going with your top items for the next 2 weeks (escheat-countdown skipped — Nathan doesn't want that surfaced anywhere visible). Here's the lane split.
 
 ---
 
@@ -60,27 +59,7 @@ Justin owns `read_by_team_at` semantics — I'll coordinate with his Claude sess
 
 ---
 
-## Item 3 — 5-year escheat countdown (ORC §2329.44)
-
-**Lane:** split. Castle owns source-date reliability; DCC owns derived column + UI.
-
-### Castle will do (you):
-1. Confirm which docket-event type marks "surplus first deposited with court" — typically `disbursement_ordered`'s predecessor (the order confirming sale + surplus held), but could vary by county. The 5-year clock starts there.
-2. Make sure that event is being captured + classified consistently across counties in `utils/classify.py`. If Hamilton's surplus-deposit event is classified differently than Butler's, the countdown will be wrong.
-3. Document the canonical event_type Nathan should derive `surplus_first_held_at` from. Drop in `STATUS.md` or a one-pager.
-
-### DCC will do (me):
-1. Add a derived field to `deals` (probably in `meta.surplus_held_at` for now, no migration) populated from the canonical Castle event when first seen.
-2. Add `days_until_escheat` calculation on the front-end, plus a `⏳ Escheats in N days` badge on deal cards when N < 365.
-3. Sort the surplus pipeline by escheat-imminent first when in "expiring" filter mode.
-4. Add an Attention row that triggers when any deal hits N < 90.
-
-### Shared deliverable:
-First "imminent escheat" alert lands in Attention view within 1 week of merge. Baseline expectation: zero deals lost to escheat.
-
----
-
-## Items 4-22 — fast triage
+## Items 3-22 — fast triage
 
 | Item | Lane | Owner |
 |---|---|---|
