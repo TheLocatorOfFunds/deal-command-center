@@ -65,7 +65,7 @@ Justin owns `read_by_team_at` semantics — I'll coordinate with his Claude sess
 |---|---|---|
 | **DNC / TCPA opt-out list** | Shared table `contacts.do_not_text` boolean. DCC adds column + UI checkbox. Justin's `send-sms` filters it. Castle: no involvement. | DCC + Justin |
 | **Personalized-link page analytics** | Marketing site lives in your domain (Cloudflare Pages, behind `refundlocators.com`). Add view/scroll/time analytics there → emit to a table DCC can query. Castle: scope. | Castle |
-| **Competitor watch on docket** | New event_type classification (e.g. `competitor_appearance`) when an opposing-counsel filing matches a known competitor pattern. Castle adds taxonomy; DCC surfaces it in Attention. | Castle (taxonomy) + DCC (UI) |
+| **Partner attorney directory builder** (rescoped from "competitor watch") | When any attorney files on a docket Castle's monitoring, emit `attorney_appearance` with name + firm + role. DCC pre-fills a `contacts` row (`kind='attorney'`) so Nathan can flag anyone he wants as a partner / referral source. **Not adversarial — Nathan: "I would call it a partner, not a competitor."** No allowlist needed; Castle emits all attorneys, DCC's UI lets Nathan triage. | Castle (taxonomy) + DCC (Contacts integration) |
 | **Engagement-log rollup view** | Pure DCC UI over `messages_outbound + activity`. | DCC |
 | **Bulk send queue UI** | DCC builds queue + review screen; Justin's `send-sms` consumes. Castle: no involvement. | DCC + Justin |
 | **Lead-source attribution dashboard** | DCC Reports tab over `leads.metadata.utm_*` + closed-deal join. | DCC |
@@ -187,8 +187,20 @@ The three DCC-side gaps in section B (no `leads` row, no dedup, no activity from
 ### G. Acknowledgments on Castle's ownership confirmations
 
 - **(a) Personalized-link page analytics** — agree with Castle's split. Castle specs `/api/s/view`, marketing-site session implements, DCC surfaces "viewed not submitted" cohort in Reply Inbox once the schema column starts populating.
-- **(b) Competitor watch — taxonomy** — accepted. **Nathan: Castle is blocked on a competitor-firm allowlist from you.** Provide a list of known surplus-recovery competitor firms (or law-firm names that file notices of appearance against your interests) so Castle can scaffold the regex.
-- **(c) GHL kill or integrate** — Castle's read is "Option A — KILL" unless Nathan has a concrete GHL workflow planned. **Nathan: pick A / B / C.** My read agrees with Castle's: A.
+- **(b) Partner attorney directory** — **rescoped from "competitor watch" per Nathan.** These aren't competitors — they're potential partners / referral sources. New ask for Castle:
+  - Emit `attorney_appearance` event_type whenever ANY attorney files on a monitored docket (no allowlist needed).
+  - Include `attorney_name`, `firm_name` (best-effort parse from filings), `role` (plaintiff_counsel | defendant_counsel | claimant_counsel | other), and the originating `docket_event_id`.
+  - DCC will build a new view that surfaces these and lets Nathan promote any of them to a `contacts` row with `kind='attorney'`. Optionally tag with custom labels (e.g. "Ohio surplus-recovery", "probate generalist", "potential referral partner").
+  - **No regex allowlist needed.** Castle emits everyone; DCC's UI is the triage layer.
+- **(c) GHL kill or integrate** — **Nathan: A (kill).** Castle: rip out the `ghl/` directory, `auth/token_manager.py`, the `tests/test_ghl_connection.py`, and any GHL config in `.env.example`. ~30 min of Castle's time. DCC stays the canonical CRM.
+
+### G.1 Decisions confirmed (2026-04-25)
+
+| Decision | Castle's ask | Nathan's call |
+|---|---|---|
+| Ohio-only V1 for deadlines (§K.3) | "Confirm OH-only V1?" | **YES — Ohio-only.** Multi-state defers until scrapers for state #2 land. |
+| GHL kill/integrate (§H.c) | A / B / C | **A — kill.** |
+| Competitor list (§H.b) | Allowlist of competitor firms | **REFRAMED.** Not competitors — partners. Capture all attorneys filing on dockets, store as potential partners in `contacts`. No allowlist needed. |
 
 ### H. One ask back of Castle (low priority, do whenever)
 
