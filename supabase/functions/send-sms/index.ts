@@ -112,6 +112,28 @@ Deno.serve(async (req) => {
              : digits.length === 11 && digits.startsWith('1') ? `+${digits}`
              : toRaw
 
+    // ────────────────────────────────────────────────────────────────────
+    // DND check (added 2026-04-25 by Nathan's session — see WORKING_ON.md)
+    // If the recipient phone is on contacts.do_not_text=true, refuse to
+    // send. Returns 403 + structured error so the caller (UI / cadence
+    // engine) can mark the queue row 'cancelled' with a clear reason.
+    // ────────────────────────────────────────────────────────────────────
+    const bareTo = to.replace(/^\+1/, '')
+    const { data: dndRows } = await sb
+      .from('contacts')
+      .select('id, phone, do_not_text, dnd_reason')
+      .or(`phone.eq.${to},phone.eq.${bareTo}`)
+      .eq('do_not_text', true)
+      .limit(1)
+    if (dndRows && dndRows.length > 0) {
+      return new Response(JSON.stringify({
+        error: 'recipient_on_dnd',
+        details: dndRows[0].dnd_reason || 'do_not_text=true',
+        contact_id: dndRows[0].id,
+      }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+    // ────────────────────────────────────────────────────────────────────
+
     // Resolve from_number + check gateway (twilio vs mac_bridge)
     let resolvedFrom = twilioFromNumber
     let gateway      = 'twilio'

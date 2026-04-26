@@ -1470,6 +1470,111 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
   );
 }
 
+// ─── Bulk-outreach queue button ─────────────────────────────────
+// One-click "queue first-text outreach for every visible A/B-tier deal"
+// for the Monday A/B push. Filters in-scope candidates: tier A or B,
+// has a contact phone, status not closed/dead/recovered, NOT already
+// in an active outreach_queue row (anything not in skipped/cancelled/
+// failed is considered active so we never double-queue). Inserts one
+// row per qualifying deal at cadence_day=0, status='queued' — Justin's
+// AutomationsQueue auto-fires generate-outreach to draft each.
+//
+// The intro draft (cadence_day=0) is human-gated: rows land in
+// AutomationsQueue on Today / Outreach view, Nathan reviews + clicks
+// Send for each. After the first send, the cadence engine takes over
+// (Day 1 → Day 3 → Day 5 → weekly through Day 90).
+function BulkOutreachButton({ candidates }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const eligible = candidates.filter(d => (d.lead_tier === 'A' || d.lead_tier === 'B'));
+  const eligibleWithPhone = eligible.filter(d => d.meta?.homeownerPhone || d.meta?.phone);
+
+  const handleClick = async () => {
+    if (busy) return;
+    if (eligibleWithPhone.length === 0) {
+      setResult({ type: 'info', text: 'No A/B-tier deals with a phone number in current view.' });
+      return;
+    }
+    if (!window.confirm(`Queue first-text outreach for ${eligibleWithPhone.length} A/B-tier deal${eligibleWithPhone.length === 1 ? '' : 's'}?\n\nEach gets one cadence_day=0 draft. You'll review + send each from the Outreach view. After you send, the cadence engine handles Day 1/3/5 + weekly drip automatically.`)) return;
+
+    setBusy(true); setResult(null);
+    let queued = 0, skipped = 0, failed = 0;
+    const reasons = { no_phone: 0, already_active: 0, dnd: 0, error: 0 };
+
+    for (const d of eligible) {
+      const phone = d.meta?.homeownerPhone || d.meta?.phone;
+      if (!phone) { skipped++; reasons.no_phone++; continue; }
+
+      try {
+        // Check DNC
+        const { data: dnc } = await sb.from('contacts')
+          .select('id').eq('phone', phone).eq('do_not_text', true).limit(1).maybeSingle();
+        if (dnc) { skipped++; reasons.dnd++; continue; }
+
+        // Check existing active outreach_queue row for this deal (any cadence_day)
+        const { data: existing } = await sb.from('outreach_queue')
+          .select('id, status').eq('deal_id', d.id)
+          .not('status', 'in', '(skipped,cancelled,failed,sent)')
+          .limit(1).maybeSingle();
+        if (existing) { skipped++; reasons.already_active++; continue; }
+
+        // Insert the cadence_day=0 row. Justin's AutomationsQueue auto-fires
+        // generate-outreach which drafts the SMS body using the deal's
+        // refundlocators_token (synced from personalized_links by trigger).
+        const { error: insErr } = await sb.from('outreach_queue').insert({
+          deal_id: d.id,
+          contact_phone: phone,
+          cadence_day: 0,
+          status: 'queued',
+          scheduled_for: new Date().toISOString(),
+        });
+        if (insErr) { failed++; reasons.error++; console.error('bulk queue insert failed:', insErr); }
+        else queued++;
+      } catch (e) {
+        failed++; reasons.error++;
+        console.error('bulk queue exception:', e);
+      }
+    }
+
+    setBusy(false);
+    setResult({
+      type: queued > 0 ? 'success' : skipped > 0 ? 'info' : 'error',
+      text: `Queued ${queued} · Skipped ${skipped} (${reasons.no_phone} no phone, ${reasons.already_active} already active, ${reasons.dnd} DNC) · Failed ${failed}`,
+    });
+    if (queued > 0) setTimeout(() => setResult(null), 12000);
+  };
+
+  // Don't render unless there are A/B candidates visible
+  if (eligible.length === 0) return null;
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto' }}>
+      {result && (
+        <span style={{ fontSize: 11, color: result.type === 'success' ? '#6ee7b7' : result.type === 'error' ? '#fca5a5' : '#a8a29e' }}>
+          {result.text}
+        </span>
+      )}
+      <button
+        onClick={handleClick}
+        disabled={busy}
+        title={`Queue first-text outreach for ${eligibleWithPhone.length} A/B-tier deal${eligibleWithPhone.length === 1 ? '' : 's'} with a phone number in current view`}
+        style={{
+          fontSize: 11, fontWeight: 700, padding: '6px 14px', borderRadius: 5,
+          background: busy ? '#1c1917' : '#78350f',
+          color: busy ? '#78716c' : '#fbbf24',
+          border: '1px solid #92400e',
+          cursor: busy ? 'wait' : 'pointer',
+          letterSpacing: '0.04em',
+          fontFamily: 'inherit',
+          whiteSpace: 'nowrap',
+        }}>
+        {busy ? '⏳ Queuing…' : `🚀 Queue outreach · ${eligibleWithPhone.length} A/B`}
+      </button>
+    </div>
+  );
+}
+
 function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   const [track, setTrack] = useState('surplus'); // 'surplus' | '30dts'
   const [tierFilter, setTierFilter] = useState({ A: true, B: true, C: true, other: true });
@@ -1630,6 +1735,7 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
             {counties.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / address / case #" style={{ ...inputStyle, fontSize: 11, padding: '4px 10px', maxWidth: 260, background: '#0c0a09' }} />
+          <BulkOutreachButton candidates={filtered} />
         </div>
       </div>
 

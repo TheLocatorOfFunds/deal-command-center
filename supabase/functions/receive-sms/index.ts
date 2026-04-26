@@ -1,5 +1,41 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
+// ────────────────────────────────────────────────────────────────────
+// HEADS UP for Justin's Claude session — modified 2026-04-25 by Nathan's session
+// ────────────────────────────────────────────────────────────────────
+// Added STOP-keyword silent DND handler at the bottom of the success path:
+// when an inbound body matches STOP/UNSUBSCRIBE/QUIT/END/CANCEL/'OPT OUT',
+// the matching contacts row gets do_not_text=true AND do_not_call=true
+// (both new columns added in migration 20260425020000), all pending/queued
+// outreach_queue rows for that contact_phone get cancelled, and an activity
+// row of type='dnc_optout' is logged.
+//
+// Per Nathan's directive 2026-04-25: NO app-level reply. Twilio's
+// carrier-level Advanced Opt-Out emits the bare-minimum confirmation
+// ("Unsubscribed. No more messages." — set at messaging service level)
+// and that's it. Our code stays silent after flipping the flags.
+//
+// Nathan's framing: he's the human physically operating his iPhone via DCC;
+// the system is a typing assistant. Sender-reputation compliance lives at
+// the Twilio messaging-service config layer, not in this code.
+//
+// Nothing else in receive-sms changed. The existing matching/routing logic
+// (lines 36-101) is untouched.
+// ────────────────────────────────────────────────────────────────────
+
+const STOP_KEYWORDS = new Set([
+  'stop', 'unsubscribe', 'quit', 'end', 'cancel', 'opt out', 'optout', 'stop all',
+])
+
+function isStopKeyword(body: string): boolean {
+  const trimmed = (body || '').trim().toLowerCase()
+  if (!trimmed) return false
+  if (STOP_KEYWORDS.has(trimmed)) return true
+  // Also catch single-word STOP at the start of multi-word messages
+  const firstWord = trimmed.split(/\s+/)[0]
+  return STOP_KEYWORDS.has(firstWord)
+}
+
 // Twilio sends no JWT — this function must be deployed with --no-verify-jwt
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -126,7 +162,45 @@ Deno.serve(async (req) => {
       channel:     'sms',
     })
 
-    // Return empty TwiML so Twilio doesn't auto-reply
+    // ── STOP keyword → silent DND (Nathan's directive 2026-04-25) ──
+    // Carrier-level Advanced Opt-Out at Twilio MS handles the single
+    // required confirmation; this code does total app-side DND on top.
+    if (isStopKeyword(body)) {
+      const dndPatch = {
+        do_not_text: true,
+        do_not_call: true,
+        dnd_set_at: new Date().toISOString(),
+        dnd_reason: `STOP keyword inbound on ${new Date().toISOString().slice(0, 10)} from ${from}`,
+      }
+      if (contactId) {
+        await sb.from('contacts').update(dndPatch).eq('id', contactId)
+      } else {
+        // No contact row exists for this number — create a stub so future
+        // sends are still blocked. Match by phone is what filters check.
+        await sb.from('contacts').insert({
+          name: from,
+          phone: from,
+          kind: 'other',
+          ...dndPatch,
+          notes: 'Auto-created from STOP-keyword inbound. No prior contact record.',
+        })
+      }
+      // Cancel any pending/queued cadence rows for this number
+      await sb.from('outreach_queue')
+        .update({ status: 'cancelled', skipped_reason: 'dnc_optout', updated_at: new Date().toISOString() })
+        .eq('contact_phone', from)
+        .in('status', ['queued', 'generating', 'pending'])
+      // Log to activity feed for Nathan's audit trail
+      if (dealId) {
+        await sb.from('activity').insert({
+          deal_id: dealId,
+          action: `dnc_optout: STOP keyword from ${from}`,
+        })
+      }
+    }
+
+    // Return empty TwiML so Twilio doesn't auto-reply (Twilio's carrier-level
+    // Advanced Opt-Out emits the required STOP confirmation independently)
     return new Response('<Response/>', { headers: { 'Content-Type': 'text/xml' } })
 
   } catch (err) {
