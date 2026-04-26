@@ -248,16 +248,33 @@ function DealRoom({ data, onRefresh }) {
     })();
   }, [coverDoc?.id]);
 
+  // Parallel-fetch signed URLs for all photos. The previous version awaited
+  // them one-by-one which was 70 × ~300ms = 21s on a fresh page load with
+  // 70 photos — enough that Kevin's phone never finished and the gallery
+  // looked broken. Now we run with concurrency 10 (avoid hammering Supabase
+  // with 70 simultaneous requests) and stream results into state as each
+  // batch lands so thumbnails appear progressively, top-of-gallery first.
   useEffect(() => {
+    let cancelled = false;
     (async () => {
-      const m = {};
-      for (const p of photos) {
-        if (p.id === coverDoc?.id) continue;
-        const u = await resolvePartnerAsset(p.id);
-        if (u) m[p.id] = u;
-      }
-      setPhotoUrls(m);
+      const queue = photos.filter(p => p.id !== coverDoc?.id).map(p => p.id);
+      if (!queue.length) return;
+      const CONCURRENCY = 10;
+      // Workers pull from the queue and call resolve concurrently; each
+      // resolved URL flushes into state immediately so the user sees photos
+      // appear as they load instead of waiting for a giant batch.
+      const worker = async () => {
+        while (!cancelled && queue.length) {
+          const id = queue.shift();
+          if (!id) break;
+          const u = await resolvePartnerAsset(id);
+          if (cancelled) return;
+          if (u) setPhotoUrls(prev => ({ ...prev, [id]: u }));
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
     })();
+    return () => { cancelled = true; };
   }, [photos.length]);
 
   // Profit-share math: pull deal economics from meta.partner
