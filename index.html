@@ -937,6 +937,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("attention", "🔔 Attention", 0)}
+          {viewBtn("outreach", "🚀 Outreach", 0)}
           {viewBtn("pipeline", "🧭 Pipeline", 0)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
@@ -954,7 +955,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       </div>
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks views) */}
-      {view !== "today" && view !== "attention" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -973,12 +974,14 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
+          ) : view === "outreach" ? (
+            <OutreachView deals={deals} onSelect={onSelect} />
           ) : view === "reports" ? (
             <ReportsView deals={deals} onSelect={onSelect} />
           ) : view === "analytics" ? (
@@ -2261,6 +2264,186 @@ function DeadlineAlertStrip({ onSelect }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ─── Outreach View ───────────────────────────────────────────────
+// Workspace for "today's drip + replies + escalations." Top-level nav.
+// Reuses Justin's AutomationsQueue (drafts ready to send) + a new
+// ReplyInbox (cross-deal inbound SMS oldest-unread first). Stats tiles
+// summarize the queue. This is the Monday-launch hub for A/B-tier
+// outreach campaigns.
+function OutreachView({ deals, onSelect }) {
+  const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
+
+  const loadStats = React.useCallback(async () => {
+    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    const next24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const [draftsRes, repliesRes, schedRes, sentRes] = await Promise.all([
+      sb.from('outreach_queue').select('id', { count: 'exact', head: true }).in('status', ['queued', 'generating', 'pending']),
+      sb.from('messages_outbound').select('id', { count: 'exact', head: true }).eq('direction', 'inbound').is('read_by_team_at', null),
+      sb.from('outreach_queue').select('id', { count: 'exact', head: true }).eq('status', 'pending').lte('scheduled_for', next24h.toISOString()).gt('scheduled_for', new Date().toISOString()),
+      sb.from('messages_outbound').select('id', { count: 'exact', head: true }).eq('direction', 'outbound').gte('created_at', todayStart.toISOString()),
+    ]);
+    setStats({
+      pending_drafts: draftsRes.count || 0,
+      replies_waiting: repliesRes.count || 0,
+      scheduled_24h: schedRes.count || 0,
+      sent_today: sentRes.count || 0,
+    });
+  }, []);
+
+  useEffect(() => { loadStats(); }, [loadStats]);
+
+  // Refresh stats whenever queue or messages change
+  useEffect(() => {
+    const ch = sb.channel('outreach-stats')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadStats)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [loadStats]);
+
+  const Tile = ({ label, value, sub, color }) => (
+    <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: `2px solid ${color}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{value}</div>
+      <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          🚀 Outreach
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· campaigns + replies + escalations, all in one place</span>
+        </h2>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
+        <Tile label="Drafts ready to send" value={stats.pending_drafts} sub={stats.pending_drafts === 0 ? 'Nothing pending' : 'review + send below'} color="#d8b560" />
+        <Tile label="Replies waiting" value={stats.replies_waiting} sub={stats.replies_waiting === 0 ? 'Inbox clear' : 'oldest first below'} color="#3b82f6" />
+        <Tile label="Drips scheduled · next 24h" value={stats.scheduled_24h} sub="cadence engine" color="#a78bfa" />
+        <Tile label="Sent today" value={stats.sent_today} sub="outbound count" color="#10b981" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
+        <div>
+          <SectionHeader icon="🤖" label="Drafts ready to send" sub="AI-drafted intro + cadence messages waiting on your review. Click any row to open the deal's Comms tab." />
+          <AutomationsQueue onSelectDeal={onSelect} />
+          {stats.pending_drafts === 0 && (
+            <div style={{ fontSize: 12, color: '#78716c', padding: 18, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
+              No drafts pending. Push an A/B-tier deal into outreach to queue one.
+            </div>
+          )}
+        </div>
+        <div>
+          <SectionHeader icon="💬" label="Replies waiting" sub="Inbound SMS from claimants you haven't responded to yet. Oldest first — clear by replying or marking seen." />
+          <ReplyInbox onSelect={onSelect} />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        <b style={{ color: '#a8a29e' }}>How this hub works:</b> Drafts come from <code style={{ color: '#a8a29e' }}>outreach_queue</code> — Justin's AI auto-drafts the intro + each cadence-day follow-up the moment a deal is queued. You review + send. Replies surface from <code style={{ color: '#a8a29e' }}>messages_outbound</code> where direction='inbound' and read_by_team_at is null. Realtime — new replies pop in without refresh. Once Lauren intake-and-classify lands (Justin), some replies will auto-escalate or auto-draft responses for your review.
+      </div>
+    </div>
+  );
+}
+
+// SectionHeader helper for OutreachView (matches ReportsView's pattern)
+const SectionHeader = ({ icon, label, sub }) => (
+  <div style={{ marginBottom: 12, marginTop: 4 }}>
+    <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8 }}>
+      <span>{icon}</span>{label}
+    </div>
+    {sub && <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4, lineHeight: 1.5 }}>{sub}</div>}
+  </div>
+);
+
+// ─── Reply Inbox ────────────────────────────────────────────────
+// Cross-deal "messages_outbound where direction='inbound' and not yet
+// seen by the team." Oldest unread first. Click to jump to the deal's
+// Comms tab. Closes Castle's gap-analysis Tier 1 #2.
+function ReplyInbox({ onSelect, limit = 30 }) {
+  const [rows, setRows] = useState(null);
+
+  const load = React.useCallback(async () => {
+    const { data: msgs } = await sb.from('messages_outbound')
+      .select('id, deal_id, body, from_number, created_at, read_by_team_at')
+      .eq('direction', 'inbound')
+      .is('read_by_team_at', null)
+      .order('created_at', { ascending: true })
+      .limit(limit);
+    if (!msgs || msgs.length === 0) { setRows([]); return; }
+    const dealIds = [...new Set(msgs.map(m => m.deal_id).filter(Boolean))];
+    const { data: deals } = dealIds.length > 0
+      ? await sb.from('deals').select('id, name, status, lead_tier').in('id', dealIds)
+      : { data: [] };
+    const dealsById = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    setRows(msgs.map(m => ({ ...m, deal: dealsById[m.deal_id] || null })));
+  }, [limit]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    const ch = sb.channel('reply-inbox')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  const markSeen = async (id) => {
+    await sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).eq('id', id);
+    await load();
+  };
+
+  if (rows === null) return <div style={{ fontSize: 12, color: '#78716c', padding: 18 }}>Loading…</div>;
+  if (rows.length === 0) return (
+    <div style={{ fontSize: 12, color: '#78716c', padding: 18, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
+      All caught up. Inbound replies will appear here in real time.
+    </div>
+  );
+
+  const fmtAge = (iso) => {
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    if (m < 1440) return (m / 60).toFixed(1) + 'h ago';
+    return Math.floor(m / 1440) + 'd ago';
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.map(r => (
+        <div key={r.id}
+          style={{ background: '#0c0a09', border: '1px solid #292524', borderLeft: '3px solid #3b82f6', borderRadius: 7, padding: '10px 12px' }}>
+          <div onClick={() => r.deal && onSelect && onSelect(r.deal.id)} style={{ cursor: r.deal ? 'pointer' : 'default' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+                {r.deal?.name || r.from_number || 'Unknown sender'}
+                {r.deal?.lead_tier && <span style={{ fontSize: 10, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 6px', borderRadius: 3, marginLeft: 6, letterSpacing: '0.05em' }}>TIER {r.deal.lead_tier}</span>}
+              </span>
+              <span style={{ fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace", flexShrink: 0 }}>{fmtAge(r.created_at)}</span>
+            </div>
+            <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, fontStyle: 'italic', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+              "{r.body}"
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            {r.deal && (
+              <button onClick={() => onSelect && onSelect(r.deal.id)}
+                style={{ ...btnGhost, fontSize: 10, padding: '3px 9px' }}>Open Comms →</button>
+            )}
+            <button onClick={() => markSeen(r.id)}
+              style={{ ...btnGhost, fontSize: 10, padding: '3px 9px', color: '#a8a29e' }}>Mark seen</button>
+            {r.from_number && (
+              <span style={{ fontSize: 10, color: '#57534e', alignSelf: 'center', marginLeft: 'auto', fontFamily: "'DM Mono', monospace" }}>{r.from_number}</span>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
