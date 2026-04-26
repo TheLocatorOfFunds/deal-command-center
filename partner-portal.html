@@ -57,22 +57,9 @@
   .pill-navy { background: #e6edf7; color: var(--navy-mid); }
   .pill-green { background: var(--green-soft); color: var(--green); }
 
-  /* Profit share hero card — the centerpiece for a JV partner */
-  .share-hero {
-    background: linear-gradient(135deg, #0b1f3a 0%, #17355e 100%);
-    color: #fffcf5;
-    border-radius: 14px;
-    padding: 24px 26px;
-    margin-bottom: 22px;
-    border: 1px solid var(--gold);
-    position: relative;
-    overflow: hidden;
-  }
-  .share-hero::after { content:''; position:absolute; right:-30px; top:-30px; width:140px; height:140px; background: radial-gradient(circle, rgba(201,162,74,.35), transparent 70%); }
-  .share-hero-label { font-size: 11px; font-weight: 700; color: var(--gold-light); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
-  .share-hero-pct { font-family: 'Fraunces',serif; font-size: 56px; line-height: 1; color: var(--gold-light); font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
-  .share-hero-amount { font-family: 'Fraunces',serif; font-size: 22px; color: #fffcf5; font-weight: 500; }
-  .share-hero-note { font-size: 12px; color: rgba(255,252,245,.7); margin-top: 12px; line-height: 1.55; }
+  /* Quiet role card — replaces the old "25%" hero. Same footprint as other cards. */
+  .role-card-share { font-size: 11px; color: var(--text-muted); }
+  .role-card-share b { color: var(--navy); font-weight: 600; }
 
   .num-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
   .num-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
@@ -142,8 +129,6 @@
 
   @media (max-width: 520px) {
     h1.deal-name { font-size: 24px; }
-    .share-hero-pct { font-size: 44px; }
-    .share-hero-amount { font-size: 18px; }
     .container { padding: 16px 14px 60px; }
   }
 </style>
@@ -154,6 +139,10 @@
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- heic2any: client-side HEIC → JPEG for iPhone photo uploads. ~150KB,
+     loads on demand. iOS Safari can decode HEIC natively but Chrome/desktop
+     browsers can't, and DCC + email previews need JPEG to display them. -->
+<script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
 <script type="text/babel" data-presets="env,react">
 const { useState, useEffect } = React;
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
@@ -306,22 +295,24 @@ function DealRoom({ data, onRefresh }) {
         {partner.dealType && <span className="pill pill-gold">{cap(partner.dealType)}</span>}
       </div>
 
-      {/* Profit share hero */}
-      <div className="share-hero">
-        <div className="share-hero-label">Your JV share</div>
-        <div className="share-hero-pct">{sharePct}%</div>
-        {partnerCut != null && (
-          <div className="share-hero-amount">≈ {fmtMoney(partnerCut)} on a {fmtMoney(expectedNet)} net</div>
-        )}
-        {partnerCut == null && expectedNet === 0 && (
-          <div className="share-hero-amount" style={{ color: 'rgba(255,252,245,.6)' }}>Numbers locked in once we have a buyer + title quote</div>
-        )}
-        {role_description && (
-          <div className="share-hero-note">
-            <b style={{ color: 'var(--gold-light)' }}>Your role:</b> {role_description}
-          </div>
-        )}
-      </div>
+      {/* Quiet role card — replaces the old hero. Profit share lives as a
+           short line at the bottom; the focus is the role + the work. */}
+      {(role_description || sharePct > 0) && (
+        <div className="card" style={{ padding: '16px 22px' }}>
+          {role_description && (
+            <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.55 }}>
+              <span className="card-title" style={{ display: 'inline-block', marginBottom: 0, marginRight: 10 }}>Your role</span>
+              {role_description}
+            </div>
+          )}
+          {sharePct > 0 && (
+            <div className="role-card-share" style={{ marginTop: role_description ? 8 : 0 }}>
+              <b>{sharePct}%</b> on close
+              {partnerCut != null && <> · projected ≈ {fmtMoney(partnerCut)}</>}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Deal economics tiles */}
       {(askingPrice || contractPrice || expectedFee) > 0 && (
@@ -564,10 +555,45 @@ function PhotoUploader({ onUploaded }) {
     xhr.send(file);
   });
 
-  const uploadOne = async (file, idx) => {
+  // HEIC detection: iPhone photos arrive as image/heic OR image/heif (or
+   //   sometimes application/octet-stream with .heic extension). We convert
+   //   them to JPEG before upload so DCC, email previews, and non-Apple
+   //   browsers can display them without extra plumbing.
+  const isHeic = (f) => {
+    if (!f) return false;
+    if (/heic|heif/i.test(f.type || '')) return true;
+    if (/\.(heic|heif)$/i.test(f.name || '')) return true;
+    return false;
+  };
+
+  const convertHeicToJpeg = async (file) => {
+    if (!window.heic2any) throw new Error('HEIC converter not loaded');
+    const blob = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+    const jpegBlob = Array.isArray(blob) ? blob[0] : blob;
+    const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+    return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: file.lastModified });
+  };
+
+  const uploadOne = async (rawFile, idx) => {
     const updateRow = (patch) => setFiles(prev => prev.map((f, i) => i === idx ? { ...f, ...patch } : f));
     let docId = null;
     try {
+      // Pre-step: HEIC → JPEG. Photos from iPhone camera roll default to HEIC.
+      // Conversion runs in the browser — no server roundtrip. Slow files
+      // (8-10MB HEICs) take ~1-2s on a recent iPhone.
+      let file = rawFile;
+      if (isHeic(rawFile)) {
+        updateRow({ status: 'converting' });
+        try {
+          file = await convertHeicToJpeg(rawFile);
+        } catch (convErr) {
+          // If conversion fails (rare), fall back to uploading the original
+          // HEIC. Better to have the file than to fail the upload.
+          console.warn('HEIC conversion failed, uploading original:', convErr);
+          file = rawFile;
+        }
+      }
+
       // 1. Request upload slot — creates documents row in pending state
       const { data: req, error: reqErr } = await sb.rpc('partner_request_upload', {
         p_token: TOKEN,
@@ -700,6 +726,7 @@ function PhotoUploader({ onUploaded }) {
                 <div style={{ color, fontWeight: 600, fontSize: 10, fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>
                   {f.status === 'done' ? '✓ ' + fmtBytes(f.total)
                    : f.status === 'failed' ? '✗ ' + (f.err || 'failed')
+                   : f.status === 'converting' ? 'converting HEIC…'
                    : pct + '%'}
                 </div>
               </div>
