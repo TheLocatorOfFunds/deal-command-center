@@ -677,12 +677,16 @@ function PhotoUploader({ onUploaded }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
+      {/* No capture attribute — iOS shows the native action sheet
+          (Photo Library / Take Photo or Video / Choose Files) so Kevin
+          can pick from his roll OR take fresh shots. With capture set,
+          iOS skips the menu and jumps straight into the camera, which
+          left no way to upload existing photos. */}
       <input
         ref={inputRef}
         type="file"
         accept="image/*,video/*"
         multiple
-        capture="environment"
         onChange={onFiles}
         style={{ display: 'none' }}
       />
