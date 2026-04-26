@@ -46,12 +46,65 @@
   .brand-dot { width: 9px; height: 9px; background: var(--gold); border-radius: 50%; }
   .brand-tag { font-family: 'Inter',sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--text-muted); text-transform: uppercase; margin-left: 6px; padding-top: 3px; }
 
-  .hero-photo { width: 100%; aspect-ratio: 16 / 9; background: var(--bg-card-alt) center center / cover no-repeat; border-radius: 14px; margin-bottom: 22px; border: 1px solid var(--border); }
-  .hero-photo-placeholder { display: flex; align-items: center; justify-content: center; color: var(--text-subtle); font-size: 14px; height: 100%; }
+  /* Compact hero strip — was 16:9, now 21:6 banner under the header.
+     Big enough to show the property at a glance, short enough to keep
+     the action area near the top of the screen. */
+  .hero-strip { width: 100%; aspect-ratio: 21 / 6; background: var(--bg-card-alt) center center / cover no-repeat; border-radius: 12px; margin-bottom: 16px; border: 1px solid var(--border); position: relative; overflow: hidden; }
+  .hero-strip-fade { position: absolute; inset: 0; background: linear-gradient(to top, rgba(11,31,58,0.55), rgba(11,31,58,0) 50%); }
+  .hero-strip-empty { display: flex; align-items: center; justify-content: center; color: var(--text-subtle); font-size: 12px; height: 100%; }
 
-  h1.deal-name { font-family: 'Fraunces',serif; font-weight: 500; font-size: 32px; line-height: 1.15; color: var(--navy); margin: 0 0 4px; letter-spacing: -0.02em; }
-  .deal-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 6px; }
-  .deal-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 22px; }
+  /* Tabs (mobile-first single-screen layout) */
+  .tab-bar { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: 18px 0 0; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .tab-bar::-webkit-scrollbar { display: none; }
+  .tab-btn { flex: 1 1 auto; min-width: 80px; background: transparent; border: 0; border-bottom: 3px solid transparent; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--text-muted); cursor: pointer; font-family: inherit; white-space: nowrap; transition: all 0.12s; position: relative; }
+  .tab-btn:hover { color: var(--navy); }
+  .tab-btn.active { color: var(--navy); border-bottom-color: var(--gold); }
+  .tab-badge { display: inline-block; min-width: 18px; padding: 1px 6px; margin-left: 5px; background: var(--gold-soft); color: var(--amber); border-radius: 999px; font-size: 10px; font-weight: 700; }
+  .tab-btn.active .tab-badge { background: var(--gold); color: #fff; }
+  .tab-content { padding-top: 16px; }
+
+  /* Compact info strip — replaces the 4-tile economics row */
+  .stat-strip { display: flex; gap: 14px; padding: 10px 0; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .stat-strip::-webkit-scrollbar { display: none; }
+  .stat-strip .pair { display: flex; flex-direction: column; align-items: flex-start; flex-shrink: 0; }
+  .stat-strip .label { font-size: 9px; font-weight: 700; color: var(--text-subtle); letter-spacing: 0.1em; text-transform: uppercase; }
+  .stat-strip .value { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 500; color: var(--navy); margin-top: 1px; white-space: nowrap; }
+
+  /* Sticky bottom action bar — keyboard-safe via env(safe-area-inset-bottom) */
+  .sticky-bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background: rgba(255, 255, 255, 0.96);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    border-top: 1px solid var(--border);
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    z-index: 50;
+    display: flex; gap: 8px; justify-content: center;
+    box-shadow: 0 -2px 16px rgba(11,31,58,0.06);
+  }
+  .sticky-bar .btn { flex: 1; max-width: 200px; padding: 12px 14px; border-radius: 9px; font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; text-align: center; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 1px solid transparent; }
+  .sticky-bar .btn.primary { background: var(--navy); color: #fffcf5; }
+  .sticky-bar .btn.primary:active { background: var(--navy-mid); }
+  .sticky-bar .btn.gold { background: var(--gold); color: var(--navy); border-color: var(--gold-light); }
+  .sticky-bar .btn.gold:active { background: var(--gold-light); }
+  .sticky-bar .btn.ghost { background: var(--bg-card); color: var(--navy); border-color: var(--border-strong); }
+  .sticky-bar-spacer { height: 80px; }   /* leaves room above the sticky bar so content isn't hidden */
+
+  /* Compact "Open Tasks" callout right under the header. */
+  .open-tasks-callout {
+    background: var(--bg-card); border: 1px solid var(--gold);
+    border-radius: 10px; padding: 12px 16px; margin: 16px 0;
+    display: flex; align-items: center; gap: 12px; cursor: pointer;
+  }
+  .open-tasks-callout:hover { background: var(--gold-soft); }
+  .open-tasks-icon { font-size: 18px; }
+  .open-tasks-text { flex: 1; font-size: 13px; }
+  .open-tasks-text b { color: var(--navy); }
+  .open-tasks-arrow { color: var(--gold); font-weight: 700; }
+
+  h1.deal-name { font-family: 'Fraunces',serif; font-weight: 500; font-size: 26px; line-height: 1.15; color: var(--navy); margin: 0 0 4px; letter-spacing: -0.02em; }
+  .deal-sub { color: var(--text-muted); font-size: 13px; margin-bottom: 6px; }
+  .deal-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 0; }
   .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
   .pill-gold { background: var(--gold-soft); color: var(--amber); }
   .pill-navy { background: #e6edf7; color: var(--navy-mid); }
@@ -289,10 +342,21 @@ function DealRoom({ data, onRefresh }) {
   const title = partner.title || {};
   const closeDate = partner.expectedCloseDate || partner.closingDate;
 
+  // Tab state — default to 'tasks' if any open, else 'photos'.
+  const openTaskCount = (tasks || []).filter(t => !t.done).length;
+  const initialTab = openTaskCount > 0 ? 'tasks' : 'photos';
+  const [tab, setTab] = useState(initialTab);
+
+  // Sticky bar shows + Upload only on photos tab; otherwise just Call/Text.
+  // The whole sticky bar is hidden when the in-tab uploader is visible to
+  // avoid duplicate buttons cluttering the screen.
+  const showStickyUpload = tab !== 'photos';
+
   return (
     <div className="container">
-      <header className="portal-header">
-        <div className="brand">
+      {/* Compact header — brand + partner name in one line */}
+      <header className="portal-header" style={{ marginBottom: 8 }}>
+        <div className="brand" style={{ fontSize: 17 }}>
           <span className="brand-dot"></span>
           RefundLocators
           <span className="brand-tag">JV Deal Room</span>
@@ -300,168 +364,205 @@ function DealRoom({ data, onRefresh }) {
         {partner_name && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Partner: <b style={{ color: 'var(--navy)' }}>{partner_name}</b></div>}
       </header>
 
-      <div className="hero-photo" style={coverUrl ? { backgroundImage: `url(${coverUrl})` } : {}}>
-        {!coverUrl && <div className="hero-photo-placeholder">Photos coming</div>}
+      {/* Compact hero strip (21:6 instead of 16:9) */}
+      <div className="hero-strip" style={coverUrl ? { backgroundImage: `url(${coverUrl})` } : {}}>
+        {!coverUrl && <div className="hero-strip-empty">Photos coming</div>}
+        {coverUrl && <div className="hero-strip-fade" />}
       </div>
 
       <h1 className="deal-name">{address || deal.name}</h1>
-      <div className="deal-sub">{county && <>{county} County · </>}Ohio · {cap(deal.type || 'wholesale')}</div>
-
-      <div className="deal-tags">
-        {deal.status && <span className="pill pill-navy">{cap(String(deal.status).replace(/-/g, ' '))}</span>}
-        {partner.dealType && <span className="pill pill-gold">{cap(partner.dealType)}</span>}
+      <div className="deal-sub">
+        {county && <>{county} County · </>}Ohio · {cap(deal.type || 'wholesale')}
+        {deal.status && <> · <span style={{ color: 'var(--navy)', fontWeight: 600 }}>{cap(String(deal.status).replace(/-/g, ' '))}</span></>}
       </div>
 
-      {/* Quiet role card — replaces the old hero. Profit share lives as a
-           short line at the bottom; the focus is the role + the work. */}
-      {(role_description || sharePct > 0) && (
-        <div className="card" style={{ padding: '16px 22px' }}>
-          {role_description && (
-            <div style={{ fontSize: 14, color: 'var(--text)', lineHeight: 1.55 }}>
-              <span className="card-title" style={{ display: 'inline-block', marginBottom: 0, marginRight: 10 }}>Your role</span>
-              {role_description}
+      {/* Inline economics strip — replaces the 4 big tiles */}
+      {(askingPrice || contractPrice || expectedFee || closeDate) && (
+        <div className="stat-strip">
+          {contractPrice > 0 && <div className="pair"><div className="label">Contract</div><div className="value">{fmtMoney(contractPrice)}</div></div>}
+          {askingPrice > 0   && <div className="pair"><div className="label">Asking</div><div className="value">{fmtMoney(askingPrice)}</div></div>}
+          {expectedFee > 0   && <div className="pair"><div className="label">Fee</div><div className="value">{fmtMoney(expectedFee)}</div></div>}
+          {closeDate         && <div className="pair"><div className="label">Close</div><div className="value">{fmtDate(closeDate)}</div></div>}
+          {sharePct > 0      && <div className="pair"><div className="label">Your share</div><div className="value">{sharePct}%{partnerCut != null && <> · {fmtMoney(partnerCut)}</>}</div></div>}
+        </div>
+      )}
+
+      {/* Single-line role banner */}
+      {role_description && (
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 0 0' }}>
+          <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-subtle)', marginRight: 8 }}>Your role</span>
+          {role_description}
+        </div>
+      )}
+
+      {/* Open-tasks callout — only when on a tab other than tasks */}
+      {tab !== 'tasks' && openTaskCount > 0 && (
+        <div className="open-tasks-callout" onClick={() => setTab('tasks')}>
+          <span className="open-tasks-icon">✓</span>
+          <span className="open-tasks-text">
+            <b>{openTaskCount} open task{openTaskCount === 1 ? '' : 's'}</b> for you
+          </span>
+          <span className="open-tasks-arrow">→</span>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="tab-bar">
+        <button className={'tab-btn' + (tab === 'tasks' ? ' active' : '')} onClick={() => setTab('tasks')}>
+          ✓ Tasks{openTaskCount > 0 && <span className="tab-badge">{openTaskCount}</span>}
+        </button>
+        <button className={'tab-btn' + (tab === 'photos' ? ' active' : '')} onClick={() => setTab('photos')}>
+          📷 Photos{photos.length > 0 && <span className="tab-badge">{photos.length}</span>}
+        </button>
+        <button className={'tab-btn' + (tab === 'updates' ? ' active' : '')} onClick={() => setTab('updates')}>
+          💬 Updates
+        </button>
+        <button className={'tab-btn' + (tab === 'info' ? ' active' : '')} onClick={() => setTab('info')}>
+          ℹ Info
+        </button>
+      </div>
+
+      <div className="tab-content">
+        {tab === 'tasks' && (
+          tasks && tasks.length > 0 ? (
+            <div className="card">
+              {tasks.map(t => <TaskRow key={t.id} task={t} onChange={onRefresh} />)}
             </div>
-          )}
-          {sharePct > 0 && (
-            <div className="role-card-share" style={{ marginTop: role_description ? 8 : 0 }}>
-              <b>{sharePct}%</b> on close
-              {partnerCut != null && <> · projected ≈ {fmtMoney(partnerCut)}</>}
+          ) : (
+            <div className="empty" style={{ textAlign: 'center', padding: 32 }}>
+              No tasks yet. When Nathan adds tasks for you, they'll show here.
             </div>
-          )}
-        </div>
-      )}
+          )
+        )}
 
-      {/* Deal economics tiles */}
-      {(askingPrice || contractPrice || expectedFee) > 0 && (
-        <div className="num-tiles">
-          {contractPrice > 0 && <Tile label="Under contract at" value={fmtMoney(contractPrice)} />}
-          {askingPrice > 0 && <Tile label="Asking buyer" value={fmtMoney(askingPrice)} />}
-          {expectedFee > 0 && <Tile label="Assignment fee" value={fmtMoney(expectedFee)} />}
-          {closeDate && <Tile label="Target close" value={fmtDate(closeDate)} />}
-        </div>
-      )}
-
-      <div className="cta-bar">
-        <a href="tel:+15135162306" className="cta-primary">📞 Call Nathan</a>
-        <a href="sms:+15135162306" className="cta-secondary">💬 Text</a>
-      </div>
-
-      {/* Property */}
-      <div className="card">
-        <p className="card-title">The property</p>
-        <div className="stat-grid">
-          <Stat label="Address" value={address} />
-          {partner.beds      && <Stat label="Beds" value={partner.beds} />}
-          {partner.baths     && <Stat label="Baths" value={partner.baths} />}
-          {partner.sqft      && <Stat label="Sqft" value={Number(partner.sqft).toLocaleString('en-US')} />}
-          {partner.yearBuilt && <Stat label="Year built" value={partner.yearBuilt} />}
-          {partner.lotSize   && <Stat label="Lot" value={partner.lotSize} />}
-          {partner.occupancy && <Stat label="Occupancy" value={cap(partner.occupancy)} />}
-          {partner.condition && <Stat label="Condition" value={cap(partner.condition)} />}
-        </div>
-      </div>
-
-      {/* Buyer */}
-      {(buyer.name || buyer.phone || buyer.email || buyer.notes) && (
-        <div className="card">
-          <p className="card-title">Buyer</p>
-          <div className="stat-grid">
-            {buyer.name  && <Stat label="Name" value={buyer.name} />}
-            {buyer.phone && <Stat label="Phone" value={<a href={`tel:${buyer.phone}`}>{buyer.phone}</a>} />}
-            {buyer.email && <Stat label="Email" value={<a href={`mailto:${buyer.email}`}>{buyer.email}</a>} />}
-            {buyer.entity && <Stat label="Entity" value={buyer.entity} />}
-          </div>
-          {buyer.notes && <div style={{ marginTop: 14, padding: 12, background: 'var(--bg-card-alt)', borderRadius: 8, fontSize: 13, color: 'var(--text)' }}>{buyer.notes}</div>}
-        </div>
-      )}
-
-      {/* Title */}
-      {(title.company || title.contact || title.phone || title.email) && (
-        <div className="card">
-          <p className="card-title">Title company</p>
-          <div className="stat-grid">
-            {title.company && <Stat label="Company" value={title.company} />}
-            {title.contact && <Stat label="Contact" value={title.contact} />}
-            {title.phone   && <Stat label="Phone" value={<a href={`tel:${title.phone}`}>{title.phone}</a>} />}
-            {title.email   && <Stat label="Email" value={<a href={`mailto:${title.email}`}>{title.email}</a>} />}
-            {title.fileNumber && <Stat label="File #" value={title.fileNumber} />}
-          </div>
-        </div>
-      )}
-
-      {/* Tasks */}
-      {tasks && tasks.length > 0 && (
-        <div className="card">
-          <p className="card-title">Your checklist</p>
-          {tasks.map(t => <TaskRow key={t.id} task={t} onChange={onRefresh} />)}
-        </div>
-      )}
-
-      {/* Photos */}
-      <div className="card">
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
-          <p className="card-title" style={{ margin: 0 }}>Photos</p>
-          <PhotoUploader onUploaded={onRefresh} />
-        </div>
-        {photos.length === 0 ? (
-          <div className="empty">No photos or videos yet. Tap <b>+ Upload photos / videos</b> above — Nathan sees them instantly. Drag-and-drop works on desktop.</div>
-        ) : (
-          <div className="photos-grid">
-            {photos.map(p => {
-              const u = p.id === coverDoc?.id ? coverUrl : photoUrls[p.id];
-              if (isVideo(p)) {
-                // Videos: render an inline <video> with controls. Tap-to-fullscreen via the native player.
-                return (
-                  <div key={p.id} className="photo-thumb" style={{ background: '#000', position: 'relative' }}>
-                    {u ? (
-                      <video src={u} controls preload="metadata" playsInline
-                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />
-                    ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-subtle)', fontSize: 12 }}>Loading video…</div>
-                    )}
-                    <div style={{ position: 'absolute', top: 6, left: 6, background: 'rgba(0,0,0,.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.05em' }}>VIDEO</div>
-                  </div>
-                );
-              }
-              // Photos: existing tap-to-lightbox
-              return (
-                <div key={p.id} className="photo-thumb"
-                  style={u ? { backgroundImage: `url(${u})` } : {}}
-                  onClick={() => u && setLightbox(u)} />
-              );
-            })}
+        {tab === 'photos' && (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+                Photos &amp; Videos · {photos.length}
+              </div>
+              <PhotoUploader onUploaded={onRefresh} />
+            </div>
+            {photos.length === 0 ? (
+              <div className="empty" style={{ textAlign: 'center', padding: 24, fontStyle: 'normal' }}>
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📸</div>
+                Tap <b>+ Upload photos / videos</b> above — Nathan sees them instantly.
+                <div style={{ fontSize: 11, color: 'var(--text-subtle)', marginTop: 8 }}>From your camera roll, take new photos, or drag-and-drop on desktop.</div>
+              </div>
+            ) : (
+              <div className="photos-grid">
+                {photos.map(p => {
+                  const u = p.id === coverDoc?.id ? coverUrl : photoUrls[p.id];
+                  if (isVideo(p)) {
+                    return (
+                      <div key={p.id} className="photo-thumb" style={{ background: '#000', position: 'relative' }}>
+                        {u ? (
+                          <video src={u} controls preload="metadata" playsInline
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />
+                        ) : (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-subtle)', fontSize: 12 }}>Loading video…</div>
+                        )}
+                        <div style={{ position: 'absolute', top: 6, left: 6, background: 'rgba(0,0,0,.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.05em' }}>VIDEO</div>
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={p.id} className="photo-thumb"
+                      style={u ? { backgroundImage: `url(${u})` } : {}}
+                      onClick={() => u && setLightbox(u)} />
+                  );
+                })}
+              </div>
+            )}
+            {files.length > 0 && (
+              <div className="card" style={{ marginTop: 16 }}>
+                <p className="card-title">Other documents</p>
+                {files.map(d => <DocRow key={d.id} doc={d} />)}
+              </div>
+            )}
           </div>
         )}
-      </div>
 
-      {/* Documents (non-image) */}
-      {files.length > 0 && (
-        <div className="card">
-          <p className="card-title">Documents</p>
-          {files.map(d => <DocRow key={d.id} doc={d} />)}
-        </div>
-      )}
-
-      {/* Activity feed (read) + post update (write) */}
-      <div className="card">
-        <p className="card-title">Activity</p>
-        <PostUpdate onPosted={onRefresh} />
-        {(!activity || activity.length === 0) ? (
-          <div className="empty">No activity yet. Updates you post and what the team does will show here.</div>
-        ) : (
-          <div style={{ marginTop: 16 }}>
-            {activity.map(a => (
-              <div key={a.id} className="activity-row">
-                {a.action}
-                <div className="activity-meta">{a.author} · {fmtDateTime(a.created_at)}</div>
+        {tab === 'updates' && (
+          <div>
+            <div className="card">
+              <PostUpdate onPosted={onRefresh} />
+            </div>
+            {(!activity || activity.length === 0) ? (
+              <div className="empty" style={{ textAlign: 'center', padding: 24 }}>
+                No activity yet. Updates you post and what the team does will show here.
               </div>
-            ))}
+            ) : (
+              <div className="card" style={{ marginTop: 16 }}>
+                <p className="card-title">Recent activity</p>
+                {activity.map(a => (
+                  <div key={a.id} className="activity-row">
+                    {a.action}
+                    <div className="activity-meta">{a.author} · {fmtDateTime(a.created_at)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === 'info' && (
+          <div>
+            <div className="card">
+              <p className="card-title">The property</p>
+              <div className="stat-grid">
+                <Stat label="Address" value={address} />
+                {partner.beds      && <Stat label="Beds" value={partner.beds} />}
+                {partner.baths     && <Stat label="Baths" value={partner.baths} />}
+                {partner.sqft      && <Stat label="Sqft" value={Number(partner.sqft).toLocaleString('en-US')} />}
+                {partner.yearBuilt && <Stat label="Year built" value={partner.yearBuilt} />}
+                {partner.lotSize   && <Stat label="Lot" value={partner.lotSize} />}
+                {partner.occupancy && <Stat label="Occupancy" value={cap(partner.occupancy)} />}
+                {partner.condition && <Stat label="Condition" value={cap(partner.condition)} />}
+              </div>
+            </div>
+
+            {(buyer.name || buyer.phone || buyer.email || buyer.notes) && (
+              <div className="card">
+                <p className="card-title">Buyer</p>
+                <div className="stat-grid">
+                  {buyer.name  && <Stat label="Name" value={buyer.name} />}
+                  {buyer.phone && <Stat label="Phone" value={<a href={`tel:${buyer.phone}`}>{buyer.phone}</a>} />}
+                  {buyer.email && <Stat label="Email" value={<a href={`mailto:${buyer.email}`}>{buyer.email}</a>} />}
+                  {buyer.entity && <Stat label="Entity" value={buyer.entity} />}
+                </div>
+                {buyer.notes && <div style={{ marginTop: 14, padding: 12, background: 'var(--bg-card-alt)', borderRadius: 8, fontSize: 13, color: 'var(--text)' }}>{buyer.notes}</div>}
+              </div>
+            )}
+
+            {(title.company || title.contact || title.phone || title.email) && (
+              <div className="card">
+                <p className="card-title">Title company</p>
+                <div className="stat-grid">
+                  {title.company && <Stat label="Company" value={title.company} />}
+                  {title.contact && <Stat label="Contact" value={title.contact} />}
+                  {title.phone   && <Stat label="Phone" value={<a href={`tel:${title.phone}`}>{title.phone}</a>} />}
+                  {title.email   && <Stat label="Email" value={<a href={`mailto:${title.email}`}>{title.email}</a>} />}
+                  {title.fileNumber && <Stat label="File #" value={title.fileNumber} />}
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
 
       <div style={{ marginTop: 30, paddingTop: 20, borderTop: '1px solid var(--border)', textAlign: 'center' }}>
         <div className="fineprint">Private deal room. Don't share this link — it's tied to you.</div>
+      </div>
+      <div className="sticky-bar-spacer" />
+
+      {/* Sticky bottom action bar — always one tap away */}
+      <div className="sticky-bar">
+        <a href="tel:+15135162306" className="btn primary">📞 Call</a>
+        <a href="sms:+15135162306" className="btn ghost">💬 Text</a>
+        {showStickyUpload && (
+          <button className="btn gold" onClick={() => setTab('photos')}>📷 Upload</button>
+        )}
       </div>
 
       {lightbox && (
