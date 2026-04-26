@@ -938,6 +938,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("attention", "🔔 Attention", 0)}
           {viewBtn("outreach", "🚀 Outreach", 0)}
+          {viewBtn("forecast", "📅 Forecast", 0)}
           {viewBtn("pipeline", "🧭 Pipeline", 0)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
@@ -955,7 +956,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       </div>
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -974,7 +975,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -982,6 +983,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
+          ) : view === "forecast" ? (
+            <ForecastView deals={deals} onSelect={onSelect} />
           ) : view === "reports" ? (
             <ReportsView deals={deals} onSelect={onSelect} />
           ) : view === "analytics" ? (
@@ -2372,6 +2375,360 @@ function DeadlineAlertStrip({ onSelect }) {
       </div>
     </div>
   );
+}
+
+// ─── Forecast View ───────────────────────────────────────────────
+// Proactive "next 7-14 days" planning surface — opposite philosophy from
+// Attention (which is reactive — what just happened). Six sections pull
+// from data that already lands in DCC's Supabase. Each section is empty-
+// state-friendly so it lights up gracefully as Castle's pipeline matures
+// (especially Castle's K.1/K.3/H.b emissions which haven't begun yet, and
+// Phase 8's per-county scraper rollout which is months-away).
+//
+// Sections:
+//   🏛 Court hearings · next 7 days     (docket_events.event_type='hearing_scheduled')
+//   ⏳ Statutory deadlines · next 14d   (docket_events.deadline_metadata)
+//   📤 Cadence drips · next 48h         (outreach_queue scheduled future)
+//   💰 Disbursement watch · 14d+ stale  (litigation_stage='distribution_ordered' w/o paid)
+//   🔥 Stale active deals · 14d+ silent (active deals w/ no recent outbound)
+//   🏛 Sheriff sales · next 14 days     (foreclosure_cases.sale_date)
+function ForecastView({ deals, onSelect }) {
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          📅 Forecast
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· what's coming · 7-14 days out</span>
+        </h2>
+        <div style={{ fontSize: 11, color: '#78716c', marginTop: 6, lineHeight: 1.55 }}>
+          Plan instead of react. Sections refresh every 5 min. Empty sections will populate as Castle's pipeline emits the data type — many event types and full county coverage are still rolling out (Phase 8: 5/88 counties live).
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
+        <ForecastHearings onSelect={onSelect} />
+        <ForecastDeadlines onSelect={onSelect} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start', marginTop: 20 }}>
+        <ForecastCadenceDrips deals={deals} onSelect={onSelect} />
+        <ForecastDisbursementWatch onSelect={onSelect} />
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start', marginTop: 20 }}>
+        <ForecastStaleDeals deals={deals} onSelect={onSelect} />
+        <ForecastSheriffSales />
+      </div>
+
+      <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        <b style={{ color: '#a8a29e' }}>Coverage note:</b> sheriff sales + court hearings only show for counties Castle is actively monitoring. Currently <code style={{ color: '#a8a29e' }}>Hamilton</code>, <code style={{ color: '#a8a29e' }}>Franklin</code>, <code style={{ color: '#a8a29e' }}>Butler</code>, <code style={{ color: '#a8a29e' }}>Cuyahoga</code>, <code style={{ color: '#a8a29e' }}>Montgomery</code> (5 of 88 OH counties). The other 83 surface as Castle's Phase 8 ships per-county scrapers.
+      </div>
+    </div>
+  );
+}
+
+// ─── Forecast: Court hearings · next 7 days ────────────────────
+function ForecastHearings({ onSelect }) {
+  const [rows, setRows] = useState(null);
+  const load = React.useCallback(async () => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const in7d = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
+    const { data } = await sb.from('docket_events')
+      .select('id, deal_id, event_type, event_date, description, court_system, county')
+      .eq('event_type', 'hearing_scheduled')
+      .gte('event_date', todayIso)
+      .lte('event_date', in7d)
+      .eq('is_backfill', false)
+      .order('event_date', { ascending: true });
+    if (!data || data.length === 0) { setRows([]); return; }
+    const dealIds = [...new Set(data.map(d => d.deal_id))];
+    const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
+    const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    setRows(data.map(e => ({ ...e, deal: byId[e.deal_id] || { id: e.deal_id, name: e.deal_id } })));
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('forecast-hearings').on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, load).subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  return (
+    <ForecastSection icon="🏛" label="Court hearings · next 7 days" sub="From docket_events. Castle event type: hearing_scheduled." count={rows?.length}>
+      {rows === null && <ForecastLoading />}
+      {rows && rows.length === 0 && <ForecastEmpty text="No hearings scheduled in the next 7 days for any monitored deal." />}
+      {rows && rows.length > 0 && rows.map(e => (
+        <ForecastRow key={e.id} onClick={() => onSelect && onSelect(e.deal_id)}>
+          <ForecastDate iso={e.event_date} />
+          <ForecastBody primary={e.deal.name} secondary={e.description ? e.description.slice(0, 80) : (e.county ? e.county + ' County' : '')} />
+        </ForecastRow>
+      ))}
+    </ForecastSection>
+  );
+}
+
+// ─── Forecast: Statutory deadlines · next 14 days ──────────────
+function ForecastDeadlines({ onSelect }) {
+  const [rows, setRows] = useState(null);
+  const load = React.useCallback(async () => {
+    const since = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+    const { data } = await sb.from('docket_events')
+      .select('id, deal_id, event_type, event_date, description, deadline_metadata')
+      .gte('event_date', since)
+      .not('deadline_metadata', 'is', null)
+      .eq('is_backfill', false);
+    if (!data || data.length === 0) { setRows([]); return; }
+    const dealIds = [...new Set(data.map(d => d.deal_id))];
+    const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
+    const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    const upcoming = [];
+    for (const e of data) {
+      const d = eventDeadline(e);
+      if (!d) continue;
+      if (d.daysRemaining < 0 || d.daysRemaining > 14) continue;
+      upcoming.push({ ...e, deadline: d, deal: byId[e.deal_id] || { id: e.deal_id, name: e.deal_id } });
+    }
+    upcoming.sort((a, b) => a.deadline.daysRemaining - b.deadline.daysRemaining);
+    setRows(upcoming);
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+
+  return (
+    <ForecastSection icon="⏳" label="Statutory deadlines · next 14 days" sub="From docket_events.deadline_metadata. Castle's K.3 emission lights this up." count={rows?.length}>
+      {rows === null && <ForecastLoading />}
+      {rows && rows.length === 0 && <ForecastEmpty text="No statutory deadlines approaching. (Castle's deadline_metadata emission ships as motions/orders fire on monitored deals — empty until then.)" />}
+      {rows && rows.length > 0 && rows.map(e => {
+        const c = deadlineColor(e.deadline.daysRemaining);
+        return (
+          <ForecastRow key={e.id} onClick={() => onSelect && onSelect(e.deal_id)}>
+            <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: c, fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
+              {e.deadline.daysRemaining}d
+            </div>
+            <ForecastBody primary={e.deal.name} secondary={`${deadlineKindLabel(e.deadline.kind)} · due ${e.deadline.deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`} />
+          </ForecastRow>
+        );
+      })}
+    </ForecastSection>
+  );
+}
+
+// ─── Forecast: Cadence drips · next 48h ────────────────────────
+function ForecastCadenceDrips({ deals, onSelect }) {
+  const [rows, setRows] = useState(null);
+  const load = React.useCallback(async () => {
+    const now = new Date();
+    const in48h = new Date(Date.now() + 48 * 60 * 60 * 1000);
+    const { data } = await sb.from('outreach_queue')
+      .select('id, deal_id, contact_phone, cadence_day, status, draft_body, scheduled_for')
+      .eq('status', 'pending')
+      .gte('cadence_day', 1)
+      .gte('scheduled_for', now.toISOString())
+      .lte('scheduled_for', in48h.toISOString())
+      .order('scheduled_for', { ascending: true })
+      .limit(50);
+    if (!data) { setRows([]); return; }
+    const dealsById = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    setRows(data.map(r => ({ ...r, deal: dealsById[r.deal_id] || { id: r.deal_id, name: r.deal_id } })));
+  }, [deals]);
+  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('forecast-cadence').on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, load).subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  return (
+    <ForecastSection icon="📤" label="Cadence drips · next 48h" sub="What the cadence engine is about to send. Pause individual deals from their Comms tab." count={rows?.length}>
+      {rows === null && <ForecastLoading />}
+      {rows && rows.length === 0 && <ForecastEmpty text="No drips scheduled in the next 48h." />}
+      {rows && rows.length > 0 && rows.map(r => {
+        const fireAt = new Date(r.scheduled_for);
+        const minsUntil = Math.max(0, Math.round((fireAt.getTime() - Date.now()) / 60000));
+        const fmt = minsUntil < 60 ? `in ${minsUntil}m` : minsUntil < 1440 ? `in ${(minsUntil / 60).toFixed(1)}h` : `in ${(minsUntil / 1440).toFixed(1)}d`;
+        return (
+          <ForecastRow key={r.id} onClick={() => onSelect && onSelect(r.deal_id)}>
+            <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: '#a78bfa', fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
+              D{r.cadence_day}
+            </div>
+            <ForecastBody primary={r.deal.name} secondary={(r.draft_body || '(drafting…)').slice(0, 80)} />
+            <div style={{ fontSize: 10, color: '#a78bfa', whiteSpace: 'nowrap', flexShrink: 0 }}>{fmt}</div>
+          </ForecastRow>
+        );
+      })}
+    </ForecastSection>
+  );
+}
+
+// ─── Forecast: Disbursement watch · check overdue ──────────────
+function ForecastDisbursementWatch({ onSelect }) {
+  const [rows, setRows] = useState(null);
+  const load = React.useCallback(async () => {
+    // Look for distribution_ordered events older than 14 days where the deal
+    // hasn't yet had a distribution_paid event. The "where's my check" leading
+    // indicator. Per Nathan's portal copy commitment of "24h after receipt" —
+    // anything past 14 days from order-entry without payment deserves attention.
+    const before14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+    const { data: ordered } = await sb.from('docket_events')
+      .select('id, deal_id, event_type, event_date, description, litigation_stage')
+      .or('event_type.eq.disbursement_ordered,litigation_stage.eq.distribution_ordered')
+      .lte('event_date', before14d)
+      .eq('is_backfill', false);
+    if (!ordered || ordered.length === 0) { setRows([]); return; }
+    const dealIds = [...new Set(ordered.map(o => o.deal_id))];
+    const { data: paid } = await sb.from('docket_events')
+      .select('deal_id')
+      .or('event_type.eq.disbursement_paid,litigation_stage.eq.distribution_paid')
+      .in('deal_id', dealIds);
+    const paidSet = new Set((paid || []).map(p => p.deal_id));
+    const unresolved = ordered.filter(o => !paidSet.has(o.deal_id));
+    if (unresolved.length === 0) { setRows([]); return; }
+    const { data: deals } = await sb.from('deals').select('id, name, status, meta').in('id', [...new Set(unresolved.map(o => o.deal_id))]);
+    const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    const enriched = unresolved.map(o => {
+      const d = new Date(o.event_date);
+      const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+      return { ...o, deal: byId[o.deal_id] || { id: o.deal_id, name: o.deal_id }, daysSinceOrdered: days };
+    });
+    enriched.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);
+    setRows(enriched);
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+
+  return (
+    <ForecastSection icon="💰" label="Disbursement watch · 14d+ stale" sub="Distribution ordered ≥14 days ago, no payment recorded. The 'where's my check?' leading indicator." count={rows?.length}>
+      {rows === null && <ForecastLoading />}
+      {rows && rows.length === 0 && <ForecastEmpty text="No stuck disbursements. Either nothing's been ordered yet or everything paid out within 14 days." />}
+      {rows && rows.length > 0 && rows.map(o => (
+        <ForecastRow key={o.id} onClick={() => onSelect && onSelect(o.deal_id)}>
+          <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: o.daysSinceOrdered > 30 ? '#ef4444' : '#f59e0b', fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
+            {o.daysSinceOrdered}d
+          </div>
+          <ForecastBody primary={o.deal.name} secondary={`Distribution ordered ${o.event_date}. No payment yet.`} />
+        </ForecastRow>
+      ))}
+    </ForecastSection>
+  );
+}
+
+// ─── Forecast: Stale active deals · 14d+ no contact ───────────
+function ForecastStaleDeals({ deals, onSelect }) {
+  const [rows, setRows] = useState(null);
+  const load = React.useCallback(async () => {
+    const ARCHIVE = new Set(['closed', 'recovered', 'dead']);
+    const active = (deals || []).filter(d => !ARCHIVE.has(d.status));
+    if (active.length === 0) { setRows([]); return; }
+    const since = new Date(Date.now() - 14 * 86400000).toISOString();
+    const { data: recentMsgs } = await sb.from('messages_outbound')
+      .select('deal_id, created_at')
+      .eq('direction', 'outbound')
+      .gte('created_at', since)
+      .in('deal_id', active.map(d => d.id));
+    const recent = new Set((recentMsgs || []).map(m => m.deal_id));
+    const stale = active.filter(d => !recent.has(d.id));
+    // Sort by oldest updated_at (proxy for "longest neglected")
+    stale.sort((a, b) => new Date(a.updated_at || 0).getTime() - new Date(b.updated_at || 0).getTime());
+    setRows(stale.slice(0, 30));
+  }, [deals]);
+  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+
+  return (
+    <ForecastSection icon="🔥" label="Stale active deals · 14d+ no outbound" sub="Active deals you haven't messaged in 2+ weeks. Top 30, oldest first." count={rows?.length}>
+      {rows === null && <ForecastLoading />}
+      {rows && rows.length === 0 && <ForecastEmpty text="No stale deals. Every active deal has had outbound contact in the last 2 weeks." />}
+      {rows && rows.length > 0 && rows.map(d => {
+        const lastUpdated = d.updated_at ? Math.floor((Date.now() - new Date(d.updated_at).getTime()) / 86400000) : null;
+        return (
+          <ForecastRow key={d.id} onClick={() => onSelect && onSelect(d.id)}>
+            <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
+              {lastUpdated != null ? `${lastUpdated}d` : '—'}
+            </div>
+            <ForecastBody primary={d.name || d.id} secondary={`${d.status || 'active'}${d.lead_tier ? ' · Tier ' + d.lead_tier : ''}${d.meta?.county ? ' · ' + d.meta.county + ' Co.' : ''}`} />
+          </ForecastRow>
+        );
+      })}
+    </ForecastSection>
+  );
+}
+
+// ─── Forecast: Sheriff sales · next 14 days ────────────────────
+function ForecastSheriffSales() {
+  const [rows, setRows] = useState(null);
+  const load = React.useCallback(async () => {
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const in14d = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
+    const { data } = await sb.from('foreclosure_cases')
+      .select('id, case_number, county, property_address, sale_date, estimated_surplus_low, estimated_surplus_high, judgment_amount, source')
+      .gte('sale_date', todayIso)
+      .lte('sale_date', in14d)
+      .order('sale_date', { ascending: true })
+      .limit(50);
+    setRows(data || []);
+  }, []);
+  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+
+  return (
+    <ForecastSection icon="🏛" label="Sheriff sales · next 14 days" sub="From foreclosure_cases (Castle auction sweeps). Castle covers 5 OH counties." count={rows?.length}>
+      {rows === null && <ForecastLoading />}
+      {rows && rows.length === 0 && <ForecastEmpty text="No upcoming sheriff sales in the next 14 days. (Castle's auction sweeps populate this — empty until next sweep run.)" />}
+      {rows && rows.length > 0 && rows.map(s => {
+        const surplusMid = s.estimated_surplus_low && s.estimated_surplus_high
+          ? Math.round((Number(s.estimated_surplus_low) + Number(s.estimated_surplus_high)) / 2)
+          : null;
+        return (
+          <ForecastRow key={s.id}>
+            <ForecastDate iso={s.sale_date} />
+            <ForecastBody primary={s.property_address || s.case_number} secondary={`${s.county || '—'} · case ${s.case_number || '—'}${surplusMid ? ' · est. surplus ~$' + surplusMid.toLocaleString() : ''}`} />
+          </ForecastRow>
+        );
+      })}
+    </ForecastSection>
+  );
+}
+
+// ─── Shared Forecast helpers ────────────────────────────────────
+function ForecastSection({ icon, label, sub, count, children }) {
+  return (
+    <div>
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>{icon}</span>
+          <span>{label}</span>
+          {count != null && count > 0 && <span style={{ background: '#292524', color: '#fafaf9', padding: '1px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700, letterSpacing: 0 }}>{count}</span>}
+        </div>
+        {sub && <div style={{ fontSize: 11, color: '#57534e', marginTop: 3, lineHeight: 1.5 }}>{sub}</div>}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+function ForecastRow({ children, onClick }) {
+  return (
+    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, cursor: onClick ? 'pointer' : 'default' }}>
+      {children}
+    </div>
+  );
+}
+function ForecastDate({ iso }) {
+  const d = new Date(iso);
+  const days = Math.floor((d.getTime() - Date.now()) / 86400000);
+  return (
+    <div style={{ minWidth: 60, textAlign: 'center', flexShrink: 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" }}>{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+      <div style={{ fontSize: 9, color: '#78716c', marginTop: 1 }}>{days <= 0 ? 'today' : days === 1 ? 'tmrw' : `${days}d`}</div>
+    </div>
+  );
+}
+function ForecastBody({ primary, secondary }) {
+  return (
+    <div style={{ flex: 1, minWidth: 0 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{primary}</div>
+      {secondary && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{secondary}</div>}
+    </div>
+  );
+}
+function ForecastEmpty({ text }) {
+  return <div style={{ fontSize: 11, color: '#78716c', padding: 14, border: '1px dashed #292524', borderRadius: 6, fontStyle: 'italic', lineHeight: 1.5 }}>{text}</div>;
+}
+function ForecastLoading() {
+  return <div style={{ fontSize: 11, color: '#78716c', padding: 14 }}>Loading…</div>;
 }
 
 // ─── Outreach View ───────────────────────────────────────────────
