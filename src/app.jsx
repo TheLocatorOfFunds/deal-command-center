@@ -1258,6 +1258,7 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
 function BulkOutreachButton({ candidates }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const alive = useAliveRef();
 
   const eligible = candidates.filter(d => (d.lead_tier === 'A' || d.lead_tier === 'B'));
   const eligibleWithPhone = eligible.filter(d => d.meta?.homeownerPhone || d.meta?.phone);
@@ -1309,12 +1310,16 @@ function BulkOutreachButton({ candidates }) {
       }
     }
 
+    if (!alive.current) return;
     setBusy(false);
     setResult({
       type: queued > 0 ? 'success' : skipped > 0 ? 'info' : 'error',
       text: `Queued ${queued} · Skipped ${skipped} (${reasons.no_phone} no phone, ${reasons.already_active} already active, ${reasons.dnd} DNC) · Failed ${failed}`,
     });
-    if (queued > 0) setTimeout(() => setResult(null), 12000);
+    if (queued > 0) {
+      const timeoutId = setTimeout(() => { if (alive.current) setResult(null); }, 12000);
+      // No cleanup needed — alive.current gates the setResult call
+    }
   };
 
   // Don't render unless there are A/B candidates visible
@@ -2146,6 +2151,17 @@ function DeadlineAlertStrip({ onSelect }) {
   );
 }
 
+// ─── useAliveRef: gate setState calls after unmount ───────────
+// Prevents async data-fetches from setting state on unmounted components
+// (silences React warnings on rapid view nav). Pattern:
+//   const alive = useAliveRef();
+//   ... if (alive.current) setRows(data);
+function useAliveRef() {
+  const ref = useRef(true);
+  useEffect(() => { ref.current = true; return () => { ref.current = false; }; }, []);
+  return ref;
+}
+
 // ─── Forecast View ───────────────────────────────────────────────
 // Proactive "next 7-14 days" planning surface — opposite philosophy from
 // Attention (which is reactive — what just happened). Six sections pull
@@ -2197,6 +2213,7 @@ function ForecastView({ deals, onSelect }) {
 // ─── Forecast: Court hearings · next 7 days ────────────────────
 function ForecastHearings({ onSelect }) {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
   const load = React.useCallback(async () => {
     const todayIso = new Date().toISOString().slice(0, 10);
     const in7d = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
@@ -2207,17 +2224,23 @@ function ForecastHearings({ onSelect }) {
       .lte('event_date', in7d)
       .eq('is_backfill', false)
       .order('event_date', { ascending: true });
+    if (!alive.current) return;
     if (!data || data.length === 0) { setRows([]); return; }
     const dealIds = [...new Set(data.map(d => d.deal_id))];
     const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
+    if (!alive.current) return;
     const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
     setRows(data.map(e => ({ ...e, deal: byId[e.deal_id] || { id: e.deal_id, name: e.deal_id } })));
-  }, []);
-  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  }, [alive]);
+  // Stable ref so the channel subscription doesn't churn when load identity changes
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
   useEffect(() => {
-    const ch = sb.channel('forecast-hearings').on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, load).subscribe();
+    // Empty deps — subscribe once. useId would give per-instance unique names but
+    // singleton names are fine since cleanup runs before any same-named re-subscribe.
+    const ch = sb.channel('forecast-hearings').on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, () => loadRef.current()).subscribe();
     return () => { sb.removeChannel(ch); };
-  }, [load]);
+  }, []);
 
   return (
     <ForecastSection icon="🏛" label="Court hearings · next 7 days" sub="From docket_events. Castle event type: hearing_scheduled." count={rows?.length}>
@@ -2236,6 +2259,7 @@ function ForecastHearings({ onSelect }) {
 // ─── Forecast: Statutory deadlines · next 14 days ──────────────
 function ForecastDeadlines({ onSelect }) {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
   const load = React.useCallback(async () => {
     const since = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
     const { data } = await sb.from('docket_events')
@@ -2243,9 +2267,11 @@ function ForecastDeadlines({ onSelect }) {
       .gte('event_date', since)
       .not('deadline_metadata', 'is', null)
       .eq('is_backfill', false);
+    if (!alive.current) return;
     if (!data || data.length === 0) { setRows([]); return; }
     const dealIds = [...new Set(data.map(d => d.deal_id))];
     const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
+    if (!alive.current) return;
     const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
     const upcoming = [];
     for (const e of data) {
@@ -2256,8 +2282,9 @@ function ForecastDeadlines({ onSelect }) {
     }
     upcoming.sort((a, b) => a.deadline.daysRemaining - b.deadline.daysRemaining);
     setRows(upcoming);
-  }, []);
-  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  }, [alive]);
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
 
   return (
     <ForecastSection icon="⏳" label="Statutory deadlines · next 14 days" sub="From docket_events.deadline_metadata. Castle's K.3 emission lights this up." count={rows?.length}>
@@ -2281,6 +2308,10 @@ function ForecastDeadlines({ onSelect }) {
 // ─── Forecast: Cadence drips · next 48h ────────────────────────
 function ForecastCadenceDrips({ deals, onSelect }) {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
+  // Hold deals in a ref so load identity stays stable when deals reference changes —
+  // prevents channel re-subscribe churn on every parent re-render.
+  const dealsRef = useRef(deals); dealsRef.current = deals;
   const load = React.useCallback(async () => {
     const now = new Date();
     const in48h = new Date(Date.now() + 48 * 60 * 60 * 1000);
@@ -2292,15 +2323,17 @@ function ForecastCadenceDrips({ deals, onSelect }) {
       .lte('scheduled_for', in48h.toISOString())
       .order('scheduled_for', { ascending: true })
       .limit(50);
+    if (!alive.current) return;
     if (!data) { setRows([]); return; }
-    const dealsById = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    const dealsById = Object.fromEntries((dealsRef.current || []).map(d => [d.id, d]));
     setRows(data.map(r => ({ ...r, deal: dealsById[r.deal_id] || { id: r.deal_id, name: r.deal_id } })));
-  }, [deals]);
-  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  }, [alive]);
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
   useEffect(() => {
-    const ch = sb.channel('forecast-cadence').on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, load).subscribe();
+    const ch = sb.channel('forecast-cadence').on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, () => loadRef.current()).subscribe();
     return () => { sb.removeChannel(ch); };
-  }, [load]);
+  }, []);
 
   return (
     <ForecastSection icon="📤" label="Cadence drips · next 48h" sub="What the cadence engine is about to send. Pause individual deals from their Comms tab." count={rows?.length}>
@@ -2327,6 +2360,7 @@ function ForecastCadenceDrips({ deals, onSelect }) {
 // ─── Forecast: Disbursement watch · check overdue ──────────────
 function ForecastDisbursementWatch({ onSelect }) {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
   const load = React.useCallback(async () => {
     // Look for distribution_ordered events older than 14 days where the deal
     // hasn't yet had a distribution_paid event. The "where's my check" leading
@@ -2338,16 +2372,19 @@ function ForecastDisbursementWatch({ onSelect }) {
       .or('event_type.eq.disbursement_ordered,litigation_stage.eq.distribution_ordered')
       .lte('event_date', before14d)
       .eq('is_backfill', false);
+    if (!alive.current) return;
     if (!ordered || ordered.length === 0) { setRows([]); return; }
     const dealIds = [...new Set(ordered.map(o => o.deal_id))];
     const { data: paid } = await sb.from('docket_events')
       .select('deal_id')
       .or('event_type.eq.disbursement_paid,litigation_stage.eq.distribution_paid')
       .in('deal_id', dealIds);
+    if (!alive.current) return;
     const paidSet = new Set((paid || []).map(p => p.deal_id));
     const unresolved = ordered.filter(o => !paidSet.has(o.deal_id));
     if (unresolved.length === 0) { setRows([]); return; }
     const { data: deals } = await sb.from('deals').select('id, name, status, meta').in('id', [...new Set(unresolved.map(o => o.deal_id))]);
+    if (!alive.current) return;
     const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
     const enriched = unresolved.map(o => {
       const d = new Date(o.event_date);
@@ -2356,8 +2393,9 @@ function ForecastDisbursementWatch({ onSelect }) {
     });
     enriched.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);
     setRows(enriched);
-  }, []);
-  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  }, [alive]);
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
 
   return (
     <ForecastSection icon="💰" label="Disbursement watch · 14d+ stale" sub="Distribution ordered ≥14 days ago, no payment recorded. The 'where's my check?' leading indicator." count={rows?.length}>
@@ -2378,23 +2416,28 @@ function ForecastDisbursementWatch({ onSelect }) {
 // ─── Forecast: Stale active deals · 14d+ no contact ───────────
 function ForecastStaleDeals({ deals, onSelect }) {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
+  const dealsRef = useRef(deals); dealsRef.current = deals;
   const load = React.useCallback(async () => {
     const ARCHIVE = new Set(['closed', 'recovered', 'dead']);
-    const active = (deals || []).filter(d => !ARCHIVE.has(d.status));
-    if (active.length === 0) { setRows([]); return; }
+    const active = (dealsRef.current || []).filter(d => !ARCHIVE.has(d.status));
+    if (active.length === 0) { if (alive.current) setRows([]); return; }
     const since = new Date(Date.now() - 14 * 86400000).toISOString();
     const { data: recentMsgs } = await sb.from('messages_outbound')
       .select('deal_id, created_at')
       .eq('direction', 'outbound')
       .gte('created_at', since)
       .in('deal_id', active.map(d => d.id));
+    if (!alive.current) return;
     const recent = new Set((recentMsgs || []).map(m => m.deal_id));
     const stale = active.filter(d => !recent.has(d.id));
-    // Sort by oldest updated_at (proxy for "longest neglected")
     stale.sort((a, b) => new Date(a.updated_at || 0).getTime() - new Date(b.updated_at || 0).getTime());
     setRows(stale.slice(0, 30));
-  }, [deals]);
-  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  }, [alive]);
+  const loadRef = useRef(load); loadRef.current = load;
+  // Re-fire load when deals prop changes (new deal added, status changed, etc.)
+  useEffect(() => { loadRef.current(); }, [deals]);
+  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
 
   return (
     <ForecastSection icon="🔥" label="Stale active deals · 14d+ no outbound" sub="Active deals you haven't messaged in 2+ weeks. Top 30, oldest first." count={rows?.length}>
@@ -2418,6 +2461,7 @@ function ForecastStaleDeals({ deals, onSelect }) {
 // ─── Forecast: Sheriff sales · next 14 days ────────────────────
 function ForecastSheriffSales() {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
   const load = React.useCallback(async () => {
     const todayIso = new Date().toISOString().slice(0, 10);
     const in14d = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
@@ -2427,9 +2471,11 @@ function ForecastSheriffSales() {
       .lte('sale_date', in14d)
       .order('sale_date', { ascending: true })
       .limit(50);
+    if (!alive.current) return;
     setRows(data || []);
-  }, []);
-  useEffect(() => { load(); const t = setInterval(load, 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
+  }, [alive]);
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
 
   return (
     <ForecastSection icon="🏛" label="Sheriff sales · next 14 days" sub="From foreclosure_cases (Castle auction sweeps). Castle covers 5 OH counties." count={rows?.length}>
@@ -2508,6 +2554,7 @@ function ForecastLoading() {
 // outreach campaigns.
 function OutreachView({ deals, onSelect }) {
   const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
+  const alive = useAliveRef();
 
   const loadStats = React.useCallback(async () => {
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
@@ -2518,24 +2565,24 @@ function OutreachView({ deals, onSelect }) {
       sb.from('outreach_queue').select('id', { count: 'exact', head: true }).eq('status', 'pending').lte('scheduled_for', next24h.toISOString()).gt('scheduled_for', new Date().toISOString()),
       sb.from('messages_outbound').select('id', { count: 'exact', head: true }).eq('direction', 'outbound').gte('created_at', todayStart.toISOString()),
     ]);
+    if (!alive.current) return;
     setStats({
       pending_drafts: draftsRes.count || 0,
       replies_waiting: repliesRes.count || 0,
       scheduled_24h: schedRes.count || 0,
       sent_today: sentRes.count || 0,
     });
-  }, []);
+  }, [alive]);
 
+  const loadStatsRef = useRef(loadStats); loadStatsRef.current = loadStats;
   useEffect(() => { loadStats(); }, [loadStats]);
-
-  // Refresh stats whenever queue or messages change
   useEffect(() => {
     const ch = sb.channel('outreach-stats')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, loadStats)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadStats)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, () => loadStatsRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadStatsRef.current())
       .subscribe();
     return () => { sb.removeChannel(ch); };
-  }, [loadStats]);
+  }, []);
 
   const Tile = ({ label, value, sub, color }) => (
     <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: `2px solid ${color}`, borderRadius: 10, padding: 14 }}>
@@ -2600,6 +2647,7 @@ const SectionHeader = ({ icon, label, sub }) => (
 // Comms tab. Closes Castle's gap-analysis Tier 1 #2.
 function ReplyInbox({ onSelect, limit = 30 }) {
   const [rows, setRows] = useState(null);
+  const alive = useAliveRef();
 
   const load = React.useCallback(async () => {
     const { data: msgs } = await sb.from('messages_outbound')
@@ -2608,23 +2656,25 @@ function ReplyInbox({ onSelect, limit = 30 }) {
       .is('read_by_team_at', null)
       .order('created_at', { ascending: true })
       .limit(limit);
+    if (!alive.current) return;
     if (!msgs || msgs.length === 0) { setRows([]); return; }
     const dealIds = [...new Set(msgs.map(m => m.deal_id).filter(Boolean))];
     const { data: deals } = dealIds.length > 0
       ? await sb.from('deals').select('id, name, status, lead_tier').in('id', dealIds)
       : { data: [] };
+    if (!alive.current) return;
     const dealsById = Object.fromEntries((deals || []).map(d => [d.id, d]));
     setRows(msgs.map(m => ({ ...m, deal: dealsById[m.deal_id] || null })));
-  }, [limit]);
+  }, [limit, alive]);
 
+  const loadRef = useRef(load); loadRef.current = load;
   useEffect(() => { load(); }, [load]);
-
   useEffect(() => {
     const ch = sb.channel('reply-inbox')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadRef.current())
       .subscribe();
     return () => { sb.removeChannel(ch); };
-  }, [load]);
+  }, []);
 
   const markSeen = async (id) => {
     await sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).eq('id', id);
