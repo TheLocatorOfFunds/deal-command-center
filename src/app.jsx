@@ -6720,6 +6720,35 @@ function InvestorPortalCard({ deal, userId }) {
   );
 }
 
+// Module-scoped field components — MUST live outside PartnerDetailsEditor.
+// If you put them inside the parent function each render creates a new
+// component identity, React sees a different type, unmounts the input
+// DOM node, and the focused input loses focus on every keystroke. Same
+// trap that bit InvestorDetailsEditor; see comment near InvNumField.
+function PartnerNumField({ label, k, step = 1, ph, p, updatePartner }) {
+  return (
+    <Field label={label}>
+      <input type="number" step={step} value={p[k] ?? ''}
+        onChange={e => updatePartner({ [k]: e.target.value === '' ? null : parseFloat(e.target.value) })}
+        style={inputStyle} placeholder={ph} />
+    </Field>
+  );
+}
+function PartnerTxtField({ label, ph, val, onChange }) {
+  return (
+    <Field label={label}>
+      <input value={val ?? ''} onChange={e => onChange(e.target.value || null)} style={inputStyle} placeholder={ph} />
+    </Field>
+  );
+}
+function PartnerDateField({ label, k, p, updatePartner }) {
+  return (
+    <Field label={label}>
+      <input type="date" value={p[k] ?? ''} onChange={e => updatePartner({ [k]: e.target.value || null })} style={inputStyle} />
+    </Field>
+  );
+}
+
 // PartnerDetailsEditor: edits deal.meta.partner — the JV-partner-facing
 // fields (deal economics, buyer info, title contacts, partner-tab task
 // flagging happens on the Tasks tab). Mirrors InvestorDetailsEditor's
@@ -6737,22 +6766,7 @@ function PartnerDetailsEditor({ deal, onUpdateDeal }) {
 
   const buyer = p.buyer || {};
   const title = p.title || {};
-
-  const Num = ({ label, k, step = 1, ph }) => (
-    <Field label={label}>
-      <input type="number" step={step} value={p[k] ?? ''} onChange={e => updatePartner({ [k]: e.target.value === '' ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder={ph} />
-    </Field>
-  );
-  const Txt = ({ label, k, ph, val, onChange }) => (
-    <Field label={label}>
-      <input value={val ?? ''} onChange={e => onChange(e.target.value || null)} style={inputStyle} placeholder={ph} />
-    </Field>
-  );
-  const DateF = ({ label, k }) => (
-    <Field label={label}>
-      <input type="date" value={p[k] ?? ''} onChange={e => updatePartner({ [k]: e.target.value || null })} style={inputStyle} />
-    </Field>
-  );
+  const fp = { p, updatePartner };  // shared prop bag for number + date fields
 
   return (
     <Card title="JV-Facing Details" style={{ marginTop: 16 }}>
@@ -6768,20 +6782,20 @@ function PartnerDetailsEditor({ deal, onUpdateDeal }) {
 
       {sect === 'pricing' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
-          <Num label="Under contract at ($)" k="contractPrice" step={1000} ph="80000" />
-          <Num label="Asking buyer ($)" k="askingPrice" step={1000} ph="100000" />
-          <Num label="Assignment fee ($)" k="expectedAssignmentFee" step={500} ph="20000" />
-          <Num label="Expected net profit ($)" k="expectedNetProfit" step={500} ph="20000" />
-          <DateF label="Target close date" k="expectedCloseDate" />
+          <PartnerNumField {...fp} label="Under contract at ($)" k="contractPrice" step={1000} ph="80000" />
+          <PartnerNumField {...fp} label="Asking buyer ($)" k="askingPrice" step={1000} ph="100000" />
+          <PartnerNumField {...fp} label="Assignment fee ($)" k="expectedAssignmentFee" step={500} ph="20000" />
+          <PartnerNumField {...fp} label="Expected net profit ($)" k="expectedNetProfit" step={500} ph="20000" />
+          <PartnerDateField {...fp} label="Target close date" k="expectedCloseDate" />
         </div>
       )}
 
       {sect === 'buyer' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <Txt label="Buyer name" val={buyer.name} onChange={v => updateNested('buyer', { name: v })} ph="John Doe" />
-          <Txt label="Buyer phone" val={buyer.phone} onChange={v => updateNested('buyer', { phone: v })} ph="513-555-0123" />
-          <Txt label="Buyer email" val={buyer.email} onChange={v => updateNested('buyer', { email: v })} ph="john@…" />
-          <Txt label="Buyer entity / LLC" val={buyer.entity} onChange={v => updateNested('buyer', { entity: v })} ph="Doe Holdings LLC" />
+          <PartnerTxtField label="Buyer name" val={buyer.name} onChange={v => updateNested('buyer', { name: v })} ph="John Doe" />
+          <PartnerTxtField label="Buyer phone" val={buyer.phone} onChange={v => updateNested('buyer', { phone: v })} ph="513-555-0123" />
+          <PartnerTxtField label="Buyer email" val={buyer.email} onChange={v => updateNested('buyer', { email: v })} ph="john@…" />
+          <PartnerTxtField label="Buyer entity / LLC" val={buyer.entity} onChange={v => updateNested('buyer', { entity: v })} ph="Doe Holdings LLC" />
           <div style={{ gridColumn: '1 / -1' }}>
             <Field label="Buyer notes (visible to JV partner)">
               <textarea value={buyer.notes ?? ''} onChange={e => updateNested('buyer', { notes: e.target.value || null })} style={{ ...inputStyle, minHeight: 60 }} placeholder="How they bought, terms, EMD, anything the partner should know…" />
@@ -6792,23 +6806,23 @@ function PartnerDetailsEditor({ deal, onUpdateDeal }) {
 
       {sect === 'title' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <Txt label="Title company" val={title.company} onChange={v => updateNested('title', { company: v })} ph="Ohio Title & Closing" />
-          <Txt label="Contact name" val={title.contact} onChange={v => updateNested('title', { contact: v })} ph="Jane Closer" />
-          <Txt label="Phone" val={title.phone} onChange={v => updateNested('title', { phone: v })} ph="513-555-0124" />
-          <Txt label="Email" val={title.email} onChange={v => updateNested('title', { email: v })} ph="jane@…" />
-          <Txt label="File #" val={title.fileNumber} onChange={v => updateNested('title', { fileNumber: v })} ph="OT-2026-…" />
+          <PartnerTxtField label="Title company" val={title.company} onChange={v => updateNested('title', { company: v })} ph="Ohio Title & Closing" />
+          <PartnerTxtField label="Contact name" val={title.contact} onChange={v => updateNested('title', { contact: v })} ph="Jane Closer" />
+          <PartnerTxtField label="Phone" val={title.phone} onChange={v => updateNested('title', { phone: v })} ph="513-555-0124" />
+          <PartnerTxtField label="Email" val={title.email} onChange={v => updateNested('title', { email: v })} ph="jane@…" />
+          <PartnerTxtField label="File #" val={title.fileNumber} onChange={v => updateNested('title', { fileNumber: v })} ph="OT-2026-…" />
         </div>
       )}
 
       {sect === 'property' && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-          <Txt label="Beds" val={p.beds} onChange={v => updatePartner({ beds: v })} ph="3" />
-          <Txt label="Baths" val={p.baths} onChange={v => updatePartner({ baths: v })} ph="2" />
-          <Txt label="Sqft" val={p.sqft} onChange={v => updatePartner({ sqft: v })} ph="1450" />
-          <Txt label="Year built" val={p.yearBuilt} onChange={v => updatePartner({ yearBuilt: v })} ph="1962" />
-          <Txt label="Lot" val={p.lotSize} onChange={v => updatePartner({ lotSize: v })} ph="0.18 ac" />
-          <Txt label="Occupancy" val={p.occupancy} onChange={v => updatePartner({ occupancy: v })} ph="vacant / occupied" />
-          <Txt label="Condition" val={p.condition} onChange={v => updatePartner({ condition: v })} ph="rough / fair / good" />
+          <PartnerTxtField label="Beds" val={p.beds} onChange={v => updatePartner({ beds: v })} ph="3" />
+          <PartnerTxtField label="Baths" val={p.baths} onChange={v => updatePartner({ baths: v })} ph="2" />
+          <PartnerTxtField label="Sqft" val={p.sqft} onChange={v => updatePartner({ sqft: v })} ph="1450" />
+          <PartnerTxtField label="Year built" val={p.yearBuilt} onChange={v => updatePartner({ yearBuilt: v })} ph="1962" />
+          <PartnerTxtField label="Lot" val={p.lotSize} onChange={v => updatePartner({ lotSize: v })} ph="0.18 ac" />
+          <PartnerTxtField label="Occupancy" val={p.occupancy} onChange={v => updatePartner({ occupancy: v })} ph="vacant / occupied" />
+          <PartnerTxtField label="Condition" val={p.condition} onChange={v => updatePartner({ condition: v })} ph="rough / fair / good" />
         </div>
       )}
     </Card>
