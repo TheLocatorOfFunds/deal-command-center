@@ -4,15 +4,18 @@ This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund ca
 
 ## Architecture at a glance
 
-- **One file**: `index.html` is the entire app (~52KB). No build step, no bundler, no package.json.
-- **Runtime**: React 18 + Babel Standalone + `@supabase/supabase-js@2`, all loaded from CDN inside the HTML. JSX is transpiled in the browser via `<script type="text/babel">`.
+- **Source**: React JSX in `src/app.jsx` (~12,640 lines). Pre-compiled by **esbuild** to `app.js` (~483KB minified) via `npm run build`. **Edit `src/app.jsx`, NOT `index.html`.**
+- **Shell**: `index.html` is now a 12KB shell that loads React + ReactDOM + supabase-js from CDN, then `<script src="app.js" defer></script>`.
+- **Why the build step**: prior to 2026-04-26, JSX was inline in `index.html` and transpiled at runtime by Babel-Standalone. The file grew past Babel's 500KB deopt threshold and cold-loads were 10-15 sec. esbuild eliminates Babel-in-browser entirely; cold-load is sub-second.
+- **Build workflow**: edit `src/app.jsx` → `npm run build` (~30ms) → `git add src/app.jsx app.js index.html` → commit + push. **Always commit `app.js` along with source — GitHub Pages serves it directly.**
+- **Build tooling**: `package.json` + `build.js` + `node_modules` (gitignored). Run `npm install` once after cloning.
 - **Backend**: Supabase project `rcfaashkfpurkvtmsmeb` — Postgres + Auth + Realtime.
-- **Hosting**: GitHub Pages on `main` branch root. Any commit to `main` rebuilds in ~30s. URL: https://thelocatoroffunds.github.io/deal-command-center/
+- **Hosting**: GitHub Pages on `main` branch root. Any commit to `main` rebuilds in ~30s. URL: https://thelocatoroffunds.github.io/deal-command-center/ (custom domain: app.refundlocators.com).
 - **Auth**: Magic-link (`signInWithOtp`). Users auto-create on first sign-in. Profiles auto-populate via `handle_new_user` trigger.
 
 ## Credentials
 
-Supabase URL + **publishable** (anon) key are hardcoded near the top of `index.html`:
+Supabase URL + **publishable** (anon) key are hardcoded near the top of `src/app.jsx`:
 
 ```js
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
@@ -42,8 +45,21 @@ Core tables, all in `public` schema:
 | `docket_events` | Matched docket events from Castle | `deal_id` FK, `external_id`, `event_type`, unique(deal_id, external_id) |
 | `docket_events_unmatched` | Staged events Castle sent before DCC had a matching deal | — |
 | `scrape_runs` | Castle heartbeats (one row per county per monitor run) | — |
-| **`contacts`** | **Company-wide CRM entities** (partner attorneys, title companies, investors, referral sources, partners, vendors at company level, press, competitors) — intentionally separate from `vendors` (per-deal) and `leads` (intake) | `id` (uuid PK), `name`, `company`, `email`, `phone`, `kind`, `tags` text[], `notes`, `financial_notes` (admin-only UI), `owner_id` |
+| **`contacts`** | **Company-wide CRM entities** (partner attorneys, title companies, investors, referral sources, partners, vendors at company level, press, competitors) — intentionally separate from `vendors` (per-deal) and `leads` (intake) | `id` (uuid PK), `name`, `company`, `email`, `phone`, `kind`, `tags` text[], `notes`, `financial_notes` (admin-only UI), `owner_id`, **`do_not_text` boolean**, **`do_not_call` boolean**, **`dnd_set_at`**, **`dnd_reason`** (DND added 2026-04-25) |
 | **`contact_deals`** | **Many-to-many** between `contacts` and `deals` | `contact_id` FK, `deal_id` FK, `relationship`, unique(contact_id, deal_id) |
+| `outreach_queue` | Justin's AI-drafted SMS pipeline (PR #12) | `deal_id`, `contact_phone`, `cadence_day` (0=intro, 1/3/5 + weekly through 90 = drips), `status` (queued / generating / pending / sent / skipped / failed / **cancelled**), `scheduled_for`, `draft_body`, `sent_at`, `message_id` |
+| `messages_outbound` | Justin's SMS table (also receives inbound) | `deal_id`, `direction` (`inbound` / `outbound`), `to_number`, `from_number`, `body`, `twilio_sid`, `contact_id`, `thread_key`, `channel` (sms / imessage), **`read_by_team_at`** (added 2026-04-25 for Reply Inbox) |
+| `personalized_links` | Castle-owned. Token-based URLs at refundlocators.com/s/{token} | `token` (8-char nanoid PK), `deal_id` (nullable for orphan auction-discovered), `first_name`, `last_name`, `phone`, **`mailing_address`**, **`claim_submitted_at`** (added 2026-04-25 — were missing, broke claim flow), `property_address`, `county`, `case_number`, `sale_date`, `sale_price`, `judgment_amount`, `estimated_surplus_low/_high`, `expires_at`, `responded_at`, `view_count` |
+| `library_documents` | **Phase 3 Library — populated 2026-04-26.** Reusable templates / SOPs / brand assets that get pinned-to or attached-to deals | `id`, `folder_id`, `title`, `description`, `path` (storage), `kind` (`file` / `template` / `video` / `image` / `link`), `tags` text[], `visibility` (admin_only / team / attorney / client), `template_fields` jsonb (for DocuSign merge), `docusign_template_id`, `extracted` jsonb (Claude Vision OCR) |
+| `library_folders` | Org structure for `library_documents` | `id`, `name`, `parent_id`, `visibility`, `icon` |
+| `deal_library_pins` | Per-deal expose-without-copying for library docs | `deal_id`, `library_document_id`, `pinned_for` (client / attorney) |
+| `castle_health_log` | Daily snapshots from `castle-health-daily` Edge Function (Castle agent) | `snapshot_date`, `agents` jsonb (full v_scraper_health row), `severity` (green / transient / chronic / critical), `summary` (Claude prose), `recommendations` jsonb, `email_sent` |
+| `scraper_agents` | Catalog of Castle's 5 monitor agents (owned by ohio-intel session, lives in DCC's project) | `agent_id` PK, `display_name`, `cadence_minutes`, `grace_minutes`, `uses_selenium`, `county_scope`, `enabled` |
+| `v_scraper_health` (view) | Computed health per agent — green/yellow/red based on cadence + grace | reads `scraper_agents` + `scrape_runs` |
+| `court_pull_requests` | DCC → Castle queue: "scrape this case on demand" | `deal_id`, `case_number`, `county`, `status`, `documents_added`, `events_added` |
+| `foreclosure_cases` | Castle auction sweep target — sheriff sale calendar | `case_number`, `county`, `property_address`, `sale_date`, `sale_price`, `judgment_amount`, `estimated_surplus_low/_high` |
+
+`docket_events` also gained 3 columns 2026-04-25: `litigation_stage` (text), `deadline_metadata` (jsonb), `attorney_appearance` (jsonb) — Castle's K.1/K.3/H.b sprint emissions.
 
 All child tables cascade-delete when the parent deal is deleted. `contact_deals` cascades when either the contact or the deal is deleted.
 
@@ -94,24 +110,43 @@ The app subscribes to Postgres changes on `deals` (global) and on all 5 child ta
 ## Deployment flow
 
 1. `git clone https://github.com/TheLocatorOfFunds/deal-command-center.git`
-2. Edit `index.html`
-3. Open the file directly in a browser (`file://...`) to test — auth works, Supabase calls work. No dev server needed.
-4. `git commit -am "..."` and `git push`
-5. Wait ~30s, refresh https://thelocatoroffunds.github.io/deal-command-center/
+2. `npm install` (one-time — installs esbuild)
+3. Edit `src/app.jsx` (NOT `index.html` — `index.html` is a 12KB shell, all React lives in `src/app.jsx`)
+4. `npm run build` (~30ms — outputs minified `app.js`)
+5. **Test locally:** open `index.html` in a browser — works via `file://` since React/ReactDOM/supabase load via CDN. Auth + Supabase calls work.
+6. `git add src/app.jsx app.js index.html` + `git commit -m "..."` + `git push`
+7. Wait ~30s, refresh https://app.refundlocators.com (or thelocatoroffunds.github.io/deal-command-center/)
+
+**Forgot to run `npm run build` before commit?** GitHub Actions auto-rebuilds (`.github/workflows/build.yml`). If `app.js` is stale relative to `src/app.jsx` on push, the action runs `npm run build` + commits the rebuilt artifact back to `main` with `[skip ci]` to avoid loops. So the deploy still works — it just adds a follow-up commit.
 
 No staging environment. Commits to `main` go live. Coordinate with the team before big changes.
+
+## Top-level views (nav order, left → right)
+
+1. **📌 Today** — daily dashboard, AutomationsQueue (pending outreach drafts), team activity
+2. **🔔 Attention** — reactive: per-deal unread/unacked items + Castle scraper alerts strip + cross-deal deadline alerts strip
+3. **🚀 Outreach** — campaign workspace: 4 stats tiles + AutomationsQueue + ReplyInbox (cross-deal inbound SMS unread)
+4. **📅 Forecast** — proactive 7-14 day planning: court hearings, statutory deadlines, cadence drips, disbursement watch, stale active deals, sheriff sales
+5. **🧭 Pipeline** — kanban view filtered by lead_tier A/B/C, has the **🚀 Queue outreach · N A/B** bulk-queue button on the filter bar
+6. **✓ Tasks** — global task list across deals
+7. **Active / Flagged / Hygiene / Closed** — deal-list views by status filter
+8. **📈 Reports / 📊 Analytics / 🌐 Traffic** — admin-only metrics views (Reports has the per-agent ScraperHealthPanel)
+
+Plus modal entries from the top header: 🔍 search, ⚖ Docket overview, 👥 Contacts, 📚 Library, Team.
 
 ## Common change recipes
 
 ### Add a new field to deals
 1. In Supabase SQL editor: `alter table deals add column foo text;` — or add inside `meta` jsonb to avoid migrations.
-2. In `index.html`, add the field to `NewDealModal`, `DealDetail`, and (if it should show on the card) `DealCard` / `SurplusCard`.
+2. In `src/app.jsx`, add the field to `NewDealModal`, `DealDetail`, and (if it should show on the card) `DealCard` / `SurplusCard`.
+3. `npm run build` + commit.
 
 ### Add a new deal type (e.g. "wholesale")
 1. Add the type to `DEAL_STATUSES` (new array of stages).
 2. Add status colors to `STATUS_COLORS`.
 3. Add a case in `DealList` to render a section for it.
 4. Add a card component if the layout should differ from `DealCard`.
+5. `npm run build` + commit.
 
 ### Add a new user
 Nothing to do in the dashboard — just share the URL. First sign-in auto-creates the `auth.users` row and the `profiles` row via trigger.
