@@ -1092,6 +1092,161 @@ function GlobalTasksView({ deals, onJumpToDeal }) {
 // review/edit, sends via send-sms Edge Function (Twilio today; swap to
 // iMessage bridge when Justin ships it). On success logs structured
 // activity + flips sales_stage to 'texted'.
+// ─── Send Personalized Link Button + Modal ─────────────────────
+// Per-deal one-shot action to push refundlocators.com/s/<token> to a
+// claimant via SMS, email, or clipboard. Lives in the deal detail header.
+// Only renders when deal.refundlocators_token is set (auto-synced from
+// Castle's personalized_links by tg_sync_refundlocators_token trigger).
+//
+// Distinct from BulkOutreachButton (Pipeline → mass-queue cadence) and
+// SendIntroTextModal (Comms tab → full template-driven outbound). This
+// is the "I want to text/email this one person their link RIGHT NOW"
+// surface — three clicks max from any deal.
+function SendPersonalizedLinkButton({ deal }) {
+  const [open, setOpen] = useState(false);
+  const token = deal?.refundlocators_token || '';
+  if (!token) return null;
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title="Push this deal's refundlocators.com/s/<token> URL to the claimant via SMS, email, or copy-to-clipboard"
+        style={{ background: "transparent", border: "1px solid #44403c", color: "#fbbf24", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+        🔗 Send link
+      </button>
+      {open && <SendPersonalizedLinkModal deal={deal} onClose={() => setOpen(false)} />}
+    </>
+  );
+}
+
+function SendPersonalizedLinkModal({ deal, onClose }) {
+  const m = deal.meta || {};
+  const firstName = ((m.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there';
+  const token = deal.refundlocators_token;
+  const url = `https://refundlocators.com/s/${token}`;
+  const phone = m.homeownerPhone || m.phone || '';
+  const email = m.homeownerEmail || m.email || '';
+
+  const [smsBody, setSmsBody] = useState(`Hi ${firstName}, this is Nathan from RefundLocators. I put together a quick page on your case with the details: ${url}`);
+  const [emailSubject, setEmailSubject] = useState(`Your RefundLocators case page`);
+  const [emailBody, setEmailBody] = useState(`Hi ${firstName},\n\nI put together a quick page with the details on your case. You can review it here:\n\n${url}\n\nIf you have any questions, just reply to this email or call/text me at (513) 516-2306.\n\n— Nathan\nRefundLocators`);
+  const [busy, setBusy] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  const copyUrl = async () => {
+    try { await navigator.clipboard.writeText(url); setMsg({ type: 'success', text: 'Link copied to clipboard' }); }
+    catch (e) { setMsg({ type: 'error', text: 'Clipboard blocked. URL: ' + url }); }
+  };
+
+  const sendSms = async () => {
+    if (!phone) { setMsg({ type: 'error', text: 'No phone number on this deal. Add meta.homeownerPhone first.' }); return; }
+    setBusy('sms'); setMsg(null);
+    try {
+      const { data, error } = await sb.functions.invoke('send-sms', {
+        body: { to: phone, body: smsBody, deal_id: deal.id },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.details || data.error);
+      setMsg({ type: 'success', text: `SMS sent to ${phone}` });
+      setTimeout(() => onClose(), 1200);
+    } catch (e) {
+      setMsg({ type: 'error', text: 'Send failed: ' + (e.message || 'unknown') });
+    } finally { setBusy(null); }
+  };
+
+  const sendEmail = async () => {
+    if (!email) { setMsg({ type: 'error', text: 'No email on this deal. Add meta.homeownerEmail first.' }); return; }
+    setBusy('email'); setMsg(null);
+    try {
+      const { data, error } = await sb.functions.invoke('send-email', {
+        body: { to: email, subject: emailSubject, body: emailBody, deal_id: deal.id },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.details || data.error);
+      setMsg({ type: 'success', text: `Email sent to ${email}` });
+      setTimeout(() => onClose(), 1200);
+    } catch (e) {
+      setMsg({ type: 'error', text: 'Send failed: ' + (e.message || 'unknown') });
+    } finally { setBusy(null); }
+  };
+
+  return (
+    <Modal onClose={onClose} title="🔗 Send personalized link">
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>The URL</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 12, color: '#fbbf24', overflow: 'hidden' }}>
+          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{url}</span>
+          <button onClick={copyUrl} disabled={busy !== null} style={{ ...btnGhost, fontSize: 11, padding: '4px 10px', whiteSpace: 'nowrap', flexShrink: 0 }}>📋 Copy</button>
+        </div>
+      </div>
+
+      {msg && (
+        <div style={{ padding: '8px 12px', borderRadius: 6, marginBottom: 14, fontSize: 12, background: msg.type === 'success' ? '#14532d' : '#7f1d1d', color: msg.type === 'success' ? '#bbf7d0' : '#fecaca' }}>
+          {msg.text}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        {/* SMS column */}
+        <div style={{ padding: 12, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>📱 SMS</div>
+          <div style={{ fontSize: 11, color: phone ? '#a8a29e' : '#fca5a5', marginBottom: 8 }}>
+            {phone ? `To: ${phone}` : 'No phone on file (add meta.homeownerPhone)'}
+          </div>
+          <textarea
+            value={smsBody}
+            onChange={e => setSmsBody(e.target.value)}
+            disabled={!phone || busy !== null}
+            rows={5}
+            style={{ ...inputStyle, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', minHeight: 100, opacity: phone ? 1 : 0.5 }}
+          />
+          <div style={{ fontSize: 10, color: smsBody.length > 160 ? '#fbbf24' : '#57534e', marginTop: 4, fontFamily: "'DM Mono', monospace" }}>
+            {smsBody.length} chars{smsBody.length > 160 ? ` · will send as ${Math.ceil(smsBody.length / 160)} segments` : ''}
+          </div>
+          <button
+            onClick={sendSms}
+            disabled={!phone || busy !== null}
+            style={{ ...btnPrimary, width: '100%', marginTop: 10, opacity: (!phone || busy !== null) ? 0.5 : 1, cursor: (!phone || busy !== null) ? 'not-allowed' : 'pointer' }}>
+            {busy === 'sms' ? '⏳ Sending…' : '📱 Send SMS'}
+          </button>
+        </div>
+
+        {/* Email column */}
+        <div style={{ padding: 12, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>📧 Email</div>
+          <div style={{ fontSize: 11, color: email ? '#a8a29e' : '#fca5a5', marginBottom: 8 }}>
+            {email ? `To: ${email}` : 'No email on file (add meta.homeownerEmail)'}
+          </div>
+          <input
+            value={emailSubject}
+            onChange={e => setEmailSubject(e.target.value)}
+            disabled={!email || busy !== null}
+            placeholder="Subject"
+            style={{ ...inputStyle, fontSize: 12, marginBottom: 8, opacity: email ? 1 : 0.5 }}
+          />
+          <textarea
+            value={emailBody}
+            onChange={e => setEmailBody(e.target.value)}
+            disabled={!email || busy !== null}
+            rows={5}
+            style={{ ...inputStyle, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', minHeight: 100, opacity: email ? 1 : 0.5 }}
+          />
+          <button
+            onClick={sendEmail}
+            disabled={!email || busy !== null}
+            style={{ ...btnPrimary, width: '100%', marginTop: 10, opacity: (!email || busy !== null) ? 0.5 : 1, cursor: (!email || busy !== null) ? 'not-allowed' : 'pointer' }}>
+            {busy === 'email' ? '⏳ Sending…' : '📧 Send email'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14, padding: 10, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 6, fontSize: 11, color: '#78716c', lineHeight: 1.55 }}>
+        Drafts are pre-filled with Nathan's voice. Edit either before sending. Token comes from <code style={{ color: '#a8a29e' }}>deals.refundlocators_token</code> (auto-synced from Castle's <code style={{ color: '#a8a29e' }}>personalized_links</code>).
+      </div>
+    </Modal>
+  );
+}
+
 function SendIntroTextModal({ deal, onClose, onSent }) {
   const [templates, setTemplates] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
@@ -5212,6 +5367,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <button onClick={() => setShowPostUpdate(true)} title="Post a case update to the client and/or attorney timeline" style={{ background: "#d97706", color: "#0c0a09", border: "none", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
               📢 Post Update
             </button>
+            <SendPersonalizedLinkButton deal={deal} />
             {/* Send Intro Text button moved into the Comms tab (see 📝 Send Intro button) */}
             {/* Overflow menu — infrequent admin actions (Flag, Bonus Due) */}
             <div style={{ position: "relative" }}>
