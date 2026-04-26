@@ -6664,6 +6664,7 @@ function InvestorPortalCard({ deal, userId }) {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {!dead && <button onClick={() => window.open(link, '_blank')} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#93c5fd" }} title="Open the investor portal as the buyer sees it (new tab)">👁 Preview</button>}
                     {!dead && <button onClick={() => copy(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: copiedId === r.id ? "#6ee7b7" : "#fbbf24" }}>{copiedId === r.id ? '✓ Copied' : '📋 Copy link'}</button>}
                     {!dead ? (
                       <button onClick={() => revoke(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5" }}>Revoke</button>
@@ -6918,6 +6919,7 @@ function PartnerPortalCard({ deal, userId }) {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {!dead && <button onClick={() => window.open(link, '_blank')} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#93c5fd" }} title="Open the JV portal as Kevin sees it (new tab)">👁 Preview</button>}
                     {!dead && <button onClick={() => copy(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: copiedId === r.id ? "#6ee7b7" : "#fbbf24" }}>{copiedId === r.id ? '✓ Copied' : '📋 Copy link'}</button>}
                     {!dead ? (
                       <button onClick={() => revoke(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5" }}>Revoke</button>
