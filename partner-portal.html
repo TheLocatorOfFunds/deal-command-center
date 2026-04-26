@@ -557,15 +557,25 @@ function PhotoUploader({ onUploaded }) {
   };
 
   // PUT one file using XHR so we can stream upload progress to the UI.
-  // fetch() doesn't expose request body progress — XHR does.
+  // fetch() doesn't expose request body progress — XHR does. On non-2xx
+  // responses we surface the response body when present (Supabase storage
+  // returns a JSON error like {error, message, statusCode}) so failures
+  // like "Payload too large" or "MIME type not allowed" are debuggable
+  // instead of opaque "PUT failed: 400".
   const putWithProgress = (signedUrl, file, onProg) => new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('PUT', signedUrl, true);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProg(e.loaded); };
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error('PUT failed: ' + xhr.status + ' ' + xhr.statusText));
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(); return; }
+      let detail = xhr.statusText || '';
+      try {
+        const j = JSON.parse(xhr.responseText || '{}');
+        if (j.message) detail = j.message;
+        else if (j.error) detail = j.error;
+      } catch { detail = xhr.responseText || detail; }
+      reject(new Error(`${xhr.status}: ${detail || 'upload rejected'}`));
     };
     xhr.onerror = () => reject(new Error('network error during upload'));
     xhr.onabort = () => reject(new Error('upload aborted'));
