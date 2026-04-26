@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1f3a">
+<title>JV Deal Room — RefundLocators</title>
+<link rel="preconnect" href="https://rcfaashkfpurkvtmsmeb.supabase.co">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700&family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #fbf8f1;
+    --bg-card: #ffffff;
+    --bg-card-alt: #f4ecdc;
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --gold: #c9a24a;
+    --gold-light: #d8b560;
+    --gold-soft: #ede5cf;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
+    --border: #e5dfd0;
+    --border-strong: #c9bea3;
+    --green: #2d7a4f;
+    --green-soft: #dff3e6;
+    --amber: #a5731c;
+    --red: #a83232;
+    --shadow: 0 1px 2px rgba(11,31,58,.06), 0 8px 24px rgba(11,31,58,.04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: 'Inter',-apple-system,BlinkMacSystemFont,sans-serif; background: var(--bg); color: var(--text); line-height: 1.55; -webkit-font-smoothing: antialiased; min-height: 100vh; }
+  .serif { font-family: 'Fraunces',Georgia,serif; font-weight: 500; letter-spacing: -0.01em; }
+  .mono { font-family: 'DM Mono',monospace; }
+  .container { max-width: 920px; margin: 0 auto; padding: 24px 20px 80px; }
+  .centered-shell { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; box-shadow: var(--shadow); }
+  .card + .card { margin-top: 18px; }
+  .card-title { font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin: 0 0 16px; }
+
+  header.portal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-top: 8px; gap: 12px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-family: 'Fraunces',serif; font-weight: 700; font-size: 20px; color: var(--navy); letter-spacing: -0.01em; }
+  .brand-dot { width: 9px; height: 9px; background: var(--gold); border-radius: 50%; }
+  .brand-tag { font-family: 'Inter',sans-serif; font-size: 10px; font-weight: 700; letter-spacing: 0.12em; color: var(--text-muted); text-transform: uppercase; margin-left: 6px; padding-top: 3px; }
+
+  .hero-photo { width: 100%; aspect-ratio: 16 / 9; background: var(--bg-card-alt) center center / cover no-repeat; border-radius: 14px; margin-bottom: 22px; border: 1px solid var(--border); }
+  .hero-photo-placeholder { display: flex; align-items: center; justify-content: center; color: var(--text-subtle); font-size: 14px; height: 100%; }
+
+  h1.deal-name { font-family: 'Fraunces',serif; font-weight: 500; font-size: 32px; line-height: 1.15; color: var(--navy); margin: 0 0 4px; letter-spacing: -0.02em; }
+  .deal-sub { color: var(--text-muted); font-size: 14px; margin-bottom: 6px; }
+  .deal-tags { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0 22px; }
+  .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+  .pill-gold { background: var(--gold-soft); color: var(--amber); }
+  .pill-navy { background: #e6edf7; color: var(--navy-mid); }
+  .pill-green { background: var(--green-soft); color: var(--green); }
+
+  /* Profit share hero card — the centerpiece for a JV partner */
+  .share-hero {
+    background: linear-gradient(135deg, #0b1f3a 0%, #17355e 100%);
+    color: #fffcf5;
+    border-radius: 14px;
+    padding: 24px 26px;
+    margin-bottom: 22px;
+    border: 1px solid var(--gold);
+    position: relative;
+    overflow: hidden;
+  }
+  .share-hero::after { content:''; position:absolute; right:-30px; top:-30px; width:140px; height:140px; background: radial-gradient(circle, rgba(201,162,74,.35), transparent 70%); }
+  .share-hero-label { font-size: 11px; font-weight: 700; color: var(--gold-light); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
+  .share-hero-pct { font-family: 'Fraunces',serif; font-size: 56px; line-height: 1; color: var(--gold-light); font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
+  .share-hero-amount { font-family: 'Fraunces',serif; font-size: 22px; color: #fffcf5; font-weight: 500; }
+  .share-hero-note { font-size: 12px; color: rgba(255,252,245,.7); margin-top: 12px; line-height: 1.55; }
+
+  .num-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 22px; }
+  .num-tile { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .num-tile-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 4px; }
+  .num-tile-value { font-family: 'Fraunces',serif; font-size: 22px; font-weight: 500; color: var(--navy); letter-spacing: -0.015em; }
+  .num-tile-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px 20px; }
+  .stat-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .stat-value { font-size: 15px; color: var(--text); margin-top: 2px; font-weight: 500; }
+  .stat-value.muted { color: var(--text-subtle); font-style: italic; }
+  .stat-value a { color: var(--navy); text-decoration: none; }
+  .stat-value a:hover { text-decoration: underline; }
+
+  .photos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+  .photo-thumb { aspect-ratio: 4/3; background: var(--bg-card-alt) center center / cover no-repeat; border-radius: 8px; border: 1px solid var(--border); cursor: pointer; transition: transform .12s; }
+  .photo-thumb:hover { transform: scale(1.02); }
+
+  .doc-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .doc-row:last-child { border-bottom: none; }
+  .doc-name { font-size: 13px; color: var(--navy); font-weight: 500; }
+  .doc-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+  .btn-gold { background: var(--navy); color: #fffcf5; padding: 8px 16px; border: none; border-radius: 7px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-block; }
+  .btn-gold:hover { background: var(--navy-mid); }
+  .btn-ghost { background: transparent; border: 1px solid var(--border-strong); color: var(--text-muted); padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; }
+  .btn-ghost:hover { border-color: var(--navy); color: var(--navy); }
+
+  .cta-bar { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 22px; }
+  .cta-primary { background: var(--navy); color: #fffcf5; padding: 14px 22px; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+  .cta-primary:hover { background: var(--navy-mid); }
+  .cta-secondary { background: var(--bg-card); color: var(--navy); padding: 14px 22px; border: 1px solid var(--border-strong); border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; font-family: inherit; text-decoration: none; display: inline-flex; align-items: center; gap: 8px; }
+
+  .fineprint { font-size: 12px; color: var(--text-subtle); }
+  .empty { color: var(--text-muted); font-size: 13px; font-style: italic; padding: 16px 0; }
+
+  .lightbox { position: fixed; inset: 0; background: rgba(11,31,58,.85); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 100; cursor: zoom-out; }
+  .lightbox img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+
+  /* Tasks */
+  .task-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .task-row:last-child { border-bottom: none; }
+  .task-check {
+    width: 22px; height: 22px; flex-shrink: 0; margin-top: 1px;
+    border: 2px solid var(--border-strong); border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; transition: all .12s; background: var(--bg-card);
+  }
+  .task-check:hover { border-color: var(--navy); }
+  .task-check.done { background: var(--green); border-color: var(--green); color: #fff; }
+  .task-text { flex: 1; }
+  .task-title { font-size: 14px; color: var(--text); }
+  .task-title.done { color: var(--text-muted); text-decoration: line-through; }
+  .task-due { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  /* Activity feed */
+  .activity-row { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; line-height: 1.5; }
+  .activity-row:last-child { border-bottom: none; }
+  .activity-meta { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  /* Post update */
+  .compose textarea {
+    width: 100%; min-height: 80px; padding: 12px;
+    border: 1px solid var(--border-strong); border-radius: 8px;
+    font-family: inherit; font-size: 14px; resize: vertical; background: var(--bg-card);
+  }
+  .compose textarea:focus { outline: none; border-color: var(--navy); }
+
+  @media (max-width: 520px) {
+    h1.deal-name { font-size: 24px; }
+    .share-hero-pct { font-size: 44px; }
+    .share-hero-amount { font-size: 18px; }
+    .container { padding: 16px 14px 60px; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script type="text/babel" data-presets="env,react">
+const { useState, useEffect } = React;
+const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const url = new URL(window.location.href);
+const TOKEN = url.searchParams.get('t') || url.searchParams.get('token');
+
+const fmtMoney = v => {
+  if (v == null || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.-]/g,''));
+  if (Number.isNaN(n) || n === 0) return null;
+  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+};
+const fmtDate = d => d ? new Date(d).toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' }) : null;
+const fmtDateTime = d => d ? new Date(d).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : null;
+const cap = s => s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+
+function App() {
+  const [state, setState] = useState({ loading: true, data: null, error: null });
+
+  const refresh = async () => {
+    if (!TOKEN) { setState({ loading: false, data: null, error: 'no-token' }); return; }
+    const { data, error } = await sb.rpc('get_partner_deal_by_token', { p_token: TOKEN });
+    if (error) { setState({ loading: false, data: null, error: error.message }); return; }
+    if (!data) { setState({ loading: false, data: null, error: 'invalid-token' }); return; }
+    setState({ loading: false, data, error: null });
+  };
+
+  useEffect(() => { refresh(); /* eslint-disable-next-line */ }, []);
+
+  if (state.loading) return <LoaderFull />;
+  if (state.error || !state.data) return <InvalidLink error={state.error} />;
+  return <DealRoom data={state.data} onRefresh={refresh} />;
+}
+
+function LoaderFull() {
+  return <div className="centered-shell"><div className="card" style={{ padding: 40, textAlign: 'center' }}>
+    <div className="brand" style={{ justifyContent: 'center', marginBottom: 20 }}>
+      <span className="brand-dot"></span>
+      RefundLocators
+      <span className="brand-tag">JV Deal Room</span>
+    </div>
+    <div className="fineprint">Loading deal…</div>
+  </div></div>;
+}
+
+function InvalidLink({ error }) {
+  const msg = error === 'no-token' ? 'This link is missing its access code. Check the full URL Nathan sent you.' :
+              error === 'invalid-token' ? 'This link is no longer valid. It may have been revoked. Reach out to Nathan for a refresh.' :
+              'We couldn\'t load this deal. Please try again or contact Nathan.';
+  return <div className="centered-shell"><div className="card" style={{ padding: 40, maxWidth: 480, textAlign: 'center' }}>
+    <div className="brand" style={{ justifyContent: 'center', marginBottom: 20 }}>
+      <span className="brand-dot"></span>
+      RefundLocators
+      <span className="brand-tag">JV Deal Room</span>
+    </div>
+    <h1 className="serif" style={{ fontSize: 20, color: 'var(--navy)', marginBottom: 12 }}>Link not active</h1>
+    <p style={{ color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.55, marginBottom: 20 }}>{msg}</p>
+    <a href="tel:+15135162306" className="btn-gold">📞 Call Nathan · (513) 516-2306</a>
+  </div></div>;
+}
+
+function isImage(d) {
+  return d.is_image || /\.(jpg|jpeg|png|webp|heic|gif)$/i.test(d.name || '');
+}
+
+async function resolvePartnerAsset(document_id) {
+  // Look up the bucket path via RPC, then sign it client-side using anon key.
+  // The RPC validates the token + partner_visible flag — anon callers without
+  // a valid token get null back.
+  const { data: path, error } = await sb.rpc('get_partner_document_url', { p_token: TOKEN, p_document_id: document_id });
+  if (error || !path) return null;
+  const { data: signed, error: e2 } = await sb.storage.from('deal-docs').createSignedUrl(path, 3600);
+  if (e2 || !signed) return null;
+  return signed.signedUrl;
+}
+
+function DealRoom({ data, onRefresh }) {
+  const { deal, documents, tasks, activity, partner_name, profit_share_pct, role_description } = data;
+  const partner = deal.partner || {};
+  const address = partner.propertyAddress || deal.headline_address;
+  const county = deal.county;
+
+  const photos = (documents || []).filter(isImage);
+  const files  = (documents || []).filter(d => !isImage(d));
+  const coverDoc = photos.find(p => p.is_cover) || photos[0];
+
+  const [coverUrl, setCoverUrl] = useState(null);
+  const [photoUrls, setPhotoUrls] = useState({});
+  const [lightbox, setLightbox] = useState(null);
+
+  useEffect(() => {
+    if (!coverDoc) return;
+    (async () => {
+      const u = await resolvePartnerAsset(coverDoc.id);
+      if (u) setCoverUrl(u);
+    })();
+  }, [coverDoc?.id]);
+
+  useEffect(() => {
+    (async () => {
+      const m = {};
+      for (const p of photos) {
+        if (p.id === coverDoc?.id) continue;
+        const u = await resolvePartnerAsset(p.id);
+        if (u) m[p.id] = u;
+      }
+      setPhotoUrls(m);
+    })();
+  }, [photos.length]);
+
+  // Profit-share math: pull deal economics from meta.partner
+  const askingPrice    = Number(partner.askingPrice) || 0;
+  const contractPrice  = Number(partner.contractPrice) || 0;
+  const expectedFee    = Number(partner.expectedAssignmentFee) || 0;
+  const expectedNet    = Number(partner.expectedNetProfit) || expectedFee || 0;
+  const sharePct       = Number(profit_share_pct) || 0;
+  const partnerCut     = expectedNet > 0 ? Math.round(expectedNet * sharePct / 100) : null;
+
+  const buyer = partner.buyer || {};
+  const title = partner.title || {};
+  const closeDate = partner.expectedCloseDate || partner.closingDate;
+
+  return (
+    <div className="container">
+      <header className="portal-header">
+        <div className="brand">
+          <span className="brand-dot"></span>
+          RefundLocators
+          <span className="brand-tag">JV Deal Room</span>
+        </div>
+        {partner_name && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Partner: <b style={{ color: 'var(--navy)' }}>{partner_name}</b></div>}
+      </header>
+
+      <div className="hero-photo" style={coverUrl ? { backgroundImage: `url(${coverUrl})` } : {}}>
+        {!coverUrl && <div className="hero-photo-placeholder">Photos coming</div>}
+      </div>
+
+      <h1 className="deal-name">{address || deal.name}</h1>
+      <div className="deal-sub">{county && <>{county} County · </>}Ohio · {cap(deal.type || 'wholesale')}</div>
+
+      <div className="deal-tags">
+        {deal.status && <span className="pill pill-navy">{cap(String(deal.status).replace(/-/g, ' '))}</span>}
+        {partner.dealType && <span className="pill pill-gold">{cap(partner.dealType)}</span>}
+      </div>
+
+      {/* Profit share hero */}
+      <div className="share-hero">
+        <div className="share-hero-label">Your JV share</div>
+        <div className="share-hero-pct">{sharePct}%</div>
+        {partnerCut != null && (
+          <div className="share-hero-amount">≈ {fmtMoney(partnerCut)} on a {fmtMoney(expectedNet)} net</div>
+        )}
+        {partnerCut == null && expectedNet === 0 && (
+          <div className="share-hero-amount" style={{ color: 'rgba(255,252,245,.6)' }}>Numbers locked in once we have a buyer + title quote</div>
+        )}
+        {role_description && (
+          <div className="share-hero-note">
+            <b style={{ color: 'var(--gold-light)' }}>Your role:</b> {role_description}
+          </div>
+        )}
+      </div>
+
+      {/* Deal economics tiles */}
+      {(askingPrice || contractPrice || expectedFee) > 0 && (
+        <div className="num-tiles">
+          {contractPrice > 0 && <Tile label="Under contract at" value={fmtMoney(contractPrice)} />}
+          {askingPrice > 0 && <Tile label="Asking buyer" value={fmtMoney(askingPrice)} />}
+          {expectedFee > 0 && <Tile label="Assignment fee" value={fmtMoney(expectedFee)} />}
+          {closeDate && <Tile label="Target close" value={fmtDate(closeDate)} />}
+        </div>
+      )}
+
+      <div className="cta-bar">
+        <a href="tel:+15135162306" className="cta-primary">📞 Call Nathan</a>
+        <a href="sms:+15135162306" className="cta-secondary">💬 Text</a>
+      </div>
+
+      {/* Property */}
+      <div className="card">
+        <p className="card-title">The property</p>
+        <div className="stat-grid">
+          <Stat label="Address" value={address} />
+          {partner.beds      && <Stat label="Beds" value={partner.beds} />}
+          {partner.baths     && <Stat label="Baths" value={partner.baths} />}
+          {partner.sqft      && <Stat label="Sqft" value={Number(partner.sqft).toLocaleString('en-US')} />}
+          {partner.yearBuilt && <Stat label="Year built" value={partner.yearBuilt} />}
+          {partner.lotSize   && <Stat label="Lot" value={partner.lotSize} />}
+          {partner.occupancy && <Stat label="Occupancy" value={cap(partner.occupancy)} />}
+          {partner.condition && <Stat label="Condition" value={cap(partner.condition)} />}
+        </div>
+      </div>
+
+      {/* Buyer */}
+      {(buyer.name || buyer.phone || buyer.email || buyer.notes) && (
+        <div className="card">
+          <p className="card-title">Buyer</p>
+          <div className="stat-grid">
+            {buyer.name  && <Stat label="Name" value={buyer.name} />}
+            {buyer.phone && <Stat label="Phone" value={<a href={`tel:${buyer.phone}`}>{buyer.phone}</a>} />}
+            {buyer.email && <Stat label="Email" value={<a href={`mailto:${buyer.email}`}>{buyer.email}</a>} />}
+            {buyer.entity && <Stat label="Entity" value={buyer.entity} />}
+          </div>
+          {buyer.notes && <div style={{ marginTop: 14, padding: 12, background: 'var(--bg-card-alt)', borderRadius: 8, fontSize: 13, color: 'var(--text)' }}>{buyer.notes}</div>}
+        </div>
+      )}
+
+      {/* Title */}
+      {(title.company || title.contact || title.phone || title.email) && (
+        <div className="card">
+          <p className="card-title">Title company</p>
+          <div className="stat-grid">
+            {title.company && <Stat label="Company" value={title.company} />}
+            {title.contact && <Stat label="Contact" value={title.contact} />}
+            {title.phone   && <Stat label="Phone" value={<a href={`tel:${title.phone}`}>{title.phone}</a>} />}
+            {title.email   && <Stat label="Email" value={<a href={`mailto:${title.email}`}>{title.email}</a>} />}
+            {title.fileNumber && <Stat label="File #" value={title.fileNumber} />}
+          </div>
+        </div>
+      )}
+
+      {/* Tasks */}
+      {tasks && tasks.length > 0 && (
+        <div className="card">
+          <p className="card-title">Your checklist</p>
+          {tasks.map(t => <TaskRow key={t.id} task={t} onChange={onRefresh} />)}
+        </div>
+      )}
+
+      {/* Photos */}
+      {photos.length > 0 && (
+        <div className="card">
+          <p className="card-title">Photos</p>
+          <div className="photos-grid">
+            {photos.map(p => {
+              const u = p.id === coverDoc?.id ? coverUrl : photoUrls[p.id];
+              return (
+                <div key={p.id} className="photo-thumb"
+                  style={u ? { backgroundImage: `url(${u})` } : {}}
+                  onClick={() => u && setLightbox(u)} />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Documents (non-image) */}
+      {files.length > 0 && (
+        <div className="card">
+          <p className="card-title">Documents</p>
+          {files.map(d => <DocRow key={d.id} doc={d} />)}
+        </div>
+      )}
+
+      {/* Activity feed (read) + post update (write) */}
+      <div className="card">
+        <p className="card-title">Activity</p>
+        <PostUpdate onPosted={onRefresh} />
+        {(!activity || activity.length === 0) ? (
+          <div className="empty">No activity yet. Updates you post and what the team does will show here.</div>
+        ) : (
+          <div style={{ marginTop: 16 }}>
+            {activity.map(a => (
+              <div key={a.id} className="activity-row">
+                {a.action}
+                <div className="activity-meta">{a.author} · {fmtDateTime(a.created_at)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ marginTop: 30, paddingTop: 20, borderTop: '1px solid var(--border)', textAlign: 'center' }}>
+        <div className="fineprint">Private deal room. Don't share this link — it's tied to you.</div>
+      </div>
+
+      {lightbox && (
+        <div className="lightbox" onClick={() => setLightbox(null)}>
+          <img src={lightbox} alt="" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Tile({ label, value, sub }) {
+  return <div className="num-tile">
+    <div className="num-tile-label">{label}</div>
+    <div className="num-tile-value">{value}</div>
+    {sub && <div className="num-tile-sub">{sub}</div>}
+  </div>;
+}
+
+function Stat({ label, value }) {
+  if (!value) return null;
+  return <div>
+    <div className="stat-label">{label}</div>
+    <div className="stat-value">{value}</div>
+  </div>;
+}
+
+function TaskRow({ task, onChange }) {
+  const [busy, setBusy] = useState(false);
+  const toggle = async () => {
+    setBusy(true);
+    const newDone = !task.done;
+    await sb.rpc('partner_complete_task', { p_token: TOKEN, p_task_id: task.id, p_done: newDone });
+    setBusy(false);
+    onChange();
+  };
+  return (
+    <div className="task-row">
+      <div className={'task-check' + (task.done ? ' done' : '')} onClick={busy ? null : toggle}>
+        {task.done && '✓'}
+      </div>
+      <div className="task-text">
+        <div className={'task-title' + (task.done ? ' done' : '')}>{task.title}</div>
+        {task.due_date && <div className="task-due">Due {fmtDate(task.due_date)}</div>}
+        {task.completed_by_partner_at && <div className="task-due">Completed {fmtDateTime(task.completed_by_partner_at)}</div>}
+      </div>
+    </div>
+  );
+}
+
+function DocRow({ doc }) {
+  const [url, setUrl] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const open = async () => {
+    if (url) { window.open(url, '_blank'); return; }
+    setLoading(true);
+    const u = await resolvePartnerAsset(doc.id);
+    setLoading(false);
+    if (u) { setUrl(u); window.open(u, '_blank'); }
+  };
+  return (
+    <div className="doc-row">
+      <div>
+        <div className="doc-name">{doc.name}</div>
+        <div className="doc-meta">{doc.document_type || 'Document'} · {fmtDate(doc.created_at)}</div>
+      </div>
+      <button className="btn-ghost" onClick={open} disabled={loading}>{loading ? '…' : 'Open'}</button>
+    </div>
+  );
+}
+
+function PostUpdate({ onPosted }) {
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const post = async () => {
+    const trimmed = body.trim();
+    if (!trimmed) return;
+    setBusy(true);
+    const { error } = await sb.rpc('partner_post_update', { p_token: TOKEN, p_message: trimmed });
+    setBusy(false);
+    if (error) { alert('Could not post: ' + error.message); return; }
+    setBody('');
+    onPosted();
+  };
+  return (
+    <div className="compose">
+      <textarea
+        value={body}
+        onChange={e => setBody(e.target.value)}
+        placeholder="Post an update — Nathan sees it instantly. Examples: 'Pictures done, uploaded to Dropbox' / 'Title quote came back at $X' / 'Buyer wants to push close to Friday.'"
+      />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 8 }}>
+        <button className="btn-gold" onClick={post} disabled={busy || !body.trim()}>
+          {busy ? 'Posting…' : 'Post update'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

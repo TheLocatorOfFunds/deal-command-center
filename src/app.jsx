@@ -5314,10 +5314,13 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   //   • Expenses hidden on surplus deals (only attorney fee, already in FS)
   // Stage 2 (2026-04-23): notes → files (merged w/ documents), vendors → contacts.
   // Old tabs remain as components; they're just not wired into the tab bar.
+  const isWholesale = deal.type === "wholesale";
   const tabs = isAdmin
     ? (isFlip
-        ? ["overview", "comms", "docket", "contacts", "investor", "expenses", "tasks", "files"]
-        : ["overview", "comms", "docket", "contacts", "tasks", "files"])
+        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "tasks", "files"]
+        : isWholesale
+          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "tasks", "files"]
+          : ["overview", "comms", "docket", "contacts", "tasks", "files"])
     : ["overview", "comms", "docket", "contacts", "tasks", "files"];
 
   return (
@@ -5442,7 +5445,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
             borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
           }}>
-            {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id === "investor" ? "💵 Investor" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
+            {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id === "investor" ? "💵 Investor" : id === "partner" ? "🤝 JV Partner" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
             {/* Unread-since-last-seen badge for Comms + Docket — resets when the tab is opened */}
             {((id === "comms" && unreadCounts.comms > 0) || (id === "docket" && unreadCounts.docket > 0)) && (
               <span style={{ marginLeft: 6, display: "inline-block", background: "#ef4444", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 700, lineHeight: 1.3, verticalAlign: "middle" }}>
@@ -5498,8 +5501,14 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           <InvestorPortalCard deal={deal} userId={userId} />
         </div>
       )}
+      {tab === "partner" && (isFlip || isWholesale) && isAdmin && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <PartnerDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
+          <PartnerPortalCard deal={deal} userId={userId} />
+        </div>
+      )}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
-      {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} />}
+      {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} deal={deal} />}
       {tab === "files" && (
         <div>
           <Documents items={documents} dealId={deal.id} deal={deal} userId={userId} logAct={logAct} reload={loadAll} />
@@ -6675,6 +6684,260 @@ function InvestorPortalCard({ deal, userId }) {
   );
 }
 
+// PartnerDetailsEditor: edits deal.meta.partner — the JV-partner-facing
+// fields (deal economics, buyer info, title contacts, partner-tab task
+// flagging happens on the Tasks tab). Mirrors InvestorDetailsEditor's
+// shape but split into Pricing / Buyer / Title / Property sections.
+function PartnerDetailsEditor({ deal, onUpdateDeal }) {
+  const m = deal.meta || {};
+  const p = m.partner || {};
+  const updatePartner = (patch) => onUpdateDeal({ meta: { ...m, partner: { ...p, ...patch } } });
+  const updateNested = (key, patch) => updatePartner({ [key]: { ...(p[key] || {}), ...patch } });
+  const [sect, setSect] = useState('pricing');
+
+  const sectionBtn = (id, label) => (
+    <button key={id} onClick={() => setSect(id)} style={{ background: sect === id ? '#292524' : 'transparent', color: sect === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (sect === id ? '#44403c' : 'transparent'), padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>{label}</button>
+  );
+
+  const buyer = p.buyer || {};
+  const title = p.title || {};
+
+  const Num = ({ label, k, step = 1, ph }) => (
+    <Field label={label}>
+      <input type="number" step={step} value={p[k] ?? ''} onChange={e => updatePartner({ [k]: e.target.value === '' ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder={ph} />
+    </Field>
+  );
+  const Txt = ({ label, k, ph, val, onChange }) => (
+    <Field label={label}>
+      <input value={val ?? ''} onChange={e => onChange(e.target.value || null)} style={inputStyle} placeholder={ph} />
+    </Field>
+  );
+  const DateF = ({ label, k }) => (
+    <Field label={label}>
+      <input type="date" value={p[k] ?? ''} onChange={e => updatePartner({ [k]: e.target.value || null })} style={inputStyle} />
+    </Field>
+  );
+
+  return (
+    <Card title="JV-Facing Details" style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.55 }}>
+        Numbers + contacts the JV partner needs to manage the deal end-to-end. They see this in their portal alongside their profit share.
+      </div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, flexWrap: 'wrap' }}>
+        {sectionBtn('pricing', 'Pricing')}
+        {sectionBtn('buyer', 'Buyer')}
+        {sectionBtn('title', 'Title')}
+        {sectionBtn('property', 'Property')}
+      </div>
+
+      {sect === 'pricing' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 12 }}>
+          <Num label="Under contract at ($)" k="contractPrice" step={1000} ph="80000" />
+          <Num label="Asking buyer ($)" k="askingPrice" step={1000} ph="100000" />
+          <Num label="Assignment fee ($)" k="expectedAssignmentFee" step={500} ph="20000" />
+          <Num label="Expected net profit ($)" k="expectedNetProfit" step={500} ph="20000" />
+          <DateF label="Target close date" k="expectedCloseDate" />
+        </div>
+      )}
+
+      {sect === 'buyer' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <Txt label="Buyer name" val={buyer.name} onChange={v => updateNested('buyer', { name: v })} ph="John Doe" />
+          <Txt label="Buyer phone" val={buyer.phone} onChange={v => updateNested('buyer', { phone: v })} ph="513-555-0123" />
+          <Txt label="Buyer email" val={buyer.email} onChange={v => updateNested('buyer', { email: v })} ph="john@…" />
+          <Txt label="Buyer entity / LLC" val={buyer.entity} onChange={v => updateNested('buyer', { entity: v })} ph="Doe Holdings LLC" />
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Field label="Buyer notes (visible to JV partner)">
+              <textarea value={buyer.notes ?? ''} onChange={e => updateNested('buyer', { notes: e.target.value || null })} style={{ ...inputStyle, minHeight: 60 }} placeholder="How they bought, terms, EMD, anything the partner should know…" />
+            </Field>
+          </div>
+        </div>
+      )}
+
+      {sect === 'title' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <Txt label="Title company" val={title.company} onChange={v => updateNested('title', { company: v })} ph="Ohio Title & Closing" />
+          <Txt label="Contact name" val={title.contact} onChange={v => updateNested('title', { contact: v })} ph="Jane Closer" />
+          <Txt label="Phone" val={title.phone} onChange={v => updateNested('title', { phone: v })} ph="513-555-0124" />
+          <Txt label="Email" val={title.email} onChange={v => updateNested('title', { email: v })} ph="jane@…" />
+          <Txt label="File #" val={title.fileNumber} onChange={v => updateNested('title', { fileNumber: v })} ph="OT-2026-…" />
+        </div>
+      )}
+
+      {sect === 'property' && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
+          <Txt label="Beds" val={p.beds} onChange={v => updatePartner({ beds: v })} ph="3" />
+          <Txt label="Baths" val={p.baths} onChange={v => updatePartner({ baths: v })} ph="2" />
+          <Txt label="Sqft" val={p.sqft} onChange={v => updatePartner({ sqft: v })} ph="1450" />
+          <Txt label="Year built" val={p.yearBuilt} onChange={v => updatePartner({ yearBuilt: v })} ph="1962" />
+          <Txt label="Lot" val={p.lotSize} onChange={v => updatePartner({ lotSize: v })} ph="0.18 ac" />
+          <Txt label="Occupancy" val={p.occupancy} onChange={v => updatePartner({ occupancy: v })} ph="vacant / occupied" />
+          <Txt label="Condition" val={p.condition} onChange={v => updatePartner({ condition: v })} ph="rough / fair / good" />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// PartnerPortalCard: invite/revoke JV partner share links. Same shape as
+// InvestorPortalCard but writes to partner_deal_access and uses the
+// partner-portal.html target with profit_share_pct + role_description.
+function PartnerPortalCard({ deal, userId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ name: '', email: '', phone: '', share: '25', role: '' });
+  const [copiedId, setCopiedId] = useState(null);
+
+  const base = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+  const buildLink = (token) => base + 'partner-portal.html?t=' + token;
+
+  const load = async () => {
+    const { data } = await sb.from('partner_deal_access').select('*').eq('deal_id', deal.id).order('invited_at', { ascending: false });
+    setRows(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [deal.id]);
+
+  useEffect(() => {
+    const ch = sb.channel('partner-access-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'partner_deal_access', filter: `deal_id=eq.${deal.id}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [deal.id]);
+
+  const add = async () => {
+    if (!form.name.trim() && !form.phone.trim() && !form.email.trim()) {
+      alert('Add at least a name, phone, or email so we know who this link is for.');
+      return;
+    }
+    const sharePct = parseFloat(form.share);
+    if (Number.isNaN(sharePct) || sharePct <= 0 || sharePct > 100) {
+      alert('Profit share % must be between 0 and 100.');
+      return;
+    }
+    setAdding(true);
+    const { error } = await sb.from('partner_deal_access').insert({
+      deal_id: deal.id,
+      partner_name: form.name.trim() || null,
+      partner_email: form.email.trim() || null,
+      partner_phone: form.phone.trim() || null,
+      profit_share_pct: sharePct,
+      role_description: form.role.trim() || null,
+      invited_by: userId,
+    });
+    setAdding(false);
+    if (error) { alert('Could not add: ' + error.message); return; }
+    setForm({ name: '', email: '', phone: '', share: '25', role: '' });
+    load();
+  };
+
+  const revoke = async (row) => {
+    if (!confirm(`Revoke ${row.partner_name || row.partner_email || 'this link'}? They won't be able to view the deal anymore.`)) return;
+    await sb.from('partner_deal_access').update({ enabled: false, revoked_at: new Date().toISOString() }).eq('id', row.id);
+    load();
+  };
+
+  const reenable = async (row) => {
+    await sb.from('partner_deal_access').update({ enabled: true, revoked_at: null }).eq('id', row.id);
+    load();
+  };
+
+  const copy = async (row) => {
+    const link = buildLink(row.token);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedId(row.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch { window.prompt('Copy this link:', link); }
+  };
+
+  return (
+    <Card title="JV Partner Portal" style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 11, color: "#78716c", marginBottom: 12, lineHeight: 1.55 }}>
+        Generate a share link for a JV partner. They see deal economics, their profit share, buyer + title contacts, the tasks flagged for them (mark <code style={{ background:'#1c1917', padding:'1px 4px', borderRadius: 3 }}>partner_visible</code> on tasks in the Tasks tab), and an activity feed they can post into. No signup. Revoke anytime.
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 10 }}>
+        <Field label="Partner name"><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inputStyle} placeholder="Kevin" /></Field>
+        <Field label="Phone"><input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
+        <Field label="Email"><input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
+        <Field label="Profit share %"><input type="number" step="1" value={form.share} onChange={e => setForm({ ...form, share: e.target.value })} style={inputStyle} placeholder="25" /></Field>
+      </div>
+      <div style={{ marginBottom: 10 }}>
+        <Field label="Role / responsibilities (shown on their portal)">
+          <input value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} style={inputStyle} placeholder="Photos, manage buyer, coordinate title, close, handoff" />
+        </Field>
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={add} disabled={adding} style={btnPrimary}>
+          {adding ? 'Generating…' : '+ Generate JV link'}
+        </button>
+        {rows.some(r => r.enabled && !r.revoked_at) && (
+          <button
+            onClick={async () => {
+              const live = rows.filter(r => r.enabled && !r.revoked_at);
+              if (!confirm(`Revoke access for all ${live.length} active JV link${live.length === 1 ? '' : 's'}? They'll need new links to view again.`)) return;
+              await sb.from('partner_deal_access').update({ enabled: false, revoked_at: new Date().toISOString() }).eq('deal_id', deal.id).eq('enabled', true);
+              load();
+            }}
+            style={{ ...btnGhost, color: "#fca5a5", borderColor: "#7f1d1d" }}
+          >
+            Revoke all active
+          </button>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        {loading ? null : rows.length === 0 ? (
+          <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic", padding: 12 }}>No JV links yet. Fill in the partner's details + share %, click generate.</div>
+        ) : (
+          rows.map(r => {
+            const link = buildLink(r.token);
+            const dead = !r.enabled || r.revoked_at;
+            return (
+              <div key={r.id} style={{ padding: "10px 12px", marginBottom: 8, background: "#0c0a09", border: "1px solid " + (dead ? "#292524" : "#44403c"), borderRadius: 6, opacity: dead ? 0.55 : 1 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#fafaf9" }}>
+                      {r.partner_name || r.partner_email || r.partner_phone || 'Unnamed partner'}
+                      {' · '}<span style={{ color: '#fbbf24' }}>{Number(r.profit_share_pct)}%</span>
+                    </div>
+                    <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                      {[r.partner_email, r.partner_phone].filter(Boolean).join(' · ')}
+                    </div>
+                    {r.role_description && (
+                      <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 4, fontStyle: 'italic' }}>{r.role_description}</div>
+                    )}
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 4 }}>
+                      Invited {new Date(r.invited_at).toLocaleDateString()}
+                      {r.view_count > 0 && <> · {r.view_count} view{r.view_count === 1 ? '' : 's'}</>}
+                      {r.last_viewed_at && <> · last seen {new Date(r.last_viewed_at).toLocaleDateString()}</>}
+                      {dead && <span style={{ color: "#ef4444", marginLeft: 6 }}>· Revoked</span>}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    {!dead && <button onClick={() => copy(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: copiedId === r.id ? "#6ee7b7" : "#fbbf24" }}>{copiedId === r.id ? '✓ Copied' : '📋 Copy link'}</button>}
+                    {!dead ? (
+                      <button onClick={() => revoke(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#fca5a5" }}>Revoke</button>
+                    ) : (
+                      <button onClick={() => reenable(r)} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#6ee7b7" }}>Re-enable</button>
+                    )}
+                  </div>
+                </div>
+                {!dead && (
+                  <div style={{ fontSize: 10, color: "#57534e", marginTop: 6, fontFamily: "'DM Mono', monospace", wordBreak: "break-all" }}>{link}</div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
+  );
+}
+
 // Helpers live at module level so React doesn't recreate them on every
 // InvestorDetailsEditor render. (Defining them inside the parent function
 // made the input lose focus on every keystroke because React sees a new
@@ -7692,14 +7955,24 @@ function Expenses({ items, dealId, userId, logAct, reload }) {
 }
 
 // ─── Tasks Tab ───────────────────────────────────────────────────────
-function Tasks({ items, dealId, userId, teamMembers, logAct, reload }) {
+function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
+
+  // Show the partner-visible toggle column only when this deal could have a
+  // JV partner attached (flip or wholesale). Avoids cluttering the row for
+  // surplus / rental / other deals where it'd never apply.
+  const isJvCapable = deal && (deal.type === 'flip' || deal.type === 'wholesale');
 
   const toggle = async (id) => {
     const it = items.find(i => i.id === id);
     await sb.from('tasks').update({ done: !it.done }).eq('id', id);
-    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${it.label}`);
+    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${it.label || it.title}`);
+    reload();
+  };
+
+  const togglePartner = async (id, current) => {
+    await sb.from('tasks').update({ partner_visible: !current }).eq('id', id);
     reload();
   };
   const add = async () => {
@@ -7742,6 +8015,22 @@ function Tasks({ items, dealId, userId, teamMembers, logAct, reload }) {
               </div>
             </div>
             <PriorityBadge p={t.priority} />
+            {isJvCapable && (
+              <button
+                onClick={() => togglePartner(t.id, !!t.partner_visible)}
+                title={t.partner_visible ? "Visible to JV partner — click to hide" : "Hidden from JV partner — click to expose"}
+                style={{
+                  ...btnGhost,
+                  fontSize: 10,
+                  padding: "3px 8px",
+                  color: t.partner_visible ? "#fbbf24" : "#57534e",
+                  borderColor: t.partner_visible ? "#92400e" : "#292524",
+                  background: t.partner_visible ? "#78350f22" : "transparent"
+                }}
+              >
+                🤝 JV
+              </button>
+            )}
             <button onClick={() => del(t.id)} style={btnGhost}>×</button>
           </div>
         ))}
@@ -8890,6 +9179,28 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                     title={deal.meta?.investor?.coverPhotoPath === doc.path ? "Cover photo — click to unset" : "Set as cover photo"}
                     style={{ ...btnGhost, fontSize: 12, padding: "3px 8px", color: deal.meta?.investor?.coverPhotoPath === doc.path ? "#fbbf24" : "#57534e", borderColor: deal.meta?.investor?.coverPhotoPath === doc.path ? "#92400e" : "#292524" }}
                   >★</button>
+                )}
+                {/* JV partner visibility toggle — separate from investor (different audience). Shows on flip + wholesale deals where a JV partner could be attached. */}
+                {(deal.type === 'flip' || deal.type === 'wholesale') && (
+                  <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10, color: doc.partner_visible ? "#fbbf24" : "#57534e", cursor: "pointer", padding: "4px 8px", border: "1px solid " + (doc.partner_visible ? "#92400e" : "#292524"), borderRadius: 4, background: doc.partner_visible ? "#78350f22" : "transparent" }} title="Show this document on the JV Partner Portal">
+                    <input type="checkbox" checked={!!doc.partner_visible} onChange={async (e) => {
+                      await sb.from('documents').update({ partner_visible: e.target.checked }).eq('id', doc.id);
+                      await reload();
+                    }} style={{ margin: 0 }} />
+                    🤝 JV
+                  </label>
+                )}
+                {doc.partner_visible && /\.(jpg|jpeg|png|webp|heic|gif)$/i.test(doc.name) && (
+                  <button
+                    onClick={async () => {
+                      const isCover = (deal.meta?.partner?.coverPhotoPath === doc.path);
+                      const newP = { ...(deal.meta?.partner || {}), coverPhotoPath: isCover ? null : doc.path };
+                      await sb.from('deals').update({ meta: { ...(deal.meta || {}), partner: newP } }).eq('id', deal.id);
+                      await reload();
+                    }}
+                    title={deal.meta?.partner?.coverPhotoPath === doc.path ? "JV cover photo — click to unset" : "Set as JV cover photo"}
+                    style={{ ...btnGhost, fontSize: 12, padding: "3px 8px", color: deal.meta?.partner?.coverPhotoPath === doc.path ? "#6ee7b7" : "#57534e", borderColor: deal.meta?.partner?.coverPhotoPath === doc.path ? "#065f46" : "#292524" }}
+                  >★JV</button>
                 )}
                 {status === 'done' && hasFields && (
                   <button onClick={() => setExpanded(prev => ({ ...prev, [doc.id]: !isExpanded }))} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{isExpanded ? 'Hide fields' : 'Show fields'}</button>
