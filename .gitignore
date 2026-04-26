@@ -27,3 +27,6 @@ INFRASTRUCTURE_MAP.md
 mac-bridge/.env
 mac-bridge/.watermark
 mac-bridge/node_modules/
+
+# Build artifacts
+node_modules/
