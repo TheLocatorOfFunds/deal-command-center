@@ -221,6 +221,10 @@ function InvalidLink({ error }) {
 function isImage(d) {
   return d.is_image || /\.(jpg|jpeg|png|webp|heic|gif)$/i.test(d.name || '');
 }
+function isVideo(d) {
+  return d.is_video || /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(d.name || '');
+}
+function isMedia(d) { return isImage(d) || isVideo(d); }
 
 async function resolvePartnerAsset(document_id) {
   // Look up the bucket path via RPC, then sign it client-side using anon key.
@@ -239,9 +243,9 @@ function DealRoom({ data, onRefresh }) {
   const address = partner.propertyAddress || deal.headline_address;
   const county = deal.county;
 
-  const photos = (documents || []).filter(isImage);
-  const files  = (documents || []).filter(d => !isImage(d));
-  const coverDoc = photos.find(p => p.is_cover) || photos[0];
+  const photos = (documents || []).filter(isMedia);             // photos + videos in the gallery
+  const files  = (documents || []).filter(d => !isMedia(d));     // everything else (PDFs, etc) below
+  const coverDoc = photos.find(p => p.is_cover && isImage(p)) || photos.find(isImage); // cover must be an image
 
   const [coverUrl, setCoverUrl] = useState(null);
   const [photoUrls, setPhotoUrls] = useState({});
@@ -392,11 +396,26 @@ function DealRoom({ data, onRefresh }) {
           <PhotoUploader onUploaded={onRefresh} />
         </div>
         {photos.length === 0 ? (
-          <div className="empty">No photos yet. Tap <b>+ Upload photos</b> above — Nathan sees them instantly.</div>
+          <div className="empty">No photos or videos yet. Tap <b>+ Upload photos / videos</b> above — Nathan sees them instantly. Drag-and-drop works on desktop.</div>
         ) : (
           <div className="photos-grid">
             {photos.map(p => {
               const u = p.id === coverDoc?.id ? coverUrl : photoUrls[p.id];
+              if (isVideo(p)) {
+                // Videos: render an inline <video> with controls. Tap-to-fullscreen via the native player.
+                return (
+                  <div key={p.id} className="photo-thumb" style={{ background: '#000', position: 'relative' }}>
+                    {u ? (
+                      <video src={u} controls preload="metadata" playsInline
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8 }} />
+                    ) : (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-subtle)', fontSize: 12 }}>Loading video…</div>
+                    )}
+                    <div style={{ position: 'absolute', top: 6, left: 6, background: 'rgba(0,0,0,.6)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '2px 6px', borderRadius: 4, letterSpacing: '0.05em' }}>VIDEO</div>
+                  </div>
+                );
+              }
+              // Photos: existing tap-to-lightbox
               return (
                 <div key={p.id} className="photo-thumb"
                   style={u ? { backgroundImage: `url(${u})` } : {}}
@@ -506,63 +525,188 @@ function DocRow({ doc }) {
   );
 }
 
+// Direct-to-storage upload: works for photos AND videos of any size up to
+// Supabase's 5 GB storage object limit. Three steps per file:
+//   1. partner_request_upload RPC → creates 'pending' documents row, returns path
+//   2. POST /functions/v1/partner-upload-url → returns signed PUT URL
+//   3. fetch PUT signedUrl → file body uploads directly (no EF body limit)
+//   4. partner_finalize_upload RPC → flips row to 'complete' + activity log
+// Falls back to partner-abandon-upload if the user cancels or it fails.
 function PhotoUploader({ onUploaded }) {
-  const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState({ done: 0, total: 0 });
-  const [err, setErr] = useState(null);
+  const [busy, setBusy]         = useState(false);
+  const [files, setFiles]       = useState([]); // [{name, total, sent, status, err, docId}]
+  const [globalErr, setGlobalErr] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
   const inputRef = React.useRef(null);
 
   const onPick = () => inputRef.current && inputRef.current.click();
 
-  const onFiles = async (e) => {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
-    setBusy(true); setErr(null);
-    setProgress({ done: 0, total: files.length });
+  const fmtBytes = (n) => {
+    if (!n || n < 1024) return (n || 0) + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+  };
 
-    let succeeded = 0;
-    for (const file of files) {
-      try {
-        const fd = new FormData();
-        fd.append('file', file);
-        const r = await fetch(SUPABASE_URL + '/functions/v1/partner-upload', {
-          method: 'POST',
-          headers: {
-            'apikey': SUPABASE_KEY,
-            'x-partner-token': TOKEN,
-          },
-          body: fd,
-        });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(j.error || ('upload failed: ' + r.status));
-        succeeded++;
-      } catch (ex) {
-        setErr(ex.message || String(ex));
-      } finally {
-        setProgress(p => ({ ...p, done: p.done + 1 }));
+  // PUT one file using XHR so we can stream upload progress to the UI.
+  // fetch() doesn't expose request body progress — XHR does.
+  const putWithProgress = (signedUrl, file, onProg) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', signedUrl, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProg(e.loaded); };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new Error('PUT failed: ' + xhr.status + ' ' + xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error('network error during upload'));
+    xhr.onabort = () => reject(new Error('upload aborted'));
+    xhr.send(file);
+  });
+
+  const uploadOne = async (file, idx) => {
+    const updateRow = (patch) => setFiles(prev => prev.map((f, i) => i === idx ? { ...f, ...patch } : f));
+    let docId = null;
+    try {
+      // 1. Request upload slot — creates documents row in pending state
+      const { data: req, error: reqErr } = await sb.rpc('partner_request_upload', {
+        p_token: TOKEN,
+        p_filename: file.name,
+        p_size: file.size,
+        p_mime: file.type || null,
+      });
+      if (reqErr) throw new Error('request slot: ' + reqErr.message);
+      if (!req || !req.document_id) throw new Error('could not allocate upload slot');
+      docId = req.document_id;
+      updateRow({ docId });
+
+      // 2. Get signed PUT URL
+      const r = await fetch(SUPABASE_URL + '/functions/v1/partner-upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'apikey': SUPABASE_KEY, 'x-partner-token': TOKEN },
+        body: JSON.stringify({ path: req.path, document_id: req.document_id }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j.signedUrl) throw new Error(j.error || ('signing failed: ' + r.status));
+
+      // 3. PUT directly to storage with progress
+      updateRow({ status: 'uploading' });
+      await putWithProgress(j.signedUrl, file, (sent) => updateRow({ sent }));
+
+      // 4. Finalize — flip to complete + log activity
+      const { data: ok, error: finErr } = await sb.rpc('partner_finalize_upload', {
+        p_token: TOKEN,
+        p_document_id: docId,
+        p_final_size: file.size,
+      });
+      if (finErr || !ok) throw new Error(finErr?.message || 'finalize failed');
+
+      updateRow({ status: 'done', sent: file.size });
+      return true;
+    } catch (ex) {
+      updateRow({ status: 'failed', err: ex.message || String(ex) });
+      // Best-effort cleanup
+      if (docId) {
+        try { await sb.rpc('partner_abandon_upload', { p_token: TOKEN, p_document_id: docId }); } catch {}
       }
+      return false;
     }
+  };
+
+  const handleFileList = async (fileList) => {
+    const arr = Array.from(fileList || []);
+    if (!arr.length) return;
+    setGlobalErr(null);
+    const initial = arr.map(f => ({ name: f.name, total: f.size, sent: 0, status: 'queued', err: null, docId: null }));
+    setFiles(initial);
+    setBusy(true);
+
+    // Run uploads in parallel (max 3 at a time so phones don't choke)
+    const queue = arr.map((f, i) => ({ file: f, idx: i }));
+    let succeeded = 0;
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length) {
+        const next = queue.shift();
+        if (!next) break;
+        const ok = await uploadOne(next.file, next.idx);
+        if (ok) succeeded++;
+      }
+    });
+    await Promise.all(workers);
 
     setBusy(false);
     if (inputRef.current) inputRef.current.value = '';
     if (succeeded > 0) onUploaded();
+    // Auto-clear successful rows after 3s so the panel doesn't grow forever
+    setTimeout(() => setFiles(prev => prev.filter(f => f.status !== 'done')), 3000);
+  };
+
+  const onFiles = (e) => handleFileList(e.target.files);
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    handleFileList(e.dataTransfer?.files);
   };
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'flex-end' }}>
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,video/*"
         multiple
         capture="environment"
         onChange={onFiles}
         style={{ display: 'none' }}
       />
-      <button className="btn-gold" onClick={onPick} disabled={busy}>
-        {busy ? `Uploading ${progress.done}/${progress.total}…` : '+ Upload photos'}
-      </button>
-      {err && <span style={{ fontSize: 11, color: 'var(--red)' }}>{err}</span>}
+      <div
+        onClick={onPick}
+        onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        style={{
+          cursor: 'pointer',
+          padding: '10px 18px',
+          borderRadius: 8,
+          background: dragOver ? 'var(--gold-soft)' : 'var(--navy)',
+          color: dragOver ? 'var(--navy)' : '#fffcf5',
+          fontSize: 13,
+          fontWeight: 600,
+          border: dragOver ? '2px dashed var(--gold)' : '2px solid transparent',
+          transition: 'all .12s',
+          textAlign: 'center',
+          minWidth: 200,
+        }}
+      >
+        {busy ? 'Uploading…' : (dragOver ? 'Drop to upload' : '+ Upload photos / videos')}
+      </div>
+      {!busy && !files.length && (
+        <div style={{ fontSize: 10, color: 'var(--text-subtle)' }}>
+          Or drag-and-drop · phone camera roll OK · videos OK
+        </div>
+      )}
+      {globalErr && <span style={{ fontSize: 11, color: 'var(--red)' }}>{globalErr}</span>}
+      {files.length > 0 && (
+        <div style={{ width: '100%', minWidth: 280, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {files.map((f, i) => {
+            const pct = f.total > 0 ? Math.round((f.sent / f.total) * 100) : 0;
+            const color = f.status === 'failed' ? 'var(--red)'
+                         : f.status === 'done'    ? 'var(--green)'
+                         : 'var(--navy)';
+            return (
+              <div key={i} style={{ fontSize: 11, padding: '6px 8px', background: 'var(--bg-card-alt)', borderRadius: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
+                <div style={{ color, fontWeight: 600, fontSize: 10, fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>
+                  {f.status === 'done' ? '✓ ' + fmtBytes(f.total)
+                   : f.status === 'failed' ? '✗ ' + (f.err || 'failed')
+                   : pct + '%'}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
