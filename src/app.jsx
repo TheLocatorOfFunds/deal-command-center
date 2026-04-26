@@ -8853,6 +8853,14 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const dragDepth = useRef(0);
   const [batchProgress, setBatchProgress] = useState(null); // { done, total, current }
 
+  // Files-tab filtering UX: a gallery strip for photos+videos at the top,
+  // chip-based source filter on the doc list below. Casey-Jennings-scale
+  // deals (90+ docs, 70+ photos) are unscannable as one flat list.
+  const [chip, setChip] = useState('all');                 // all | kevin | court | contracts | mine
+  const [galleryExpanded, setGalleryExpanded] = useState(false);
+  const [galleryThumbs, setGalleryThumbs] = useState({});  // doc.id → signed URL
+  const [thumbsLoading, setThumbsLoading] = useState(false);
+
   // Filing-date extractor. Every document Nathan uploads is a snapshot of
   // something that already happened at the courthouse. We pull the court-
   // action date from Claude Vision's extracted fields (falling through a
@@ -9129,6 +9137,76 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
     return String(v);
   };
 
+  // Source classification — used by the chip filter. Precedence is
+  // explicit so a doc only counts in one category: Kevin > Court > Contracts > Mine > Other.
+  const isImage = (d) => /\.(jpg|jpeg|png|webp|heic|heif|gif)$/i.test(d?.name || '');
+  const isVideo = (d) => /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(d?.name || '');
+  const isMedia = (d) => isImage(d) || isVideo(d);
+  const docSource = (d) => {
+    if (d.uploaded_by_partner_access_id) return 'kevin';
+    const t = d.extracted?.document_type;
+    if (t === 'court_filing') return 'court';
+    if (t === 'engagement_agreement' || t === 'deed' || t === 'power_of_attorney' || t === 'probate_document') return 'contracts';
+    if (d.uploaded_by && userId && d.uploaded_by === userId) return 'mine';
+    return 'other';
+  };
+
+  // Split into media (gallery strip) vs documents (filterable list).
+  const mediaItems    = sortedItems.filter(isMedia);
+  const documentItems = sortedItems.filter(d => !isMedia(d));
+
+  // Per-source counts (only for documents, not media — gallery is shown separately).
+  const sourceCounts = documentItems.reduce((acc, d) => {
+    const s = docSource(d);
+    acc[s] = (acc[s] || 0) + 1;
+    acc.all = (acc.all || 0) + 1;
+    return acc;
+  }, { all: 0, kevin: 0, court: 0, contracts: 0, mine: 0, other: 0 });
+
+  // Filtered doc list per chip selection.
+  const filteredDocs = chip === 'all' ? documentItems : documentItems.filter(d => docSource(d) === chip);
+
+  // Lazy-load thumbnails for the gallery strip. Use a worker pool with
+  // concurrency 8; same pattern as the JV portal so 70-photo galleries
+  // don't sequentially round-trip and freeze the UI.
+  useEffect(() => {
+    if (!mediaItems.length) return;
+    let cancelled = false;
+    setThumbsLoading(true);
+    (async () => {
+      const queue = mediaItems.filter(m => isImage(m) && !galleryThumbs[m.id]).map(m => m);
+      if (!queue.length) { setThumbsLoading(false); return; }
+      const CONCURRENCY = 8;
+      const worker = async () => {
+        while (!cancelled && queue.length) {
+          const m = queue.shift();
+          if (!m) break;
+          const { data } = await sb.storage.from('deal-docs').createSignedUrl(m.path, 3600);
+          if (cancelled) return;
+          if (data?.signedUrl) {
+            setGalleryThumbs(prev => ({ ...prev, [m.id]: data.signedUrl }));
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+      if (!cancelled) setThumbsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [mediaItems.length]);
+
+  const COLLAPSED_GALLERY_COUNT = 8;
+  const visibleMedia = galleryExpanded ? mediaItems : mediaItems.slice(0, COLLAPSED_GALLERY_COUNT);
+
+  // Chip definitions — order matters for the chip bar layout.
+  const chips = [
+    { id: 'all',       label: 'All',         color: '#fafaf9' },
+    { id: 'kevin',     label: '🤝 Kevin',     color: '#fbbf24' },
+    { id: 'court',     label: '📋 Court',     color: '#93c5fd' },
+    { id: 'contracts', label: '📑 Contracts', color: '#6ee7b7' },
+    { id: 'mine',      label: '👤 Mine',      color: '#d8b560' },
+    { id: 'other',     label: '· Other',      color: '#a8a29e' },
+  ].filter(c => c.id === 'all' || sourceCounts[c.id] > 0);
+
   return (
     <div
       onDragEnter={onDragEnter}
@@ -9285,7 +9363,98 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
 
       {err && <div style={{ fontSize: 12, color: "#fca5a5", marginBottom: 10 }}>{err}</div>}
       {items.length === 0 && <div style={{ fontSize: 12, color: "#78716c", padding: 20, textAlign: "center" }}>No documents yet. Upload engagement agreements, distribution orders, sale confirmations, NODs, proof of claim, death certificates, IDs, deeds, or any court filing. Claude Vision reads each file and extracts key fields — surplus amounts, case numbers, dates, fee percentages — automatically.</div>}
-      {sortedItems.map(doc => {
+
+      {/* Gallery strip: photos + videos at the top, expandable. */}
+      {mediaItems.length > 0 && (
+        <div style={{ marginBottom: 18, padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>
+              📷 Photos &amp; Videos · {mediaItems.length}
+              {thumbsLoading && <span style={{ color: "#57534e", marginLeft: 8, fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>loading…</span>}
+            </div>
+            {mediaItems.length > COLLAPSED_GALLERY_COUNT && (
+              <button onClick={() => setGalleryExpanded(v => !v)} style={{ ...btnGhost, fontSize: 11, padding: "3px 10px" }}>
+                {galleryExpanded ? `Collapse (showing ${mediaItems.length})` : `Show all ${mediaItems.length} →`}
+              </button>
+            )}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
+            {visibleMedia.map(m => {
+              const url = galleryThumbs[m.id];
+              const video = isVideo(m);
+              return (
+                <div key={m.id}
+                  onClick={() => openDoc(m)}
+                  title={m.name}
+                  style={{
+                    aspectRatio: '4/3',
+                    background: url ? `#000 center/cover no-repeat url(${url})` : "#1c1917",
+                    borderRadius: 6,
+                    border: "1px solid #292524",
+                    cursor: "pointer",
+                    position: "relative",
+                    transition: "transform .12s",
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.02)'}
+                  onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+                >
+                  {video && (
+                    <div style={{ position: "absolute", top: 4, left: 4, fontSize: 9, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,0.7)", padding: "2px 6px", borderRadius: 3, letterSpacing: "0.05em" }}>VIDEO</div>
+                  )}
+                  {!url && !video && (
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#57534e", fontSize: 18 }}>📷</div>
+                  )}
+                  {/* Source pill on each thumb */}
+                  {(() => {
+                    const src = docSource(m);
+                    if (src === 'kevin') return <div style={{ position: "absolute", bottom: 4, right: 4, fontSize: 9, fontWeight: 700, color: "#fbbf24", background: "rgba(0,0,0,0.7)", padding: "1px 5px", borderRadius: 3 }}>🤝 Kevin</div>;
+                    return null;
+                  })()}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Filter chips — show only when there are 6+ docs to avoid noise on small deals. */}
+      {documentItems.length >= 6 && chips.length > 1 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+          {chips.map(c => {
+            const active = chip === c.id;
+            const count = sourceCounts[c.id] || 0;
+            return (
+              <button
+                key={c.id}
+                onClick={() => setChip(c.id)}
+                style={{
+                  background: active ? c.color + '22' : 'transparent',
+                  color: active ? c.color : '#a8a29e',
+                  border: '1px solid ' + (active ? c.color + '88' : '#292524'),
+                  padding: '5px 11px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.12s',
+                }}
+              >
+                {c.label} · {count}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* No-results-for-this-chip empty state */}
+      {documentItems.length > 0 && filteredDocs.length === 0 && (
+        <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic", padding: 16, textAlign: "center" }}>
+          No documents in this category. <button onClick={() => setChip('all')} style={{ ...btnGhost, fontSize: 11, padding: "2px 8px", marginLeft: 6 }}>Show all</button>
+        </div>
+      )}
+
+      {filteredDocs.map(doc => {
         const status = doc.extraction_status;
         const isExtracting = extracting[doc.id] || status === 'processing';
         // Default to expanded so the AI analysis is visible without a click.
