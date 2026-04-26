@@ -8847,6 +8847,12 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [showDocuSign, setShowDocuSign] = useState(false);
   const fileRef = useRef(null);
 
+  // Drag-drop upload state. dragDepth tracks nested dragenter/dragleave so
+  // child elements firing dragleave don't prematurely turn off the overlay.
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+  const [batchProgress, setBatchProgress] = useState(null); // { done, total, current }
+
   // Filing-date extractor. Every document Nathan uploads is a snapshot of
   // something that already happened at the courthouse. We pull the court-
   // action date from Claude Vision's extracted fields (falling through a
@@ -8953,20 +8959,101 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
     await loadPins();
   };
 
-  const upload = async (file) => {
-    if (!file) return;
-    setBusy(true); setErr("");
+  // HEIC → JPEG conversion. Same pattern as the JV portal — Mac/iPhone
+   //   photos default to HEIC, but most browsers + email previews can't
+   //   render them. We convert client-side via heic2any (loaded from CDN
+   //   on demand) before upload. Falls back to uploading the original if
+   //   conversion fails for any reason.
+  const HEIC_LIB_URL = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+  const ensureHeicLib = async () => {
+    if (window.heic2any) return true;
+    return new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = HEIC_LIB_URL;
+      s.onload = () => resolve(!!window.heic2any);
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    });
+  };
+  const isHeic = (f) => /heic|heif/i.test(f?.type || '') || /\.(heic|heif)$/i.test(f?.name || '');
+  const maybeConvertHeic = async (file) => {
+    if (!isHeic(file)) return file;
+    const ok = await ensureHeicLib();
+    if (!ok) return file;
+    try {
+      const blob = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+      const jpegBlob = Array.isArray(blob) ? blob[0] : blob;
+      const newName = file.name.replace(/\.(heic|heif)$/i, '.jpg');
+      return new File([jpegBlob], newName, { type: 'image/jpeg', lastModified: file.lastModified });
+    } catch (e) {
+      console.warn('HEIC convert failed for', file.name, '— uploading original:', e);
+      return file;
+    }
+  };
+
+  // Upload one file end-to-end: storage → documents row → activity log → extract.
+  const uploadOne = async (rawFile) => {
+    const file = await maybeConvertHeic(rawFile);
     const path = `${dealId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,'_')}`;
     const up = await sb.storage.from('deal-docs').upload(path, file);
-    if (up.error) { setErr(up.error.message); setBusy(false); return; }
+    if (up.error) throw new Error(up.error.message);
     const { data: inserted, error } = await sb.from('documents').insert({ deal_id: dealId, name: file.name, path, size: file.size, uploaded_by: userId, extraction_status: 'pending' }).select().single();
-    if (error) { setErr(error.message); setBusy(false); return; }
+    if (error) throw new Error(error.message);
     await logAct(`Uploaded document: ${file.name}`);
-    await reload();
+    if (inserted) extract(inserted, true);  // fire-and-forget Vision extract
+    return inserted;
+  };
+
+  // Upload many files sequentially (so we don't blow up storage quotas
+  // on a 50-photo batch). Surfaces progress via batchProgress state.
+  const uploadMany = async (rawFiles) => {
+    const list = Array.from(rawFiles || []).filter(Boolean);
+    if (!list.length) return;
+    setBusy(true); setErr("");
+    setBatchProgress({ done: 0, total: list.length, current: list[0]?.name || '' });
+    let firstErr = null;
+    for (let i = 0; i < list.length; i++) {
+      setBatchProgress({ done: i, total: list.length, current: list[i].name });
+      try {
+        await uploadOne(list[i]);
+      } catch (ex) {
+        firstErr = firstErr || (list[i].name + ': ' + (ex.message || ex));
+      }
+    }
+    setBatchProgress(null);
     setBusy(false);
+    if (firstErr) setErr(firstErr);
     if (fileRef.current) fileRef.current.value = "";
-    // Auto-extract on upload (fire and forget)
-    if (inserted) extract(inserted, true);
+    await reload();
+  };
+
+  // Single-file shim for the existing onChange (kept for the Upload File button).
+  const upload = async (file) => uploadMany(file ? [file] : []);
+
+  // Drag-drop handlers. The dragDepth ref handles nested elements firing
+  // dragleave; without it the overlay flickers off when you cross a child boundary.
+  const onDragEnter = (e) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  };
+  const onDragOver = (e) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDragLeave = (e) => {
+    e.preventDefault();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  };
+  const onDrop = (e) => {
+    e.preventDefault();
+    dragDepth.current = 0;
+    setDragOver(false);
+    const dropped = e.dataTransfer?.files;
+    if (dropped && dropped.length) uploadMany(dropped);
   };
 
   const openDoc = async (doc) => {
@@ -9043,7 +9130,42 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   };
 
   return (
-    <Card title={`Documents (${items.length}${pins.length > 0 ? ' · ' + pins.length + ' pinned' : ''})`} action={
+    <div
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={{ position: "relative" }}
+    >
+      {dragOver && (
+        <div style={{
+          position: "absolute", inset: 0, zIndex: 20,
+          background: "rgba(120, 53, 15, 0.18)",
+          border: "3px dashed #d97706",
+          borderRadius: 12,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          pointerEvents: "none",
+        }}>
+          <div style={{ background: "#1c1917", padding: "16px 24px", borderRadius: 10, border: "1px solid #d97706", boxShadow: "0 8px 24px rgba(0,0,0,0.4)" }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "#fbbf24", marginBottom: 4 }}>📥 Drop to upload</div>
+            <div style={{ fontSize: 12, color: "#a8a29e" }}>Photos, videos, PDFs — multi-select OK · HEIC auto-converts</div>
+          </div>
+        </div>
+      )}
+      {batchProgress && (
+        <div style={{ marginBottom: 10, padding: "10px 14px", background: "#0c0a09", border: "1px solid #92400e", borderRadius: 8, display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 12, color: "#fbbf24", fontWeight: 600 }}>
+            Uploading {batchProgress.done + 1} / {batchProgress.total}
+          </div>
+          <div style={{ flex: 1, fontSize: 11, color: "#a8a29e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {batchProgress.current}
+          </div>
+          <div style={{ width: 120, height: 4, background: "#292524", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ width: `${(batchProgress.done / batchProgress.total) * 100}%`, height: "100%", background: "#d97706", transition: "width 0.2s" }} />
+          </div>
+        </div>
+      )}
+      <Card title={`Documents (${items.length}${pins.length > 0 ? ' · ' + pins.length + ' pinned' : ''})`} action={
       <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
         <button onClick={() => setShowDocuSign(true)} title="Send a library template via DocuSign for e-signature (email + optional SMS)" style={{ ...btnGhost, fontSize: 11, color: "#d97706", borderColor: "#78350f" }}>
           📝 Send for signature
@@ -9054,9 +9176,9 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         <button onClick={() => { setPickerMode('attach'); setShowLibraryPicker(true); }} title="Clone a library file into this deal's documents" style={{ ...btnGhost, fontSize: 11 }}>
           📚 From library
         </button>
-        <label style={{ ...btnPrimary, cursor: "pointer", display: "inline-block", opacity: busy ? 0.5 : 1 }}>
-          {busy ? "Uploading..." : "+ Upload File"}
-          <input ref={fileRef} type="file" style={{ display: "none" }} disabled={busy} onChange={e => upload(e.target.files[0])} />
+        <label style={{ ...btnPrimary, cursor: "pointer", display: "inline-block", opacity: busy ? 0.5 : 1 }} title="Or drag-and-drop files anywhere onto this Files area">
+          {busy ? "Uploading..." : "+ Upload Files"}
+          <input ref={fileRef} type="file" multiple style={{ display: "none" }} disabled={busy} onChange={e => uploadMany(e.target.files)} />
         </label>
       </div>
     }>
@@ -9311,6 +9433,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         );
       })}
     </Card>
+    </div>
   );
 }
 
