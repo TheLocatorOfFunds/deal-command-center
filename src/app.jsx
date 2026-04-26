@@ -8861,6 +8861,11 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [galleryThumbs, setGalleryThumbs] = useState({});  // doc.id → signed URL
   const [thumbsLoading, setThumbsLoading] = useState(false);
 
+  // Lightbox state — click a thumb opens an in-page fullscreen viewer with
+  // prev/next nav. lightboxIdx is the index into mediaItems, or null when
+  // closed. Avoids opening a new tab per photo.
+  const [lightboxIdx, setLightboxIdx] = useState(null);
+
   // Filing-date extractor. Every document Nathan uploads is a snapshot of
   // something that already happened at the courthouse. We pull the court-
   // action date from Claude Vision's extracted fields (falling through a
@@ -9197,6 +9202,34 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const COLLAPSED_GALLERY_COUNT = 8;
   const visibleMedia = galleryExpanded ? mediaItems : mediaItems.slice(0, COLLAPSED_GALLERY_COUNT);
 
+  // Lightbox keyboard navigation. Bound to document so arrow keys work
+  // even when no specific element has focus.
+  useEffect(() => {
+    if (lightboxIdx === null) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { setLightboxIdx(null); }
+      else if (e.key === 'ArrowRight') { setLightboxIdx(i => i === null ? null : Math.min(mediaItems.length - 1, i + 1)); }
+      else if (e.key === 'ArrowLeft')  { setLightboxIdx(i => i === null ? null : Math.max(0, i - 1)); }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [lightboxIdx, mediaItems.length]);
+
+  // When lightbox opens to a thumb that hasn't been loaded yet (user expanded
+  // gallery and clicked one beyond the lazy-load batch), fetch its signed URL.
+  useEffect(() => {
+    if (lightboxIdx === null) return;
+    const m = mediaItems[lightboxIdx];
+    if (!m || galleryThumbs[m.id]) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.storage.from('deal-docs').createSignedUrl(m.path, 3600);
+      if (cancelled) return;
+      if (data?.signedUrl) setGalleryThumbs(prev => ({ ...prev, [m.id]: data.signedUrl }));
+    })();
+    return () => { cancelled = true; };
+  }, [lightboxIdx]);
+
   // Chip definitions — order matters for the chip bar layout.
   const chips = [
     { id: 'all',       label: 'All',         color: '#fafaf9' },
@@ -9215,6 +9248,79 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
       onDrop={onDrop}
       style={{ position: "relative" }}
     >
+      {/* Lightbox: click a thumb opens this inline fullscreen viewer.
+           Arrow keys ← → navigate, Esc closes, click backdrop closes too.
+           Videos render with native <video controls>; images get max-fit. */}
+      {lightboxIdx !== null && mediaItems[lightboxIdx] && (() => {
+        const cur = mediaItems[lightboxIdx];
+        const url = galleryThumbs[cur.id];
+        const video = isVideo(cur);
+        const canPrev = lightboxIdx > 0;
+        const canNext = lightboxIdx < mediaItems.length - 1;
+        return (
+          <div
+            onClick={() => setLightboxIdx(null)}
+            style={{
+              position: "fixed", inset: 0, zIndex: 1000,
+              background: "rgba(0,0,0,0.92)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 20,
+            }}
+          >
+            {/* Top bar: filename + counter + close */}
+            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 0, left: 0, right: 0, padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", color: "#fafaf9", background: "linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)", pointerEvents: "none" }}>
+              <div style={{ pointerEvents: "auto" }}>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{cur.name}</div>
+                <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+                  {lightboxIdx + 1} of {mediaItems.length}
+                  {docSource(cur) === 'kevin' && <span style={{ color: "#fbbf24", marginLeft: 8 }}>🤝 Kevin</span>}
+                  {' · '}{fmtSize(cur.size || 0)}
+                  {' · '}{new Date(cur.created_at).toLocaleDateString()}
+                </div>
+              </div>
+              <button
+                onClick={() => setLightboxIdx(null)}
+                style={{ pointerEvents: "auto", background: "rgba(0,0,0,0.5)", color: "#fafaf9", border: "1px solid #44403c", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                title="Close (Esc)"
+              >× Close</button>
+            </div>
+
+            {/* Prev arrow */}
+            {canPrev && (
+              <button
+                onClick={e => { e.stopPropagation(); setLightboxIdx(lightboxIdx - 1); }}
+                style={{ position: "absolute", left: 20, top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,0.5)", color: "#fafaf9", border: "1px solid #44403c", borderRadius: "50%", width: 50, height: 50, fontSize: 22, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}
+                title="Previous (←)"
+              >‹</button>
+            )}
+            {/* Next arrow */}
+            {canNext && (
+              <button
+                onClick={e => { e.stopPropagation(); setLightboxIdx(lightboxIdx + 1); }}
+                style={{ position: "absolute", right: 20, top: "50%", transform: "translateY(-50%)", background: "rgba(0,0,0,0.5)", color: "#fafaf9", border: "1px solid #44403c", borderRadius: "50%", width: 50, height: 50, fontSize: 22, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "inherit" }}
+                title="Next (→)"
+              >›</button>
+            )}
+
+            {/* Main media */}
+            <div onClick={e => e.stopPropagation()} style={{ maxWidth: "90vw", maxHeight: "85vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              {!url ? (
+                <div style={{ color: "#a8a29e", fontSize: 14 }}>Loading…</div>
+              ) : video ? (
+                <video src={url} controls autoPlay playsInline style={{ maxWidth: "90vw", maxHeight: "85vh", borderRadius: 6, background: "#000" }} />
+              ) : (
+                <img src={url} alt={cur.name} style={{ maxWidth: "90vw", maxHeight: "85vh", borderRadius: 6, objectFit: "contain" }} />
+              )}
+            </div>
+
+            {/* Bottom hint */}
+            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", bottom: 16, left: 0, right: 0, textAlign: "center", color: "#78716c", fontSize: 11, pointerEvents: "none" }}>
+              ← → to navigate · Esc to close
+            </div>
+          </div>
+        );
+      })()}
+
       {dragOver && (
         <div style={{
           position: "absolute", inset: 0, zIndex: 20,
@@ -9379,12 +9485,12 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
             )}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(120px, 1fr))", gap: 8 }}>
-            {visibleMedia.map(m => {
+            {visibleMedia.map((m, idx) => {
               const url = galleryThumbs[m.id];
               const video = isVideo(m);
               return (
                 <div key={m.id}
-                  onClick={() => openDoc(m)}
+                  onClick={() => setLightboxIdx(idx)}
                   title={m.name}
                   style={{
                     aspectRatio: '4/3',
@@ -9399,7 +9505,10 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                   onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
                 >
                   {video && (
-                    <div style={{ position: "absolute", top: 4, left: 4, fontSize: 9, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,0.7)", padding: "2px 6px", borderRadius: 3, letterSpacing: "0.05em" }}>VIDEO</div>
+                    <>
+                      <div style={{ position: "absolute", top: 4, left: 4, fontSize: 9, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,0.7)", padding: "2px 6px", borderRadius: 3, letterSpacing: "0.05em" }}>VIDEO</div>
+                      <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 28, textShadow: "0 2px 8px rgba(0,0,0,0.6)", pointerEvents: "none" }}>▶</div>
+                    </>
                   )}
                   {!url && !video && (
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "#57534e", fontSize: 18 }}>📷</div>
