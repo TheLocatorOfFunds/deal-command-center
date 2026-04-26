@@ -3,6 +3,39 @@ const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ─── ErrorBoundary ───────────────────────────────────────────────────
+// Catches render-time crashes inside a tab (e.g. Comms) so the whole app
+// doesn't black-screen. Surfaces the actual error message + stack so we
+// can debug instead of just seeing a blank page.
+class ErrorBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null, info: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) {
+    this.setState({ info });
+    // Also push to console so Cmd+Opt+J still shows the trace
+    console.error('[ErrorBoundary]', this.props.label || 'tab', err, info);
+  }
+  reset = () => this.setState({ err: null, info: null });
+  render() {
+    if (!this.state.err) return this.props.children;
+    return (
+      React.createElement('div', { style: { padding: 20, background: '#1c1917', border: '1px solid #7f1d1d', borderRadius: 10, color: '#fafaf9', margin: 16 } },
+        React.createElement('div', { style: { fontSize: 14, fontWeight: 700, color: '#fca5a5', marginBottom: 8 } }, '⚠ Something broke in this tab'),
+        React.createElement('div', { style: { fontSize: 12, color: '#d6d3d1', marginBottom: 12, fontFamily: "'DM Mono', monospace", whiteSpace: 'pre-wrap', wordBreak: 'break-word' } },
+          (this.state.err && this.state.err.message) || String(this.state.err)),
+        this.state.info && this.state.info.componentStack ?
+          React.createElement('details', { style: { fontSize: 10, color: '#78716c' } },
+            React.createElement('summary', { style: { cursor: 'pointer' } }, 'Stack'),
+            React.createElement('pre', { style: { whiteSpace: 'pre-wrap', wordBreak: 'break-word' } }, this.state.info.componentStack))
+          : null,
+        React.createElement('button', { onClick: this.reset, style: { ...btnGhostFallback, marginTop: 12 } }, 'Try again')
+      )
+    );
+  }
+}
+// Inline fallback in case btnGhost from later in the file isn't hoisted yet
+const btnGhostFallback = { background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 6, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' };
+
 // ─── Helpers ────────────────────────────────────────────────────────
 const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -5462,20 +5495,22 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {/* Comms = SMS/iMessage + in-app messages + unified timeline. Stacked */}
       {/* sections for now; Stage 3 merges into a single threaded GHL-style view. */}
       {tab === "comms" && (
-        <div>
-          <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
-          <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />
-          <div style={{ marginTop: 20 }}>
-            <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
+        <ErrorBoundary label="comms">
+          <div>
+            <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
+            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />
+            <div style={{ marginTop: 20 }}>
+              <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
+            </div>
+            <div style={{ marginTop: 20 }}>
+              <CallRecordings dealId={deal.id} />
+            </div>
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>📜 Full activity log</div>
+              <Activity items={activity} dealId={deal.id} reload={loadAll} />
+            </div>
           </div>
-          <div style={{ marginTop: 20 }}>
-            <CallRecordings dealId={deal.id} />
-          </div>
-          <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>📜 Full activity log</div>
-            <Activity items={activity} dealId={deal.id} reload={loadAll} />
-          </div>
-        </div>
+        </ErrorBoundary>
       )}
       {tab === "docket" && <DocketTab dealId={deal.id} />}
       {tab === "contacts" && (
@@ -9807,6 +9842,12 @@ function normalizePhone(p) {
 }
 
 function OutboundMessages({ dealId, vendors, deal }) {
+  // Hoisted to the top: groupThreads useMemo below references this. Was
+  // declared mid-function which caused a TDZ ReferenceError ('Cannot access
+  // Ce before initialization') the first time a deal had messages with a
+  // :group: thread_key. Putting it here removes the order-of-evaluation trap.
+  const NATHAN_BRIDGE_NUMBER = '+15135162306';
+
   const [msgs, setMsgs]               = useState([]);
   const [calls, setCalls]             = useState([]);
   const [emails, setEmails]           = useState([]);
@@ -9995,7 +10036,8 @@ function OutboundMessages({ dealId, vendors, deal }) {
   }, [msgs, contacts]);
 
   // ── Thread messages for active contact ───────────────────────────────────
-  const NATHAN_BRIDGE_NUMBER = '+15135162306';
+  // (NATHAN_BRIDGE_NUMBER is hoisted to the top of this component now —
+  // see top of OutboundMessages — to avoid TDZ on groupThreads useMemo.)
   const threadMsgs = React.useMemo(() => {
     if (!activeContact) return msgs;
     // Everyone view — all messages on this deal, no filtering
