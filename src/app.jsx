@@ -10702,6 +10702,23 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
     await load();
   };
 
+  const [ackingAll, setAckingAll] = useState(false);
+  const ackAll = async () => {
+    if (events.length === 0 || ackingAll) return;
+    if (!window.confirm(`Acknowledge all ${events.length} unacknowledged docket event${events.length === 1 ? '' : 's'}?`)) return;
+    setAckingAll(true);
+    try {
+      // Fire all RPC calls in parallel — they're idempotent and Supabase
+      // handles concurrent UPSERTs fine. ~50 events finishes in <2s.
+      await Promise.all(events.map(e => sb.rpc('acknowledge_docket_event', { p_event_id: e.id })));
+      await load();
+    } catch (e) {
+      alert('Acknowledge-all failed: ' + (e.message || e));
+    } finally {
+      setAckingAll(false);
+    }
+  };
+
   const statusColor = (h) => {
     if (h.last_status === 'running') return "#3b82f6";
     if (h.failures_24h > 2) return "#ef4444";
@@ -10746,6 +10763,12 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+              <button onClick={ackAll} disabled={ackingAll}
+                style={{ background: ackingAll ? '#44403c' : '#78350f', color: '#fafaf9', border: 0, padding: '6px 14px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: ackingAll ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: ackingAll ? 0.7 : 1 }}>
+                {ackingAll ? `Acknowledging ${events.length}…` : `✓ Acknowledge all ${events.length}`}
+              </button>
+            </div>
             {events.map(e => {
               const meta = eventMeta(e.event_type);
               return (
