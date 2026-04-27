@@ -1023,12 +1023,32 @@ function TeamView({ teamMembers }) {
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [dragOver, setDragOver] = useState(false);
+  const [showNewThreadModal, setShowNewThreadModal] = useState(false);
+  const [actionsByMessageId, setActionsByMessageId] = useState({});  // pending action map for current thread
+  const [participantsByThreadId, setParticipantsByThreadId] = useState({});
   const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
   const fileInputRef = useRef(null);
 
   // Load current user + initial threads + their profile names
+  const loadThreads = async () => {
+    const { data: t } = await sb.from('team_threads').select('*').is('archived_at', null).order('created_at', { ascending: true });
+    setThreads(t || []);
+    // Hydrate participant lists for any DMs (so we can label "DM with Justin" instead of generic title)
+    const dmIds = (t || []).filter(x => x.thread_type === 'dm').map(x => x.id);
+    if (dmIds.length) {
+      const { data: parts } = await sb.from('team_thread_participants').select('thread_id, user_id').in('thread_id', dmIds);
+      const map = {};
+      (parts || []).forEach(p => {
+        if (!map[p.thread_id]) map[p.thread_id] = [];
+        map[p.thread_id].push(p.user_id);
+      });
+      setParticipantsByThreadId(map);
+    }
+    return t;
+  };
+
   useEffect(() => {
     (async () => {
       const { data: { user } } = await sb.auth.getUser();
@@ -1036,15 +1056,13 @@ function TeamView({ teamMembers }) {
         const { data: prof } = await sb.from('profiles').select('id, name, role').eq('id', user.id).single();
         setMe({ id: user.id, name: prof?.name || user.email || 'Me', role: prof?.role || 'admin' });
       }
-      const { data: t } = await sb.from('team_threads').select('*').is('archived_at', null).order('created_at', { ascending: true });
-      setThreads(t || []);
+      const t = await loadThreads();
       if (t && t.length > 0 && !activeThreadId) setActiveThreadId(t[0].id);
 
-      // Cache all team profiles for sender display (include avatar + display_name + presence)
+      // Cache all team profiles for sender display
       const { data: profs } = await sb.from('profiles').select('id, name, display_name, avatar_path, last_active_at').in('role', ['admin','user','va']);
       const byId = {};
       (profs || []).forEach(p => {
-        // Resolve public avatar URL once. Bucket is public so no signing needed.
         let avatarUrl = null;
         if (p.avatar_path) {
           const { data } = sb.storage.from('avatars').getPublicUrl(p.avatar_path);
@@ -1055,6 +1073,14 @@ function TeamView({ teamMembers }) {
       setProfilesById(byId);
     })();
     // eslint-disable-next-line
+  }, []);
+
+  // Subscribe to thread-list changes (so a new thread created from another device shows up)
+  useEffect(() => {
+    const ch = sb.channel('team-threads-list')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_threads' }, () => loadThreads())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
   }, []);
 
   // Load messages for active thread + subscribe to realtime
@@ -1106,6 +1132,34 @@ function TeamView({ teamMembers }) {
   useEffect(() => {
     if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
+
+  // Load + subscribe to Lauren's pending action proposals for the active thread.
+  // These render as confirm/reject cards below the message that proposed them.
+  useEffect(() => {
+    if (!activeThreadId) return;
+    let cancelled = false;
+    const loadActions = async () => {
+      const { data } = await sb.from('lauren_pending_actions')
+        .select('*')
+        .eq('thread_id', activeThreadId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (cancelled) return;
+      const map = {};
+      (data || []).forEach(a => {
+        if (a.message_id) {
+          if (!map[a.message_id]) map[a.message_id] = [];
+          map[a.message_id].push(a);
+        }
+      });
+      setActionsByMessageId(map);
+    };
+    loadActions();
+    const ch = sb.channel('lauren-actions-' + activeThreadId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_pending_actions', filter: `thread_id=eq.${activeThreadId}` }, loadActions)
+      .subscribe();
+    return () => { cancelled = true; sb.removeChannel(ch); };
+  }, [activeThreadId]);
 
   // HEIC → JPEG conversion (reused from JV portal pattern)
   const isHeic = (f) => /heic|heif/i.test(f?.type || '') || /\.(heic|heif)$/i.test(f?.name || '');
@@ -1273,35 +1327,45 @@ function TeamView({ teamMembers }) {
     }}>
       {/* Thread list */}
       <div style={{ borderRight: '1px solid #292524', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #292524', fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
-          Threads
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Threads</span>
+          <button onClick={() => setShowNewThreadModal(true)} title="Create a channel, DM, or per-deal thread"
+            style={{ background: '#292524', color: '#fbbf24', border: '1px solid #44403c', borderRadius: 5, padding: '3px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+            + New
+          </button>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-          {threads.map(t => (
-            <button
-              key={t.id}
-              onClick={() => setActiveThreadId(t.id)}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                background: activeThreadId === t.id ? '#1c1917' : 'transparent',
-                color: activeThreadId === t.id ? '#fafaf9' : '#a8a29e',
-                border: 'none',
-                padding: '10px 12px', borderRadius: 6,
-                fontSize: 13, fontWeight: 600,
-                cursor: 'pointer', fontFamily: 'inherit',
-                marginBottom: 2,
-              }}
-            >
-              # {t.title}
-            </button>
-          ))}
+          {threads.map(t => {
+            const icon = t.thread_type === 'dm' ? '💬' : t.thread_type === 'deal' ? '🏠' : '#';
+            // For DMs, show the OTHER participant's name (not your own)
+            let label = t.title;
+            if (t.thread_type === 'dm') {
+              const others = (participantsByThreadId[t.id] || []).filter(uid => uid !== me.id);
+              const otherProf = others[0] && profilesById[others[0]];
+              if (otherProf) label = otherProf.display_name || otherProf.name || t.title;
+            }
+            return (
+              <button
+                key={t.id}
+                onClick={() => setActiveThreadId(t.id)}
+                style={{
+                  display: 'block', width: '100%', textAlign: 'left',
+                  background: activeThreadId === t.id ? '#1c1917' : 'transparent',
+                  color: activeThreadId === t.id ? '#fafaf9' : '#a8a29e',
+                  border: 'none',
+                  padding: '10px 12px', borderRadius: 6,
+                  fontSize: 13, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  marginBottom: 2,
+                }}
+              >
+                <span style={{ marginRight: 6 }}>{icon}</span>{label}
+              </button>
+            );
+          })}
           {threads.length === 0 && (
-            <div style={{ padding: 16, fontSize: 12, color: '#57534e', fontStyle: 'italic' }}>No threads yet.</div>
+            <div style={{ padding: 16, fontSize: 12, color: '#57534e', fontStyle: 'italic' }}>No threads yet. Tap + New.</div>
           )}
-        </div>
-        <div style={{ padding: 12, borderTop: '1px solid #292524', fontSize: 10, color: '#57534e', lineHeight: 1.5 }}>
-          Phase 1: text only.<br />
-          Phase 2: files + 🤖 Lauren.
         </div>
       </div>
 
@@ -1393,6 +1457,9 @@ function TeamView({ teamMembers }) {
                       {Array.isArray(m.attachments) && m.attachments.length > 0 && (
                         <TeamAttachments attachments={m.attachments} onLightbox={setLightboxUrl} />
                       )}
+                      {actionsByMessageId[m.id] && actionsByMessageId[m.id].map(a => (
+                        <LaurenActionCard key={a.id} action={a} />
+                      ))}
                     </div>
                   </div>
                 );
@@ -1478,7 +1545,159 @@ function TeamView({ teamMembers }) {
           <img src={lightboxUrl} alt="" style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 6, objectFit: 'contain' }} />
         </div>
       )}
+
+      {/* New thread modal */}
+      {showNewThreadModal && (
+        <NewThreadModal
+          onClose={() => setShowNewThreadModal(false)}
+          profilesById={profilesById}
+          me={me}
+          onCreated={(newThreadId) => { setShowNewThreadModal(false); setActiveThreadId(newThreadId); }}
+        />
+      )}
     </div>
+  );
+}
+
+// Lauren proposes a write action — render a confirm/reject card under her
+// chat message. Either teammate can approve. RPC handles the actual write
+// in a transaction so failures don't leave half-applied state.
+function LaurenActionCard({ action }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const isPending = action.status === 'pending';
+  const isExecuted = action.status === 'executed';
+  const isRejected = action.status === 'rejected';
+  const isFailed = action.status === 'failed';
+  const isExpired = action.status === 'expired';
+
+  const confirm = async () => {
+    if (!confirm_('Apply this change?\n\n' + action.action_label)) return;
+    setBusy(true); setErr(null);
+    const { data, error } = await sb.rpc('lauren_execute_action', { p_action_id: action.id });
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    if (data?.error) setErr(data.error);
+  };
+  const reject = async () => {
+    setBusy(true); setErr(null);
+    const { error } = await sb.rpc('lauren_reject_action', { p_action_id: action.id });
+    setBusy(false);
+    if (error) setErr(error.message);
+  };
+
+  const headerColor = isExecuted ? '#10b981' : isRejected ? '#a8a29e' : isFailed ? '#ef4444' : isExpired ? '#a8a29e' : '#fbbf24';
+  const bgColor = isExecuted ? '#064e3b22' : isRejected || isExpired ? '#1c1917' : isFailed ? '#7f1d1d22' : '#78350f22';
+  const statusLabel = isExecuted ? '✓ Applied' : isRejected ? '✗ Rejected' : isFailed ? '⚠ Failed' : isExpired ? '⏱ Expired' : 'Awaiting confirmation';
+
+  return (
+    <div style={{
+      marginTop: 8, padding: '10px 12px',
+      background: bgColor,
+      border: '1px solid ' + headerColor,
+      borderLeftWidth: 3,
+      borderRadius: 6,
+      maxWidth: 460,
+    }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: headerColor, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 }}>
+        🤖 Lauren proposes · {statusLabel}
+      </div>
+      <div style={{ fontSize: 12, color: '#e7e5e4', lineHeight: 1.55, marginBottom: isPending ? 8 : 0 }}>
+        {action.action_label}
+      </div>
+      {isPending && (
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={confirm} disabled={busy} style={{ background: '#10b981', color: '#0c0a09', border: 'none', borderRadius: 5, padding: '5px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+            {busy ? '…' : '✓ Confirm'}
+          </button>
+          <button onClick={reject} disabled={busy} style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 5, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+            ✗ Reject
+          </button>
+        </div>
+      )}
+      {action.result?.error && <div style={{ fontSize: 11, color: '#fca5a5', marginTop: 6 }}>Error: {action.result.error}</div>}
+      {err && <div style={{ fontSize: 11, color: '#fca5a5', marginTop: 6 }}>{err}</div>}
+    </div>
+  );
+}
+// Tiny shim so the linter doesn't yell about confirm
+const confirm_ = (msg) => window.confirm(msg);
+
+// Modal for creating a new thread (channel / DM / per-deal).
+function NewThreadModal({ onClose, profilesById, me, onCreated }) {
+  const [kind, setKind] = useState('channel');  // channel | dm
+  const [name, setName] = useState('');
+  const [otherUserId, setOtherUserId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const teammates = Object.values(profilesById).filter(p => p.id !== me.id);
+
+  const create = async () => {
+    setBusy(true); setErr(null);
+    try {
+      if (kind === 'channel') {
+        if (!name.trim()) { setErr('Name required.'); setBusy(false); return; }
+        const { data, error } = await sb.from('team_threads')
+          .insert({ title: name.trim(), thread_type: 'channel', created_by_id: me.id, lauren_enabled: false })
+          .select('id').single();
+        if (error) throw error;
+        onCreated(data.id);
+      } else if (kind === 'dm') {
+        if (!otherUserId) { setErr('Pick a teammate.'); setBusy(false); return; }
+        const { data, error } = await sb.rpc('team_create_dm', { p_other_user: otherUserId });
+        if (error) throw error;
+        onCreated(data);
+      }
+    } catch (ex) {
+      setErr(ex.message || String(ex));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={onClose} title="New thread">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={() => setKind('channel')} style={{
+            flex: 1, padding: '10px 12px',
+            background: kind === 'channel' ? '#292524' : 'transparent',
+            color: kind === 'channel' ? '#fbbf24' : '#a8a29e',
+            border: '1px solid ' + (kind === 'channel' ? '#92400e' : '#292524'),
+            borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          }}># Channel</button>
+          <button onClick={() => setKind('dm')} style={{
+            flex: 1, padding: '10px 12px',
+            background: kind === 'dm' ? '#292524' : 'transparent',
+            color: kind === 'dm' ? '#fbbf24' : '#a8a29e',
+            border: '1px solid ' + (kind === 'dm' ? '#92400e' : '#292524'),
+            borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+          }}>💬 Direct Message</button>
+        </div>
+
+        {kind === 'channel' && (
+          <Field label="Channel name (open to all admin/VA)">
+            <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder="e.g. casey-jennings, marketing, ideas" />
+          </Field>
+        )}
+        {kind === 'dm' && (
+          <Field label="DM with">
+            <select value={otherUserId} onChange={e => setOtherUserId(e.target.value)} style={{ ...inputStyle, padding: '8px 10px' }}>
+              <option value="">Pick a teammate…</option>
+              {teammates.map(p => <option key={p.id} value={p.id}>{p.display_name || p.name}</option>)}
+            </select>
+          </Field>
+        )}
+
+        {err && <div style={{ fontSize: 12, color: '#fca5a5' }}>{err}</div>}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={btnGhost}>Cancel</button>
+          <button onClick={create} disabled={busy} style={btnPrimary}>{busy ? 'Creating…' : 'Create'}</button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

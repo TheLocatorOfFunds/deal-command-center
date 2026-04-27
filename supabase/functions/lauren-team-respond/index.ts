@@ -1,19 +1,12 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-// Lauren's response engine for Team Chat. Triggered by a pg trigger on
-// team_messages INSERT (see migration 20260427020000) when:
-//   - thread.lauren_enabled = true
-//   - sender_kind != 'lauren' (no self-replies)
-//   - body matches the Lauren mention regex
-// Pulls last 15 messages of context, calls Claude with Lauren's system
-// prompt + DCC tool descriptions, posts the response back to the thread.
+// Lauren's response engine for Team Chat. Triggered by the pg trigger on
+// team_messages INSERT (see migrations 20260427020000 + 20260427030000).
 //
-// Tools Lauren can call (read-only, defined in the Phase 2 migration):
-//   - lauren_lookup_deal(needle)
-//   - lauren_recent_activity(deal_id, limit)
-//   - lauren_upcoming_events(window_days)
-//   - lauren_search_contacts(needle)
+// Phase 2: read-only data lookup tools.
+// Phase 3 added: propose_* tools that create a pending action row Nathan
+// or Justin must confirm before Lauren actually writes anything.
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -30,27 +23,33 @@ const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-5";
 const MAX_TOKENS = 1024;
 
-const SYSTEM_PROMPT = `You are Lauren, an AI teammate for Nathan and Justin at RefundLocators / FundLocators. You're in their internal team chat. Be concise, direct, and operational. Match the tone of a sharp ops manager — no fluff, no "I'd be happy to", no excess pleasantries. Plain text only (no markdown headers, no emoji unless the user used one first).
+const SYSTEM_PROMPT = `You are Lauren, an AI teammate for Nathan and Justin at RefundLocators / FundLocators. You're in their internal team chat. Be concise, direct, operational. No fluff, no "I'd be happy to", no excess pleasantries. Plain text only (no markdown headers, no emoji unless the user used one first).
 
-Context you should remember:
-- RefundLocators recovers surplus funds for foreclosure victims (mostly Ohio cases).
-- Nathan also does fix/flip + wholesale real estate deals.
-- Casey Jennings is the current active deal (wholesale, 7260 Jerry Drive, West Chester, OH; $200k contract, $225k asking).
-- Kevin Daubenmire is a JV partner taking 25% of Casey Jennings to manage photos, buyer, title, close.
+Context:
+- RefundLocators recovers surplus funds for foreclosure victims (mostly Ohio).
+- Nathan also does fix/flip + wholesale real estate.
+- Casey Jennings is an active wholesale deal at 7260 Jerry Drive, West Chester, OH.
+- Kevin Daubenmire is the JV partner on Casey Jennings (25% share).
 
-Tools available (call by name; the runtime will execute and return results):
-- lookup_deal(needle): fuzzy match a deal by name/address/id. Returns up to 5.
-- recent_activity(deal_id, limit=10): timeline of recent activity for a deal.
-- upcoming_events(window_days=14): court hearings + sheriff sales coming up.
+READ TOOLS (always safe to call):
+- lookup_deal(needle): fuzzy match a deal. Returns up to 5.
+- recent_activity(deal_id, limit=10): timeline.
+- upcoming_events(window_days=14): hearings + sheriff sales.
 - search_contacts(needle): partner attorneys, title companies, etc.
 
+WRITE TOOLS (these PROPOSE an action — Nathan or Justin must click confirm in chat to actually run it):
+- propose_status_change(deal_id, new_status, reason): suggest moving a deal to a different status.
+- propose_create_task(deal_id, title, due_date_iso?, assigned_to?): suggest a new task.
+- propose_update_deal_meta(deal_id, meta_patch, label): suggest a meta-jsonb patch (use sparingly; mostly for milestones, partner info, etc).
+
 Behavior:
-- If the user asks a factual question about a deal/contact/event, call the right tool first, then answer.
-- If you don't know something and can't look it up, say so plainly.
-- Keep replies short — chat-length, not essay-length. 1-3 short paragraphs max unless asked for detail.
-- You can't write to the database, send SMS/email, or take actions. If asked to do something, tell Nathan or Justin what you'd do and let them confirm/execute.`;
+- For factual questions: call read tools first, then answer concisely.
+- When you'd otherwise want to write data, call the matching propose_* tool. The chat will render a confirm/reject card under your message. Don't ask "want me to do X?" for things you can propose — just propose them.
+- Reply length: 1-3 short paragraphs max. Chat-length, not essay-length.
+- If you don't know something and tools can't tell you, say so plainly.`;
 
 const TOOLS = [
+  // READ
   {
     name: "lookup_deal",
     description: "Fuzzy-match a deal by name, address, or id. Returns up to 5 matches.",
@@ -59,17 +58,58 @@ const TOOLS = [
   {
     name: "recent_activity",
     description: "Recent activity timeline for a specific deal.",
-    input_schema: { type: "object", properties: { deal_id: { type: "string" }, limit: { type: "integer", default: 10 } }, required: ["deal_id"] },
+    input_schema: { type: "object", properties: { deal_id: { type: "string" }, limit: { type: "integer" } }, required: ["deal_id"] },
   },
   {
     name: "upcoming_events",
-    description: "Upcoming court hearings, deadlines, and sheriff sales across all deals.",
-    input_schema: { type: "object", properties: { window_days: { type: "integer", default: 14 } } },
+    description: "Upcoming court hearings + sheriff sales across all deals.",
+    input_schema: { type: "object", properties: { window_days: { type: "integer" } } },
   },
   {
     name: "search_contacts",
     description: "Find contacts (partner attorneys, title companies, etc.) by name, company, or kind.",
     input_schema: { type: "object", properties: { needle: { type: "string" } }, required: ["needle"] },
+  },
+  // WRITE — propose an action that Nathan/Justin must confirm
+  {
+    name: "propose_status_change",
+    description: "Propose changing a deal's status. Creates a confirm/reject card in chat. Use the deal's `id` (e.g. 'sf-jennings-moa9iqzt'), not its display name. new_status must be a valid status string for that deal type.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string" },
+        new_status: { type: "string" },
+        reason: { type: "string", description: "One-line why" },
+      },
+      required: ["deal_id", "new_status"],
+    },
+  },
+  {
+    name: "propose_create_task",
+    description: "Propose a new task on a deal. Creates a confirm/reject card in chat.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string" },
+        title: { type: "string" },
+        due_date_iso: { type: "string", description: "ISO date string YYYY-MM-DD, optional" },
+        assigned_to: { type: "string", description: "Profile name, optional" },
+      },
+      required: ["deal_id", "title"],
+    },
+  },
+  {
+    name: "propose_update_deal_meta",
+    description: "Propose a meta-jsonb patch on a deal (e.g. milestones, partner info). meta_patch is a partial jsonb that gets merged via ||.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string" },
+        meta_patch: { type: "object" },
+        label: { type: "string", description: "One-line description for the confirm card" },
+      },
+      required: ["deal_id", "meta_patch", "label"],
+    },
   },
 ];
 
@@ -79,7 +119,7 @@ Deno.serve(async (req) => {
 
   let body;
   try { body = await req.json(); } catch { return json({ error: "bad JSON" }, 400); }
-  const { thread_id, message_id } = body;
+  const { thread_id } = body;
   if (!thread_id) return json({ error: "thread_id required" }, 400);
 
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
@@ -87,7 +127,7 @@ Deno.serve(async (req) => {
 
   const db = createClient(Deno.env.get("SUPABASE_URL"), Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
 
-  // Fetch last 15 messages of the thread (oldest first for proper conversation order)
+  // Fetch last 15 messages of the thread
   const { data: history } = await db
     .from("team_messages")
     .select("id, sender_id, sender_kind, body, attachments, created_at")
@@ -97,7 +137,6 @@ Deno.serve(async (req) => {
     .limit(15);
   const messages = (history || []).reverse();
 
-  // Hydrate sender names for context
   const senderIds = [...new Set(messages.filter(m => m.sender_id).map(m => m.sender_id))];
   let senderNames = {};
   if (senderIds.length) {
@@ -105,22 +144,21 @@ Deno.serve(async (req) => {
     (profs || []).forEach(p => { senderNames[p.id] = p.display_name || p.name || "Team"; });
   }
 
-  // Build Claude conversation. Each thread message becomes a user turn —
-  // we compress the whole history into a single "here's the conversation"
-  // user message so Lauren has the full context, then she replies once.
   const transcript = messages.map(m => {
     const who = m.sender_kind === "lauren" ? "Lauren" : (senderNames[m.sender_id] || "Team");
     return `${who}: ${m.body}`;
   }).join("\n\n");
 
   const claudeMessages = [
-    { role: "user", content: `Here's the recent conversation in our team chat:\n\n---\n${transcript}\n---\n\nReply to the latest message. Use tools if you need to look up DCC data.` },
+    { role: "user", content: `Here's the recent conversation in our team chat:\n\n---\n${transcript}\n---\n\nReply to the latest message. Use tools (read or propose_*) when needed. Don't ask permission to look things up — just look. When you'd write data, propose it.` },
   ];
 
-  // Tool-use loop: Claude may call a tool; we execute, return result, ask
-  // for final answer. Cap at 3 rounds so we don't spin if she gets confused.
+  // Track any actions proposed during this run, so we can link them to
+  // Lauren's final message after we insert it.
+  const proposedActionIds: string[] = [];
+
   let finalText = null;
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < 4; round++) {
     const r = await fetch(ANTHROPIC_API, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
@@ -135,20 +173,17 @@ Deno.serve(async (req) => {
     if (!r.ok) {
       const errText = await r.text();
       console.error("[lauren-team-respond] Claude error:", r.status, errText);
-      // Fail-soft: post a one-line apology so the user knows Lauren saw the message but choked.
       await db.from("team_messages").insert({ thread_id, sender_id: null, sender_kind: "lauren", body: "(Lauren had trouble reaching her brain just now — try again in a sec.)" });
       return json({ error: "claude failed", detail: errText.slice(0, 200) }, 500);
     }
     const data = await r.json();
     const content = data.content || [];
 
-    // If Claude produced text and is done (stop_reason 'end_turn'), we have our answer
     if (data.stop_reason === "end_turn" || data.stop_reason === "stop_sequence") {
       finalText = content.filter(c => c.type === "text").map(c => c.text).join("\n").trim();
       break;
     }
 
-    // Tool-use round
     if (data.stop_reason === "tool_use") {
       claudeMessages.push({ role: "assistant", content });
       const toolUses = content.filter(c => c.type === "tool_use");
@@ -167,6 +202,41 @@ Deno.serve(async (req) => {
           } else if (tu.name === "search_contacts") {
             const { data } = await db.rpc("lauren_search_contacts", { p_needle: tu.input.needle });
             result = data;
+          } else if (tu.name === "propose_status_change") {
+            const { deal_id, new_status, reason } = tu.input;
+            const label = `Set ${deal_id} status → ${new_status}` + (reason ? ` · ${reason}` : "");
+            const { data: row, error } = await db.from("lauren_pending_actions").insert({
+              thread_id,
+              action_type: "update_deal_status",
+              action_label: label,
+              action_payload: { deal_id, status: new_status, reason: reason || null },
+            }).select("id").single();
+            if (error) throw error;
+            proposedActionIds.push(row.id);
+            result = { proposed: true, action_id: row.id, label, note: "A confirm/reject card will appear under your reply. Mention this proposal naturally in your text reply." };
+          } else if (tu.name === "propose_create_task") {
+            const { deal_id, title, due_date_iso, assigned_to } = tu.input;
+            const label = `Create task on ${deal_id}: "${title}"` + (due_date_iso ? ` (due ${due_date_iso})` : "");
+            const { data: row, error } = await db.from("lauren_pending_actions").insert({
+              thread_id,
+              action_type: "create_task",
+              action_label: label,
+              action_payload: { deal_id, title, due_date: due_date_iso || null, assigned_to: assigned_to || null },
+            }).select("id").single();
+            if (error) throw error;
+            proposedActionIds.push(row.id);
+            result = { proposed: true, action_id: row.id, label };
+          } else if (tu.name === "propose_update_deal_meta") {
+            const { deal_id, meta_patch, label: clientLabel } = tu.input;
+            const { data: row, error } = await db.from("lauren_pending_actions").insert({
+              thread_id,
+              action_type: "update_deal_meta",
+              action_label: clientLabel,
+              action_payload: { deal_id, meta_patch },
+            }).select("id").single();
+            if (error) throw error;
+            proposedActionIds.push(row.id);
+            result = { proposed: true, action_id: row.id, label: clientLabel };
           } else {
             result = { error: "unknown tool" };
           }
@@ -179,7 +249,6 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    // Other stop reasons (max_tokens, etc.) — take whatever text we got
     finalText = content.filter(c => c.type === "text").map(c => c.text).join("\n").trim();
     break;
   }
@@ -187,16 +256,24 @@ Deno.serve(async (req) => {
   if (!finalText) finalText = "(Lauren is thinking but didn't quite finish — give her another nudge.)";
 
   // Insert Lauren's reply
-  const { error: insErr } = await db.from("team_messages").insert({
+  const { data: insertedMsg, error: insErr } = await db.from("team_messages").insert({
     thread_id,
     sender_id: null,
     sender_kind: "lauren",
     body: finalText,
-  });
+  }).select("id").single();
   if (insErr) {
     console.error("[lauren-team-respond] insert failed:", insErr);
     return json({ error: "insert failed", detail: insErr.message }, 500);
   }
 
-  return json({ ok: true });
+  // Link any proposed actions to this message so the UI can render the
+  // confirm/reject cards directly under the message that proposed them.
+  if (proposedActionIds.length && insertedMsg?.id) {
+    await db.from("lauren_pending_actions")
+      .update({ message_id: insertedMsg.id })
+      .in("id", proposedActionIds);
+  }
+
+  return json({ ok: true, proposed_actions: proposedActionIds.length });
 });
