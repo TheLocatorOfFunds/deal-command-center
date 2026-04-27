@@ -72,13 +72,14 @@ Deno.serve(async (req) => {
       } catch (_) { /* non-fatal — skip repo if unreachable */ }
     }
 
-    // ── 2. DCC live data snapshot ─────────────────────────────────────────────
+    // ── 2. DCC live data snapshot + team communications ───────────────────────
     const [
       { data: deals },
       { data: recentLeads },
       { data: outreachStats },
       { data: recentMessages },
       { data: recentActivity },
+      { data: teamComms },
     ] = await Promise.all([
       db.from('deals')
         .select('id, name, type, status, lead_tier, meta, created_at')
@@ -99,6 +100,10 @@ Deno.serve(async (req) => {
         .gte('created_at', weekAgoIso)
         .order('created_at', { ascending: false })
         .limit(50),
+      // Pull this week's communication summaries (written by gmail-sync Saturday night)
+      db.from('team_communications')
+        .select('person, source, summary')
+        .gte('week_of', weekAgoIso.split('T')[0]),
     ]);
 
     // Summarize outreach funnel
@@ -152,7 +157,7 @@ One punchy paragraph. The single most important thing they should do THIS WEEK f
 Translate the GitHub commits into plain English wins. Group by system (DCC, Castle, Ohio Intel, refundlocators.com, etc.). Skip trivial commits (merge commits, typo fixes, dependency bumps). Focus on things that changed what the business can do. Use past tense, no jargon. Dollar amounts if relevant.
 
 ## BUSINESS PULSE
-3-5 sentences covering the live data: deal pipeline, outreach volume, lead flow, anything notable. Tell them what the numbers mean for the business, not just what they are.
+3-5 sentences covering the live data: deal pipeline, outreach volume, lead flow, client communications, anything notable from emails or meetings. Tell them what the numbers mean for the business, not just what they are. If the communications context includes notable case updates, attorney correspondence, or client conversations — mention the specific details.
 
 ## RELEVANT AI & TECH THIS WEEK
 3-5 specific tools, platforms, or AI developments that are directly relevant to RefundLocators right now. For each: what it is (one sentence), why it matters to this specific business, how you'd use it. No generic "AI is getting better" statements. Ground every item in how it helps win more cases, find more leads, or move faster than competitors.
@@ -181,7 +186,27 @@ Hard rules:
 - If commits are sparse, say so honestly and focus on what the business needs
 - Specific numbers always beat vague descriptions`;
 
-    const userMsg = `Company context:\n${JSON.stringify(businessContext, null, 2)}\n\nThis week's data:\n${JSON.stringify(businessData, null, 2)}`;
+    // Build communications context block from team_communications table
+    let commsBlock = '';
+    if (teamComms && teamComms.length > 0) {
+      const sections: string[] = [];
+      const sources = ['gmail', 'granola'];
+      const people  = ['justin', 'nathan', 'team'];
+      for (const source of sources) {
+        for (const person of people) {
+          const row = teamComms.find((r: any) => r.source === source && r.person === person);
+          if (row?.summary) {
+            const label = source === 'gmail'
+              ? `${person.charAt(0).toUpperCase() + person.slice(1)}'s emails this week`
+              : `${person.charAt(0).toUpperCase() + person.slice(1)}'s meeting notes this week`;
+            sections.push(`### ${label}\n${row.summary}`);
+          }
+        }
+      }
+      if (sections.length > 0) commsBlock = `\n\nCommunications context (Gmail + Granola):\n${sections.join('\n\n')}`;
+    }
+
+    const userMsg = `Company context:\n${JSON.stringify(businessContext, null, 2)}\n\nThis week's data:\n${JSON.stringify(businessData, null, 2)}${commsBlock}`;
 
     let memoText = '';
     try {
