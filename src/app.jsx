@@ -757,6 +757,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("attention", "🔔 Attention", 0)}
           {viewBtn("outreach", "🚀 Outreach", 0)}
           {viewBtn("forecast", "📅 Forecast", 0)}
+          {viewBtn("leads", "📨 Leads", 0)}
           {viewBtn("team", "💬 Team", 0)}
           {viewBtn("pipeline", "🧭 Pipeline", 0)}
           {viewBtn("tasks", "✓ Tasks", 0)}
@@ -794,7 +795,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -804,6 +805,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <OutreachView deals={deals} onSelect={onSelect} />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
+          ) : view === "leads" ? (
+            <LeadsOutreachView />
           ) : view === "reports" ? (
             <ReportsView deals={deals} onSelect={onSelect} />
           ) : view === "analytics" ? (
@@ -3855,6 +3858,366 @@ const SectionHeader = ({ icon, label, sub }) => (
     {sub && <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4, lineHeight: 1.5 }}>{sub}</div>}
   </div>
 );
+
+// ─── Leads (click-to-text outreach via personalized_links) ─────────
+// Top-level view managing personalized_links rows. Three sub-tabs:
+// Ready (has phone, untexted) / Texted / All. Each row shows lead +
+// case info + a "Text [first] →" button that opens an sms: deep link
+// with the personalized URL pre-filled, then marks texted_at so the
+// row drops off Ready. Castle populates rows automatically; manual
+// entry form at top of Ready handles ad-hoc adds.
+//
+// Distinct from LeadsModal (intake-form `leads` table). This view
+// is `personalized_links` only.
+function LeadsOutreachView() {
+  const [status, setStatus] = useState('ready');
+  const [rows, setRows] = useState([]);
+  const [counts, setCounts] = useState({ ready: 0, texted: 0, all: 0 });
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [showManual, setShowManual] = useState(false);
+  const [createdToken, setCreatedToken] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const alive = useAliveRef();
+  const PAGE = 50;
+
+  const fmtMoney = (n) => n == null ? '—' : (Number(n) >= 1000 ? `$${Math.round(Number(n)/1000)}k` : `$${Number(n).toLocaleString()}`);
+  const fmtPhone = (p) => {
+    if (!p) return '—';
+    const d = String(p).replace(/\D/g, '');
+    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+    if (d.length === 11 && d[0] === '1') return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+    return p;
+  };
+  const fmtRel = (iso) => {
+    if (!iso) return '—';
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.round(sec/60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec/3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.round(sec/86400)}d ago`;
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+  const smsHref = (row) => {
+    if (!row.phone) return '';
+    const d = String(row.phone).replace(/\D/g, '');
+    const phone = d.length === 10 ? `+1${d}` : `+${d}`;
+    const first = (row.first_name || '').trim();
+    const addr = (row.property_address || '').split(',')[0].trim();
+    const county = (row.county || '').trim();
+    const lo = row.estimated_surplus_low, hi = row.estimated_surplus_high;
+    const mid = (lo != null && hi != null) ? Math.round(((Number(lo) + Number(hi)) / 2) / 1000) : null;
+    const body = `Hi${first ? ' ' + first : ''} — Nathan with RefundLocators. ${county || 'Your'} County may be holding ` +
+      (mid ? `~$${mid}k` : 'surplus funds') +
+      ` from your ${addr || 'former'} sale. Details: refundlocators.com/s/${row.token}`;
+    // Note: leading '&' before body= is required for iOS iMessage compatibility.
+    return `sms:${phone}&body=${encodeURIComponent(body)}`;
+  };
+
+  const COLS = 'token, first_name, last_name, phone, property_address, county, sale_date, sale_price, judgment_amount, estimated_surplus_low, estimated_surplus_high, case_number, source, created_at, texted_at, first_viewed_at, last_viewed_at, view_count, responded_at, claim_submitted_at';
+
+  const loadCounts = React.useCallback(async () => {
+    const [a, r, t] = await Promise.all([
+      sb.from('personalized_links').select('token', { count: 'exact', head: true }).not('phone', 'is', null),
+      sb.from('personalized_links').select('token', { count: 'exact', head: true }).not('phone', 'is', null).is('texted_at', null),
+      sb.from('personalized_links').select('token', { count: 'exact', head: true }).not('phone', 'is', null).not('texted_at', 'is', null),
+    ]);
+    if (!alive.current) return;
+    setCounts({ all: a.count || 0, ready: r.count || 0, texted: t.count || 0 });
+  }, [alive]);
+
+  const loadRows = React.useCallback(async () => {
+    setLoading(true);
+    let q = sb.from('personalized_links')
+      .select(COLS, { count: 'exact' })
+      .not('phone', 'is', null)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + PAGE - 1);
+    if (status === 'ready') q = q.is('texted_at', null);
+    if (status === 'texted') q = q.not('texted_at', 'is', null);
+    const { data, count } = await q;
+    if (!alive.current) return;
+    setRows(data || []);
+    setTotal(count || 0);
+    setLoading(false);
+  }, [status, offset, alive]);
+
+  useEffect(() => { loadRows(); }, [loadRows]);
+  useEffect(() => { loadCounts(); }, [loadCounts]);
+
+  const markTexted = async (token) => {
+    await sb.from('personalized_links').update({ texted_at: new Date().toISOString() }).eq('token', token);
+    if (status === 'ready') setRows(prev => prev.filter(r => r.token !== token));
+    loadCounts();
+  };
+  const resetTexted = async (token) => {
+    await sb.from('personalized_links').update({ texted_at: null }).eq('token', token);
+    loadRows(); loadCounts();
+  };
+  const onTextClick = (row) => {
+    const href = smsHref(row);
+    if (!href) return;
+    window.location.href = href;
+    setTimeout(() => markTexted(row.token), 1500);
+  };
+
+  const copyUrl = async () => {
+    if (!createdToken) return;
+    try {
+      await navigator.clipboard.writeText(`https://refundlocators.com/s/${createdToken}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (e) { /* clipboard blocked */ }
+  };
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE));
+  const page = Math.floor(offset / PAGE) + 1;
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          📨 Leads
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· click-to-text personalized URLs</span>
+        </h2>
+      </div>
+
+      {/* Sub-tabs */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: '#1c1917', borderRadius: 8, padding: 3, border: '1px solid #292524', width: 'fit-content' }}>
+        {[['ready', 'Ready', counts.ready], ['texted', 'Texted', counts.texted], ['all', 'All', counts.all]].map(([k, label, c]) => (
+          <button key={k} onClick={() => { setStatus(k); setOffset(0); }} style={{
+            background: status === k ? '#292524' : 'transparent',
+            color: status === k ? '#fafaf9' : '#78716c',
+            border: status === k ? '1px solid #44403c' : '1px solid transparent',
+            padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: status === k ? 700 : 500,
+            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit',
+          }}>
+            {label}
+            <span style={{ fontSize: 10, color: status === k ? '#d97706' : '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.toLocaleString()}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Manual create — only on Ready */}
+      {status === 'ready' && (
+        <div style={{ marginBottom: 18 }}>
+          {!showManual ? (
+            <button onClick={() => setShowManual(true)} style={{ ...btnGhost, fontSize: 12 }}>＋ Manually add a lead</button>
+          ) : (
+            <ManualLeadForm onCancel={() => setShowManual(false)} onCreated={(token) => { setCreatedToken(token); setShowManual(false); loadRows(); loadCounts(); }} />
+          )}
+          {createdToken && (
+            <div style={{ marginTop: 10, padding: '10px 14px', background: 'rgba(16,185,129,0.08)', border: '1px solid #064e3b', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 12, color: '#6ee7b7' }}>
+                ✓ Lead created. URL: <code style={{ background: '#0c0a09', padding: '1px 6px', borderRadius: 4, fontFamily: "'DM Mono', monospace", color: '#fafaf9' }}>refundlocators.com/s/{createdToken}</code>
+              </div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button onClick={copyUrl} style={{ ...btnGhost, fontSize: 11 }}>{copied ? '✓ Copied' : 'Copy URL'}</button>
+                <a href={`https://refundlocators.com/s/${createdToken}`} target="_blank" rel="noopener noreferrer" style={{ ...btnGhost, fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>Preview ↗</a>
+                <button onClick={() => setCreatedToken(null)} style={{ ...btnGhost, fontSize: 11 }}>Dismiss</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Loading / empty / list */}
+      {loading && <div style={{ padding: 60, textAlign: 'center', color: '#78716c', fontSize: 13 }}>Loading…</div>}
+
+      {!loading && rows.length === 0 && (
+        <div style={{ padding: '60px 24px', textAlign: 'center', color: '#a8a29e', fontSize: 13, lineHeight: 1.6, maxWidth: 480, margin: '0 auto' }}>
+          {status === 'ready' && <><b style={{ color: '#fafaf9', display: 'block', marginBottom: 6 }}>No leads ready to text.</b>Once Castle writes rows to <code style={{ background: '#1c1917', padding: '1px 6px', borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 11 }}>personalized_links</code> with phone numbers populated, they'll appear here.</>}
+          {status === 'texted' && 'Nothing texted yet — go send some.'}
+          {status === 'all' && 'No leads with phone numbers in the database.'}
+        </div>
+      )}
+
+      {!loading && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {rows.map(row => (
+            <div key={row.token} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 18, alignItems: 'center', padding: '14px 18px', background: '#1c1917', border: '1px solid #292524', borderRadius: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                  {(row.first_name || '—') + ' ' + (row.last_name || '')}
+                  {row.claim_submitted_at && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.18)', color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase' }}>✓ submitted claim</span>}
+                  {row.responded_at && !row.claim_submitted_at && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(217,119,6,0.18)', color: '#fbbf24', letterSpacing: '0.05em', textTransform: 'uppercase' }}>responded</span>}
+                  {row.first_viewed_at && !row.responded_at && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(78,164,255,0.15)', color: '#93c5fd', letterSpacing: '0.05em', textTransform: 'uppercase' }}>viewed {row.view_count || 1}×</span>}
+                </div>
+                <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 6 }}>{row.property_address || '—'}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>
+                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>County</span>{row.county || '—'}</span>
+                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>Surplus</span>{fmtMoney(row.estimated_surplus_low)}–{fmtMoney(row.estimated_surplus_high)}</span>
+                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>Phone</span>{fmtPhone(row.phone)}</span>
+                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>Case</span>{row.case_number || '—'}</span>
+                </div>
+                <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>
+                  Castle picked up {fmtRel(row.created_at)}
+                  {row.texted_at && <> · texted {fmtRel(row.texted_at)}</>}
+                  {row.first_viewed_at && <> · first viewed {fmtRel(row.first_viewed_at)}</>}
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, minWidth: 140 }}>
+                <a href={`https://refundlocators.com/s/${row.token}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: '#a8a29e', textDecoration: 'none', textAlign: 'center', padding: '5px 10px', borderRadius: 6, border: '1px solid #292524' }} title="Preview the page they'll see">
+                  preview ↗
+                </a>
+                {row.texted_at ? (
+                  <button onClick={() => resetTexted(row.token)} style={{ ...btnGhost, fontSize: 11 }} title="Bring this lead back to the Ready queue">reset</button>
+                ) : (
+                  <button onClick={() => onTextClick(row)} disabled={!row.phone} style={{ background: '#d97706', color: '#0c0a09', border: 0, padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                    Text {row.first_name || 'lead'} →
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+
+          {total > PAGE && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 4px', gap: 12 }}>
+              <button onClick={() => setOffset(Math.max(0, offset - PAGE))} disabled={offset === 0} style={{ ...btnGhost, fontSize: 12, opacity: offset === 0 ? 0.4 : 1 }}>← prev</button>
+              <span style={{ fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>page {page} / {totalPages} · {total.toLocaleString()} total</span>
+              <button onClick={() => setOffset(offset + PAGE)} disabled={offset + PAGE >= total} style={{ ...btnGhost, fontSize: 12, opacity: offset + PAGE >= total ? 0.4 : 1 }}>next →</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Manual entry form for ad-hoc personalized_links rows.
+// Generates an 8-char token via crypto.getRandomValues (compatible with
+// the nanoid alphabet Castle uses), source='dcc-manual', expires_at=+90d.
+function ManualLeadForm({ onCancel, onCreated }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [first, setFirst] = useState('');
+  const [last, setLast] = useState('');
+  const [phone, setPhone] = useState('');
+  const [address, setAddress] = useState('');
+  const [county, setCounty] = useState('');
+  const [saleDate, setSaleDate] = useState('');
+  const [salePrice, setSalePrice] = useState('');
+  const [judgment, setJudgment] = useState('');
+  const [low, setLow] = useState('');
+  const [high, setHigh] = useState('');
+  const [caseNum, setCaseNum] = useState('');
+  const [showOpt, setShowOpt] = useState(false);
+
+  const nanoid8 = () => {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const arr = new Uint8Array(8);
+    crypto.getRandomValues(arr);
+    let id = '';
+    for (let i = 0; i < 8; i++) id += alphabet[arr[i] % alphabet.length];
+    return id;
+  };
+
+  const submit = async () => {
+    setErr(null);
+    if (!first.trim() || !last.trim() || !phone.trim() || !address.trim() || !county.trim()) {
+      setErr('First name, last name, phone, property address, and county are all required.');
+      return;
+    }
+    const phoneClean = phone.replace(/\D/g, '');
+    if (phoneClean.length < 10) { setErr('Phone needs at least 10 digits.'); return; }
+    setBusy(true);
+    const token = nanoid8();
+    const e164 = phoneClean.length === 10 ? `+1${phoneClean}` : phoneClean.length === 11 && phoneClean[0] === '1' ? `+${phoneClean}` : `+${phoneClean}`;
+    const row = {
+      token,
+      first_name: first.trim(),
+      last_name: last.trim(),
+      phone: e164,
+      property_address: address.trim(),
+      county: county.trim(),
+      source: 'dcc-manual',
+      expires_at: new Date(Date.now() + 90 * 86400 * 1000).toISOString(),
+    };
+    if (saleDate)            row.sale_date = saleDate;
+    if (salePrice)           row.sale_price = Number(salePrice);
+    if (judgment)            row.judgment_amount = Number(judgment);
+    if (low)                 row.estimated_surplus_low = Number(low);
+    if (high)                row.estimated_surplus_high = Number(high);
+    if (caseNum.trim())      row.case_number = caseNum.trim();
+
+    const { error } = await sb.from('personalized_links').insert(row);
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    onCreated(token);
+  };
+
+  const fieldLabel = { fontSize: 9, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 };
+  const fieldInput = { ...inputStyle, fontSize: 12, width: '100%' };
+
+  return (
+    <div style={{ padding: 16, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9', marginBottom: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>＋ Add a lead manually</span>
+        <button onClick={onCancel} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
+        <div>
+          <div style={fieldLabel}>First name *</div>
+          <input value={first} onChange={e => setFirst(e.target.value)} placeholder="Jane" style={fieldInput} />
+        </div>
+        <div>
+          <div style={fieldLabel}>Last name *</div>
+          <input value={last} onChange={e => setLast(e.target.value)} placeholder="Smith" style={fieldInput} />
+        </div>
+        <div>
+          <div style={fieldLabel}>Phone *</div>
+          <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="(513) 555-0100" style={fieldInput} />
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div>
+          <div style={fieldLabel}>Property address *</div>
+          <input value={address} onChange={e => setAddress(e.target.value)} placeholder="123 Main St, Cincinnati, OH" style={fieldInput} />
+        </div>
+        <div>
+          <div style={fieldLabel}>County *</div>
+          <input value={county} onChange={e => setCounty(e.target.value)} placeholder="Hamilton" style={fieldInput} />
+        </div>
+      </div>
+      <button onClick={() => setShowOpt(s => !s)} style={{ ...btnGhost, fontSize: 11, marginBottom: 10 }}>
+        {showOpt ? '− Hide case details' : '+ Add case details (optional)'}
+      </button>
+      {showOpt && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 12 }}>
+          <div>
+            <div style={fieldLabel}>Sale date</div>
+            <input type="date" value={saleDate} onChange={e => setSaleDate(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Sale price</div>
+            <input type="number" value={salePrice} onChange={e => setSalePrice(e.target.value)} placeholder="125000" style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Judgment amount</div>
+            <input type="number" value={judgment} onChange={e => setJudgment(e.target.value)} placeholder="80000" style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Surplus low</div>
+            <input type="number" value={low} onChange={e => setLow(e.target.value)} placeholder="35000" style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Surplus high</div>
+            <input type="number" value={high} onChange={e => setHigh(e.target.value)} placeholder="50000" style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Case number</div>
+            <input value={caseNum} onChange={e => setCaseNum(e.target.value)} placeholder="A2400123" style={fieldInput} />
+          </div>
+        </div>
+      )}
+      {err && <div style={{ fontSize: 11, color: '#fca5a5', marginBottom: 10 }}>{err}</div>}
+      <button onClick={submit} disabled={busy} style={{ ...btnPrimary, fontSize: 13, opacity: busy ? 0.5 : 1, padding: '8px 16px' }}>
+        {busy ? 'Creating…' : 'Create lead'}
+      </button>
+    </div>
+  );
+}
 
 // ─── Reply Inbox ────────────────────────────────────────────────
 // Cross-deal "messages_outbound where direction='inbound' and not yet
