@@ -21,7 +21,7 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const NATHAN_PHONE = '+15135162306';
-const NATHAN_EMAIL = 'nathan@fundlocators.com';
+const DIGEST_EMAILS = ['nathan@fundlocators.com', 'justin@fundlocators.com'];
 const FROM_EMAIL = 'RefundLocators <hello@refundlocators.com>';
 
 const LATE_STAGE = new Set(['filed', 'awaiting-distribution', 'probate', 'paid-out']);
@@ -262,10 +262,13 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
       } catch (_) { /* non-fatal */ }
     }
 
-    // Email via Resend (pull key from vault)
+    // Email via Resend — read key from edge function secrets first, fall back to vault
     let emailSent = false;
-    const { data: keyRow } = await db.from('vault.decrypted_secrets').select('decrypted_secret').eq('name', 'resend_api_key').single();
-    const resendKey = keyRow?.decrypted_secret;
+    let resendKey = Deno.env.get('RESEND_API_KEY');
+    if (!resendKey) {
+      const { data: keyRow } = await db.from('vault.decrypted_secrets').select('decrypted_secret').eq('name', 'resend_api_key').single();
+      resendKey = keyRow?.decrypted_secret;
+    }
     if (resendKey) {
       // Light markdown → HTML
       const htmlBody = digestText
@@ -286,7 +289,7 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
           headers: { 'Authorization': `Bearer ${resendKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             from: FROM_EMAIL,
-            to: [NATHAN_EMAIL],
+            to: DIGEST_EMAILS,
             subject: `🌅 DCC Morning Digest · ${dateStr} · ${attention.length} needing attention`,
             html: fullHtml,
             text: digestText,
