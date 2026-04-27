@@ -1,0 +1,69 @@
+name: Auto-rebuild app.js when src/app.jsx changes
+
+# Triggered on every push to main. If src/app.jsx changed and app.js is stale,
+# runs `npm run build` and commits the rebuilt artifact back with [skip ci].
+# This makes the build step bulletproof — contributors can edit src/app.jsx
+# without remembering to run `npm run build` locally.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/app.jsx'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'build.js'
+
+# Allow the bot to push back to main
+permissions:
+  contents: write
+
+# Only one rebuild at a time per branch
+concurrency:
+  group: auto-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci --no-audit --no-fund
+
+      - name: Build app.js
+        run: npm run build
+
+      - name: Check for changes
+        id: diff
+        run: |
+          if git diff --quiet -- app.js; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "app.js is up to date — skipping commit."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "app.js changed — will commit."
+          fi
+
+      - name: Commit rebuilt app.js
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app.js
+          git commit -m "chore: rebuild app.js [skip ci]
+
+          Auto-built by .github/workflows/build.yml in response to a
+          src/app.jsx change in commit ${{ github.sha }}."
+          git push
