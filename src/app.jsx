@@ -330,6 +330,7 @@ function DealCommandCenter({ session, profile }) {
   const [showDocket, setShowDocket] = useState(false);
   const [showContacts, setShowContacts] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showAccount, setShowAccount] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
@@ -388,6 +389,19 @@ function DealCommandCenter({ session, profile }) {
   };
 
   useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); }, []);
+
+  // Presence heartbeat — every 60s while DCC is open in this tab, ping
+  // touch_user_presence() so other team members see "active now". Skipped
+  // when the tab is hidden (saves traffic). Driving the green dot in chat.
+  useEffect(() => {
+    let active = !document.hidden;
+    const tick = () => { if (active) sb.rpc('touch_user_presence').then(() => {}, () => {}); };
+    tick();  // immediate ping
+    const iv = setInterval(tick, 60000);
+    const onVis = () => { active = !document.hidden; if (active) tick(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { clearInterval(iv); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
@@ -552,6 +566,7 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
           {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
+          <button onClick={() => setShowAccount(true)} title="Account settings" style={{ ...btnGhost, fontSize: 11 }}>⚙ Account</button>
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
       </div>
@@ -560,6 +575,7 @@ function DealCommandCenter({ session, profile }) {
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
+      {showAccount && <AccountSettingsModal onClose={() => setShowAccount(false)} userId={session.user.id} userEmail={session.user.email} />}
       {showLeads && <LeadsModal onClose={() => { setShowLeads(false); loadLeadCount(); }} userName={userName} onConverted={() => { loadDeals(); loadLeadCount(); }} />}
       {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
       {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
@@ -1018,10 +1034,18 @@ function TeamView({ teamMembers }) {
       setThreads(t || []);
       if (t && t.length > 0 && !activeThreadId) setActiveThreadId(t[0].id);
 
-      // Cache all team profiles for sender display
-      const { data: profs } = await sb.from('profiles').select('id, name').in('role', ['admin','user','va']);
+      // Cache all team profiles for sender display (include avatar + display_name + presence)
+      const { data: profs } = await sb.from('profiles').select('id, name, display_name, avatar_path, last_active_at').in('role', ['admin','user','va']);
       const byId = {};
-      (profs || []).forEach(p => { byId[p.id] = p; });
+      (profs || []).forEach(p => {
+        // Resolve public avatar URL once. Bucket is public so no signing needed.
+        let avatarUrl = null;
+        if (p.avatar_path) {
+          const { data } = sb.storage.from('avatars').getPublicUrl(p.avatar_path);
+          avatarUrl = data?.publicUrl || null;
+        }
+        byId[p.id] = { ...p, avatar_url: avatarUrl };
+      });
       setProfilesById(byId);
     })();
     // eslint-disable-next-line
@@ -1104,12 +1128,27 @@ function TeamView({ teamMembers }) {
   const activeThread = threads.find(t => t.id === activeThreadId);
   const senderName = (msg) => {
     if (msg.sender_kind === 'lauren') return 'Lauren';
-    if (msg.sender_id && profilesById[msg.sender_id]) return profilesById[msg.sender_id].name;
+    if (msg.sender_id && profilesById[msg.sender_id]) {
+      const p = profilesById[msg.sender_id];
+      return p.display_name || p.name || 'Unknown';
+    }
     return 'Unknown';
+  };
+  const senderAvatar = (msg) => {
+    if (msg.sender_kind === 'lauren') return null;  // emoji avatar for now
+    if (msg.sender_id && profilesById[msg.sender_id]) return profilesById[msg.sender_id].avatar_url;
+    return null;
   };
   const senderInitial = (msg) => {
     if (msg.sender_kind === 'lauren') return '🤖';
     return (senderName(msg).charAt(0) || '?').toUpperCase();
+  };
+  // Online if last_active_at is within 2 minutes
+  const isOnline = (msg) => {
+    if (msg.sender_kind === 'lauren') return false;
+    const last = profilesById[msg.sender_id]?.last_active_at;
+    if (!last) return false;
+    return (Date.now() - new Date(last).getTime()) < 2 * 60 * 1000;
   };
   const senderColor = (id) => {
     // Hash sender id to a stable color so each person has their own bubble color
@@ -1207,13 +1246,25 @@ function TeamView({ teamMembers }) {
                     {grouped ? (
                       <div style={{ width: 32, flexShrink: 0 }} />
                     ) : (
-                      <div style={{
-                        width: 32, height: 32, flexShrink: 0,
-                        borderRadius: '50%',
-                        background: color, color: '#fff',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 13, fontWeight: 700,
-                      }}>{senderInitial(m)}</div>
+                      <div style={{ position: 'relative', width: 32, height: 32, flexShrink: 0 }}>
+                        <div style={{
+                          width: 32, height: 32,
+                          borderRadius: '50%',
+                          background: senderAvatar(m) ? `center/cover no-repeat url(${senderAvatar(m)})` : color,
+                          color: '#fff',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 13, fontWeight: 700,
+                        }}>{!senderAvatar(m) && senderInitial(m)}</div>
+                        {/* Green dot if online (active in last 2 min) */}
+                        {isOnline(m) && (
+                          <div style={{
+                            position: 'absolute', bottom: -1, right: -1,
+                            width: 10, height: 10, borderRadius: '50%',
+                            background: '#10b981',
+                            border: '2px solid #0c0a09',
+                          }} title="Online" />
+                        )}
+                      </div>
                     )}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {!grouped && (
@@ -12063,6 +12114,209 @@ function SearchModal({ deals, onClose, onSelect }) {
 }
 
 // ─── Team Management Modal (admin only) ─────────────
+// ─── Account Settings (Phase 1.5) ────────────────────────────────────
+// Each user manages their own profile here: avatar photo, display name,
+// phone, password. Display name + avatar drive how they appear in Team
+// Chat (and anywhere else profile names are shown).
+function AccountSettingsModal({ onClose, userId, userEmail }) {
+  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState(null);
+  const [displayName, setDisplayName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [pw1, setPw1] = useState('');
+  const [pw2, setPw2] = useState('');
+  const [msg, setMsg] = useState(null);
+  const fileRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from('profiles').select('*').eq('id', userId).single();
+      if (data) {
+        setProfile(data);
+        setDisplayName(data.display_name || data.name || '');
+        setPhone(data.phone || '');
+        if (data.avatar_path) {
+          const { data: urlData } = sb.storage.from('avatars').getPublicUrl(data.avatar_path);
+          setAvatarUrl(urlData?.publicUrl || null);
+        }
+      }
+      setLoading(false);
+    })();
+  }, [userId]);
+
+  const saveProfile = async () => {
+    setSavingProfile(true); setMsg(null);
+    const { error } = await sb.from('profiles').update({
+      display_name: displayName.trim() || null,
+      phone: phone.trim() || null,
+    }).eq('id', userId);
+    setSavingProfile(false);
+    if (error) { setMsg({ kind: 'err', text: error.message }); return; }
+    setMsg({ kind: 'ok', text: 'Profile saved.' });
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const onAvatarPick = () => fileRef.current && fileRef.current.click();
+
+  const onAvatarFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setMsg({ kind: 'err', text: 'Please pick an image file.' });
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setMsg({ kind: 'err', text: 'Image too large (max 10 MB).' });
+      return;
+    }
+    setUploadingAvatar(true); setMsg(null);
+    try {
+      // HEIC → JPEG conversion (iPhone exports). Reuses pattern from JV portal.
+      let upload = file;
+      if (/heic|heif/i.test(file.type) || /\.(heic|heif)$/i.test(file.name)) {
+        if (!window.heic2any) {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+            s.onload = resolve; s.onerror = reject;
+            document.head.appendChild(s);
+          });
+        }
+        const blob = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+        upload = new File([Array.isArray(blob) ? blob[0] : blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+      }
+      const ext = (upload.name.split('.').pop() || 'jpg').toLowerCase();
+      const path = `${userId}/${Date.now()}.${ext}`;
+      const { error: upErr } = await sb.storage.from('avatars').upload(path, upload, { upsert: false, cacheControl: '3600' });
+      if (upErr) throw upErr;
+      // Update profile to point at new path
+      await sb.from('profiles').update({ avatar_path: path }).eq('id', userId);
+      const { data: urlData } = sb.storage.from('avatars').getPublicUrl(path);
+      setAvatarUrl(urlData?.publicUrl + '?t=' + Date.now());
+      setProfile(prev => ({ ...prev, avatar_path: path }));
+      setMsg({ kind: 'ok', text: 'Avatar updated.' });
+      setTimeout(() => setMsg(null), 3000);
+    } catch (ex) {
+      setMsg({ kind: 'err', text: 'Avatar upload failed: ' + (ex.message || ex) });
+    } finally {
+      setUploadingAvatar(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  const removeAvatar = async () => {
+    if (!profile?.avatar_path) return;
+    if (!confirm('Remove your avatar photo?')) return;
+    await sb.storage.from('avatars').remove([profile.avatar_path]);
+    await sb.from('profiles').update({ avatar_path: null }).eq('id', userId);
+    setAvatarUrl(null);
+    setProfile(prev => ({ ...prev, avatar_path: null }));
+    setMsg({ kind: 'ok', text: 'Avatar removed.' });
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const setPassword = async () => {
+    if (pw1.length < 8) { setMsg({ kind: 'err', text: 'Password must be at least 8 characters.' }); return; }
+    if (pw1 !== pw2)    { setMsg({ kind: 'err', text: 'Passwords don\'t match.' }); return; }
+    setSavingPassword(true); setMsg(null);
+    const { error } = await sb.auth.updateUser({ password: pw1 });
+    setSavingPassword(false);
+    if (error) { setMsg({ kind: 'err', text: error.message }); return; }
+    setPw1(''); setPw2('');
+    setMsg({ kind: 'ok', text: 'Password set. You can now sign in with email + password (magic link still works too).' });
+    setTimeout(() => setMsg(null), 5000);
+  };
+
+  if (loading) return <Modal onClose={onClose} title="Account Settings"><div style={{ padding: 30, textAlign: 'center', color: '#78716c' }}>Loading…</div></Modal>;
+
+  const initial = (displayName || profile?.name || userEmail || '?').charAt(0).toUpperCase();
+
+  return (
+    <Modal onClose={onClose} title="Account Settings">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 24, paddingTop: 4 }}>
+
+        {/* Avatar */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>Profile photo</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{
+              width: 72, height: 72, borderRadius: '50%',
+              background: avatarUrl ? `center/cover no-repeat url(${avatarUrl})` : '#d97706',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: '#fff', fontSize: 28, fontWeight: 700,
+              flexShrink: 0,
+            }}>{!avatarUrl && initial}</div>
+            <div style={{ flex: 1 }}>
+              <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onAvatarFile} />
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button onClick={onAvatarPick} disabled={uploadingAvatar} style={btnPrimary}>
+                  {uploadingAvatar ? 'Uploading…' : (avatarUrl ? 'Change photo' : 'Upload photo')}
+                </button>
+                {avatarUrl && <button onClick={removeAvatar} style={{ ...btnGhost, color: '#fca5a5' }}>Remove</button>}
+              </div>
+              <div style={{ fontSize: 11, color: '#78716c', marginTop: 6 }}>
+                Shows in Team Chat + everywhere your name appears. iPhone HEICs auto-convert. Max 10 MB.
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Profile fields */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>Identity</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <Field label="Display name (shown to teammates)">
+              <input value={displayName} onChange={e => setDisplayName(e.target.value)} style={inputStyle} placeholder="Nathan" />
+            </Field>
+            <Field label="Email">
+              <input value={userEmail || ''} disabled style={{ ...inputStyle, opacity: 0.6, cursor: 'not-allowed' }} />
+            </Field>
+            <Field label="Phone (for SMS)">
+              <input value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} placeholder="513-555-0100" />
+            </Field>
+          </div>
+          <button onClick={saveProfile} disabled={savingProfile} style={{ ...btnPrimary, marginTop: 12 }}>
+            {savingProfile ? 'Saving…' : 'Save profile'}
+          </button>
+        </div>
+
+        {/* Password */}
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>Password (optional)</div>
+          <div style={{ fontSize: 11, color: '#78716c', marginBottom: 12, lineHeight: 1.55 }}>
+            Set a password to skip the magic-link email step on future sign-ins. Magic link still works either way.
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+            <Field label="New password">
+              <input type="password" value={pw1} onChange={e => setPw1(e.target.value)} style={inputStyle} placeholder="At least 8 characters" autoComplete="new-password" />
+            </Field>
+            <Field label="Confirm password">
+              <input type="password" value={pw2} onChange={e => setPw2(e.target.value)} style={inputStyle} placeholder="Repeat" autoComplete="new-password" />
+            </Field>
+          </div>
+          <button onClick={setPassword} disabled={savingPassword || !pw1 || !pw2} style={{ ...btnPrimary, marginTop: 12 }}>
+            {savingPassword ? 'Saving…' : 'Set password'}
+          </button>
+        </div>
+
+        {msg && (
+          <div style={{ padding: '10px 14px', borderRadius: 8, fontSize: 13, fontWeight: 500,
+            background: msg.kind === 'err' ? '#7f1d1d22' : '#064e3b22',
+            color: msg.kind === 'err' ? '#fca5a5' : '#6ee7b7',
+            border: '1px solid ' + (msg.kind === 'err' ? '#7f1d1d' : '#065f46') }}>
+            {msg.text}
+          </div>
+        )}
+
+      </div>
+    </Modal>
+  );
+}
+
 function TeamModal({ onClose, currentUserId }) {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
