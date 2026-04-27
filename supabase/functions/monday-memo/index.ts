@@ -20,9 +20,14 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 const DIGEST_EMAILS = ['nathan@fundlocators.com', 'justin@fundlocators.com'];
 const FROM_EMAIL    = 'RefundLocators <hello@fundlocators.com>';
 
-// GitHub repos to pull commit history from (add more as needed)
+// GitHub repos to pull commit history from (add more as needed).
+// Private repos require a GITHUB_TOKEN secret with `repo:read` scope —
+// without it, those repos return 404 and silently get skipped (the
+// per-repo fetch is wrapped in try/catch).
 const GITHUB_REPOS = [
   'TheLocatorOfFunds/deal-command-center',
+  'TheLocatorOfFunds/ohio-intel',          // private — needs GITHUB_TOKEN
+  'TheLocatorOfFunds/refundlocators-next', // private — needs GITHUB_TOKEN
 ];
 
 Deno.serve(async (req) => {

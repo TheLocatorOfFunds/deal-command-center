@@ -1,12 +1,8 @@
 # Morning Sweep — daily 8am EDT briefing
 
-The email + SMS that lands in Nathan's inbox every morning at 8am EDT. Walks every active deal, detects overnight activity, refreshes Claude's case summary on changed deals, compiles a cross-deal briefing, and sends a short SMS to Nathan's phone + a full HTML email to nathan@fundlocators.com + justin@fundlocators.com.
+The email that lands in Nathan's inbox every morning at 8am EDT. Walks every active deal, detects overnight activity, refreshes Claude's case summary on changed deals, compiles a cross-deal briefing, and sends a full HTML email to nathan@fundlocators.com + justin@fundlocators.com.
 
 ## What you actually get every morning
-
-**SMS** to `+15135162306` (Nathan's iPhone). Short — just the headline:
-
-> 🌅 Mon, Apr 27 morning digest · 3 need attention (Smith, Jones, Williams) · 7 active quiet · 4 late-stage · full brief in email.
 
 **Email** at `nathan@fundlocators.com` + `justin@fundlocators.com`. Subject:
 
@@ -89,11 +85,9 @@ If Claude is unavailable (no `ANTHROPIC_API_KEY` or API errors), there's a fallb
 4. Bucket each deal as `attention` / `active_quiet` / `late_quiet`
 5. **For every "attention" deal: refresh its AI case summary** by calling the `generate-case-summary` Edge Function. This is why the digest also keeps each deal's case summary fresh — DCC's UI reads that summary in deal detail panels.
 6. Compose the JSON context, ask Claude for the briefing prose
-7. Build the SMS body (≤320 chars, headline only)
-8. Send SMS via Twilio (currently on, but the Twilio path is legacy — see "Outbound SMS gotcha" below)
-9. Render the markdown to HTML (light find-replace, not a full markdown parser) wrapped in a cream-card design
-10. Send the email via Resend to `nathan@fundlocators.com` + `justin@fundlocators.com` from `RefundLocators <hello@refundlocators.com>`
-11. Return JSON: counts, refreshed count, sms_sent, email_sent, digest preview
+7. Render the markdown to HTML (light find-replace, not a full markdown parser) wrapped in a cream-card design
+8. Send the email via Resend to `nathan@fundlocators.com` + `justin@fundlocators.com` from `RefundLocators <hello@refundlocators.com>`
+9. Return JSON: counts, refreshed count, email_sent, digest preview
 
 ## Schedule
 
@@ -120,15 +114,21 @@ In Supabase Dashboard → Project Settings → Edge Functions → Secrets:
 | `SUPABASE_SERVICE_ROLE_KEY` | Yes (auto) | Lets the function read all tables bypassing RLS |
 | `ANTHROPIC_API_KEY` | Recommended | Claude Sonnet 4.5 writes the prose. Without it, falls back to a plainer markdown version. |
 | `RESEND_API_KEY` | Yes (or Vault) | Email send. Function looks at env var first, then falls back to `vault.decrypted_secrets` named `resend_api_key`. |
-| `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` + `TWILIO_FROM_NUMBER` | Optional | Sends the short SMS. If unset, just emails. |
 
-## Outbound SMS gotcha
+## SMS — removed 2026-04-27
 
-Per CLAUDE.md: **all outbound SMS in DCC goes through Nathan's iPhone via the mac_bridge, not Twilio.** The morning-sweep function still has Twilio code in it — that's legacy and should be migrated to use the same `send-sms` Edge Function pattern that DCC's outreach uses (which routes to `gateway = 'mac_bridge'`).
+Earlier versions of this function also sent a short SMS to Nathan's phone via Twilio. That code was removed because:
 
-Right now if Twilio creds aren't set, the SMS just doesn't send — function still emails. That's the safest posture until someone migrates the SMS path.
+1. **CLAUDE.md says all outbound SMS goes through mac_bridge, not Twilio.** Twilio remains in the codebase only as a legacy fallback for non-bridge phone numbers.
+2. **mac_bridge doesn't fit "Nathan→Nathan" notifications.** The bridge polls for `from_number = NATHAN_NUMBER` (Nathan's iPhone). It's designed for outreach to leads, not self-notifications.
 
-**Cleanup task (separate session):** rip out the inline Twilio call (lines 254-263 of `index.ts`), call DCC's `send-sms` Edge Function instead, let the mac_bridge gateway handle delivery. Bounded ~30 min.
+If you ever want a phone notification to land at 8am alongside the email, the cleanest paths:
+
+| Option | Cost | Setup time |
+|---|---|---|
+| **Pushover** | $5 one-time per platform (iOS app), free message tier | ~5 min — register API key, add `PUSHOVER_USER_KEY` + `PUSHOVER_APP_TOKEN` secrets, add a `fetch('https://api.pushover.net/1/messages.json', ...)` block in this function |
+| **Email-to-SMS via carrier gateway** | free | ~5 min — find your carrier's SMS-via-email domain (e.g., `5135162306@vtext.com` for Verizon), add it as a second recipient in `DIGEST_EMAILS` |
+| **Apple Push Notifications** | free, but needs a custom iOS app | overkill |
 
 ## Smoke test (run it once manually)
 
@@ -148,7 +148,6 @@ Response shape:
   "deals_late_quiet": 4,
   "deals_refreshed": 3,
   "pending_drafts": 2,
-  "sms_sent": false,
   "email_sent": true,
   "digest_preview": "**Top of your morning** — Casey Jennings's attorney filed a..."
 }
@@ -156,10 +155,9 @@ Response shape:
 
 ## How to change the recipient list
 
-Edit lines 24-25 of `supabase/functions/morning-sweep/index.ts`:
+Edit `DIGEST_EMAILS` in `supabase/functions/morning-sweep/index.ts`:
 
 ```ts
-const NATHAN_PHONE = '+15135162306';
 const DIGEST_EMAILS = ['nathan@fundlocators.com', 'justin@fundlocators.com'];
 ```
 
@@ -181,10 +179,9 @@ Section logic is hard-coded into the system prompt (see "How the prose gets gene
 | Claude Sonnet 4.5 (1 call, ~3-5K tokens) | ~$0.02-0.04 |
 | `generate-case-summary` calls (one per attention deal, varies) | ~$0.01-0.02 each |
 | Resend email (2 recipients) | ~free under monthly cap |
-| Twilio SMS (if active) | ~$0.008 per send |
 | Supabase queries | free |
-| **Daily total** | **~$0.05-0.20** |
-| **Annual total** | **~$20-75** |
+| **Daily total** | **~$0.04-0.18** |
+| **Annual total** | **~$15-65** |
 
 Rounding errors. Worth it.
 

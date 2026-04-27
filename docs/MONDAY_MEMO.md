@@ -34,17 +34,23 @@ Three data sources merge into the prompt:
 
 ### 1. GitHub commits (last 7 days)
 
-Hits `api.github.com/repos/<repo>/commits?since=<weekAgoIso>` for each repo in the hard-coded list:
+Hits `api.github.com/repos/<repo>/commits?since=<weekAgoIso>` for each repo in the hard-coded list (as of 2026-04-27):
 
 ```ts
 const GITHUB_REPOS = [
   'TheLocatorOfFunds/deal-command-center',
+  'TheLocatorOfFunds/ohio-intel',          // private — needs GITHUB_TOKEN
+  'TheLocatorOfFunds/refundlocators-next', // private — needs GITHUB_TOKEN
 ];
 ```
 
-**To add more repos** (e.g. ohio-intel, refundlocators-next), edit lines 24-26 of `supabase/functions/monday-memo/index.ts` and redeploy.
+**To add more repos**, edit `supabase/functions/monday-memo/index.ts` and redeploy.
 
-A `GITHUB_TOKEN` env var is optional but recommended — boosts the rate limit from 60 to 5000 requests per hour. Required when the repos are private (deal-command-center is public, but the rest are private).
+A `GITHUB_TOKEN` env var is **required** for private repos (ohio-intel and refundlocators-next are private). Without it, those repos return 404 and silently get skipped — your memo will be missing context. The deal-command-center repo is public so it works regardless.
+
+If you haven't yet set the token: GitHub → Settings → Developer Settings → Personal Access Tokens → Tokens (classic) → Generate new → scopes: `repo` (full control). Copy the `ghp_...` value, then in Supabase Dashboard → Project Settings → Edge Functions → Secrets, add `GITHUB_TOKEN` = (paste the value).
+
+Without the token, the rate limit is 60 req/hr (anonymous); with it, 5000 req/hr.
 
 Capped at 40 commits per run to stay within Claude's context.
 

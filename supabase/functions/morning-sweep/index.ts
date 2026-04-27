@@ -20,7 +20,6 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const NATHAN_PHONE = '+15135162306';
 const DIGEST_EMAILS = ['nathan@fundlocators.com', 'justin@fundlocators.com'];
 const FROM_EMAIL = 'RefundLocators <hello@refundlocators.com>';
 
@@ -40,9 +39,6 @@ Deno.serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY');
-    const twilioSid = Deno.env.get('TWILIO_ACCOUNT_SID');
-    const twilioToken = Deno.env.get('TWILIO_AUTH_TOKEN');
-    const twilioFrom = Deno.env.get('TWILIO_FROM_NUMBER');
     const db = createClient(supabaseUrl, serviceKey);
 
     // 1. All active deals
@@ -239,28 +235,23 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
       digestText = lines.join('\n');
     }
 
-    // 5. Send SMS (short summary) + email (full digest)
+    // 5. Send email (full digest)
+    //
+    // SMS-to-Nathan via Twilio was removed 2026-04-27. Per CLAUDE.md, all
+    // outbound SMS goes through mac_bridge — but mac_bridge is for outreach
+    // (Nathan→lead), not self-notifications (Nathan→Nathan). The bridge
+    // polls for from_number = NATHAN_NUMBER, so a "send the morning digest
+    // to my own phone via my own iPhone" routing doesn't fit that contract.
+    //
+    // If a phone notification is desired in the future, the right paths are:
+    //   - Pushover ($5 one-time, 5-min setup, free daily message budget)
+    //   - Apple Push Notifications via a custom iOS app (overkill)
+    //   - Email-to-SMS via carrier (e.g., 5135162306@vtext.com from Resend)
+    //
+    // For now: email-only. The headline copy below is preserved as a
+    // tagline on the email if the team ever wants it.
     const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-    const topNames = attention.slice(0, 3).map(c => (c.deal.name || '').split(' - ')[0]).filter(Boolean).join(', ');
     const pendingDraftCount = (pendingDrafts || []).length;
-    const draftsSuffix = pendingDraftCount > 0
-      ? ` · 📝 ${pendingDraftCount} AI draft${pendingDraftCount === 1 ? '' : 's'} awaiting review`
-      : '';
-    const smsBody = attention.length === 0
-      ? `🌅 ${dateStr} morning digest · quiet morning, no overnight activity across ${classified.length} active cases${draftsSuffix}.`
-      : `🌅 ${dateStr} morning digest · ${attention.length} need${attention.length === 1 ? 's' : ''} attention${topNames ? ` (${topNames}${attention.length > 3 ? '…' : ''})` : ''} · ${activeQuiet.length} active quiet · ${lateQuiet.length} late-stage${draftsSuffix} · full brief in email.`;
-
-    let smsSent = false;
-    if (twilioSid && twilioToken && twilioFrom) {
-      try {
-        const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`, {
-          method: 'POST',
-          headers: { 'Authorization': 'Basic ' + btoa(`${twilioSid}:${twilioToken}`), 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ To: NATHAN_PHONE, From: twilioFrom, Body: smsBody.slice(0, 320) }).toString(),
-        });
-        smsSent = resp.ok;
-      } catch (_) { /* non-fatal */ }
-    }
 
     // Email via Resend — read key from edge function secrets first, fall back to vault
     let emailSent = false;
@@ -306,7 +297,6 @@ Hard rules: no "I believe", no "it appears", no preamble, no meta-commentary. If
       deals_late_quiet: lateQuiet.length,
       deals_refreshed: refreshedCount,
       pending_drafts: pendingDraftCount,
-      sms_sent: smsSent,
       email_sent: emailSent,
       digest_preview: digestText.slice(0, 400),
     }), { headers: { 'Content-Type': 'application/json' } });
