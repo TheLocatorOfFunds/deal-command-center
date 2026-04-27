@@ -96,6 +96,18 @@ const DEAL_STATUSES = {
   flip: ["lead", "under-contract", "rehab", "listing", "under-offer", "closed", "dead"],
   surplus: ["new-lead", "signed", "filed", "probate", "awaiting-distribution", "recovered", "urgent", "dead"],
 };
+// Pre-engagement statuses — deals in these statuses are LEADS we're still
+// outreaching to, not active engaged cases. Filtered out of Active view
+// and surfaced under the Deals → 🌱 New Leads chip. The next status in
+// each lifecycle (flip: under-contract, surplus: signed) marks engagement.
+const LEAD_STATUSES = {
+  flip: ["lead"],
+  surplus: ["new-lead"],
+};
+const ALL_LEAD_STATUSES = [...LEAD_STATUSES.flip, ...LEAD_STATUSES.surplus];
+const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes(deal.status);
+// What status to bump to when "converting" a lead → engaged deal.
+const POST_ENGAGEMENT_STATUS = { flip: "under-contract", surplus: "signed" };
 const STATUS_COLORS = {
   "lead": "#3b82f6", "under-contract": "#f59e0b", "rehab": "#d97706", "listing": "#8b5cf6",
   "under-offer": "#06b6d4", "closed": "#10b981", "dead": "#78716c",
@@ -752,8 +764,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
 
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
-  const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
+  // "Active" excludes both archived (closed/recovered/dead) AND lead-phase
+  // (pre-engagement). Lead-phase deals live under the 🌱 New Leads chip.
+  const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status) && !isLeadStatus(d));
   const archivedDeals = deals.filter(d => ARCHIVE_STATUSES.includes(d.status));
+  const leadDeals = deals.filter(d => isLeadStatus(d));
 
   // Kanban drag-and-drop: persist the new status (and stamp closed_at
   // on close/recover, clear it on move-back-to-active).
@@ -770,7 +785,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
   const allStatuses = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
 
-  const preFiltered = view === "archive" ? archivedDeals : view === "flagged" ? flaggedDeals : activeDeals;
+  const preFiltered =
+    view === "archive"      ? archivedDeals :
+    view === "flagged"      ? flaggedDeals :
+    view === "leads-phase"  ? leadDeals :
+    activeDeals;
   const visible = preFiltered.filter(d => {
     const q = searchQ.toLowerCase();
     if (q && !(d.name || "").toLowerCase().includes(q) && !(d.address || "").toLowerCase().includes(q)) return false;
@@ -854,7 +873,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("attention", "🔔 Attention", 0)}
           {groupBtn("outreach", "🎯 Outreach", ["outreach", "leads", "forecast"], 0)}
-          {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline"], flaggedDeals.length)}
+          {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {isAdmin && groupBtn("reports", "📊 Insights", ["reports", "analytics", "traffic"], 0)}
         </div>
@@ -875,8 +894,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("forecast", "📅 Forecast")}
         </div>
       )}
-      {["active", "flagged", "hygiene", "archive", "pipeline"].includes(view) && (
+      {["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
+          {chipBtn("leads-phase", `🌱 New Leads${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
           {chipBtn("active", `Active${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
           {chipBtn("flagged", `⚑ Flagged${flaggedDeals.length ? ` (${flaggedDeals.length})` : ""}`)}
           {chipBtn("hygiene", "🩺 Hygiene")}
@@ -7072,6 +7092,20 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         }} style={{ ...selectStyle, fontSize: 11 }}>
           {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
         </select>
+        {isLeadStatus(deal) && POST_ENGAGEMENT_STATUS[deal.type] && (
+          <button
+            onClick={() => {
+              const next = POST_ENGAGEMENT_STATUS[deal.type];
+              if (!window.confirm(`Convert this lead to an engaged deal?\n\nStatus will move from "${deal.status}" → "${next}".`)) return;
+              onUpdateDeal({ status: next });
+              logAct(`Lead converted to engaged deal — status moved to ${next.replace(/-/g, " ")}`, ['team', 'client', 'attorney']);
+            }}
+            title={`Move ${deal.status} → ${POST_ENGAGEMENT_STATUS[deal.type]} once this lead has signed the engagement.`}
+            style={{ background: '#10b981', color: '#0c0a09', border: 0, padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            ✓ Convert lead → deal
+          </button>
+        )}
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
           const val = e.target.value || null;
