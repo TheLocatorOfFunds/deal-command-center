@@ -912,6 +912,36 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
+      {/* Leads-phase revenue banner — shows potential revenue if all leads
+          converted, plus a count by type. Kept separate from the main-page
+          Estimated Profit so leads don't pollute the engaged-only number. */}
+      {view === "leads-phase" && isAdmin && (() => {
+        const leadFlipPotential = leadDeals.filter(d => d.type === "flip").reduce((s, d) => s + (computeDealNet(d) || 0), 0);
+        const leadSurplusPotential = leadDeals.filter(d => d.type === "surplus").reduce((s, d) => s + (computeDealNet(d) || 0), 0);
+        const leadTotal = leadFlipPotential + leadSurplusPotential;
+        const surplusLeadCount = leadDeals.filter(d => d.type === "surplus").length;
+        const flipLeadCount = leadDeals.filter(d => d.type === "flip").length;
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, marginBottom: 18 }}>
+            <div style={{ background: "#1c1917", border: "1px solid #292524", borderTop: "2px solid #fbbf24", borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Lead pool · potential</div>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{fmt(leadTotal)}</div>
+              <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>If every lead converts</div>
+            </div>
+            <div style={{ background: "#1c1917", border: "1px solid #292524", borderTop: "2px solid #3b82f6", borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Surplus leads</div>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{surplusLeadCount}</div>
+              <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{fmt(leadSurplusPotential)} potential fees</div>
+            </div>
+            <div style={{ background: "#1c1917", border: "1px solid #292524", borderTop: "2px solid #d97706", borderRadius: 10, padding: 14 }}>
+              <div style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700 }}>Flip leads</div>
+              <div style={{ fontSize: 26, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{flipLeadCount}</div>
+              <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{fmt(leadFlipPotential)} potential profit</div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
       {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
@@ -6253,7 +6283,10 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   const monthEnd = new Date(year, month + 1, 0, 23, 59, 59);
   const monthName = now.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 
-  const isActive = (d) => !["closed", "recovered", "dead"].includes(d.status);
+  // "Active" on the main page = engaged cases only. Excludes archived
+  // (closed/recovered/dead) AND lead-phase (pre-engagement). Leads roll
+  // up under their own revenue projection on the 🌱 New Leads view.
+  const isActive = (d) => !["closed", "recovered", "dead"].includes(d.status) && !isLeadStatus(d);
   const active = deals.filter(isActive);
 
   // Monthly stats
@@ -7205,6 +7238,20 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             style={{ background: '#10b981', color: '#0c0a09', border: 0, padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}
           >
             ✓ Convert lead → deal
+          </button>
+        )}
+        {!isLeadStatus(deal) && !["closed", "recovered", "dead"].includes(deal.status) && (LEAD_STATUSES[deal.type] || []).length > 0 && (
+          <button
+            onClick={() => {
+              const target = LEAD_STATUSES[deal.type][0];
+              if (!window.confirm(`Demote this deal back to lead?\n\nStatus will move from "${deal.status}" → "${target}".\n\nIt'll disappear from the main page and show up under 🌱 New Leads.`)) return;
+              onUpdateDeal({ status: target });
+              logAct(`Deal demoted back to lead — status moved to ${target.replace(/-/g, " ")}`, ['team']);
+            }}
+            title={`Move ${deal.status} → ${LEAD_STATUSES[deal.type][0]}. Use when an engagement falls through and the contact is back to prospecting.`}
+            style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}
+          >
+            ↩ Demote to lead
           </button>
         )}
         <PersonalizedUrlControl deal={deal} reload={loadAll} logAct={logAct} />
