@@ -309,6 +309,41 @@ Use the Claude-in-Chrome MCP tools to QA directly in the browser, not just by re
 - Realtime subscription not firing on edge-function DB writes → use polling fallback (3s interval already in place)
 - `firedRef` Set needed to prevent double-calling edge functions across React re-renders
 
+## Context preservation — fighting session rot
+
+Claude Code sessions corrupt. Context windows fill up. This section explains how to keep
+knowledge in the repo so any new session (or human) can pick up where the last one left off.
+
+### The system
+
+| File | What it captures | When to update |
+|---|---|---|
+| `CLAUDE.md` (this file) | Architecture, schema, conventions, gotchas | When something fundamentally changes |
+| `WORKING_ON.md` | What each session is actively doing right now | Every session start + end |
+| `TRANSFER_TO_NEW_CLAUDE_CODE.md` | Full business + technical deep-dive | Refresh when starting a new Claude Code project |
+| `.github/PULL_REQUEST_TEMPLATE.md` | Per-PR: what changed, why, DB changes, test steps | Auto-populated when opening a PR |
+
+### PR template (mandatory for non-trivial work)
+
+Every PR that touches DB, Edge Functions, or significant UI should fill out
+`.github/PULL_REQUEST_TEMPLATE.md`. It lives in the commit history forever —
+even if sessions die, the context is preserved in GitHub PRs.
+
+### If your session is approaching the context limit
+
+Before the context fills:
+1. Write a `WORKING_ON.md` entry describing exactly what you were doing, what files
+   you touched, what was working, and what was left to do.
+2. Commit and push everything — even WIP. A partial commit with a good message is
+   better than losing work in a dead session.
+3. If mid-feature: push to a branch (not main), describe the branch state in `WORKING_ON.md`.
+
+### The TRANSFER doc
+
+`TRANSFER_TO_NEW_CLAUDE_CODE.md` is the "day 1 briefing" for any new Claude Code session.
+Nathan refreshes it when starting a new project. You can read it cold and understand the whole
+business in ~5 minutes. Keep it honest — stale context is worse than no context.
+
 ## When asking an AI to change this
 
 Give it this file plus the specific task. Good prompts:

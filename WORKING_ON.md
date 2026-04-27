@@ -7,9 +7,12 @@ every session so the other side knows what's in flight.
 
 ## Justin's session
 
-**Status**: Idle
-**Last done**: Multi-contact SMS — per-contact tabs, group chat routing, reaction pills, group-chat leak fix. Schema: `message_groups`, `messages_outbound_unmatched`, `thread_hidden`, new cols on `messages_outbound`. Edge functions `send-sms` + `receive-sms` redeployed. Mac Mini bridge updated + restarted.
-**Last updated**: Apr 23, 2026
+**Status**: Active — Apr 27, 2026
+**Working on**: Week sprint — 10-item backlog (double-send test, research routine check, technical notes system, automations brain, calling/recording, email sending, display name fixes, RVM, video-via-text)
+**Just finished**: Context preservation system — `.github/PULL_REQUEST_TEMPLATE.md` created, `CLAUDE.md` updated with context preservation section
+**Next up**: Automations brain (item #4) + Eric/Inaam display names (#7)
+**Touching**: `index.html`, `CLAUDE.md`, `WORKING_ON.md`, `.github/PULL_REQUEST_TEMPLATE.md`
+**Last updated**: Apr 27, 2026
 
 ---
 
