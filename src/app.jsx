@@ -15731,65 +15731,131 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
   );
 }
 
-// ── Lauren DCC — internal AI assistant ──────────────────────────
-const LAUREN_INTERNAL_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/lauren-internal';
-
-// Global event so callers outside this component can open Lauren's chat
-// (e.g. the mobile More sheet, which can't reach internal state directly).
-// Dispatch `window.dispatchEvent(new Event('dcc:open-lauren'))` to pop it.
+// ── Lauren DCC — unified Hub-mode FAB ──────────────────────────
+// One Lauren, available from any view. Backed by the same per-user
+// "Lauren DM" team-messages thread that the Team Chat sidebar shows,
+// so all conversations stay in sync. Has full Hub-mode capabilities:
+// "loop X in" / relay / propose tasks / status changes / etc.
+//
+// FAB pulses orange when there's a pending action waiting on Nathan
+// to confirm or reject (e.g. a relay he asked Lauren to send).
+//
+// Global event: window.dispatchEvent(new Event('dcc:open-lauren'))
 function LaurenDCC() {
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpen] = useState(false);
+  const [threadId, setThreadId] = useState(null);
+  const [msgs, setMsgs] = useState([]);
+  const [actions, setActions] = useState([]);
+  const [me, setMe] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [input, setInput] = useState('');
+  const [error, setError] = useState(null);
+  const msgsEl = useRef(null);
+  const inputEl = useRef(null);
+
+  // Boot: open-event listener + load user + ensure Lauren DM exists
   useEffect(() => {
     const handler = () => setOpen(true);
     window.addEventListener('dcc:open-lauren', handler);
+    (async () => {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        setMe(user);
+        const { data: tid, error: rpcErr } = await sb.rpc('lauren_get_or_create_dm');
+        if (rpcErr) { setError('Lauren DM not available: ' + rpcErr.message); return; }
+        if (tid) setThreadId(tid);
+      } catch (e) {
+        setError('Lauren init failed: ' + (e.message || e));
+      }
+    })();
     return () => window.removeEventListener('dcc:open-lauren', handler);
   }, []);
-  const [msgs, setMsgs] = React.useState([]);
-  const [input, setInput] = React.useState('');
-  const [busy, setBusy] = React.useState(false);
-  const sessionRef = React.useRef(localStorage.getItem('lauren_dcc_session') || null);
-  const historyRef = React.useRef([]); // API message history
-  const msgsEl = React.useRef(null);
-  const inputEl = React.useRef(null);
 
-  React.useEffect(() => {
-    if (open && msgs.length === 0) {
-      setMsgs([{ r: 'l', t: "What do you need?" }]);
+  // Load + subscribe to messages
+  useEffect(() => {
+    if (!threadId) return;
+    const load = async () => {
+      const { data } = await sb.from('team_messages')
+        .select('id, sender_id, sender_kind, body, created_at')
+        .eq('thread_id', threadId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: true })
+        .limit(200);
+      setMsgs(data || []);
+    };
+    load();
+    const ch = sb.channel('lauren-fab-msgs-' + threadId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages', filter: `thread_id=eq.${threadId}` }, payload => {
+        // When a Lauren message lands, clear busy state.
+        if (payload.eventType === 'INSERT' && payload.new?.sender_kind === 'lauren') setBusy(false);
+        load();
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [threadId]);
+
+  // Load + subscribe to pending actions for this thread
+  useEffect(() => {
+    if (!threadId) return;
+    const load = async () => {
+      const { data } = await sb.from('lauren_pending_actions')
+        .select('*')
+        .eq('thread_id', threadId)
+        .order('created_at', { ascending: true });
+      setActions(data || []);
+    };
+    load();
+    const ch = sb.channel('lauren-fab-actions-' + threadId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_pending_actions', filter: `thread_id=eq.${threadId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [threadId]);
+
+  // Pending-action driven UI signals
+  const pendingActions = actions.filter(a => a.status === 'pending');
+  const pendingCount = pendingActions.length;
+  const actionsByMessageId = {};
+  actions.forEach(a => {
+    if (a.message_id) {
+      if (!actionsByMessageId[a.message_id]) actionsByMessageId[a.message_id] = [];
+      actionsByMessageId[a.message_id].push(a);
     }
-    if (open) setTimeout(() => inputEl.current?.focus(), 80);
-  }, [open]);
+  });
 
-  React.useEffect(() => {
+  // Focus + autoscroll on open / new content
+  useEffect(() => { if (open) setTimeout(() => inputEl.current?.focus(), 80); }, [open]);
+  useEffect(() => {
     if (msgsEl.current) msgsEl.current.scrollTop = msgsEl.current.scrollHeight;
-  }, [msgs, busy]);
+  }, [msgs, actions, busy, open]);
 
   async function send() {
-    if (busy || !input.trim()) return;
+    if (busy || !input.trim() || !threadId || !me) return;
     const text = input.trim();
     setInput('');
-    setMsgs(m => [...m, { r: 'u', t: text }]);
-    historyRef.current = [...historyRef.current, { role: 'user', content: text }];
     setBusy(true);
-    try {
-      const res = await fetch(LAUREN_INTERNAL_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: historyRef.current, session_id: sessionRef.current })
-      });
-      const data = await res.json();
-      if (data.session_id) {
-        sessionRef.current = data.session_id;
-        localStorage.setItem('lauren_dcc_session', data.session_id);
-      }
-      const reply = data.reply || 'Something went wrong.';
-      historyRef.current = [...historyRef.current, { role: 'assistant', content: reply }];
-      setMsgs(m => [...m, { r: 'l', t: reply }]);
-    } catch {
-      setMsgs(m => [...m, { r: 'l', t: 'Connection error — try again.' }]);
+    const { error: insErr } = await sb.from('team_messages').insert({
+      thread_id: threadId,
+      sender_id: me.id,
+      sender_kind: 'admin',
+      body: text,
+    });
+    if (insErr) {
+      setError('Send failed: ' + insErr.message);
+      setBusy(false);
     }
-    setBusy(false);
+    // Lauren's response will arrive via realtime → busy gets cleared in the sub handler
     setTimeout(() => inputEl.current?.focus(), 50);
   }
+
+  const confirmAction = async (id) => {
+    const { error } = await sb.rpc('lauren_execute_action', { p_action_id: id });
+    if (error) alert('Confirm failed: ' + error.message);
+  };
+  const rejectAction = async (id) => {
+    const { error } = await sb.rpc('lauren_reject_action', { p_action_id: id });
+    if (error) alert('Reject failed: ' + error.message);
+  };
 
   const btnStyle = {
     position: 'fixed', bottom: 24, right: 24, zIndex: 9000,
@@ -15797,40 +15863,93 @@ function LaurenDCC() {
     borderRadius: 24, padding: '0 18px', height: 44,
     display: 'flex', alignItems: 'center', gap: 8,
     fontSize: 13, fontWeight: 700, cursor: 'pointer',
-    boxShadow: '0 4px 20px rgba(217,119,6,.45)', fontFamily: 'inherit',
-    transition: 'transform .1s'
+    boxShadow: pendingCount > 0
+      ? '0 4px 30px rgba(217,119,6,.95), 0 0 0 4px rgba(217,119,6,.3)'
+      : '0 4px 20px rgba(217,119,6,.45)',
+    fontFamily: 'inherit',
+    transition: 'transform .1s, box-shadow .25s',
+    animation: pendingCount > 0 ? 'laurenPulse 1.5s ease-in-out infinite' : 'none',
   };
+
+  // Render a single message with any attached action cards underneath
+  const renderMessage = (m) => {
+    const isMe = m.sender_kind !== 'lauren';
+    const attached = actionsByMessageId[m.id] || [];
+    return React.createElement(React.Fragment, { key: m.id },
+      React.createElement('div', {
+        style: {
+          alignSelf: isMe ? 'flex-end' : 'flex-start',
+          maxWidth: '84%', padding: '9px 13px',
+          background: isMe ? '#d97706' : '#292524',
+          color: isMe ? '#1c0a00' : '#fafaf9',
+          borderRadius: 12,
+          borderBottomRightRadius: isMe ? 3 : 12,
+          borderBottomLeftRadius: !isMe ? 3 : 12,
+          fontSize: 13, lineHeight: 1.55,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          fontWeight: isMe ? 500 : 400
+        }
+      }, m.body),
+      ...attached.map(a => React.createElement('div', {
+        key: a.id,
+        style: {
+          alignSelf: 'flex-start', maxWidth: '92%',
+          background: '#0c0a09', border: '1px solid ' + (a.status === 'pending' ? '#78350f' : '#292524'),
+          borderRadius: 10, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8,
+        }
+      },
+        React.createElement('div', { style: { fontSize: 10, color: '#fbbf24', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' } },
+          '🤖 Lauren proposes · ' + (a.status === 'pending' ? 'awaiting your confirm' : a.status)),
+        React.createElement('div', { style: { fontSize: 12, color: '#fafaf9', lineHeight: 1.4 } }, a.action_label),
+        a.status === 'pending' && React.createElement('div', { style: { display: 'flex', gap: 6 } },
+          React.createElement('button', {
+            onClick: () => confirmAction(a.id),
+            style: { background: '#d97706', color: '#0c0a09', border: 0, padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }
+          }, '✓ Confirm'),
+          React.createElement('button', {
+            onClick: () => rejectAction(a.id),
+            style: { background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }
+          }, 'Reject'),
+        ),
+      ))
+    );
+  };
+
+  // Pending actions that aren't tied to a Lauren message yet (rare, but possible if EF inserts the action before the message)
+  const orphanPending = actions.filter(a => a.status === 'pending' && !a.message_id);
 
   return React.createElement(React.Fragment, null,
     React.createElement('button', {
       onClick: () => setOpen(o => !o),
       style: btnStyle,
-      className: 'lauren-fab',
-      title: 'Chat with Lauren'
+      className: 'lauren-fab' + (pendingCount > 0 ? ' has-pending' : ''),
+      title: pendingCount > 0 ? `Lauren has ${pendingCount} action${pendingCount === 1 ? '' : 's'} waiting on you` : 'Chat with Lauren'
     },
       React.createElement('svg', { width: 16, height: 16, fill: 'none', viewBox: '0 0 20 20' },
         React.createElement('path', { d: 'M18 10c0 4.418-3.582 8-8 8a7.96 7.96 0 0 1-3.93-1.03L2 18l1.03-4.07A7.96 7.96 0 0 1 2 10C2 5.582 5.582 2 10 2s8 3.582 8 8Z', stroke: 'currentColor', strokeWidth: 1.8, strokeLinejoin: 'round' })
       ),
-      'Lauren'
+      'Lauren',
+      pendingCount > 0 && React.createElement('span', {
+        style: { background: '#1c0a00', color: '#fbbf24', borderRadius: 10, padding: '1px 6px', fontSize: 10, fontWeight: 700, marginLeft: 2 }
+      }, pendingCount),
     ),
     open && React.createElement('div', {
       className: 'lauren-panel',
       style: {
         position: 'fixed', bottom: 80, right: 24, zIndex: 9001,
-        width: 380, height: 520,
+        width: 400, height: 560,
         background: '#1c1917', border: '1px solid #44403c',
         borderRadius: 16, boxShadow: '0 16px 48px rgba(0,0,0,.65)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden'
       }
     },
-      // Header
       React.createElement('div', {
         style: { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: '#0c0a09', borderBottom: '1px solid #292524', flexShrink: 0 }
       },
         React.createElement('div', { style: { width: 8, height: 8, borderRadius: '50%', background: '#4ade80', flexShrink: 0 } }),
         React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#fafaf9' } }, 'Lauren'),
-          React.createElement('div', { style: { fontSize: 10, color: '#78716c' } }, 'Internal · FundLocators')
+          React.createElement('div', { style: { fontSize: 10, color: '#78716c' } }, 'Exec assistant · "loop X in" / ask anything')
         ),
         React.createElement('button', {
           onClick: () => setOpen(false),
@@ -15838,26 +15957,31 @@ function LaurenDCC() {
           style: { marginLeft: 'auto', background: '#292524', border: '1px solid #44403c', color: '#fafaf9', fontSize: 20, lineHeight: 1, cursor: 'pointer', borderRadius: 8, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: 'inherit', fontWeight: 400 }
         }, '×')
       ),
-      // Messages
       React.createElement('div', {
         ref: msgsEl,
         style: { flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }
       },
-        ...msgs.map((msg, i) => React.createElement('div', {
-          key: i,
-          style: {
-            alignSelf: msg.r === 'u' ? 'flex-end' : 'flex-start',
-            maxWidth: '84%', padding: '9px 13px',
-            background: msg.r === 'u' ? '#d97706' : '#292524',
-            color: msg.r === 'u' ? '#1c0a00' : '#fafaf9',
-            borderRadius: 12,
-            borderBottomRightRadius: msg.r === 'u' ? 3 : 12,
-            borderBottomLeftRadius: msg.r === 'l' ? 3 : 12,
-            fontSize: 13, lineHeight: 1.55,
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-            fontWeight: msg.r === 'u' ? 500 : 400
-          }
-        }, msg.t)),
+        !threadId && !error && React.createElement('div', {
+          style: { color: '#78716c', fontSize: 12, padding: 12, textAlign: 'center' }
+        }, 'Loading Lauren…'),
+        error && React.createElement('div', {
+          style: { color: '#fca5a5', fontSize: 12, padding: 10, background: 'rgba(127,29,29,0.2)', border: '1px solid #7f1d1d', borderRadius: 8 }
+        }, error),
+        msgs.length === 0 && threadId && !error && React.createElement('div', {
+          style: { alignSelf: 'flex-start', background: '#292524', color: '#fafaf9', borderRadius: 12, borderBottomLeftRadius: 3, padding: '9px 13px', fontSize: 13, fontWeight: 400 }
+        }, 'What do you need?'),
+        ...msgs.map(renderMessage),
+        ...orphanPending.map(a => React.createElement('div', {
+          key: 'orphan-' + a.id,
+          style: { alignSelf: 'flex-start', maxWidth: '92%', background: '#0c0a09', border: '1px solid #78350f', borderRadius: 10, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8 }
+        },
+          React.createElement('div', { style: { fontSize: 10, color: '#fbbf24', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' } }, '🤖 Lauren proposes · awaiting confirm'),
+          React.createElement('div', { style: { fontSize: 12, color: '#fafaf9', lineHeight: 1.4 } }, a.action_label),
+          React.createElement('div', { style: { display: 'flex', gap: 6 } },
+            React.createElement('button', { onClick: () => confirmAction(a.id), style: { background: '#d97706', color: '#0c0a09', border: 0, padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' } }, '✓ Confirm'),
+            React.createElement('button', { onClick: () => rejectAction(a.id), style: { background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' } }, 'Reject'),
+          ),
+        )),
         busy && React.createElement('div', {
           style: { alignSelf: 'flex-start', background: '#292524', borderRadius: 12, borderBottomLeftRadius: 3, padding: '10px 14px', display: 'flex', gap: 5 }
         },
@@ -15867,7 +15991,6 @@ function LaurenDCC() {
           }))
         )
       ),
-      // Input row
       React.createElement('div', {
         style: { display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #292524', background: '#1c1917', flexShrink: 0 }
       },
@@ -15876,13 +15999,14 @@ function LaurenDCC() {
           value: input,
           onChange: e => setInput(e.target.value),
           onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } },
-          placeholder: 'Ask Lauren anything…',
+          placeholder: threadId ? 'Ask Lauren or say "loop Justin in: …"' : 'Loading…',
           rows: 1,
-          style: { flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8, padding: '8px 12px', color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', minHeight: 38 }
+          disabled: !threadId,
+          style: { flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8, padding: '8px 12px', color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', minHeight: 38, opacity: threadId ? 1 : 0.5 }
         }),
         React.createElement('button', {
-          onClick: send, disabled: busy,
-          style: { minWidth: 38, height: 38, background: busy ? '#44403c' : '#d97706', color: busy ? '#78716c' : '#1c0a00', border: 'none', borderRadius: 8, cursor: busy ? 'not-allowed' : 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }
+          onClick: send, disabled: busy || !threadId,
+          style: { minWidth: 38, height: 38, background: (busy || !threadId) ? '#44403c' : '#d97706', color: (busy || !threadId) ? '#78716c' : '#1c0a00', border: 'none', borderRadius: 8, cursor: (busy || !threadId) ? 'not-allowed' : 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }
         }, '↑')
       )
     )
