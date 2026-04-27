@@ -337,6 +337,78 @@ function DealCommandCenter({ session, profile }) {
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
   const isTeam = isAdmin || profile.role === 'va';
 
+  // ── Team chat notifications ────────────────────────────────────────
+  // Subscribes globally (not just inside TeamView) to new team_messages
+  // and pings the user when one lands. Audio chirp if the tab is focused;
+  // a browser Notification when it isn't (clicking it navigates to the
+  // Team chat view). Skips messages the current user sent themselves.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const myId = session.user.id;
+
+    // Ask permission once. Browser caches the answer.
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
+
+    // Web Audio API beep — short two-tone chirp, ~120ms total. No asset needed.
+    const playChirp = () => {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return;
+        const ctx = new Ctx();
+        const now = ctx.currentTime;
+        const o1 = ctx.createOscillator();
+        const g1 = ctx.createGain();
+        o1.type = 'sine'; o1.frequency.value = 880;
+        g1.gain.setValueAtTime(0.0001, now);
+        g1.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
+        g1.gain.exponentialRampToValueAtTime(0.0001, now + 0.10);
+        o1.connect(g1).connect(ctx.destination);
+        o1.start(now); o1.stop(now + 0.11);
+        const o2 = ctx.createOscillator();
+        const g2 = ctx.createGain();
+        o2.type = 'sine'; o2.frequency.value = 1175;
+        g2.gain.setValueAtTime(0.0001, now + 0.06);
+        g2.gain.exponentialRampToValueAtTime(0.16, now + 0.07);
+        g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        o2.connect(g2).connect(ctx.destination);
+        o2.start(now + 0.06); o2.stop(now + 0.19);
+        setTimeout(() => ctx.close(), 300);
+      } catch {/* audio blocked or unsupported */}
+    };
+
+    const ch = sb.channel('global-chat-notify')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_messages' }, async (payload) => {
+        const msg = payload.new;
+        if (!msg || msg.sender_id === myId) return;
+        // Resolve sender name for the notification body
+        let senderName = 'A teammate';
+        if (msg.sender_kind === 'lauren') senderName = 'Lauren';
+        else if (msg.sender_id) {
+          const { data: prof } = await sb.from('profiles').select('display_name, name').eq('id', msg.sender_id).single();
+          senderName = prof?.display_name || prof?.name || senderName;
+        }
+        const preview = (msg.body || '').slice(0, 140);
+
+        if (document.hidden) {
+          // Tab unfocused — fire a browser Notification instead of a sound.
+          try {
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              const n = new Notification(`💬 ${senderName}`, { body: preview, tag: 'dcc-team-chat' });
+              n.onclick = () => { window.focus(); setView('team'); n.close(); };
+            }
+          } catch {/* notification blocked */}
+        } else {
+          // Tab focused but maybe not on Team view — chirp.
+          playChirp();
+        }
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id]);
+
   const loadLeadCount = async () => {
     const { count } = await sb.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new');
     setNewLeadCount(count || 0);
@@ -1083,6 +1155,17 @@ function TeamView({ teamMembers }) {
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  // Ensure the current user has their Lauren DM (Hub mode). Idempotent RPC.
+  // Runs once on TeamView mount; if the user has no Lauren DM yet, one is
+  // auto-created and shows up in the thread list on next loadThreads().
+  useEffect(() => {
+    sb.rpc('lauren_get_or_create_dm').catch(err => {
+      // Migration may not be applied yet — fail silently and let the rest
+      // of TeamView work without the Lauren DM thread.
+      if (err) console.debug('[lauren_get_or_create_dm]', err);
+    });
+  }, []);
 
   // Load current user + initial threads + their profile names
   const loadThreads = async () => {

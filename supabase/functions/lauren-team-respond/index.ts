@@ -23,7 +23,7 @@ const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-5";
 const MAX_TOKENS = 1024;
 
-const SYSTEM_PROMPT = `You are Lauren, an AI teammate for Nathan and Justin at RefundLocators / FundLocators. You're in their internal team chat. Be concise, direct, operational. No fluff, no "I'd be happy to", no excess pleasantries. Plain text only (no markdown headers, no emoji unless the user used one first).
+const SYSTEM_PROMPT_BASE = `You are Lauren, an AI teammate and exec assistant for Nathan and Justin at RefundLocators / FundLocators. You're in their internal team chat. Be concise, direct, operational. No fluff, no "I'd be happy to", no excess pleasantries. Plain text only (no markdown headers, no emoji unless the user used one first).
 
 Context:
 - RefundLocators recovers surplus funds for foreclosure victims (mostly Ohio).
@@ -36,17 +36,29 @@ READ TOOLS (always safe to call):
 - recent_activity(deal_id, limit=10): timeline.
 - upcoming_events(window_days=14): hearings + sheriff sales.
 - search_contacts(needle): partner attorneys, title companies, etc.
+- find_teammate(needle): match a teammate by name/email. Returns user_id you can use with propose_relay_to_teammate.
 
-WRITE TOOLS (these PROPOSE an action — Nathan or Justin must click confirm in chat to actually run it):
-- propose_status_change(deal_id, new_status, reason): suggest moving a deal to a different status.
-- propose_create_task(deal_id, title, due_date_iso?, assigned_to?): suggest a new task.
-- propose_update_deal_meta(deal_id, meta_patch, label): suggest a meta-jsonb patch (use sparingly; mostly for milestones, partner info, etc).
+WRITE TOOLS (PROPOSE — Nathan or Justin must click confirm in chat to actually run):
+- propose_status_change(deal_id, new_status, reason)
+- propose_create_task(deal_id, title, due_date_iso?, assigned_to?)
+- propose_update_deal_meta(deal_id, meta_patch, label)
+- propose_relay_to_teammate(target_user_id, body): forwards the body to your DM with that teammate. Use when the user says "loop X in" / "tell X" / "send this to X". The relayed message will appear in their chat from you (Lauren) with the body. Always look up the teammate via find_teammate first to get the user_id.
 
 Behavior:
 - For factual questions: call read tools first, then answer concisely.
-- When you'd otherwise want to write data, call the matching propose_* tool. The chat will render a confirm/reject card under your message. Don't ask "want me to do X?" for things you can propose — just propose them.
-- Reply length: 1-3 short paragraphs max. Chat-length, not essay-length.
+- When the user gives an actionable command, call the matching propose_* tool. Don't ask "want me to do X?" — just propose. The chat renders a confirm/reject card under your reply.
+- Reply length: 1-3 short paragraphs max.
 - If you don't know something and tools can't tell you, say so plainly.`;
+
+const HUB_MODE_ADDENDUM = `
+
+YOU ARE IN A LAUREN DM (your dedicated thread with this user — they have you all to themselves here).
+- You always respond here (no @-mention required), but stay quiet on noise.
+- If the user is thinking out loud / venting / journaling and there's nothing actionable, reply with a single short word like "noted." or "ok." (or stay completely silent by replying with just ".") — don't lecture, don't summarize their thought back to them, don't suggest things.
+- If they ask a question or give a command, act on it.
+- If they say "loop Justin in" / "tell Nathan" / "send this to X" — call find_teammate then propose_relay_to_teammate. The message will land in their DM with X.
+- If they share a photo/link as context for a relay request, include it verbatim in the relayed body.
+- Don't proactively suggest features. They know what you can do.`;
 
 const TOOLS = [
   // READ
@@ -111,6 +123,28 @@ const TOOLS = [
       required: ["deal_id", "meta_patch", "label"],
     },
   },
+  {
+    name: "find_teammate",
+    description: "Match a teammate by name fragment or email. Returns up to 5 teammates with their user_id you can pass to propose_relay_to_teammate.",
+    input_schema: {
+      type: "object",
+      properties: { needle: { type: "string" } },
+      required: ["needle"],
+    },
+  },
+  {
+    name: "propose_relay_to_teammate",
+    description: "Forward / relay a message to the user's DM with another teammate. Use when the user says 'loop X in' / 'tell X' / 'send this to X' / 'forward to X'. The body will appear in the DM from you (Lauren) so the recipient knows it was relayed. Always call find_teammate first to get target_user_id.",
+    input_schema: {
+      type: "object",
+      properties: {
+        target_user_id: { type: "string", description: "uuid from find_teammate" },
+        body: { type: "string", description: "The message to relay. Include any links/context from the original conversation." },
+        target_name: { type: "string", description: "Display name of the recipient (e.g. 'Justin') — for the confirm card label." },
+      },
+      required: ["target_user_id", "body"],
+    },
+  },
 ];
 
 Deno.serve(async (req) => {
@@ -127,6 +161,15 @@ Deno.serve(async (req) => {
 
   const db = createClient(Deno.env.get("SUPABASE_URL"), Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
 
+  // Fetch the thread row so we know whether this is a Lauren DM (Hub mode)
+  // or a regular thread (only-respond-on-mention mode).
+  const { data: threadRow } = await db
+    .from("team_threads")
+    .select("id, thread_type, title")
+    .eq("id", thread_id)
+    .single();
+  const isLaurenDm = threadRow?.thread_type === "lauren_dm";
+
   // Fetch last 15 messages of the thread
   const { data: history } = await db
     .from("team_messages")
@@ -136,6 +179,8 @@ Deno.serve(async (req) => {
     .order("created_at", { ascending: false })
     .limit(15);
   const messages = (history || []).reverse();
+  const lastUserMessage = [...messages].reverse().find(m => m.sender_kind !== "lauren");
+  const lastUserSenderId = lastUserMessage?.sender_id ?? null;
 
   const senderIds = [...new Set(messages.filter(m => m.sender_id).map(m => m.sender_id))];
   let senderNames = {};
@@ -165,7 +210,7 @@ Deno.serve(async (req) => {
       body: JSON.stringify({
         model: MODEL,
         max_tokens: MAX_TOKENS,
-        system: SYSTEM_PROMPT,
+        system: SYSTEM_PROMPT_BASE + (isLaurenDm ? HUB_MODE_ADDENDUM : ""),
         tools: TOOLS,
         messages: claudeMessages,
       }),
@@ -237,6 +282,26 @@ Deno.serve(async (req) => {
             if (error) throw error;
             proposedActionIds.push(row.id);
             result = { proposed: true, action_id: row.id, label: clientLabel };
+          } else if (tu.name === "find_teammate") {
+            const { data } = await db.rpc("lauren_find_teammate", { p_needle: tu.input.needle });
+            result = data;
+          } else if (tu.name === "propose_relay_to_teammate") {
+            const { target_user_id, body, target_name } = tu.input;
+            if (!lastUserSenderId) throw new Error("no caller user_id available — cannot relay without a sender");
+            const label = `Relay to ${target_name || "teammate"}: "${(body || "").slice(0, 80)}${body && body.length > 80 ? "…" : ""}"`;
+            const { data: row, error } = await db.from("lauren_pending_actions").insert({
+              thread_id,
+              action_type: "relay_to_user",
+              action_label: label,
+              action_payload: {
+                from_user_id: lastUserSenderId,
+                to_user_id: target_user_id,
+                body,
+              },
+            }).select("id").single();
+            if (error) throw error;
+            proposedActionIds.push(row.id);
+            result = { proposed: true, action_id: row.id, label, note: "A confirm/reject card will appear under your reply." };
           } else {
             result = { error: "unknown tool" };
           }
@@ -254,6 +319,13 @@ Deno.serve(async (req) => {
   }
 
   if (!finalText) finalText = "(Lauren is thinking but didn't quite finish — give her another nudge.)";
+
+  // Hub-mode silent acknowledgement: a bare "." is the sentinel for "noted,
+  // staying quiet". Skip inserting Lauren's reply entirely so the chat
+  // doesn't get noisy with empty bubbles. The user's message persists.
+  if (isLaurenDm && finalText.trim() === ".") {
+    return json({ ok: true, silent: true, proposed_actions: proposedActionIds.length });
+  }
 
   // Insert Lauren's reply
   const { data: insertedMsg, error: insErr } = await db.from("team_messages").insert({
