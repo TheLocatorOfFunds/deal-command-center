@@ -11854,7 +11854,30 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [rvmResult, setRvmResult] = useState(null);
   const [mediaUrl, setMediaUrl] = useState('');
   const [showMediaInput, setShowMediaInput] = useState(false);
+  const [editingNoteId, setEditingNoteId] = useState(null);
+  const [editingNoteBody, setEditingNoteBody] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
   const threadRef = useRef(null);
+
+  const startEditNote = (note) => {
+    setEditingNoteId(note.id);
+    setEditingNoteBody(note.body || '');
+  };
+  const cancelEditNote = () => { setEditingNoteId(null); setEditingNoteBody(''); };
+  const saveNoteEdit = async (noteId) => {
+    setSavingNote(true);
+    const { error } = await sb.from('deal_notes').update({ body: editingNoteBody }).eq('id', noteId);
+    setSavingNote(false);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    setEditingNoteId(null);
+    setEditingNoteBody('');
+  };
+  const deleteNote = async (note) => {
+    const preview = (note.body || '').split('\n')[0].slice(0, 60) || 'this note';
+    if (!window.confirm(`Delete note "${preview}"? This can't be undone.`)) return;
+    const { error } = await sb.from('deal_notes').delete().eq('id', note.id);
+    if (error) alert('Could not delete: ' + error.message);
+  };
 
   const RVM_TEMPLATES = {
     intro:    { label: 'Intro — surplus funds', url: '' },
@@ -12775,17 +12798,41 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
               // ─── Internal note bubble ────────────────────────────────
               if (m._kind === 'note') {
+                const isEditing = editingNoteId === m.id;
                 return (
                   <div key={'n-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 10 }}>
                     <div style={{ maxWidth: '85%', background: 'rgba(251, 191, 36, 0.05)', border: '1px dashed #78350f', borderRadius: 8, padding: '8px 12px', width: '100%' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: m.body ? 4 : 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: (m.body || isEditing) ? 4 : 0, flexWrap: 'wrap' }}>
                         <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.08em', textTransform: 'uppercase' }}>🔒 Internal note</span>
                         {m.title && <span style={{ fontSize: 12, fontWeight: 600, color: '#fafaf9' }}>· {m.title}</span>}
                         <span style={{ fontSize: 10, color: '#78716c', marginLeft: 'auto', fontFamily: "'DM Mono', monospace" }}>{time}</span>
+                        {!isEditing && (
+                          <>
+                            <button onClick={() => startEditNote(m)} title="Edit note" style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 11, padding: '0 4px' }}>✏️</button>
+                            <button onClick={() => deleteNote(m)} title="Delete note" style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 11, padding: '0 4px' }}>🗑</button>
+                          </>
+                        )}
                       </div>
-                      {m.body && (
+                      {isEditing ? (
+                        <div>
+                          <textarea
+                            autoFocus
+                            value={editingNoteBody}
+                            onChange={e => setEditingNoteBody(e.target.value)}
+                            onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveNoteEdit(m.id); if (e.key === 'Escape') cancelEditNote(); }}
+                            rows={Math.min(12, Math.max(3, (editingNoteBody.match(/\n/g) || []).length + 2))}
+                            style={{ width: '100%', background: '#0c0a09', border: '1px solid #78350f', borderRadius: 6, color: '#fafaf9', padding: '8px 10px', fontSize: 12, fontFamily: 'inherit', lineHeight: 1.55, outline: 'none', resize: 'vertical' }}
+                            placeholder="Note body..."
+                          />
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'flex-end', alignItems: 'center' }}>
+                            <span style={{ fontSize: 10, color: '#57534e', marginRight: 'auto' }}>⌘+Enter to save · Esc to cancel</span>
+                            <button onClick={cancelEditNote} disabled={savingNote} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+                            <button onClick={() => saveNoteEdit(m.id)} disabled={savingNote} style={{ background: '#d97706', color: '#0c0a09', border: 0, padding: '5px 12px', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', opacity: savingNote ? 0.5 : 1 }}>{savingNote ? 'Saving…' : 'Save'}</button>
+                          </div>
+                        </div>
+                      ) : m.body ? (
                         <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 );
