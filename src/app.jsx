@@ -1506,14 +1506,40 @@ function TeamView({ teamMembers }) {
         {activeThread ? (
           <>
             {/* Thread header */}
-            <div style={{ padding: '14px 18px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div>
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9' }}># {activeThread.title}</div>
                 <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
                   {messages.length} message{messages.length === 1 ? '' : 's'}
-                  {activeThread.lauren_enabled && <> · 🤖 Lauren is in this thread (mention <code style={{ background: '#0c0a09', padding: '0 4px', borderRadius: 3 }}>@lauren</code> to summon)</>}
+                  {activeThread.lauren_enabled && <> · 🤖 mention <code style={{ background: '#0c0a09', padding: '0 4px', borderRadius: 3 }}>@lauren</code> to summon</>}
                 </div>
               </div>
+              {(me.role === 'admin' || me.role === 'user') && (
+                <button
+                  onClick={async () => {
+                    const next = !activeThread.lauren_enabled;
+                    // Optimistic local update — realtime sub will reconcile.
+                    setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, lauren_enabled: next } : t));
+                    const { error } = await sb.from('team_threads')
+                      .update({ lauren_enabled: next })
+                      .eq('id', activeThread.id);
+                    if (error) {
+                      setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, lauren_enabled: !next } : t));
+                      alert('Could not toggle Lauren: ' + error.message);
+                    }
+                  }}
+                  title={activeThread.lauren_enabled ? 'Lauren is on for this thread — click to turn off' : 'Lauren is off for this thread — click to turn on'}
+                  style={{
+                    fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+                    border: '1px solid ' + (activeThread.lauren_enabled ? '#78350f' : '#292524'),
+                    background: activeThread.lauren_enabled ? '#1c1209' : '#0c0a09',
+                    color: activeThread.lauren_enabled ? '#fbbf24' : '#78716c',
+                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  🤖 Lauren: {activeThread.lauren_enabled ? 'On' : 'Off'}
+                </button>
+              )}
             </div>
 
             {/* Message list */}
