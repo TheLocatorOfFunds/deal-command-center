@@ -3924,6 +3924,7 @@ function LeadsOutreachView() {
   const [showManual, setShowManual] = useState(false);
   const [createdToken, setCreatedToken] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [editingRow, setEditingRow] = useState(null);
   const alive = useAliveRef();
   const PAGE = 50;
 
@@ -4108,11 +4109,20 @@ function LeadsOutreachView() {
                 </a>
                 {row.texted_at ? (
                   <button onClick={() => resetTexted(row.token)} style={{ ...btnGhost, fontSize: 11 }} title="Bring this lead back to the Ready queue">reset</button>
-                ) : (
-                  <button onClick={() => onTextClick(row)} disabled={!row.phone} style={{ background: '#d97706', color: '#0c0a09', border: 0, padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                ) : row.phone ? (
+                  <a
+                    href={smsHref(row)}
+                    onClick={() => { setTimeout(() => markTexted(row.token), 1500); }}
+                    style={{ background: '#d97706', color: '#0c0a09', border: 0, padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit', textDecoration: 'none', textAlign: 'center', display: 'inline-block' }}
+                  >
                     Text {row.first_name || 'lead'} →
-                  </button>
+                  </a>
+                ) : (
+                  <button disabled style={{ background: '#44403c', color: '#78716c', border: 0, padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'not-allowed', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>No phone</button>
                 )}
+                <button onClick={() => setEditingRow(row)} title="Edit this lead's info" style={{ ...btnGhost, fontSize: 11, padding: '4px 10px' }}>
+                  ✏️ Edit
+                </button>
               </div>
             </div>
           ))}
@@ -4125,6 +4135,14 @@ function LeadsOutreachView() {
             </div>
           )}
         </div>
+      )}
+
+      {editingRow && (
+        <EditLeadModal
+          row={editingRow}
+          onClose={() => setEditingRow(null)}
+          onSaved={() => { setEditingRow(null); loadRows(); loadCounts(); }}
+        />
       )}
     </div>
   );
@@ -4264,6 +4282,136 @@ function ManualLeadForm({ onCancel, onCreated }) {
   );
 }
 
+// Edit modal for an existing personalized_links row. Patches all the
+// caller-relevant fields. Token + source + timestamps are immutable.
+function EditLeadModal({ row, onClose, onSaved }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  const [first, setFirst]     = useState(row.first_name || '');
+  const [last, setLast]       = useState(row.last_name || '');
+  const [phone, setPhone]     = useState(row.phone || '');
+  const [address, setAddress] = useState(row.property_address || '');
+  const [county, setCounty]   = useState(row.county || '');
+  const [saleDate, setSaleDate]   = useState(row.sale_date || '');
+  const [salePrice, setSalePrice] = useState(row.sale_price ?? '');
+  const [judgment, setJudgment]   = useState(row.judgment_amount ?? '');
+  const [low, setLow]             = useState(row.estimated_surplus_low ?? '');
+  const [high, setHigh]           = useState(row.estimated_surplus_high ?? '');
+  const [caseNum, setCaseNum]     = useState(row.case_number || '');
+
+  const submit = async () => {
+    setErr(null);
+    if (!first.trim() || !last.trim() || !address.trim() || !county.trim()) {
+      setErr('First name, last name, property address, and county are required.');
+      return;
+    }
+    let phoneE164 = null;
+    if (phone.trim()) {
+      const phoneClean = phone.replace(/\D/g, '');
+      if (phoneClean.length < 10) { setErr('Phone needs at least 10 digits, or leave blank.'); return; }
+      phoneE164 = phoneClean.length === 10 ? `+1${phoneClean}` : phoneClean.length === 11 && phoneClean[0] === '1' ? `+${phoneClean}` : `+${phoneClean}`;
+    }
+    setBusy(true);
+    const patch = {
+      first_name: first.trim(),
+      last_name: last.trim(),
+      phone: phoneE164,
+      property_address: address.trim(),
+      county: county.trim(),
+      sale_date: saleDate || null,
+      sale_price:           salePrice === '' ? null : Number(salePrice),
+      judgment_amount:      judgment === ''  ? null : Number(judgment),
+      estimated_surplus_low:  low === ''  ? null : Number(low),
+      estimated_surplus_high: high === '' ? null : Number(high),
+      case_number: caseNum.trim() || null,
+    };
+    const { data, error } = await sb.from('personalized_links').update(patch).eq('token', row.token).select('token');
+    setBusy(false);
+    if (error) { setErr(error.message); return; }
+    if (!data || data.length === 0) {
+      setErr('Update returned no rows — RLS may be blocking. Confirm you have admin role.');
+      return;
+    }
+    onSaved();
+  };
+
+  const fieldLabel = { fontSize: 9, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 4 };
+  const fieldInput = { ...inputStyle, fontSize: 12, width: '100%' };
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 100, display: 'flex', alignItems: 'flex-start', justifyContent: 'center', padding: 30, overflowY: 'auto' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#1c1917', border: '1px solid #44403c', borderRadius: 12, width: '100%', maxWidth: 720, padding: 22 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 11, color: '#d97706', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>Edit Lead</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#fafaf9' }}>{row.first_name} {row.last_name}</div>
+            <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", marginTop: 2 }}>token: {row.token}</div>
+          </div>
+          <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>✕ Close</button>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 10 }}>
+          <div>
+            <div style={fieldLabel}>First name *</div>
+            <input value={first} onChange={e => setFirst(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Last name *</div>
+            <input value={last} onChange={e => setLast(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Phone</div>
+            <input value={phone} onChange={e => setPhone(e.target.value)} placeholder="(513) 555-0100" style={fieldInput} />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 10, marginBottom: 10 }}>
+          <div>
+            <div style={fieldLabel}>Property address *</div>
+            <input value={address} onChange={e => setAddress(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>County *</div>
+            <input value={county} onChange={e => setCounty(e.target.value)} style={fieldInput} />
+          </div>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+          <div>
+            <div style={fieldLabel}>Sale date</div>
+            <input type="date" value={saleDate} onChange={e => setSaleDate(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Sale price</div>
+            <input type="number" value={salePrice} onChange={e => setSalePrice(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Judgment amount</div>
+            <input type="number" value={judgment} onChange={e => setJudgment(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Surplus low</div>
+            <input type="number" value={low} onChange={e => setLow(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Surplus high</div>
+            <input type="number" value={high} onChange={e => setHigh(e.target.value)} style={fieldInput} />
+          </div>
+          <div>
+            <div style={fieldLabel}>Case number</div>
+            <input value={caseNum} onChange={e => setCaseNum(e.target.value)} style={fieldInput} />
+          </div>
+        </div>
+
+        {err && <div style={{ fontSize: 11, color: '#fca5a5', marginBottom: 10 }}>{err}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
+          <button onClick={submit} disabled={busy} style={{ ...btnPrimary, opacity: busy ? 0.5 : 1 }}>{busy ? 'Saving…' : 'Save changes'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Reply Inbox ────────────────────────────────────────────────
 // Cross-deal "messages_outbound where direction='inbound' and not yet
 // seen by the team." Oldest unread first. Click to jump to the deal's
@@ -4300,7 +4448,31 @@ function ReplyInbox({ onSelect, limit = 30 }) {
   }, []);
 
   const markSeen = async (id) => {
-    await sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).eq('id', id);
+    const { data, error } = await sb.from('messages_outbound')
+      .update({ read_by_team_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id');
+    if (error) { alert('Could not mark seen: ' + error.message); return; }
+    if (!data || data.length === 0) {
+      alert('Mark seen had no effect — RLS is blocking the update. Apply migration 20260427030400_messages_outbound_admin_update.sql in Supabase SQL editor.');
+      return;
+    }
+    await load();
+  };
+
+  const markAllSeen = async () => {
+    if (!rows || rows.length === 0) return;
+    if (!window.confirm(`Mark all ${rows.length} replies as seen?`)) return;
+    const ids = rows.map(r => r.id);
+    const { data, error } = await sb.from('messages_outbound')
+      .update({ read_by_team_at: new Date().toISOString() })
+      .in('id', ids)
+      .select('id');
+    if (error) { alert('Could not mark all seen: ' + error.message); return; }
+    if (!data || data.length === 0) {
+      alert('Mark all seen had no effect — RLS is blocking the update. Apply migration 20260427030400_messages_outbound_admin_update.sql in Supabase SQL editor.');
+      return;
+    }
     await load();
   };
 
@@ -4321,6 +4493,13 @@ function ReplyInbox({ onSelect, limit = 30 }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {rows.length > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 2 }}>
+          <button onClick={markAllSeen} style={{ ...btnGhost, fontSize: 11, padding: '4px 10px' }}>
+            ✓ Mark all {rows.length} seen
+          </button>
+        </div>
+      )}
       {rows.map(r => (
         <div key={r.id}
           style={{ background: '#0c0a09', border: '1px solid #292524', borderLeft: '3px solid #3b82f6', borderRadius: 7, padding: '10px 12px' }}>
