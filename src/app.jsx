@@ -11438,7 +11438,43 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [emailSending, setEmailSending] = useState(false);
   const [emailErr, setEmailErr] = useState(null);
   const [showIntroModal, setShowIntroModal] = useState(false);
+  const [rvmMode, setRvmMode] = useState(false);
+  const [rvmPhone, setRvmPhone] = useState('');
+  const [rvmAudioUrl, setRvmAudioUrl] = useState('');
+  const [rvmTemplate, setRvmTemplate] = useState('intro');
+  const [rvmSending, setRvmSending] = useState(false);
+  const [rvmResult, setRvmResult] = useState(null);
+  const [mediaUrl, setMediaUrl] = useState('');
+  const [showMediaInput, setShowMediaInput] = useState(false);
   const threadRef = useRef(null);
+
+  const RVM_TEMPLATES = {
+    intro:    { label: 'Intro — surplus funds', url: '' },
+    followup: { label: 'Follow-up day 3',       url: '' },
+    final:    { label: 'Final touch day 7',      url: '' },
+  };
+
+  const dropRvm = async () => {
+    if (!rvmPhone.trim() || rvmSending) return;
+    setRvmSending(true); setRvmResult(null);
+    try {
+      const { data, error } = await sb.functions.invoke('drop-rvm', {
+        body: {
+          to: rvmPhone.trim(),
+          audio_url: rvmAudioUrl.trim() || RVM_TEMPLATES[rvmTemplate]?.url,
+          deal_id: dealId,
+          contact_id: activeContact?.contact_id,
+          template: RVM_TEMPLATES[rvmTemplate]?.label,
+        }
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.details || data.error);
+      setRvmResult({ type: 'success', text: 'Voicemail dropped successfully.' });
+    } catch (e) {
+      setRvmResult({ type: 'error', text: 'Failed: ' + (e.message || 'unknown') });
+    }
+    setRvmSending(false);
+  };
 
   // Virtual "Everyone" contact — shows every message / call / note on the
   // deal, merged chronologically. Solves the "I want one thread with
@@ -11827,13 +11863,17 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
   // ── Send ─────────────────────────────────────────────────────────────────
   const activeTo = activeContact?.phone || '';
+  const canSend = activeContact && !sending && (body.trim() || mediaUrl.trim());
 
   const send = async () => {
-    if (!activeTo.trim() || !body.trim() || sending) return;
+    if (!activeTo.trim() || !canSend || sending) return;
     setSending(true); setSendErr(null);
-    const optimistic = { id: 'opt-' + Date.now(), to_number: activeTo.trim(), from_number: fromNumber || '…', body: body.trim(), status: 'queued', created_at: new Date().toISOString() };
+    const capturedMedia = mediaUrl.trim() || undefined;
+    const optimistic = { id: 'opt-' + Date.now(), to_number: activeTo.trim(), from_number: fromNumber || '…', body: body.trim(), media_url: capturedMedia, status: 'queued', created_at: new Date().toISOString() };
     setMsgs(prev => [...prev, optimistic]);
     setBody('');
+    setMediaUrl('');
+    setShowMediaInput(false);
     try {
       const { data, error } = await sb.functions.invoke('send-sms', {
         body: {
@@ -11842,6 +11882,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
           deal_id:     dealId,
           from_number: fromNumber || undefined,
           contact_id:  activeContact?.contact_id || undefined,
+          media_url:   capturedMedia || undefined,
         }
       });
       if (error) {
@@ -11977,10 +12018,15 @@ function OutboundMessages({ dealId, vendors, deal }) {
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: groupMode ? '2px solid #22c55e' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: groupMode ? '#22c55e' : '#57534e', fontSize: 11, fontWeight: 600 }}>
           👥 Group
         </button>
-        <button onClick={() => { setEmailMode(true); setGroupMode(false); setNewMode(false); if (!emailForm.subject) loadEmailTemplate('payoff'); }}
+        <button onClick={() => { setEmailMode(true); setGroupMode(false); setNewMode(false); setRvmMode(false); if (!emailForm.subject) loadEmailTemplate('payoff'); }}
           title="Compose an email (from nathan@refundlocators.com, replies route to your Gmail)"
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: emailMode ? '2px solid #3b82f6' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: emailMode ? '#3b82f6' : '#57534e', fontSize: 11, fontWeight: 600 }}>
           📧 Email
+        </button>
+        <button onClick={() => { setRvmMode(true); setEmailMode(false); setGroupMode(false); setNewMode(false); if (activeContact?.phone) setRvmPhone(activeContact.phone); }}
+          title="Drop a ringless voicemail to this contact"
+          style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: rvmMode ? '2px solid #f97316' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: rvmMode ? '#f97316' : '#57534e', fontSize: 11, fontWeight: 600 }}>
+          📣 Drop VM
         </button>
         {deal.meta?.homeownerPhone && (
           <button onClick={() => setShowIntroModal(true)}
@@ -12051,6 +12097,45 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
       {showIntroModal && (
         <SendIntroTextModal deal={deal} onClose={() => setShowIntroModal(false)} onSent={load} />
+      )}
+
+      {/* RVM compose panel */}
+      {rvmMode && (
+        <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
+            📣 Drop Ringless Voicemail
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 10px', alignItems: 'center', marginBottom: 10 }}>
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To:</label>
+            <input value={rvmPhone} onChange={e => setRvmPhone(e.target.value)}
+              placeholder="+1 (555) 000-0000"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Template:</label>
+            <select value={rvmTemplate} onChange={e => setRvmTemplate(e.target.value)}
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
+              {Object.entries(RVM_TEMPLATES).map(([key, t]) => (
+                <option key={key} value={key}>{t.label}</option>
+              ))}
+            </select>
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Audio URL:</label>
+            <input value={rvmAudioUrl} onChange={e => setRvmAudioUrl(e.target.value)}
+              placeholder="Override audio URL (optional)"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+            <button onClick={() => { setRvmMode(false); setRvmResult(null); setRvmAudioUrl(''); }}
+              style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+            <button onClick={dropRvm} disabled={rvmSending || !rvmPhone.trim()}
+              style={{ background: (!rvmSending && rvmPhone.trim()) ? '#f97316' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {rvmSending ? 'Dropping…' : '📣 Drop VM'}
+            </button>
+          </div>
+          {rvmResult && (
+            <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, fontSize: 12, background: rvmResult.type === 'success' ? '#064e3b' : '#7f1d1d', color: rvmResult.type === 'success' ? '#6ee7b7' : '#fca5a5' }}>
+              {rvmResult.text}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Group compose panel */}
@@ -12329,10 +12414,22 @@ function OutboundMessages({ dealId, vendors, deal }) {
                 );
               }
 
+              const mediaIsVideo = m.media_url && /\.(mp4|mov|webm|m4v)(\?|$)/i.test(m.media_url);
+              const mediaIsImage = m.media_url && /\.(jpg|jpeg|png|gif|webp|heic)(\?|$)/i.test(m.media_url);
+
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
                   <div style={{ maxWidth: '78%', background: isInbound ? '#1c1917' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? `1px solid ${senderColor}33` : 'none' }}>
-                    <div style={{ fontSize: 14, color: '#fafaf9', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.body}</div>
+                    {m.body ? <div style={{ fontSize: 14, color: '#fafaf9', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.body}</div> : null}
+                    {mediaIsVideo && (
+                      <video controls src={m.media_url} style={{ maxWidth: 220, maxHeight: 220, borderRadius: 10, marginTop: m.body ? 6 : 0, display: 'block' }} />
+                    )}
+                    {mediaIsImage && (
+                      <img src={m.media_url} style={{ maxWidth: 220, maxHeight: 220, borderRadius: 10, cursor: 'pointer', marginTop: m.body ? 6 : 0, display: 'block' }} onClick={() => window.open(m.media_url, '_blank')} alt="media" />
+                    )}
+                    {m.media_url && !mediaIsVideo && !mediaIsImage && (
+                      <a href={m.media_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13, color: '#60a5fa', marginTop: m.body ? 4 : 0, display: 'block' }}>📎 View attachment</a>
+                    )}
                   </div>
                   {showMeta && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingLeft: isInbound ? 2 : 0, paddingRight: isInbound ? 0 : 2 }}>
@@ -12376,18 +12473,36 @@ function OutboundMessages({ dealId, vendors, deal }) {
         </div>
       ) : (activeContact || newMode) && (
         <div className="composer" style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
+          {showMediaInput && (
+            <div style={{ marginBottom: 6 }}>
+              <input
+                value={mediaUrl}
+                onChange={e => setMediaUrl(e.target.value)}
+                placeholder="Paste image / video URL (https://…)"
+                style={{ width: '100%', background: '#1c1917', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', padding: '7px 12px', fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }}
+              />
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <button
+              onClick={() => setShowMediaInput(v => !v)}
+              title="Attach image or video URL"
+              style={{ width: 34, height: 34, borderRadius: '50%', background: (showMediaInput || mediaUrl) ? '#78350f' : '#1c1917', border: `1px solid ${(showMediaInput || mediaUrl) ? '#d97706' : '#292524'}`, color: (showMediaInput || mediaUrl) ? '#fbbf24' : '#57534e', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s' }}>
+              📎
+            </button>
             <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
               placeholder={activeContact ? `Message ${activeContact.name.split(' ')[0]}…` : 'Enter a number above first'}
               disabled={!activeContact} rows={2}
               style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5, opacity: activeContact ? 1 : 0.4 }} />
-            <button onClick={send} disabled={!activeContact || !body.trim() || sending}
-              style={{ width: 34, height: 34, borderRadius: '50%', background: (activeContact && body.trim() && !sending) ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', fontSize: 17, cursor: (activeContact && body.trim() && !sending) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
+            <button onClick={send} disabled={!canSend}
+              style={{ width: 34, height: 34, borderRadius: '50%', background: canSend ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', fontSize: 17, cursor: canSend ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
               ↑
             </button>
           </div>
           {sendErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 5, paddingLeft: 4 }}>⚠ {sendErr}</div>}
-          <div style={{ fontSize: 10, color: '#44403c', marginTop: 4, paddingLeft: 4 }}>⌘↵ to send</div>
+          <div style={{ fontSize: 10, color: '#44403c', marginTop: 4, paddingLeft: 4 }}>
+            {mediaUrl ? '📎 media attached · ' : ''}⌘↵ to send
+          </div>
         </div>
       )}
     </div>
@@ -13005,6 +13120,8 @@ function TeamModal({ onClose, currentUserId }) {
   const [inviteRole, setInviteRole] = useState("va");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [editingName, setEditingName] = useState(null);
+  const [editNameVal, setEditNameVal] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -13020,6 +13137,17 @@ function TeamModal({ onClose, currentUserId }) {
     const { error } = await sb.from('profiles').update({ role }).eq('id', id);
     if (error) setMsg({ type: 'error', text: error.message });
     else setMsg({ type: 'success', text: `Role updated.` });
+    await load();
+    setBusy(false);
+  };
+
+  const saveName = async (id) => {
+    const trimmed = editNameVal.trim();
+    if (!trimmed) return;
+    setBusy(true); setMsg(null);
+    const { error } = await sb.from('profiles').update({ name: trimmed }).eq('id', id);
+    if (error) setMsg({ type: 'error', text: error.message });
+    else { setMsg({ type: 'success', text: `Name updated to "${trimmed}".` }); setEditingName(null); }
     await load();
     setBusy(false);
   };
@@ -13088,9 +13216,32 @@ function TeamModal({ onClose, currentUserId }) {
             <div key={m.id} style={{ padding: "14px 16px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 200 }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>
-                    {m.name} {m.id === currentUserId && <span style={{ fontSize: 10, color: "#10b981", marginLeft: 6 }}>(you)</span>}
-                  </div>
+                  {editingName === m.id ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                      <input
+                        autoFocus
+                        value={editNameVal}
+                        onChange={e => setEditNameVal(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveName(m.id); if (e.key === 'Escape') setEditingName(null); }}
+                        style={{ background: '#1c1917', border: '1px solid #d97706', borderRadius: 5, color: '#fafaf9', padding: '4px 8px', fontSize: 13, fontFamily: 'inherit', outline: 'none', flex: 1 }}
+                      />
+                      <button onClick={() => saveName(m.id)} disabled={busy || !editNameVal.trim()}
+                        style={{ background: '#d97706', border: 'none', color: '#0c0a09', borderRadius: 5, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Save</button>
+                      <button onClick={() => setEditingName(null)}
+                        style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 5, padding: '4px 8px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {m.name}
+                      {m.id === currentUserId && <span style={{ fontSize: 10, color: "#10b981" }}>(you)</span>}
+                      <button
+                        onClick={() => { setEditingName(m.id); setEditNameVal(m.name || ''); }}
+                        title="Edit name"
+                        style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '0 2px', fontSize: 13, lineHeight: 1, color: '#57534e', opacity: 0.7 }}>
+                        ✏️
+                      </button>
+                    </div>
+                  )}
                   <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 6, lineHeight: 1.4 }}>{roleDesc(m.role)}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
