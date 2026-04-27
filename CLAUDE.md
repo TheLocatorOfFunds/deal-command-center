@@ -261,6 +261,18 @@ Do NOT delete `TXT resend._domainkey` or `TXT _dmarc` under any circumstance —
 those are the active outbound sending config. SES leftovers (`MX send` and `TXT send`
 with `include:amazonses.com`) were deleted Apr 22, 2026 and do not need to come back.
 
+## ⚠️ Messaging gateway — ALWAYS use Nathan's iPhone, NEVER Twilio
+
+**All outbound SMS, MMS, and video is sent via Nathan's iPhone through the mac_bridge.**
+Twilio is NOT used for outbound messages. Do not build Twilio outbound paths. Do not suggest Twilio for video or MMS.
+
+The routing is automatic: Nathan's iPhone number is registered in `phone_numbers` with `gateway = 'mac_bridge'`.
+The `send-sms` edge function reads that row and returns `pending_mac` — the bridge daemon on the Mac Mini picks it up and fires it via iMessage/SMS from the iPhone.
+
+If you find yourself writing Twilio API calls for outbound messaging: stop, delete it, and use mac_bridge instead.
+
+The only Twilio code that exists is the legacy fallback in `send-sms/index.ts` — leave it there in case a non-bridge number is ever added, but it is NOT the active path and should not be extended.
+
 ## Mac Mini (Defender Mini) — SSH access
 
 Claude can SSH directly into the Mac Mini to deploy bridge fixes without any manual steps.

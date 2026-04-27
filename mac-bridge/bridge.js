@@ -182,10 +182,56 @@ function sendViaMessages(toPhone, body) {
   }
 }
 
+/** Download a remote URL to a temp file; returns the local path. */
+function downloadMediaToTmp(url) {
+  return new Promise((resolve, reject) => {
+    const ext      = (url.split('?')[0].match(/\.[a-z0-9]+$/i) || [''])[0] || '.bin';
+    const tmpPath  = `/tmp/dcc_media_${Date.now()}${ext}`;
+    const fileStream = fs.createWriteStream(tmpPath);
+    const proto    = url.startsWith('https') ? require('https') : require('http');
+    proto.get(url, (res) => {
+      // Follow one redirect
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        fileStream.close();
+        fs.unlinkSync(tmpPath);
+        return downloadMediaToTmp(res.headers.location).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200) {
+        fileStream.close();
+        fs.unlinkSync(tmpPath);
+        return reject(new Error(`HTTP ${res.statusCode} downloading media`));
+      }
+      res.pipe(fileStream);
+      fileStream.on('finish', () => { fileStream.close(); resolve(tmpPath); });
+    }).on('error', (e) => { fileStream.close(); try { fs.unlinkSync(tmpPath); } catch {} reject(e); });
+  });
+}
+
+/** Send a local file (image/video) via iMessage AppleScript. */
+function sendFileViaMessages(toPhone, localPath) {
+  const safePath = localPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const lines = [
+    'tell application "Messages"',
+    '  activate',
+    `  set targetPhone to "${toPhone}"`,
+    '  set targetService to 1st service whose service type = iMessage',
+    '  set targetBuddy to participant targetPhone of targetService',
+    `  send POSIX file "${safePath}" to targetBuddy`,
+    'end tell',
+  ];
+  const tmpScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
+  fs.writeFileSync(tmpScript, lines.join('\n'));
+  try {
+    execFileSync('osascript', [tmpScript], { timeout: 60000 }); // longer timeout for large files
+  } finally {
+    fs.unlinkSync(tmpScript);
+  }
+}
+
 async function processPendingOutbound() {
   const { data: pending, error } = await sb
     .from('messages_outbound')
-    .select('id, to_number, body')
+    .select('id, to_number, body, media_url')
     .eq('status', 'pending_mac')
     .eq('from_number', NATHAN_NUMBER);
 
@@ -198,12 +244,27 @@ async function processPendingOutbound() {
       continue;
     }
     sendingInFlight.add(msg.id);
+    let tmpMediaPath = null;
     try {
-      sendViaMessages(msg.to_number, msg.body);
+      // ── Media (image/video) path ────────────────────────────────────────────
+      if (msg.media_url) {
+        console.log(`⬇ DOWNLOAD  ${msg.media_url}`);
+        tmpMediaPath = await downloadMediaToTmp(msg.media_url);
+        sendFileViaMessages(msg.to_number, tmpMediaPath);
+        console.log(`⬆ SENT FILE  ${msg.to_number}  ${path.basename(tmpMediaPath)}`);
+        // Send text caption as a follow-up message if present
+        if (msg.body && msg.body.trim()) {
+          sendViaMessages(msg.to_number, msg.body.trim());
+          console.log(`⬆ SENT CAPTION  ${msg.to_number}`);
+        }
+      } else {
+        // ── Text-only path (unchanged) ─────────────────────────────────────────
+        sendViaMessages(msg.to_number, msg.body);
+        const preview = (msg.body || '').length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
+        console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
+      }
       consecutiveOscriptTimeouts = 0;
       await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
-      const preview = msg.body.length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
-      console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
     } catch (err) {
       if (err.message.includes('ETIMEDOUT')) {
         consecutiveOscriptTimeouts++;
@@ -226,6 +287,8 @@ async function processPendingOutbound() {
       console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
     } finally {
       sendingInFlight.delete(msg.id);
+      // Clean up temp media file
+      if (tmpMediaPath) { try { fs.unlinkSync(tmpMediaPath); } catch {} }
     }
   }
 }
