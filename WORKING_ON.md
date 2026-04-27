@@ -18,9 +18,15 @@ every session so the other side knows what's in flight.
 
 ## Nathan's session
 
-**Status**: Idle — last sprint covered JV Partner Portal + Account Settings + Team Chat (4 phases). Several pieces are code-shipped but not yet browser-QA'd; see "Open QA" below.
+**Status**: Idle as of Apr 27 afternoon — Lauren + team-management work verified end-to-end. Drag-drop upload is the only feature still untested in browser.
 
-**Last done (Apr 26–27, 2026)**:
+**Last done — afternoon of Apr 27, 2026** (in addition to morning ship below):
+- `f2148f7` Lauren `@`-mention regex fix — `\b` (backspace) → `\y` (word boundary). Bug had silently broken every `@lauren` mention in team chat since Phase 2 shipped. Verified working: Nathan tested `@lauren` in his DM with Justin after toggling her on, she responded.
+- `7fb4de9` profiles.phone column added (Eric was getting "column not found in schema cache" on Save profile) + Lauren on/off toggle in thread header (admin-only).
+- `78d24b7` Team modal upgraded — last sign-in column, password vs magic-link badges, "Resend magic link" button per row. Backed by new admin-only RPC `admin_get_team_users()`.
+- Housekeeping commit: restored `TRANSFER_TO_NEW_CLAUDE_CODE.md` from archive (Justin referenced it as live in CLAUDE.md), renamed Justin's `20260427000000_messages_outbound_media_url.sql` to `20260427001500_*` to break the timestamp collision with `team_chat_phase1.sql`, clarified the email brand rule in CLAUDE.md (client-facing = RefundLocators; internal founder-to-founder = FundLocators LLC).
+
+**Last done — morning of Apr 27, 2026**:
 
 **JV Partner Portal** (new, token-based share for outside investors on flips — separate from client/attorney portals):
 - Deal share with profit %, write-back to deals
@@ -48,23 +54,26 @@ every session so the other side knows what's in flight.
 - Phase 3b: reactions, edit/delete, @mention autocomplete (`team_reactions`)
 - Last commit: `a858675` (Apr 27 00:03 EDT) — phase3 migration fix (helper-alias removed, idempotent realtime publication adds)
 
-**Open QA (code shipped, browser-test pending — Nathan hasn't verified end-to-end)**:
+**Verified end-to-end Apr 27**:
+- Lauren `@`-mention in team chat (DM + Ops channel both working after regex fix)
+- Lauren on/off toggle in thread header
+- Team modal RPC + auth-status badges (loaded data successfully)
+- Account Settings save profile (after `phone` column migration applied)
+
+**Open QA (code shipped, browser-test still pending)**:
 - Drag-drop multi-file upload on Documents tab
-- Team Chat Phase 3a (multi-thread switching, Lauren proposal flow)
-- Team Chat Phase 3b (reactions render, edit/delete persist, @mention autocomplete suggests + inserts)
+- Team Chat Phase 3b — reactions render, edit/delete persist, @mention autocomplete suggests + inserts (autocomplete confirmed via @lauren typing; reactions/edit/delete not formally tested)
 
-**Likely working (Nathan's gut, not formally QA'd)**:
-- Account Settings (avatars + online presence + password)
-- Comms tab TDZ fix
-
-**Still pending from prior sprints** (untouched this round):
-- `.github/workflows/build.yml` exists locally but not pushed — GitHub PAT lacks `workflow` scope. Until it lands, no auto-rebuild safety net: if you forget `npm run build`, `app.js` will be stale on Pages. CLAUDE.md describes this workflow as if it's live; **it is not**. Two ways to land: (a) regenerate the PAT with `workflow` scope, then `git add .github/ && git commit && git push`, or (b) paste the file's contents into GitHub's web UI under Add file → Create new file → `.github/workflows/build.yml`.
+**Still pending**:
+- `admin@fundlocators.com` (new VA) — Supabase auth rate limit hit; wait ~30 min after last attempt then use the new "📧 Resend link" button in Team modal
+- DocuSign engagement template wire-up — UUID `db838549-0777-4f77-86bc-4436d8ec99e5` received from VA; **still waiting on the Data Labels list** (the merge-field names actually used inside the template) before the SQL wire-up can run
 - Wire portal SMS toggle to actually send texts on docket events (Justin's lane)
 - Lauren no-reply ping spec at `JUSTIN_LAUREN_NO_REPLY_PING_SPEC.md` (Justin's lane)
-- DocuSign engagement template wire-up (waiting on Nathan's VA to send Template UUID + Data Labels)
 - Email-via-DCC build (spec pending Nathan's "go")
 
-**Last updated**: Apr 27, 2026
+**Note for Justin**: GitHub Actions auto-rebuild workflow is now live (commit `bf692da`). If you forget `npm run build` before pushing src/app.jsx, the action picks up the slack and commits the rebuilt artifact back with `[skip ci]`.
+
+**Last updated**: Apr 27, 2026 (afternoon)
 
 <!--
 Template:

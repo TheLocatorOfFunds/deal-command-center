@@ -235,8 +235,10 @@ using ((select role from public.profiles where id = auth.uid()) = 'admin')
 ```
 
 ### Email templates brand rule
-All email copy says **RefundLocators**, never FundLocators.
-Sender: `RefundLocators <hello@refundlocators.com>` (Resend-verified via DKIM).
+**Client-facing** email copy says **RefundLocators**, never FundLocators.
+Sender for client/lead/partner mail: `RefundLocators <hello@refundlocators.com>` (Resend-verified via DKIM).
+
+**Internal exec mail** (founder-to-founder briefings — `monday-memo`, `morning-sweep` CEO digest, anything between Nathan and Justin) uses the FundLocators LLC brand and sends from `hello@fundlocators.com`. That's intentional: those go to the founders, not customers, and FundLocators is the parent LLC. The "never FundLocators" rule above applies only to outbound to non-founders.
 
 ### Inbound email reality (Apr 22, 2026)
 `refundlocators.com` has **no MX records** — Nathan doesn't have a real mailbox
