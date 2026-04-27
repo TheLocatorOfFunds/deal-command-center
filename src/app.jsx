@@ -15949,7 +15949,12 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
 // Global event: window.dispatchEvent(new Event('dcc:open-lauren'))
 function LaurenDCC() {
   const [open, setOpen] = useState(false);
+  // homeThreadId = user's solo lauren_dm scratchpad; threadId = currently
+  // active thread in the FAB (could be a lauren_room when looped-in).
+  const [homeThreadId, setHomeThreadId] = useState(null);
   const [threadId, setThreadId] = useState(null);
+  const [thread, setThread] = useState(null);
+  const [participants, setParticipants] = useState([]);
   const [msgs, setMsgs] = useState([]);
   const [actions, setActions] = useState([]);
   const [me, setMe] = useState(null);
@@ -15970,13 +15975,34 @@ function LaurenDCC() {
         setMe(user);
         const { data: tid, error: rpcErr } = await sb.rpc('lauren_get_or_create_dm');
         if (rpcErr) { setError('Lauren DM not available: ' + rpcErr.message); return; }
-        if (tid) setThreadId(tid);
+        if (tid) { setHomeThreadId(tid); setThreadId(tid); }
       } catch (e) {
         setError('Lauren init failed: ' + (e.message || e));
       }
     })();
     return () => window.removeEventListener('dcc:open-lauren', handler);
   }, []);
+
+  // Load thread metadata + participants whenever active thread changes
+  useEffect(() => {
+    if (!threadId) { setThread(null); setParticipants([]); return; }
+    (async () => {
+      const { data: t } = await sb.from('team_threads').select('id, title, thread_type, lauren_enabled').eq('id', threadId).single();
+      setThread(t || null);
+      if (t?.thread_type === 'lauren_room') {
+        const { data: parts } = await sb.from('team_thread_participants').select('user_id').eq('thread_id', threadId);
+        const userIds = (parts || []).map(p => p.user_id);
+        if (userIds.length) {
+          const { data: profs } = await sb.from('profiles').select('id, name, display_name, last_active_at').in('id', userIds);
+          setParticipants(profs || []);
+        } else {
+          setParticipants([]);
+        }
+      } else {
+        setParticipants([]);
+      }
+    })();
+  }, [threadId]);
 
   // Load + subscribe to messages
   useEffect(() => {
@@ -16039,7 +16065,11 @@ function LaurenDCC() {
     if (busy || !input.trim() || !threadId || !me) return;
     const text = input.trim();
     setInput('');
-    setBusy(true);
+    // Only show "Lauren typing" if Lauren is expected to respond — always
+    // in her solo DM, only when @-mentioned in rooms / channels.
+    const expectLaurenReply = thread?.thread_type === 'lauren_dm'
+      || /(@lauren\b|^\s*lauren[,:]|^\s*L:)/i.test(text);
+    if (expectLaurenReply) setBusy(true);
     const { error: insErr } = await sb.from('team_messages').insert({
       thread_id: threadId,
       sender_id: me.id,
@@ -16049,14 +16079,20 @@ function LaurenDCC() {
     if (insErr) {
       setError('Send failed: ' + insErr.message);
       setBusy(false);
+    } else if (expectLaurenReply) {
+      // Failsafe — if Lauren doesn't reply in 20s, clear busy so the UI doesn't lock.
+      setTimeout(() => setBusy(b => b && false), 20000);
     }
-    // Lauren's response will arrive via realtime → busy gets cleared in the sub handler
     setTimeout(() => inputEl.current?.focus(), 50);
   }
 
   const confirmAction = async (id) => {
-    const { error } = await sb.rpc('lauren_execute_action', { p_action_id: id });
-    if (error) alert('Confirm failed: ' + error.message);
+    const { data, error } = await sb.rpc('lauren_execute_action', { p_action_id: id });
+    if (error) { alert('Confirm failed: ' + error.message); return; }
+    // If we just confirmed a loop_in_teammate, switch the FAB to the new room.
+    if (data && typeof data === 'object' && data.room_thread_id) {
+      setThreadId(data.room_thread_id);
+    }
   };
   const rejectAction = async (id) => {
     const { error } = await sb.rpc('lauren_reject_action', { p_action_id: id });
@@ -16152,15 +16188,40 @@ function LaurenDCC() {
       React.createElement('div', {
         style: { display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: '#0c0a09', borderBottom: '1px solid #292524', flexShrink: 0 }
       },
+        // Back-to-scratchpad button if we're in a lauren_room
+        thread?.thread_type === 'lauren_room' && homeThreadId && React.createElement('button', {
+          onClick: () => setThreadId(homeThreadId),
+          title: 'Back to your Lauren scratchpad',
+          style: { background: '#292524', border: '1px solid #44403c', color: '#a8a29e', fontSize: 11, padding: '4px 8px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }
+        }, '← Lauren'),
+        // Status dot — green for active context (Lauren on)
         React.createElement('div', { style: { width: 8, height: 8, borderRadius: '50%', background: '#4ade80', flexShrink: 0 } }),
-        React.createElement('div', null,
-          React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#fafaf9' } }, 'Lauren'),
-          React.createElement('div', { style: { fontSize: 10, color: '#78716c' } }, 'Exec assistant · "loop X in" / ask anything')
+        // Title block — adapts based on thread_type
+        React.createElement('div', { style: { minWidth: 0, flex: 1 } },
+          thread?.thread_type === 'lauren_room'
+            ? React.createElement(React.Fragment, null,
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, thread.title || 'Room'),
+                React.createElement('div', { style: { fontSize: 10, color: '#78716c', display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 } },
+                  ...participants.filter(p => p.id !== me?.id).map(p => {
+                    const isOnline = p.last_active_at && (Date.now() - new Date(p.last_active_at).getTime() < 2 * 60 * 1000);
+                    return React.createElement('span', { key: p.id, style: { display: 'inline-flex', alignItems: 'center', gap: 3 } },
+                      React.createElement('span', { style: { width: 6, height: 6, borderRadius: '50%', background: isOnline ? '#4ade80' : '#57534e' } }),
+                      p.display_name || p.name || 'Teammate',
+                    );
+                  }),
+                  participants.length > 0 && React.createElement('span', { style: { color: '#44403c' } }, '·'),
+                  React.createElement('span', { style: { color: '#78716c' } }, 'Lauren is quiet — @lauren to summon'),
+                )
+              )
+            : React.createElement(React.Fragment, null,
+                React.createElement('div', { style: { fontSize: 13, fontWeight: 700, color: '#fafaf9' } }, 'Lauren'),
+                React.createElement('div', { style: { fontSize: 10, color: '#78716c' } }, 'Exec assistant · "loop X in" / ask anything')
+              )
         ),
         React.createElement('button', {
           onClick: () => setOpen(false),
           'aria-label': 'Close chat',
-          style: { marginLeft: 'auto', background: '#292524', border: '1px solid #44403c', color: '#fafaf9', fontSize: 20, lineHeight: 1, cursor: 'pointer', borderRadius: 8, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: 'inherit', fontWeight: 400 }
+          style: { background: '#292524', border: '1px solid #44403c', color: '#fafaf9', fontSize: 20, lineHeight: 1, cursor: 'pointer', borderRadius: 8, width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: 'inherit', fontWeight: 400 }
         }, '×')
       ),
       React.createElement('div', {
@@ -16205,7 +16266,7 @@ function LaurenDCC() {
           value: input,
           onChange: e => setInput(e.target.value),
           onKeyDown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } },
-          placeholder: threadId ? 'Ask Lauren or say "loop Justin in: …"' : 'Loading…',
+          placeholder: !threadId ? 'Loading…' : (thread?.thread_type === 'lauren_room' ? 'Message — @lauren to summon her' : 'Ask Lauren or say "loop Justin in: …"'),
           rows: 1,
           disabled: !threadId,
           style: { flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8, padding: '8px 12px', color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', minHeight: 38, opacity: threadId ? 1 : 0.5 }

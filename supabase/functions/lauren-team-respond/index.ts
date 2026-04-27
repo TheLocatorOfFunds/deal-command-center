@@ -58,25 +58,30 @@ YOU ARE IN A LAUREN DM (your dedicated thread with this user — they have you a
 - If they ask a question or give a command, act on it.
 - Don't proactively suggest features. They know what you can do.
 
-CRITICAL — RELAY DISCIPLINE (this is the most important rule in your prompt):
+CRITICAL — LOOP-IN DISCIPLINE (most important rule in your prompt):
 
-When the user says "loop X in" / "tell X" / "alert X" / "send this to X" / "forward to X" / "let X know" or anything else that means "communicate this to a teammate" — you MUST call the propose_relay_to_teammate tool. You do NOT have the ability to relay messages by typing text in the chat. Typing "Justin — heads up..." in this chat does NOT send anything to Justin. Only the tool call does.
+When the user says "loop X in" / "pull X in" / "get X here" / "bring X in" / "add X to this" — that means "create a real shared room with X so the three of us can talk together." You MUST call propose_loop_in_teammate. The user does NOT want a one-off message sent to X's DM; they want X to actually appear in the conversation.
 
-The required sequence for any relay request:
-  1. Call find_teammate(needle) to get the target's user_id (e.g. "Justin" → user_id)
-  2. Call propose_relay_to_teammate(target_user_id, body, target_name) with a complete, well-written body. The body is what the recipient will literally see, written in your voice as Lauren on behalf of Nathan/Justin.
-  3. THEN reply briefly in chat — one line — confirming what you proposed. The chat will render a confirm/reject card under your message. The user clicks confirm to actually send.
+When the user says "tell X" / "send to X" / "forward this to X" — that's a one-off. Use propose_relay_to_teammate (no shared room created).
+
+You do NOT have the ability to communicate with teammates by typing text in this chat. Typing "Justin — heads up..." does NOT send anything to Justin. Only a tool call does. Period.
+
+Required sequence for "loop X in":
+  1. Call find_teammate(needle) to get target_user_id.
+  2. Call propose_loop_in_teammate(target_user_id, target_name, intro) where intro is the first message you'll post in the new room — written to the target by name, with all the context they need (don't make them ask). Pull from recent activity / lookup_deal as needed before composing the intro.
+  3. Reply ONE short line in chat: "Proposed — confirm card below." The chat will render a confirm/reject card. The user clicks confirm and the room gets created with the intro posted.
+  4. After the room is created, the FAB will auto-switch to it. In the new room you (Lauren) are QUIET — only respond when explicitly @-mentioned with @lauren.
 
 NEVER do these things:
-- DON'T type a message addressed to a teammate (like "Justin — heads up...") without first calling propose_relay_to_teammate. That's a hallucination — the message goes nowhere.
-- DON'T claim "I already looped X in" or "I told them" if you have not called propose_relay_to_teammate in THIS turn. Past turns don't count.
-- DON'T ask the user to forward the message themselves. You have the tool. Use it.
+- DON'T type a message addressed to a teammate without first calling propose_loop_in_teammate or propose_relay_to_teammate. That's a hallucination — the message goes nowhere.
+- DON'T claim "I already looped X in" or "I created the room" if you have not called the tool in THIS turn.
+- DON'T ask the user to forward the message themselves. Use the tool.
 
-If the body isn't clear from the user's request, ask them ONCE in a short reply: "What do you want me to tell them?" — then wait for their answer before calling the tool. Don't infer a body and relay without confirmation if the user was vague.
+If the user is vague (e.g. just "loop Justin in" with no topic), pull context from the recent conversation if obvious; otherwise ask ONE short question: "What's the context — what should I open the room with?"
 
-Example correct behavior:
+Example:
   User: "loop Justin in on Casey Jennings"
-  You: [call find_teammate("Justin")] → [call propose_relay_to_teammate(<justin_uuid>, "Casey Jennings update — [pull recent activity if needed]", "Justin")]
+  You: [call lookup_deal("Casey Jennings")] → [call recent_activity(deal_id)] → [call find_teammate("Justin")] → [call propose_loop_in_teammate(<justin_uuid>, "Justin", "Justin — Nathan's looping you in on Casey Jennings (7260 Jerry Drive, West Chester). Recent: <summary>. Wanted to make sure you're tracking.")]
   You: "Proposed — confirm card below."`;
 
 const TOOLS = [
@@ -152,14 +157,27 @@ const TOOLS = [
     },
   },
   {
-    name: "propose_relay_to_teammate",
-    description: "Forward / relay a message to the user's DM with another teammate. Use when the user says 'loop X in' / 'tell X' / 'send this to X' / 'forward to X'. The body will appear in the DM from you (Lauren) so the recipient knows it was relayed. Always call find_teammate first to get target_user_id.",
+    name: "propose_loop_in_teammate",
+    description: "Add a teammate to the current conversation as a real participant — creates a 3-way room (current user + target + you/Lauren) and posts an intro message there. Use when the user says 'loop X in' / 'pull X in' / 'get X here' / 'add X' / 'bring X in'. After the room is created, you (Lauren) go quiet there unless @-mentioned. Call find_teammate first to get target_user_id.",
     input_schema: {
       type: "object",
       properties: {
         target_user_id: { type: "string", description: "uuid from find_teammate" },
-        body: { type: "string", description: "The message to relay. Include any links/context from the original conversation." },
-        target_name: { type: "string", description: "Display name of the recipient (e.g. 'Justin') — for the confirm card label." },
+        target_name: { type: "string", description: "Display name (e.g. 'Justin')" },
+        intro: { type: "string", description: "First message you'll post in the new room as Lauren — sets context. Include any links/context from the original conversation. Address it to the target by name (e.g. 'Justin — Nathan wanted to loop you in on...')." },
+      },
+      required: ["target_user_id", "intro"],
+    },
+  },
+  {
+    name: "propose_relay_to_teammate",
+    description: "Send a one-off message to a teammate's DM without creating a shared room. Use when the user says 'tell X' / 'send to X' / 'forward to X' (one-shot, no ongoing conversation). For most 'loop X in' requests, use propose_loop_in_teammate instead — that creates a real shared room.",
+    input_schema: {
+      type: "object",
+      properties: {
+        target_user_id: { type: "string", description: "uuid from find_teammate" },
+        body: { type: "string", description: "The message to relay." },
+        target_name: { type: "string", description: "Display name of the recipient." },
       },
       required: ["target_user_id", "body"],
     },
@@ -321,6 +339,24 @@ Deno.serve(async (req) => {
             if (error) throw error;
             proposedActionIds.push(row.id);
             result = { proposed: true, action_id: row.id, label, note: "A confirm/reject card will appear under your reply." };
+          } else if (tu.name === "propose_loop_in_teammate") {
+            const { target_user_id, target_name, intro } = tu.input;
+            if (!lastUserSenderId) throw new Error("no caller user_id available — cannot create room without a sender");
+            const label = `Loop ${target_name || "teammate"} in — open a room with intro: "${(intro || "").slice(0, 80)}${intro && intro.length > 80 ? "…" : ""}"`;
+            const { data: row, error } = await db.from("lauren_pending_actions").insert({
+              thread_id,
+              action_type: "loop_in_teammate",
+              action_label: label,
+              action_payload: {
+                caller_id: lastUserSenderId,
+                target_user_id,
+                target_name: target_name || null,
+                intro: intro || "",
+              },
+            }).select("id").single();
+            if (error) throw error;
+            proposedActionIds.push(row.id);
+            result = { proposed: true, action_id: row.id, label, note: "A confirm card will appear under your reply. Confirm creates the room with the intro posted, and the FAB auto-switches to it." };
           } else {
             result = { error: "unknown tool" };
           }
