@@ -1026,6 +1026,11 @@ function TeamView({ teamMembers }) {
   const [showNewThreadModal, setShowNewThreadModal] = useState(false);
   const [actionsByMessageId, setActionsByMessageId] = useState({});  // pending action map for current thread
   const [participantsByThreadId, setParticipantsByThreadId] = useState({});
+  const [reactionsByMessageId, setReactionsByMessageId] = useState({});  // { msgId: [{emoji,user_id,...}] }
+  const [reactionPickerForId, setReactionPickerForId] = useState(null);
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [editingBody, setEditingBody] = useState('');
+  const [mentionState, setMentionState] = useState(null);  // { open, prefix, anchorPos }
   const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
@@ -1132,6 +1137,96 @@ function TeamView({ teamMembers }) {
   useEffect(() => {
     if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
+
+  // Load + subscribe to reactions for the active thread's messages.
+  useEffect(() => {
+    if (!activeThreadId || messages.length === 0) return;
+    let cancelled = false;
+    const messageIds = messages.map(m => m.id);
+    const loadReactions = async () => {
+      const { data } = await sb.from('team_reactions').select('*').in('message_id', messageIds);
+      if (cancelled) return;
+      const map = {};
+      (data || []).forEach(r => {
+        if (!map[r.message_id]) map[r.message_id] = [];
+        map[r.message_id].push(r);
+      });
+      setReactionsByMessageId(map);
+    };
+    loadReactions();
+    const ch = sb.channel('team-reactions-' + activeThreadId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_reactions' }, loadReactions)
+      .subscribe();
+    return () => { cancelled = true; sb.removeChannel(ch); };
+  }, [activeThreadId, messages.length]);
+
+  const toggleReaction = async (messageId, emoji) => {
+    const existing = (reactionsByMessageId[messageId] || []).find(r => r.user_id === me.id && r.emoji === emoji);
+    if (existing) {
+      await sb.from('team_reactions').delete().eq('id', existing.id);
+    } else {
+      await sb.from('team_reactions').insert({ message_id: messageId, user_id: me.id, emoji });
+    }
+    setReactionPickerForId(null);
+  };
+
+  const startEdit = (msg) => {
+    setEditingMessageId(msg.id);
+    setEditingBody(msg.body);
+  };
+  const cancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingBody('');
+  };
+  const saveEdit = async () => {
+    if (!editingMessageId) return;
+    const trimmed = editingBody.trim();
+    if (!trimmed) return cancelEdit();
+    await sb.from('team_messages').update({ body: trimmed, edited_at: new Date().toISOString() }).eq('id', editingMessageId).eq('sender_id', me.id);
+    cancelEdit();
+  };
+
+  const deleteMessage = async (msg) => {
+    if (!window.confirm('Delete this message?')) return;
+    await sb.from('team_messages').update({ deleted_at: new Date().toISOString() }).eq('id', msg.id).eq('sender_id', me.id);
+  };
+
+  // @mention autocomplete: scan composer body for an open '@'-prefix at the
+  // current caret position. Returns null when not in a mention context.
+  const computeMentionState = (text, caret) => {
+    const before = text.slice(0, caret);
+    const m = before.match(/(?:^|\s)@(\w*)$/);
+    if (!m) return null;
+    return { prefix: m[1].toLowerCase(), startPos: caret - m[1].length - 1 };
+  };
+
+  // Suggestions for the current mention prefix
+  const mentionSuggestions = (() => {
+    if (!mentionState) return [];
+    const candidates = [
+      { id: 'lauren', label: 'Lauren', icon: '🤖' },
+      ...Object.values(profilesById).filter(p => p.id !== me.id).map(p => ({ id: p.id, label: p.display_name || p.name || 'Teammate', icon: '👤' })),
+    ];
+    const q = mentionState.prefix;
+    return candidates.filter(c => !q || c.label.toLowerCase().startsWith(q)).slice(0, 6);
+  })();
+
+  const insertMention = (suggestion) => {
+    if (!mentionState) return;
+    const before = body.slice(0, mentionState.startPos);
+    const after = body.slice(composerRef.current?.selectionEnd ?? body.length);
+    const insertion = '@' + suggestion.label + ' ';
+    const next = before + insertion + after;
+    setBody(next);
+    setMentionState(null);
+    setTimeout(() => {
+      if (composerRef.current) {
+        const pos = before.length + insertion.length;
+        composerRef.current.focus();
+        composerRef.current.setSelectionRange(pos, pos);
+      }
+    }, 0);
+  };
 
   // Load + subscribe to Lauren's pending action proposals for the active thread.
   // These render as confirm/reject cards below the message that proposed them.
@@ -1262,11 +1357,28 @@ function TeamView({ teamMembers }) {
   };
 
   const onKeyDown = (e) => {
+    // Mention autocomplete navigation
+    if (mentionState && mentionSuggestions.length) {
+      if (e.key === 'Escape') { e.preventDefault(); setMentionState(null); return; }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        insertMention(mentionSuggestions[0]);
+        return;
+      }
+    }
     // Cmd/Ctrl+Enter sends; plain Enter inserts newline (chat convention)
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
       send();
     }
+  };
+
+  const onBodyChange = (e) => {
+    const newVal = e.target.value;
+    setBody(newVal);
+    // Recompute mention state
+    const caret = e.target.selectionStart || newVal.length;
+    setMentionState(computeMentionState(newVal, caret));
   };
 
   const activeThread = threads.find(t => t.id === activeThreadId);
@@ -1410,14 +1522,25 @@ function TeamView({ teamMembers }) {
                 <div style={{ textAlign: 'center', padding: 40, color: '#57534e', fontSize: 13 }}>
                   No messages yet. Say hi 👋
                 </div>
-              ) : messages.map((m, i) => {
-                const prev = messages[i - 1];
+              ) : messages.filter(m => !m.deleted_at).map((m, i, arr) => {
+                const prev = arr[i - 1];
                 const grouped = prev && prev.sender_id === m.sender_id && prev.sender_kind === m.sender_kind &&
                   (new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() < 3 * 60 * 1000);
                 const isMe = m.sender_id === me.id;
                 const color = senderColor(m.sender_id);
+                const reactions = reactionsByMessageId[m.id] || [];
+                const reactionCounts = reactions.reduce((acc, r) => {
+                  if (!acc[r.emoji]) acc[r.emoji] = { count: 0, mine: false, names: [] };
+                  acc[r.emoji].count++;
+                  if (r.user_id === me.id) acc[r.emoji].mine = true;
+                  const reactor = profilesById[r.user_id];
+                  acc[r.emoji].names.push(reactor?.display_name || reactor?.name || '?');
+                  return acc;
+                }, {});
+                const isEditing = editingMessageId === m.id;
+                const canEdit = isMe;  // Lauren / others = no edit
                 return (
-                  <div key={m.id} style={{ display: 'flex', gap: 10, marginTop: grouped ? 2 : 14 }}>
+                  <div key={m.id} className="team-msg-row" style={{ display: 'flex', gap: 10, marginTop: grouped ? 2 : 14, position: 'relative' }}>
                     {grouped ? (
                       <div style={{ width: 32, flexShrink: 0 }} />
                     ) : (
@@ -1447,20 +1570,91 @@ function TeamView({ teamMembers }) {
                           <span style={{ color: '#fafaf9', fontWeight: 700 }}>{senderName(m)}</span>
                           {isMe && <span style={{ color: '#57534e', fontSize: 10, marginLeft: 6 }}>(you)</span>}
                           <span style={{ color: '#57534e', fontSize: 10, marginLeft: 8 }}>{formatTime(m.created_at)}</span>
+                          {m.edited_at && <span style={{ color: '#57534e', fontSize: 10, marginLeft: 6, fontStyle: 'italic' }}>(edited)</span>}
                         </div>
                       )}
-                      {m.body && (
-                        <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                          {m.body}
+                      {isEditing ? (
+                        <div>
+                          <textarea
+                            value={editingBody}
+                            autoFocus
+                            onChange={e => setEditingBody(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Escape') cancelEdit();
+                              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEdit(); }
+                            }}
+                            style={{ width: '100%', minHeight: 60, padding: 8, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', fontSize: 13, fontFamily: 'inherit' }}
+                          />
+                          <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                            <button onClick={saveEdit} style={{ ...btnPrimary, fontSize: 11, padding: '4px 10px' }}>Save</button>
+                            <button onClick={cancelEdit} style={{ ...btnGhost, fontSize: 11, padding: '4px 10px' }}>Cancel</button>
+                            <span style={{ fontSize: 10, color: '#57534e', alignSelf: 'center' }}>⌘+Enter to save · Esc to cancel</span>
+                          </div>
                         </div>
+                      ) : (
+                        m.body && (
+                          <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                            {m.body}
+                          </div>
+                        )
                       )}
-                      {Array.isArray(m.attachments) && m.attachments.length > 0 && (
+                      {!isEditing && Array.isArray(m.attachments) && m.attachments.length > 0 && (
                         <TeamAttachments attachments={m.attachments} onLightbox={setLightboxUrl} />
                       )}
-                      {actionsByMessageId[m.id] && actionsByMessageId[m.id].map(a => (
+                      {!isEditing && actionsByMessageId[m.id] && actionsByMessageId[m.id].map(a => (
                         <LaurenActionCard key={a.id} action={a} />
                       ))}
+                      {/* Reaction pills */}
+                      {!isEditing && Object.keys(reactionCounts).length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                          {Object.entries(reactionCounts).map(([emoji, info]) => (
+                            <button key={emoji}
+                              onClick={() => toggleReaction(m.id, emoji)}
+                              title={info.names.join(', ')}
+                              style={{
+                                background: info.mine ? '#78350f44' : '#1c1917',
+                                border: '1px solid ' + (info.mine ? '#92400e' : '#292524'),
+                                color: info.mine ? '#fbbf24' : '#a8a29e',
+                                borderRadius: 12, padding: '2px 8px', fontSize: 12, cursor: 'pointer',
+                                fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 4,
+                              }}>
+                              <span>{emoji}</span><span style={{ fontWeight: 600 }}>{info.count}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
+                    {/* Per-message hover actions: react + edit + delete */}
+                    {!isEditing && (
+                      <div className="team-msg-actions" style={{
+                        position: 'absolute', top: -10, right: 0,
+                        display: 'flex', gap: 2,
+                        background: '#0c0a09', border: '1px solid #292524', borderRadius: 6,
+                        padding: 2, opacity: 0, transition: 'opacity 0.1s',
+                      }}>
+                        <button
+                          onClick={() => setReactionPickerForId(reactionPickerForId === m.id ? null : m.id)}
+                          title="React"
+                          style={{ background: 'transparent', border: 'none', color: '#a8a29e', cursor: 'pointer', padding: '4px 6px', fontSize: 12, fontFamily: 'inherit' }}
+                        >😀</button>
+                        {canEdit && <button onClick={() => startEdit(m)} title="Edit" style={{ background: 'transparent', border: 'none', color: '#a8a29e', cursor: 'pointer', padding: '4px 6px', fontSize: 12, fontFamily: 'inherit' }}>✎</button>}
+                        {canEdit && <button onClick={() => deleteMessage(m)} title="Delete" style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer', padding: '4px 6px', fontSize: 12, fontFamily: 'inherit' }}>×</button>}
+                      </div>
+                    )}
+                    {/* Reaction emoji picker */}
+                    {reactionPickerForId === m.id && (
+                      <div style={{
+                        position: 'absolute', top: 8, right: 0,
+                        background: '#1c1917', border: '1px solid #44403c', borderRadius: 8,
+                        padding: 4, display: 'flex', gap: 2,
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.5)', zIndex: 5,
+                      }}>
+                        {['👍','❤️','😂','🎉','🔥','✅','👀','🤔'].map(emoji => (
+                          <button key={emoji} onClick={() => toggleReaction(m.id, emoji)}
+                            style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: '4px 6px', fontSize: 18, fontFamily: 'inherit' }}>{emoji}</button>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -1468,7 +1662,35 @@ function TeamView({ teamMembers }) {
             </div>
 
             {/* Composer */}
-            <div style={{ padding: '12px 14px', borderTop: '1px solid #292524', background: '#0c0a09' }}>
+            <div style={{ padding: '12px 14px', borderTop: '1px solid #292524', background: '#0c0a09', position: 'relative' }}>
+              {/* @mention autocomplete dropdown — floats above the textarea */}
+              {mentionState && mentionSuggestions.length > 0 && (
+                <div style={{
+                  position: 'absolute', bottom: '100%', left: 14, marginBottom: 6,
+                  background: '#1c1917', border: '1px solid #44403c', borderRadius: 8,
+                  boxShadow: '0 -4px 16px rgba(0,0,0,0.5)',
+                  minWidth: 220, maxHeight: 240, overflowY: 'auto',
+                  zIndex: 20,
+                }}>
+                  {mentionSuggestions.map((s, i) => (
+                    <button key={s.id}
+                      onClick={() => insertMention(s)}
+                      style={{
+                        display: 'flex', width: '100%', alignItems: 'center', gap: 10,
+                        padding: '8px 12px',
+                        background: i === 0 ? '#292524' : 'transparent',
+                        color: '#fafaf9',
+                        border: 'none', textAlign: 'left',
+                        cursor: 'pointer', fontFamily: 'inherit', fontSize: 13,
+                      }}
+                    >
+                      <span style={{ fontSize: 16 }}>{s.icon}</span>
+                      <span style={{ fontWeight: 600 }}>{s.label}</span>
+                      {i === 0 && <span style={{ marginLeft: 'auto', fontSize: 9, color: '#78716c' }}>↵ Tab</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* Pending attachments preview */}
               {pendingAttachments.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
@@ -1485,7 +1707,7 @@ function TeamView({ teamMembers }) {
               <textarea
                 ref={composerRef}
                 value={body}
-                onChange={e => setBody(e.target.value)}
+                onChange={onBodyChange}
                 onKeyDown={onKeyDown}
                 placeholder={`Message #${activeThread.title}…   (⌘+Enter to send · drag files anywhere · @lauren to summon)`}
                 rows={2}
