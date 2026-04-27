@@ -13125,9 +13125,43 @@ function TeamModal({ onClose, currentUserId }) {
 
   const load = async () => {
     setLoading(true);
-    const { data } = await sb.from('profiles').select('*').order('role').order('name');
-    setMembers(data || []);
+    const { data, error } = await sb.rpc('admin_get_team_users');
+    if (error) {
+      setMsg({ type: 'error', text: 'Could not load team: ' + error.message });
+      setMembers([]);
+    } else {
+      setMembers(data || []);
+    }
     setLoading(false);
+  };
+
+  const sinceLabel = (ts) => {
+    if (!ts) return 'Never signed in';
+    const ms = Date.now() - new Date(ts).getTime();
+    const m = Math.round(ms / 60000);
+    if (m < 1) return 'Just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.round(h / 24);
+    if (d < 30) return `${d}d ago`;
+    const mo = Math.round(d / 30);
+    return `${mo}mo ago`;
+  };
+
+  const resendMagicLink = async (email) => {
+    if (!email) return;
+    setBusy(true); setMsg(null);
+    try {
+      const appUrl = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+      const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: appUrl } });
+      if (error) throw error;
+      setMsg({ type: 'success', text: `Magic link re-sent to ${email}.` });
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
   };
 
   useEffect(() => { load(); }, []);
@@ -13243,8 +13277,36 @@ function TeamModal({ onClose, currentUserId }) {
                     </div>
                   )}
                   <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 6, lineHeight: 1.4 }}>{roleDesc(m.role)}</div>
+                  <div style={{ fontSize: 11, color: "#78716c", marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    {m.email && <span style={{ fontFamily: 'monospace' }}>{m.email}</span>}
+                    {m.email && <span style={{ color: '#44403c' }}>·</span>}
+                    <span title={m.last_sign_in_at ? new Date(m.last_sign_in_at).toLocaleString() : 'Never signed in'}>
+                      {sinceLabel(m.last_sign_in_at)}
+                    </span>
+                    <span style={{ color: '#44403c' }}>·</span>
+                    {m.has_password ? (
+                      <span style={{ color: '#10b981', fontWeight: 600 }} title="Password is set — can sign in directly with email + password">✅ password set</span>
+                    ) : m.last_sign_in_at ? (
+                      <span style={{ color: '#fbbf24', fontWeight: 600 }} title="No password — sign in via magic link only">📧 magic-link only</span>
+                    ) : (
+                      <span style={{ color: '#a8a29e', fontWeight: 600 }} title="Invited but has not signed in yet">⏳ never signed in</span>
+                    )}
+                    {!m.email_confirmed_at && (
+                      <span style={{ color: '#fca5a5', fontWeight: 600 }} title="Email address has not been confirmed">⚠ unconfirmed</span>
+                    )}
+                  </div>
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: 'wrap' }}>
+                  {m.email && m.id !== currentUserId && (
+                    <button
+                      onClick={() => resendMagicLink(m.email)}
+                      disabled={busy}
+                      title={`Send a fresh magic link to ${m.email}`}
+                      style={{ ...btnGhost, fontSize: 11, padding: '6px 10px', whiteSpace: 'nowrap' }}
+                    >
+                      📧 Resend link
+                    </button>
+                  )}
                   <select
                     value={m.role || 'user'}
                     onChange={e => updateRole(m.id, e.target.value)}
