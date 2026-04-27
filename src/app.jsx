@@ -6928,6 +6928,107 @@ function Modal({ onClose, title, children, wide }) {
   );
 }
 
+// ─── Personalized URL control (deal detail header) ─────────────────
+// Renders next to the status select. For lead-phase deals without a
+// refundlocators_token: shows a "🔗 Generate personalized URL" button.
+// For deals with a token (any phase): shows the URL with Copy + Preview
+// + Open in Leads tab. Generating writes a personalized_links row; the
+// existing tg_sync_refundlocators_token trigger copies the token back
+// to deals.refundlocators_token automatically.
+function PersonalizedUrlControl({ deal, reload, logAct }) {
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const token = deal?.refundlocators_token;
+
+  // Show the control on lead-phase deals (need a URL to send out) AND
+  // on deals that already have a URL (so you can copy it from anywhere).
+  const showOnLead = isLeadStatus(deal);
+  if (!showOnLead && !token) return null;
+
+  const generate = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+      const arr = new Uint8Array(8);
+      crypto.getRandomValues(arr);
+      let newToken = '';
+      for (let i = 0; i < 8; i++) newToken += alphabet[arr[i] % alphabet.length];
+
+      const meta = deal.meta || {};
+      const nameParts = (deal.name || '').trim().split(/\s+/);
+      const first_name = nameParts[0] || null;
+      const last_name = nameParts.slice(1).join(' ') || null;
+      const phoneRaw = meta.phone || meta.homeownerPhone || meta.contactPhone || meta.homeowner_phone || null;
+      const phoneClean = phoneRaw ? String(phoneRaw).replace(/\D/g, '') : null;
+      const phoneE164 = phoneClean
+        ? (phoneClean.length === 10 ? `+1${phoneClean}`
+            : phoneClean.length === 11 && phoneClean[0] === '1' ? `+${phoneClean}`
+            : `+${phoneClean}`)
+        : null;
+
+      const row = {
+        token: newToken,
+        deal_id: deal.id,
+        first_name, last_name,
+        phone: phoneE164,
+        property_address: deal.address || null,
+        county: meta.county || null,
+        case_number: meta.courtCase || meta.caseNumber || meta.case_number || null,
+        sale_date: meta.saleDate || meta.sale_date || null,
+        sale_price: meta.salePrice ?? meta.sale_price ?? null,
+        judgment_amount: meta.judgmentAmount ?? meta.judgment_amount ?? null,
+        estimated_surplus_low: meta.estimatedSurplusLow ?? meta.estimated_surplus_low ?? null,
+        estimated_surplus_high: meta.estimatedSurplusHigh ?? meta.estimated_surplus_high ?? null,
+        source: 'dcc-lead',
+        expires_at: new Date(Date.now() + 90 * 86400 * 1000).toISOString(),
+      };
+
+      const { error } = await sb.from('personalized_links').insert(row);
+      if (error) throw error;
+      if (logAct) logAct(`Generated personalized URL — refundlocators.com/s/${newToken}`, ['team']);
+      // Trigger sync_refundlocators_token copies token to deals.refundlocators_token.
+      // Reload to pick it up.
+      if (reload) await reload();
+    } catch (e) {
+      alert('Could not generate URL: ' + (e.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copyUrl = async () => {
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(`https://refundlocators.com/s/${token}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {/* clipboard blocked */}
+  };
+
+  if (token) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, marginLeft: 4, padding: '2px 6px', background: 'rgba(217,119,6,0.08)', border: '1px solid #78350f', borderRadius: 6 }}>
+        <span style={{ fontSize: 10, color: '#fbbf24', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase' }}>🔗 URL</span>
+        <code style={{ fontSize: 11, color: '#fafaf9', fontFamily: "'DM Mono', monospace", background: 'transparent' }}>/s/{token}</code>
+        <button onClick={copyUrl} title="Copy full URL" style={{ background: 'transparent', border: 'none', color: copied ? '#10b981' : '#a8a29e', cursor: 'pointer', fontSize: 11, padding: '0 4px' }}>{copied ? '✓ copied' : '📋'}</button>
+        <a href={`https://refundlocators.com/s/${token}`} target="_blank" rel="noopener noreferrer" title="Open the page they'll see" style={{ color: '#a8a29e', textDecoration: 'none', fontSize: 11, padding: '0 4px' }}>↗</a>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={generate}
+      disabled={busy}
+      title="Generates a refundlocators.com/s/<token> URL pre-filled with this deal's data, so you can text it to the lead."
+      style={{ background: '#78350f', color: '#fafaf9', border: 0, padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: busy ? 0.6 : 1 }}
+    >
+      {busy ? 'Generating…' : '🔗 Generate personalized URL'}
+    </button>
+  );
+}
+
 // ─── Deal Detail ─────────────────────────────────────────────────────
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab }) {
   const [tab, setTab] = useState(initialTab || "overview");
@@ -7106,6 +7207,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             ✓ Convert lead → deal
           </button>
         )}
+        <PersonalizedUrlControl deal={deal} reload={loadAll} logAct={logAct} />
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
           const val = e.target.value || null;
