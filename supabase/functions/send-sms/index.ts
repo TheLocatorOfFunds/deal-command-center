@@ -97,10 +97,10 @@ Deno.serve(async (req) => {
 
     const sb = createClient(supabaseUrl, serviceRoleKey)
 
-    const { to: toRaw, body, deal_id, from_number, contact_id } = await req.json()
+    const { to: toRaw, body, deal_id, from_number, contact_id, media_url } = await req.json()
 
-    if (!toRaw || !body) {
-      return new Response(JSON.stringify({ error: 'Missing required fields: to, body' }), {
+    if (!toRaw || (!body && !media_url)) {
+      return new Response(JSON.stringify({ error: 'Missing required fields: to, and at least one of body or media_url' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
@@ -162,7 +162,8 @@ Deno.serve(async (req) => {
     const initialStatus = gateway === 'mac_bridge' ? 'pending_mac' : 'queued'
     const insertedIds: string[] = []
 
-    for (const segment of segments) {
+    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+      const segment = segments[segIdx]
       const { data: msgRow, error: insertError } = await sb
         .from('messages_outbound')
         .insert({
@@ -175,6 +176,8 @@ Deno.serve(async (req) => {
           contact_id:  contact_id ?? null,
           channel,
           thread_key:  threadKey,
+          // Only attach media_url to the first segment
+          ...(media_url && segIdx === 0 ? { media_url } : {}),
         })
         .select()
         .single()
@@ -207,7 +210,12 @@ Deno.serve(async (req) => {
           'Authorization': `Basic ${btoa(`${twilioAccountSid}:${twilioAuthToken}`)}`,
           'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: new URLSearchParams({ To: to, From: resolvedFrom, Body: segments[i] }).toString(),
+        body: new URLSearchParams({
+            To: to,
+            From: resolvedFrom,
+            Body: segments[i] || '',
+            ...(media_url && i === 0 ? { MediaUrl: media_url } : {}),
+          }).toString(),
       })
 
       const twilioData = await twilioRes.json()
