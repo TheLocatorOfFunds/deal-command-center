@@ -5539,6 +5539,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "partner" && (isFlip || isWholesale) && isAdmin && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <PartnerDetailsEditor deal={deal} onUpdateDeal={onUpdateDeal} />
+          <PartnerMilestonesCard deal={deal} onUpdateDeal={onUpdateDeal} userName={userName} />
           <PartnerPortalCard deal={deal} userId={userId} />
         </div>
       )}
@@ -6746,6 +6747,99 @@ function PartnerDateField({ label, k, p, updatePartner }) {
     <Field label={label}>
       <input type="date" value={p[k] ?? ''} onChange={e => updatePartner({ [k]: e.target.value || null })} style={inputStyle} />
     </Field>
+  );
+}
+
+// Milestones definition — one ordered list, used for both DCC editor + JV
+// portal display. Single set covers flip + wholesale; users ignore steps
+// that don't apply (e.g. inspection isn't always done on a wholesale).
+const PARTNER_MILESTONES = [
+  { key: 'contract',   label: 'Property under contract',   icon: '📝' },
+  { key: 'buyer',      label: 'Buyer found',               icon: '🤝' },
+  { key: 'assignment', label: 'Buyer signed assignment',   icon: '✍' },
+  { key: 'emd',        label: 'Earnest money received',    icon: '💰' },
+  { key: 'inspection', label: 'Inspection complete',       icon: '🔍' },
+  { key: 'title',      label: 'Title cleared',             icon: '📋' },
+  { key: 'closing',    label: 'Closing scheduled',         icon: '🗓' },
+  { key: 'closed',     label: 'Closed',                    icon: '✅' },
+];
+
+// Card that lets Nathan check off milestones on a deal. State stored in
+// deal.meta.partner.milestones as { [key]: { done, at, by } }. Kevin sees
+// the same data rendered as a horizontal step indicator in his portal.
+function PartnerMilestonesCard({ deal, onUpdateDeal, userName }) {
+  const m = deal.meta || {};
+  const p = m.partner || {};
+  const milestones = p.milestones || {};
+
+  const toggle = (key) => {
+    const cur = milestones[key];
+    const isDone = !!cur?.done;
+    const next = isDone
+      ? { ...milestones, [key]: { done: false } }
+      : { ...milestones, [key]: { done: true, at: new Date().toISOString(), by: userName || 'Team' } };
+    onUpdateDeal({ meta: { ...m, partner: { ...p, milestones: next } } });
+  };
+
+  const completedCount = PARTNER_MILESTONES.filter(s => milestones[s.key]?.done).length;
+  const pct = Math.round((completedCount / PARTNER_MILESTONES.length) * 100);
+
+  return (
+    <Card title={`Milestones · ${completedCount} / ${PARTNER_MILESTONES.length}`}>
+      <div style={{ fontSize: 11, color: '#78716c', marginBottom: 14, lineHeight: 1.55 }}>
+        Tick a milestone as it happens. Kevin sees the timeline live in his portal — gives him "what's done, what's next" at a glance.
+      </div>
+
+      {/* Progress bar */}
+      <div style={{ height: 6, background: '#1c1917', borderRadius: 3, marginBottom: 14, overflow: 'hidden' }}>
+        <div style={{ width: `${pct}%`, height: '100%', background: 'linear-gradient(to right, #d97706, #fbbf24)', transition: 'width 0.3s' }} />
+      </div>
+
+      {/* Step list */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+        {PARTNER_MILESTONES.map(step => {
+          const data = milestones[step.key] || {};
+          const done = !!data.done;
+          return (
+            <button
+              key={step.key}
+              onClick={() => toggle(step.key)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 10,
+                padding: '10px 12px',
+                background: done ? '#064e3b' : '#0c0a09',
+                border: '1px solid ' + (done ? '#065f46' : '#292524'),
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontFamily: 'inherit',
+                textAlign: 'left',
+                transition: 'all 0.12s',
+              }}
+            >
+              <div style={{
+                width: 22, height: 22, flexShrink: 0,
+                borderRadius: 5,
+                border: '2px solid ' + (done ? '#10b981' : '#44403c'),
+                background: done ? '#10b981' : 'transparent',
+                color: '#0c0a09',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 13, fontWeight: 700,
+              }}>{done ? '✓' : ''}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: done ? '#6ee7b7' : '#fafaf9' }}>
+                  <span style={{ marginRight: 6 }}>{step.icon}</span>{step.label}
+                </div>
+                {done && data.at && (
+                  <div style={{ fontSize: 10, color: '#86efac', marginTop: 2 }}>
+                    {new Date(data.at).toLocaleDateString()}{data.by && ` · ${data.by}`}
+                  </div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 
@@ -9257,6 +9351,18 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         const video = isVideo(cur);
         const canPrev = lightboxIdx > 0;
         const canNext = lightboxIdx < mediaItems.length - 1;
+        const isJvCover = !video && deal?.meta?.partner?.coverPhotoPath === cur.path;
+        const setAsJvCover = async () => {
+          // Toggle: if already cover, unset. If not, set + auto-flag partner_visible
+          // (you wouldn't pick a cover photo Kevin can't see).
+          const newCover = isJvCover ? null : cur.path;
+          const newPartnerMeta = { ...(deal.meta?.partner || {}), coverPhotoPath: newCover };
+          await sb.from('deals').update({ meta: { ...(deal.meta || {}), partner: newPartnerMeta } }).eq('id', deal.id);
+          if (!isJvCover && !cur.partner_visible) {
+            await sb.from('documents').update({ partner_visible: true }).eq('id', cur.id);
+          }
+          await reload();
+        };
         return (
           <div
             onClick={() => setLightboxIdx(null)}
@@ -9267,22 +9373,37 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
               padding: 20,
             }}
           >
-            {/* Top bar: filename + counter + close */}
-            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 0, left: 0, right: 0, padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", color: "#fafaf9", background: "linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)", pointerEvents: "none" }}>
+            {/* Top bar: filename + counter + actions */}
+            <div onClick={e => e.stopPropagation()} style={{ position: "absolute", top: 0, left: 0, right: 0, padding: "16px 24px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, color: "#fafaf9", background: "linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)", pointerEvents: "none" }}>
               <div style={{ pointerEvents: "auto" }}>
                 <div style={{ fontSize: 13, fontWeight: 600 }}>{cur.name}</div>
                 <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
                   {lightboxIdx + 1} of {mediaItems.length}
                   {docSource(cur) === 'kevin' && <span style={{ color: "#fbbf24", marginLeft: 8 }}>🤝 Kevin</span>}
+                  {isJvCover && <span style={{ color: "#6ee7b7", marginLeft: 8 }}>★ JV cover</span>}
                   {' · '}{fmtSize(cur.size || 0)}
                   {' · '}{new Date(cur.created_at).toLocaleDateString()}
                 </div>
               </div>
-              <button
-                onClick={() => setLightboxIdx(null)}
-                style={{ pointerEvents: "auto", background: "rgba(0,0,0,0.5)", color: "#fafaf9", border: "1px solid #44403c", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
-                title="Close (Esc)"
-              >× Close</button>
+              <div style={{ display: "flex", gap: 8, pointerEvents: "auto" }}>
+                {!video && (deal.type === 'flip' || deal.type === 'wholesale') && (
+                  <button
+                    onClick={setAsJvCover}
+                    title={isJvCover ? "Currently the JV portal hero photo — click to unset" : "Make this the JV portal hero photo Kevin sees"}
+                    style={{
+                      background: isJvCover ? "rgba(110,231,183,0.15)" : "rgba(0,0,0,0.5)",
+                      color: isJvCover ? "#6ee7b7" : "#fbbf24",
+                      border: "1px solid " + (isJvCover ? "#065f46" : "#92400e"),
+                      borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit"
+                    }}
+                  >{isJvCover ? '✓ JV cover' : '★ Set as JV cover'}</button>
+                )}
+                <button
+                  onClick={() => setLightboxIdx(null)}
+                  style={{ background: "rgba(0,0,0,0.5)", color: "#fafaf9", border: "1px solid #44403c", borderRadius: 6, padding: "6px 12px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
+                  title="Close (Esc)"
+                >× Close</button>
+              </div>
             </div>
 
             {/* Prev arrow */}

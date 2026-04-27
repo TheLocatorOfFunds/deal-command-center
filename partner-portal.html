@@ -90,6 +90,44 @@
   .sticky-bar .btn.ghost { background: var(--bg-card); color: var(--navy); border-color: var(--border-strong); }
   .sticky-bar-spacer { height: 80px; }   /* leaves room above the sticky bar so content isn't hidden */
 
+  /* Milestones timeline strip — horizontal scrollable on mobile */
+  .milestones {
+    margin: 14px 0 0;
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .milestones-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .milestones-title { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; }
+  .milestones-prog { font-size: 10px; color: var(--text-muted); }
+  .milestones-prog b { color: var(--green); font-weight: 700; }
+  .milestones-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 12px; }
+  .milestones-bar-fill { height: 100%; background: linear-gradient(to right, var(--gold), var(--green)); transition: width 0.3s; }
+  .milestones-track {
+    display: flex; gap: 14px; padding: 4px 0;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .milestones-track::-webkit-scrollbar { display: none; }
+  .milestone-step {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 6px; min-width: 90px; flex-shrink: 0;
+  }
+  .milestone-dot {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; flex-shrink: 0;
+    border: 2px solid var(--border-strong);
+    background: var(--bg-card-alt); color: var(--text-subtle);
+  }
+  .milestone-step.done .milestone-dot { background: var(--green); border-color: var(--green); color: #fff; }
+  .milestone-step.next .milestone-dot { background: var(--gold-soft); border-color: var(--gold); color: var(--amber); }
+  .milestone-label { font-size: 10px; text-align: center; color: var(--text-muted); line-height: 1.3; max-width: 100px; }
+  .milestone-step.done .milestone-label { color: var(--green); font-weight: 600; }
+  .milestone-step.next .milestone-label { color: var(--navy); font-weight: 600; }
+  .milestone-date { font-size: 9px; color: var(--text-subtle); margin-top: 1px; }
+
   /* Compact "Open Tasks" callout right under the header. */
   .open-tasks-callout {
     background: var(--bg-card); border: 1px solid var(--gold);
@@ -260,6 +298,20 @@ function InvalidLink({ error }) {
   </div></div>;
 }
 
+// Mirrors PARTNER_MILESTONES in src/app.jsx — single ordered list of
+// milestones the deal moves through. State stored per-deal in
+// deal.meta.partner.milestones.{key} = { done, at, by }.
+const MILESTONES = [
+  { key: 'contract',   label: 'Under contract',     icon: '📝' },
+  { key: 'buyer',      label: 'Buyer found',        icon: '🤝' },
+  { key: 'assignment', label: 'Buyer signed',       icon: '✍' },
+  { key: 'emd',        label: 'Earnest money',      icon: '💰' },
+  { key: 'inspection', label: 'Inspection done',    icon: '🔍' },
+  { key: 'title',      label: 'Title cleared',      icon: '📋' },
+  { key: 'closing',    label: 'Closing scheduled',  icon: '🗓' },
+  { key: 'closed',     label: 'Closed',             icon: '✅' },
+];
+
 function isImage(d) {
   return d.is_image || /\.(jpg|jpeg|png|webp|heic|gif)$/i.test(d.name || '');
 }
@@ -394,6 +446,46 @@ function DealRoom({ data, onRefresh }) {
           {role_description}
         </div>
       )}
+
+      {/* Milestones timeline strip — Nathan ticks them off in DCC; Kevin
+          sees progress + what's next. First not-done step gets the gold
+          "next" highlight to draw the eye. */}
+      {(() => {
+        const ms = partner.milestones || {};
+        const done = MILESTONES.map(s => !!ms[s.key]?.done);
+        const totalDone = done.filter(Boolean).length;
+        const nextIdx = done.indexOf(false);  // first not-done = the "next" step
+        // Skip rendering entirely if nothing's been ticked yet — avoid empty noise.
+        if (totalDone === 0) return null;
+        return (
+          <div className="milestones">
+            <div className="milestones-header">
+              <div className="milestones-title">📍 Where we are</div>
+              <div className="milestones-prog"><b>{totalDone}</b> of {MILESTONES.length} complete</div>
+            </div>
+            <div className="milestones-bar">
+              <div className="milestones-bar-fill" style={{ width: `${(totalDone / MILESTONES.length) * 100}%` }} />
+            </div>
+            <div className="milestones-track">
+              {MILESTONES.map((step, i) => {
+                const data = ms[step.key] || {};
+                const isDone = !!data.done;
+                const isNext = !isDone && i === nextIdx;
+                const cls = 'milestone-step' + (isDone ? ' done' : isNext ? ' next' : '');
+                return (
+                  <div key={step.key} className={cls}>
+                    <div className="milestone-dot">{isDone ? '✓' : step.icon}</div>
+                    <div className="milestone-label">{step.label}</div>
+                    {isDone && data.at && (
+                      <div className="milestone-date">{new Date(data.at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Open-tasks callout — only when on a tab other than tasks */}
       {tab !== 'tasks' && openTaskCount > 0 && (
