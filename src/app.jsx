@@ -565,7 +565,8 @@ function DealCommandCenter({ session, profile }) {
           )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
-          {isAdmin && <button onClick={() => setShowTeam(true)} style={{ ...btnGhost, fontSize: 11 }}>Team</button>}
+          {isTeam && <button onClick={() => setView("team")} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
+          {isAdmin && <button onClick={() => setShowTeam(true)} title="Team management — invite, roles, status" style={{ ...btnGhost, fontSize: 11 }}>👥 Team</button>}
           <button onClick={() => setShowAccount(true)} title="Account settings" style={{ ...btnGhost, fontSize: 11 }}>⚙ Account</button>
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
@@ -740,6 +741,31 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     }}>{label}{count > 0 ? ` (${count})` : ""}</button>
   );
 
+  // Group button — highlights when ANY child view is active. Clicking sets
+  // view to the default child. Used for hubs (Outreach / Deals / Insights)
+  // that consolidate multiple sibling views into one top-nav entry.
+  const groupBtn = (defaultId, label, groupIds, count) => {
+    const active = groupIds.includes(view);
+    return (
+      <button key={defaultId} onClick={() => setView(defaultId)} style={{
+        background: active ? "#292524" : "transparent",
+        color: active ? "#fafaf9" : "#78716c",
+        border: active ? "1px solid #44403c" : "1px solid transparent",
+        padding: "6px 14px", borderRadius: 6, fontSize: 12, fontWeight: active ? 700 : 500, cursor: "pointer",
+      }}>{label}{count > 0 ? ` (${count})` : ""}</button>
+    );
+  };
+
+  // Sub-chip — smaller, lives in the hub's second-level chip bar.
+  const chipBtn = (id, label) => (
+    <button key={id} onClick={() => setView(id)} style={{
+      background: view === id ? "#1c1917" : "transparent",
+      color: view === id ? "#fafaf9" : "#78716c",
+      border: view === id ? "1px solid #44403c" : "1px solid transparent",
+      padding: "5px 11px", borderRadius: 5, fontSize: 11, fontWeight: view === id ? 700 : 500, cursor: "pointer",
+    }}>{label}</button>
+  );
+
   return (
     <div>
       {/* Portfolio summary */}
@@ -755,19 +781,10 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("attention", "🔔 Attention", 0)}
-          {viewBtn("outreach", "🚀 Outreach", 0)}
-          {viewBtn("forecast", "📅 Forecast", 0)}
-          {viewBtn("leads", "📨 Leads", 0)}
-          {viewBtn("team", "💬 Team", 0)}
-          {viewBtn("pipeline", "🧭 Pipeline", 0)}
+          {groupBtn("outreach", "🎯 Outreach", ["outreach", "leads", "forecast"], 0)}
+          {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline"], flaggedDeals.length)}
           {viewBtn("tasks", "✓ Tasks", 0)}
-          {viewBtn("active", "Active", activeDeals.length)}
-          {viewBtn("flagged", "⚑ Flagged", flaggedDeals.length)}
-          {viewBtn("hygiene", "🩺 Hygiene", 0)}
-          {viewBtn("archive", "Closed Deals", archivedDeals.length)}
-          {isAdmin && viewBtn("reports", "📈 Reports", 0)}
-          {isAdmin && viewBtn("analytics", "📊 Analytics", 0)}
-          {isAdmin && viewBtn("traffic", "🌐 Traffic", 0)}
+          {isAdmin && groupBtn("reports", "📊 Insights", ["reports", "analytics", "traffic"], 0)}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
@@ -775,8 +792,36 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
+      {/* Hub sub-chips — second-level nav inside the consolidated tabs.
+          Outreach hub:  drafts/replies · leads · forecast
+          Deals hub:     active · flagged · hygiene · closed · kanban
+          Insights hub:  reports · analytics · traffic */}
+      {["outreach", "leads", "forecast"].includes(view) && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
+          {chipBtn("outreach", "🤖 Drafts & Replies")}
+          {chipBtn("leads", "📨 Leads")}
+          {chipBtn("forecast", "📅 Forecast")}
+        </div>
+      )}
+      {["active", "flagged", "hygiene", "archive", "pipeline"].includes(view) && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
+          {chipBtn("active", `Active${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
+          {chipBtn("flagged", `⚑ Flagged${flaggedDeals.length ? ` (${flaggedDeals.length})` : ""}`)}
+          {chipBtn("hygiene", "🩺 Hygiene")}
+          {chipBtn("archive", `Closed${archivedDeals.length ? ` (${archivedDeals.length})` : ""}`)}
+          {chipBtn("pipeline", "🧭 Kanban")}
+        </div>
+      )}
+      {isAdmin && ["reports", "analytics", "traffic"].includes(view) && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
+          {chipBtn("reports", "📈 Reports")}
+          {chipBtn("analytics", "📊 Analytics")}
+          {chipBtn("traffic", "🌐 Traffic")}
+        </div>
+      )}
+
+      {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
