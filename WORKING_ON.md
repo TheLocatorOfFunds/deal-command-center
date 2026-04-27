@@ -15,59 +15,53 @@ every session so the other side knows what's in flight.
 
 ## Nathan's session
 
-**Status**: Active — Monday-launch outreach pipeline pre-build
-**Last done (Apr 25, 2026 evening, multiple commits)**:
+**Status**: Idle — last sprint covered JV Partner Portal + Account Settings + Team Chat (4 phases). Several pieces are code-shipped but not yet browser-QA'd; see "Open QA" below.
 
-Big-batch sprint preparing for Monday push of A/B-tier leads through outreach. Justin: heads up — Nathan's session shipped pieces that nominally sit in your lane this time. Per his explicit direction. Below is the diff summary so your session catches up on a single git pull.
+**Last done (Apr 26–27, 2026)**:
 
-**Schema changes (live in production):**
-- `messages_outbound.read_by_team_at timestamptz` — UI marks-seen state for the new Reply Inbox in DCC
-- `contacts.do_not_text boolean default false` — DND, blocks all outbound SMS
-- `contacts.do_not_call boolean default false` — DND, must be respected by future click-to-call
-- `contacts.dnd_set_at timestamptz` — when the flags flipped
-- `contacts.dnd_reason text` — audit trail
-- `docket_events.litigation_stage / deadline_metadata / attorney_appearance` — Castle's Apr 25 sprint additions, captured by the updated docket-webhook
-- `docket_events_unmatched.litigation_stage / deadline_metadata / attorney_appearance` — same
-- `personalized_links.mailing_address text` — was missing, marketing-site `/api/s/claim` was silently failing every submission
-- `personalized_links.claim_submitted_at timestamptz` — same
+**JV Partner Portal** (new, token-based share for outside investors on flips — separate from client/attorney portals):
+- Deal share with profit %, write-back to deals
+- Photo + video upload (any size; HEIC auto-converts to JPEG)
+- Tab-based redesign with sticky action bar
+- Inline lightbox + gallery strip + filter chips on Documents
+- Cover photo settable from lightbox; milestones timeline
+- Real Supabase error surfaced on PUT failure
+- Photo URL fetching parallelized (70 photos: 21s → fast)
+- Fix: `capture=environment` removed so iOS shows the picker menu
 
-**New Edge Functions:**
-- `notify-claim-submitted` — fires SMS+email to Nathan when a personalized_links row's `claim_submitted_at` flips NULL→NOT NULL. Trigger-driven, vault secret `notify_claim_submitted_secret`
-- `castle-health-daily` — daily scheduled "agent" reads v_scraper_health, calls Claude for prose summary + ranked actions, emails recipient on issues. pg_cron 13:00 UTC. Vault `castle_health_daily_secret`. Recipient via `CASTLE_HEALTH_RECIPIENT` Edge Function env var (default nathan@fundlocators.com)
-- **`dispatch-cadence-message`** — cadence engine consumer. Auth via `X-Cadence-Secret` header (vault `cadence_engine_secret`). Re-validates DNC + status, fires `send-sms`, marks queue row sent, schedules next cadence row per ladder
+**DCC platform**:
+- Drag-and-drop multi-file upload on Documents tab (`onDrop` / `onDragOver` at app.jsx:9945–10343)
+- Account Settings + avatars + online presence + optional password (`AccountSettingsModal` at app.jsx:12776)
+- Comms tab TDZ crash fix: `NATHAN_BRIDGE_NUMBER` hoisted to top of `OutboundMessages` (app.jsx:11386)
+- Cache-bust commit so the Comms TDZ fix actually reaches browsers
+- JV-Facing Details inputs no longer lose focus on every keystroke
+- 👁 Preview buttons + JV portal RPC + `user_deal_views` constraint fix
+- Documentation audit landed: 26 stale docs archived to `docs/archive/` (commit `2e99804`)
 
-**Modified Edge Functions:**
-- **`receive-sms`** (v12) — added STOP-keyword silent DND handler at the bottom of the success path. Detects `stop / unsubscribe / quit / end / cancel / opt out`, sets `contacts.do_not_text=true AND do_not_call=true`, cancels future cadence rows for that contact_phone, logs activity. **No app-level reply** (Twilio carrier-level Advanced Opt-Out emits the required confirmation independently — set the messaging-service confirmation text to `"Unsubscribed. No more messages."` in your Twilio config). Header annotation in the file points back here.
-- **`send-sms`** (v18) — added DND filter immediately after E.164 normalization. Returns 403 + `{error: "recipient_on_dnd"}` if the recipient is on `contacts.do_not_text=true`. Header annotation in the file.
-- `docket-webhook` (v15) — captures Castle's three new optional jsonb fields (litigation_stage, deadline_metadata, attorney_appearance)
+**Team Chat** (new — internal Nathan ↔ Justin messaging inside DCC):
+- Phase 1: basic N+J messaging (`team_threads`, `team_messages`, `team_message_reads`)
+- Phase 2: file attachments + Lauren joins as a participant
+- Phase 3a: multi-thread + Lauren writes proposals into `lauren_pending_actions`
+- Phase 3b: reactions, edit/delete, @mention autocomplete (`team_reactions`)
+- Last commit: `a858675` (Apr 27 00:03 EDT) — phase3 migration fix (helper-alias removed, idempotent realtime publication adds)
 
-**New triggers + cron:**
-- `sync_refundlocators_token()` — when `personalized_links.deal_id` flips from NULL→NOT NULL OR token changes, copies `personalized_links.token` to `deals.refundlocators_token` so your `generate-outreach` reads the link correctly
-- `notify_personalized_claim_submitted()` — fires the `notify-claim-submitted` Edge Function on `personalized_links.claim_submitted_at` first-set
-- `fire_scheduled_outreach()` + pg_cron `outreach-cadence` (every 15 min) — drains `outreach_queue` rows where `status=pending AND cadence_day>=1 AND scheduled_for<=now()` AND contact not on DNC. Calls `dispatch-cadence-message` for each. Cap 100/run. **Intro (cadence_day=0) is NOT auto-fired** — Nathan hand-clicks each first text from the Outreach view's AutomationsQueue.
+**Open QA (code shipped, browser-test pending — Nathan hasn't verified end-to-end)**:
+- Drag-drop multi-file upload on Documents tab
+- Team Chat Phase 3a (multi-thread switching, Lauren proposal flow)
+- Team Chat Phase 3b (reactions render, edit/delete persist, @mention autocomplete suggests + inserts)
 
-**Cadence ladder (Nathan-set):**
-Day 0 (human-gated) → Day 1 → Day 3 → Day 5 → Day 12, 19, 26, 33, 40, 47, 54, 61, 68, 75, 82, 90 (weekly drip) → drop. ~13 touches over 90 days. Implemented in `dispatch-cadence-message::nextCadenceDay()`.
+**Likely working (Nathan's gut, not formally QA'd)**:
+- Account Settings (avatars + online presence + password)
+- Comms tab TDZ fix
 
-**DCC UI (index.html):**
-- New top-level **🚀 Outreach** view between Attention and Pipeline. Stats tiles + AutomationsQueue (your component, untouched) + new ReplyInbox component
-- New **ReplyInbox** component — cross-deal `messages_outbound where direction='inbound' AND read_by_team_at IS NULL`, oldest first, realtime, mark-seen action. Click row → jumps to deal Comms tab
-- Castle scraper health: ScraperHealthPanel (Reports) + ScraperAlertStrip (Attention) over `v_scraper_health` view
-- Court deadline countdowns + litigation stage badges + attorney appearance callouts in DocketTab
-- Cross-deal DeadlineAlertStrip in AttentionView
-- Partner Attorney directory in ContactsModal — surfaces every distinct attorney from `docket_events.attorney_appearance` not yet in contacts; one-click "+ Add to Contacts" promote
-- Client/Counsel Portal cards: per-claimant `📋 Copy invite link` + `📧 Email now` buttons
-- portal.html: unified CaseHero, ?email=&invite=1 auto-send flow, Court Activity 4-entry scroller
+**Still pending from prior sprints** (untouched this round):
+- `.github/workflows/build.yml` exists locally but not pushed — GitHub PAT lacks `workflow` scope. Until it lands, no auto-rebuild safety net: if you forget `npm run build`, `app.js` will be stale on Pages. CLAUDE.md describes this workflow as if it's live; **it is not**. Two ways to land: (a) regenerate the PAT with `workflow` scope, then `git add .github/ && git commit && git push`, or (b) paste the file's contents into GitHub's web UI under Add file → Create new file → `.github/workflows/build.yml`.
+- Wire portal SMS toggle to actually send texts on docket events (Justin's lane)
+- Lauren no-reply ping spec at `JUSTIN_LAUREN_NO_REPLY_PING_SPEC.md` (Justin's lane)
+- DocuSign engagement template wire-up (waiting on Nathan's VA to send Template UUID + Data Labels)
+- Email-via-DCC build (spec pending Nathan's "go")
 
-**Spec docs Justin should read when picking back up:**
-- `JUSTIN_LAUREN_NO_REPLY_PING_SPEC.md` — Lauren-pings-Nathan when he doesn't reply in 60s
-- `JUSTIN_MONDAY_LAUNCH_SPEC.md` — full outreach pipeline spec including deferred Lauren intake-and-classify (with hard security requirements: prompt injection, info leakage, token exhaustion defenses)
-- `CASTLE_TO_DCC_GAP_HANDOFF.md` — multi-session gap analysis with audit findings on both sides
-
-**One Twilio config item that needs your touch in the dashboard (no code):**
-- Set the messaging service Advanced Opt-Out confirmation text to `"Unsubscribed. No more messages."` (carrier-level, not in our codebase). This is the only acknowledgement that fires when someone texts STOP — our app code is silent on top.
-
-**Last updated**: Apr 25, 2026
+**Last updated**: Apr 27, 2026
 
 <!--
 Template:
