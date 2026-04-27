@@ -1019,8 +1019,14 @@ function TeamView({ teamMembers }) {
   const [sending, setSending] = useState(false);
   const [profilesById, setProfilesById] = useState({});
   const [me, setMe] = useState({ id: null, name: '', role: 'admin' });
+  const [pendingAttachments, setPendingAttachments] = useState([]);  // [{name, size, type, path, url}]
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Load current user + initial threads + their profile names
   useEffect(() => {
@@ -1101,19 +1107,103 @@ function TeamView({ teamMembers }) {
     if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [messages.length]);
 
+  // HEIC → JPEG conversion (reused from JV portal pattern)
+  const isHeic = (f) => /heic|heif/i.test(f?.type || '') || /\.(heic|heif)$/i.test(f?.name || '');
+  const ensureHeicLib = async () => {
+    if (window.heic2any) return true;
+    return new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+      s.onload = () => resolve(!!window.heic2any);
+      s.onerror = () => resolve(false);
+      document.head.appendChild(s);
+    });
+  };
+  const maybeConvertHeic = async (file) => {
+    if (!isHeic(file)) return file;
+    if (!(await ensureHeicLib())) return file;
+    try {
+      const blob = await window.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+      return new File([Array.isArray(blob) ? blob[0] : blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg', lastModified: file.lastModified });
+    } catch { return file; }
+  };
+
+  // Upload attached files to team-chat bucket. Each file gets a unique
+  // path: <thread_id>/<timestamp>-<safename>. Returns the metadata that
+  // gets stored in team_messages.attachments.
+  const uploadAttachments = async (files) => {
+    if (!files.length || !activeThreadId) return [];
+    setUploadingFiles(true);
+    const out = [];
+    for (const raw of files) {
+      try {
+        const file = await maybeConvertHeic(raw);
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+        const path = `${activeThreadId}/${Date.now()}-${Math.random().toString(36).slice(2,6)}-${safeName}`;
+        const { error: upErr } = await sb.storage.from('team-chat').upload(path, file, { upsert: false, contentType: file.type || 'application/octet-stream' });
+        if (upErr) { alert(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
+        const { data: signed } = await sb.storage.from('team-chat').createSignedUrl(path, 3600);
+        out.push({ path, name: file.name, size: file.size, type: file.type || 'application/octet-stream', url: signed?.signedUrl || null });
+      } catch (ex) {
+        alert(`Upload failed: ${raw.name} — ${ex.message || ex}`);
+      }
+    }
+    setUploadingFiles(false);
+    return out;
+  };
+
+  const onPickFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const uploaded = await uploadAttachments(files);
+    setPendingAttachments(prev => [...prev, ...uploaded]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removePending = async (idx) => {
+    const att = pendingAttachments[idx];
+    if (att?.path) await sb.storage.from('team-chat').remove([att.path]).catch(() => {});
+    setPendingAttachments(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  // Drag-drop into composer
+  const onDragEnter = (e) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault(); dragDepth.current += 1; setDragOver(true);
+  };
+  const onDragOver = (e) => {
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'copy';
+  };
+  const onDragLeave = (e) => {
+    e.preventDefault(); dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragOver(false);
+  };
+  const onDrop = async (e) => {
+    e.preventDefault(); dragDepth.current = 0; setDragOver(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (!files.length) return;
+    const uploaded = await uploadAttachments(files);
+    setPendingAttachments(prev => [...prev, ...uploaded]);
+  };
+
   const send = async () => {
     const trimmed = body.trim();
-    if (!trimmed || sending || !me.id || !activeThreadId) return;
+    if ((!trimmed && pendingAttachments.length === 0) || sending || !me.id || !activeThreadId) return;
     setSending(true);
+    // Strip the URL field — signed URLs expire; we re-sign on render
+    const attachmentsForDb = pendingAttachments.map(({ path, name, size, type }) => ({ path, name, size, type }));
     const { error } = await sb.from('team_messages').insert({
       thread_id: activeThreadId,
       sender_id: me.id,
       sender_kind: me.role === 'va' ? 'va' : 'admin',
       body: trimmed,
+      attachments: attachmentsForDb,
     });
     setSending(false);
     if (error) { alert('Could not send: ' + error.message); return; }
     setBody('');
+    setPendingAttachments([]);
     if (composerRef.current) composerRef.current.focus();
   };
 
@@ -1216,7 +1306,27 @@ function TeamView({ teamMembers }) {
       </div>
 
       {/* Active thread */}
-      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+      <div
+        style={{ display: 'flex', flexDirection: 'column', minHeight: 0, position: 'relative' }}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {dragOver && (
+          <div style={{
+            position: 'absolute', inset: 0, zIndex: 30,
+            background: 'rgba(120, 53, 15, 0.18)',
+            border: '3px dashed #d97706',
+            borderRadius: 8, margin: 8,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            pointerEvents: 'none',
+          }}>
+            <div style={{ background: '#1c1917', padding: '14px 20px', borderRadius: 8, border: '1px solid #d97706' }}>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#fbbf24' }}>📥 Drop to attach</div>
+            </div>
+          </div>
+        )}
         {activeThread ? (
           <>
             {/* Thread header */}
@@ -1225,6 +1335,7 @@ function TeamView({ teamMembers }) {
                 <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9' }}># {activeThread.title}</div>
                 <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
                   {messages.length} message{messages.length === 1 ? '' : 's'}
+                  {activeThread.lauren_enabled && <> · 🤖 Lauren is in this thread (mention <code style={{ background: '#0c0a09', padding: '0 4px', borderRadius: 3 }}>@lauren</code> to summon)</>}
                 </div>
               </div>
             </div>
@@ -1274,9 +1385,14 @@ function TeamView({ teamMembers }) {
                           <span style={{ color: '#57534e', fontSize: 10, marginLeft: 8 }}>{formatTime(m.created_at)}</span>
                         </div>
                       )}
-                      <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                        {m.body}
-                      </div>
+                      {m.body && (
+                        <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                          {m.body}
+                        </div>
+                      )}
+                      {Array.isArray(m.attachments) && m.attachments.length > 0 && (
+                        <TeamAttachments attachments={m.attachments} onLightbox={setLightboxUrl} />
+                      )}
                     </div>
                   </div>
                 );
@@ -1286,12 +1402,25 @@ function TeamView({ teamMembers }) {
 
             {/* Composer */}
             <div style={{ padding: '12px 14px', borderTop: '1px solid #292524', background: '#0c0a09' }}>
+              {/* Pending attachments preview */}
+              {pendingAttachments.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                  {pendingAttachments.map((a, i) => (
+                    <div key={i} style={{ background: '#1c1917', border: '1px solid #292524', borderRadius: 6, padding: '4px 8px', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11 }}>
+                      <span style={{ color: '#fafaf9' }}>{(/^image\//.test(a.type) ? '🖼' : /^video\//.test(a.type) ? '🎥' : '📄')} {a.name}</span>
+                      <span style={{ color: '#57534e' }}>{a.size < 1024 ? `${a.size}B` : a.size < 1048576 ? `${(a.size/1024).toFixed(0)}KB` : `${(a.size/1048576).toFixed(1)}MB`}</span>
+                      <button onClick={() => removePending(i)} style={{ ...btnGhost, fontSize: 10, padding: '2px 6px', color: '#fca5a5', borderColor: '#7f1d1d' }} title="Remove">×</button>
+                    </div>
+                  ))}
+                  {uploadingFiles && <span style={{ fontSize: 11, color: '#fbbf24' }}>uploading…</span>}
+                </div>
+              )}
               <textarea
                 ref={composerRef}
                 value={body}
                 onChange={e => setBody(e.target.value)}
                 onKeyDown={onKeyDown}
-                placeholder={`Message #${activeThread.title}…   (⌘+Enter to send)`}
+                placeholder={`Message #${activeThread.title}…   (⌘+Enter to send · drag files anywhere · @lauren to summon)`}
                 rows={2}
                 style={{
                   width: '100%',
@@ -1308,14 +1437,23 @@ function TeamView({ teamMembers }) {
                   boxSizing: 'border-box',
                 }}
               />
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
-                <div style={{ fontSize: 10, color: '#57534e' }}>
-                  📎 attachments + 🤖 Lauren coming in Phase 2
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 8 }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={onPickFiles} />
+                  <button
+                    onClick={() => fileInputRef.current && fileInputRef.current.click()}
+                    disabled={uploadingFiles}
+                    style={{ ...btnGhost, fontSize: 12, padding: '6px 10px' }}
+                    title="Attach files (or drag onto the message area)"
+                  >📎 Attach</button>
+                  <span style={{ fontSize: 10, color: '#57534e' }}>
+                    Files, photos, videos · HEIC auto-converts
+                  </span>
                 </div>
                 <button
                   onClick={send}
-                  disabled={sending || !body.trim()}
-                  style={{ ...btnPrimary, opacity: (sending || !body.trim()) ? 0.5 : 1 }}
+                  disabled={sending || (!body.trim() && pendingAttachments.length === 0)}
+                  style={{ ...btnPrimary, opacity: (sending || (!body.trim() && pendingAttachments.length === 0)) ? 0.5 : 1 }}
                 >
                   {sending ? 'Sending…' : 'Send'}
                 </button>
@@ -1328,6 +1466,82 @@ function TeamView({ teamMembers }) {
           </div>
         )}
       </div>
+
+      {/* Lightbox for attachment preview */}
+      {lightboxUrl && (
+        <div onClick={() => setLightboxUrl(null)} style={{
+          position: 'fixed', inset: 0, zIndex: 1000,
+          background: 'rgba(0,0,0,0.92)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 20, cursor: 'zoom-out',
+        }}>
+          <img src={lightboxUrl} alt="" style={{ maxWidth: '90vw', maxHeight: '90vh', borderRadius: 6, objectFit: 'contain' }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Renders attachments in a team_messages row. Re-signs URLs on render
+// (signed URLs in the DB would expire) so we always have fresh links.
+function TeamAttachments({ attachments, onLightbox }) {
+  const [resolved, setResolved] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const out = {};
+      await Promise.all(attachments.map(async (a) => {
+        if (!a.path) return;
+        const { data } = await sb.storage.from('team-chat').createSignedUrl(a.path, 3600);
+        if (data?.signedUrl) out[a.path] = data.signedUrl;
+      }));
+      if (!cancelled) setResolved(out);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line
+  }, [attachments.length]);
+
+  const fmt = (n) => n < 1024 ? `${n} B` : n < 1048576 ? `${(n/1024).toFixed(0)} KB` : `${(n/1048576).toFixed(1)} MB`;
+
+  return (
+    <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      {attachments.map((a, i) => {
+        const url = resolved[a.path];
+        const isImage = /^image\//.test(a.type) || /\.(jpg|jpeg|png|webp|gif)$/i.test(a.name);
+        const isVideo = /^video\//.test(a.type) || /\.(mp4|mov|m4v|webm)$/i.test(a.name);
+        if (isImage) {
+          return (
+            <div key={i}
+              onClick={() => url && onLightbox(url)}
+              title={`${a.name} · ${fmt(a.size)}`}
+              style={{
+                width: 'fit-content', maxWidth: 320,
+                aspectRatio: 'auto',
+                background: url ? `#0c0a09 center/cover no-repeat url(${url})` : '#1c1917',
+                borderRadius: 6,
+                border: '1px solid #292524',
+                cursor: url ? 'pointer' : 'default',
+              }}
+            >
+              {url ? <img src={url} alt={a.name} style={{ display: 'block', maxWidth: 320, maxHeight: 240, borderRadius: 6 }} /> : <div style={{ width: 240, height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#57534e', fontSize: 11 }}>loading…</div>}
+            </div>
+          );
+        }
+        if (isVideo && url) {
+          return <video key={i} src={url} controls preload="metadata" style={{ maxWidth: 360, maxHeight: 240, borderRadius: 6, background: '#000' }} />;
+        }
+        // Generic file
+        return (
+          <div key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: '#1c1917', border: '1px solid #292524', borderRadius: 6, maxWidth: 360 }}>
+            <span style={{ fontSize: 18 }}>📄</span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
+              <div style={{ fontSize: 10, color: '#78716c' }}>{fmt(a.size)}</div>
+            </div>
+            {url && <a href={url} target="_blank" rel="noopener" style={{ ...btnGhost, fontSize: 11, padding: '4px 10px', textDecoration: 'none' }}>Open</a>}
+          </div>
+        );
+      })}
     </div>
   );
 }
