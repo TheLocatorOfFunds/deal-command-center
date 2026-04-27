@@ -741,6 +741,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {viewBtn("attention", "🔔 Attention", 0)}
           {viewBtn("outreach", "🚀 Outreach", 0)}
           {viewBtn("forecast", "📅 Forecast", 0)}
+          {viewBtn("team", "💬 Team", 0)}
           {viewBtn("pipeline", "🧭 Pipeline", 0)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {viewBtn("active", "Active", activeDeals.length)}
@@ -757,8 +758,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       </div>
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && (
+      {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team views) */}
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -777,7 +778,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -799,6 +800,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} />
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "team" ? (
+            <TeamView teamMembers={teamMembers} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -982,6 +985,298 @@ function DealCardName({ deal }) {
     <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, color: '#fafaf9' }}>
       {isEstate ? <span style={{ color: '#c4b5fd' }}>Estate of </span> : null}
       {first}
+    </div>
+  );
+}
+
+// ─── Team Chat (Phase 1) ─────────────────────────────────────────────
+// Internal messaging for N + J inside DCC. Phase 2 brings file attachments
+// and Lauren as a participant. Phase 3 = multi-thread, reactions, threading.
+//
+// Schema lives in 20260427000000_team_chat_phase1.sql:
+//   team_threads · team_messages · team_message_reads · team_reactions
+function TeamView({ teamMembers }) {
+  const [threads, setThreads] = useState([]);
+  const [activeThreadId, setActiveThreadId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const [profilesById, setProfilesById] = useState({});
+  const [me, setMe] = useState({ id: null, name: '', role: 'admin' });
+  const messagesEndRef = useRef(null);
+  const composerRef = useRef(null);
+
+  // Load current user + initial threads + their profile names
+  useEffect(() => {
+    (async () => {
+      const { data: { user } } = await sb.auth.getUser();
+      if (user) {
+        const { data: prof } = await sb.from('profiles').select('id, name, role').eq('id', user.id).single();
+        setMe({ id: user.id, name: prof?.name || user.email || 'Me', role: prof?.role || 'admin' });
+      }
+      const { data: t } = await sb.from('team_threads').select('*').is('archived_at', null).order('created_at', { ascending: true });
+      setThreads(t || []);
+      if (t && t.length > 0 && !activeThreadId) setActiveThreadId(t[0].id);
+
+      // Cache all team profiles for sender display
+      const { data: profs } = await sb.from('profiles').select('id, name').in('role', ['admin','user','va']);
+      const byId = {};
+      (profs || []).forEach(p => { byId[p.id] = p; });
+      setProfilesById(byId);
+    })();
+    // eslint-disable-next-line
+  }, []);
+
+  // Load messages for active thread + subscribe to realtime
+  useEffect(() => {
+    if (!activeThreadId) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('team_messages')
+        .select('*')
+        .eq('thread_id', activeThreadId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: true })
+        .limit(500);
+      if (cancelled) return;
+      setMessages(data || []);
+      // Mark thread read
+      if (me.id) {
+        await sb.from('team_message_reads').upsert({
+          thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
+        }, { onConflict: 'thread_id,user_id' });
+      }
+    })();
+    const ch = sb.channel('team-msgs-' + activeThreadId)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'team_messages', filter: `thread_id=eq.${activeThreadId}`
+      }, (payload) => {
+        const row = payload.new;
+        setMessages(prev => prev.find(m => m.id === row.id) ? prev : [...prev, row]);
+        // If new message is from someone else, mark thread as read shortly after
+        if (me.id && row.sender_id !== me.id) {
+          setTimeout(() => {
+            sb.from('team_message_reads').upsert({
+              thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
+            }, { onConflict: 'thread_id,user_id' });
+          }, 800);
+        }
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'team_messages', filter: `thread_id=eq.${activeThreadId}`
+      }, (payload) => {
+        setMessages(prev => prev.map(m => m.id === payload.new.id ? payload.new : m));
+      })
+      .subscribe();
+    return () => { cancelled = true; sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [activeThreadId, me.id]);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages.length]);
+
+  const send = async () => {
+    const trimmed = body.trim();
+    if (!trimmed || sending || !me.id || !activeThreadId) return;
+    setSending(true);
+    const { error } = await sb.from('team_messages').insert({
+      thread_id: activeThreadId,
+      sender_id: me.id,
+      sender_kind: me.role === 'va' ? 'va' : 'admin',
+      body: trimmed,
+    });
+    setSending(false);
+    if (error) { alert('Could not send: ' + error.message); return; }
+    setBody('');
+    if (composerRef.current) composerRef.current.focus();
+  };
+
+  const onKeyDown = (e) => {
+    // Cmd/Ctrl+Enter sends; plain Enter inserts newline (chat convention)
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      send();
+    }
+  };
+
+  const activeThread = threads.find(t => t.id === activeThreadId);
+  const senderName = (msg) => {
+    if (msg.sender_kind === 'lauren') return 'Lauren';
+    if (msg.sender_id && profilesById[msg.sender_id]) return profilesById[msg.sender_id].name;
+    return 'Unknown';
+  };
+  const senderInitial = (msg) => {
+    if (msg.sender_kind === 'lauren') return '🤖';
+    return (senderName(msg).charAt(0) || '?').toUpperCase();
+  };
+  const senderColor = (id) => {
+    // Hash sender id to a stable color so each person has their own bubble color
+    if (!id) return '#a8a29e';
+    const palette = ['#d97706', '#3b82f6', '#22c55e', '#a855f7', '#ef4444', '#06b6d4', '#fbbf24'];
+    let h = 0;
+    for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+    return palette[h % palette.length];
+  };
+  const formatTime = (ts) => {
+    if (!ts) return '';
+    const d = new Date(ts);
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    if (sameDay) return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const diff = (today.getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
+    if (diff < 7) return d.toLocaleDateString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  };
+
+  return (
+    <div style={{
+      display: 'grid',
+      gridTemplateColumns: '220px 1fr',
+      gap: 0,
+      background: '#0c0a09',
+      border: '1px solid #292524',
+      borderRadius: 10,
+      overflow: 'hidden',
+      height: 'calc(100vh - 280px)',
+      minHeight: 500,
+    }}>
+      {/* Thread list */}
+      <div style={{ borderRight: '1px solid #292524', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #292524', fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+          Threads
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
+          {threads.map(t => (
+            <button
+              key={t.id}
+              onClick={() => setActiveThreadId(t.id)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                background: activeThreadId === t.id ? '#1c1917' : 'transparent',
+                color: activeThreadId === t.id ? '#fafaf9' : '#a8a29e',
+                border: 'none',
+                padding: '10px 12px', borderRadius: 6,
+                fontSize: 13, fontWeight: 600,
+                cursor: 'pointer', fontFamily: 'inherit',
+                marginBottom: 2,
+              }}
+            >
+              # {t.title}
+            </button>
+          ))}
+          {threads.length === 0 && (
+            <div style={{ padding: 16, fontSize: 12, color: '#57534e', fontStyle: 'italic' }}>No threads yet.</div>
+          )}
+        </div>
+        <div style={{ padding: 12, borderTop: '1px solid #292524', fontSize: 10, color: '#57534e', lineHeight: 1.5 }}>
+          Phase 1: text only.<br />
+          Phase 2: files + 🤖 Lauren.
+        </div>
+      </div>
+
+      {/* Active thread */}
+      <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        {activeThread ? (
+          <>
+            {/* Thread header */}
+            <div style={{ padding: '14px 18px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9' }}># {activeThread.title}</div>
+                <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+                  {messages.length} message{messages.length === 1 ? '' : 's'}
+                </div>
+              </div>
+            </div>
+
+            {/* Message list */}
+            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
+              {messages.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: 40, color: '#57534e', fontSize: 13 }}>
+                  No messages yet. Say hi 👋
+                </div>
+              ) : messages.map((m, i) => {
+                const prev = messages[i - 1];
+                const grouped = prev && prev.sender_id === m.sender_id && prev.sender_kind === m.sender_kind &&
+                  (new Date(m.created_at).getTime() - new Date(prev.created_at).getTime() < 3 * 60 * 1000);
+                const isMe = m.sender_id === me.id;
+                const color = senderColor(m.sender_id);
+                return (
+                  <div key={m.id} style={{ display: 'flex', gap: 10, marginTop: grouped ? 2 : 14 }}>
+                    {grouped ? (
+                      <div style={{ width: 32, flexShrink: 0 }} />
+                    ) : (
+                      <div style={{
+                        width: 32, height: 32, flexShrink: 0,
+                        borderRadius: '50%',
+                        background: color, color: '#fff',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontSize: 13, fontWeight: 700,
+                      }}>{senderInitial(m)}</div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {!grouped && (
+                        <div style={{ fontSize: 12, marginBottom: 2 }}>
+                          <span style={{ color: '#fafaf9', fontWeight: 700 }}>{senderName(m)}</span>
+                          {isMe && <span style={{ color: '#57534e', fontSize: 10, marginLeft: 6 }}>(you)</span>}
+                          <span style={{ color: '#57534e', fontSize: 10, marginLeft: 8 }}>{formatTime(m.created_at)}</span>
+                        </div>
+                      )}
+                      <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                        {m.body}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Composer */}
+            <div style={{ padding: '12px 14px', borderTop: '1px solid #292524', background: '#0c0a09' }}>
+              <textarea
+                ref={composerRef}
+                value={body}
+                onChange={e => setBody(e.target.value)}
+                onKeyDown={onKeyDown}
+                placeholder={`Message #${activeThread.title}…   (⌘+Enter to send)`}
+                rows={2}
+                style={{
+                  width: '100%',
+                  background: '#1c1917',
+                  border: '1px solid #292524',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  color: '#fafaf9',
+                  fontSize: 13,
+                  fontFamily: 'inherit',
+                  resize: 'vertical',
+                  minHeight: 40,
+                  maxHeight: 200,
+                  boxSizing: 'border-box',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+                <div style={{ fontSize: 10, color: '#57534e' }}>
+                  📎 attachments + 🤖 Lauren coming in Phase 2
+                </div>
+                <button
+                  onClick={send}
+                  disabled={sending || !body.trim()}
+                  style={{ ...btnPrimary, opacity: (sending || !body.trim()) ? 0.5 : 1 }}
+                >
+                  {sending ? 'Sending…' : 'Send'}
+                </button>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', flex: 1, color: '#78716c', fontSize: 14 }}>
+            Loading…
+          </div>
+        )}
+      </div>
     </div>
   );
 }
