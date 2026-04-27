@@ -114,8 +114,30 @@ security definer
 set search_path = public
 as $$
   select jsonb_build_object(
-    'hearings',     coalesce((select jsonb_agg(jsonb_build_object('deal_id', deal_id, 'event_type', event_type, 'date', occurred_at)) from public.docket_events where occurred_at >= now() and occurred_at <= now() + (p_window_days || ' days')::interval order by occurred_at limit 20), '[]'::jsonb),
-    'sheriff_sales', coalesce((select jsonb_agg(jsonb_build_object('case', case_number, 'address', property_address, 'sale_date', sale_date)) from public.foreclosure_cases where sale_date >= current_date and sale_date <= current_date + p_window_days), '[]'::jsonb)
+    'hearings', coalesce((
+      select jsonb_agg(row_to_json(h))
+      from (
+        select deal_id, event_type, event_date, litigation_stage
+        from public.docket_events
+        where event_date is not null
+          and event_date >= current_date
+          and event_date <= current_date + p_window_days
+        order by event_date asc
+        limit 20
+      ) h
+    ), '[]'::jsonb),
+    'sheriff_sales', coalesce((
+      select jsonb_agg(row_to_json(s))
+      from (
+        select case_number, property_address, sale_date, county
+        from public.foreclosure_cases
+        where sale_date is not null
+          and sale_date >= current_date
+          and sale_date <= current_date + p_window_days
+        order by sale_date asc
+        limit 20
+      ) s
+    ), '[]'::jsonb)
   );
 $$;
 grant execute on function public.lauren_upcoming_events(int) to authenticated, service_role;
