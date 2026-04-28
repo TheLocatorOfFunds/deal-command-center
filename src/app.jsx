@@ -671,7 +671,7 @@ function DealCommandCenter({ session, profile }) {
           )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
-          {isTeam && <button onClick={() => setView("team")} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
+          {isTeam && <button onClick={() => { setActiveDealId(null); setView("team"); }} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
           {isAdmin && (
             <button onClick={() => setShowLaurenCC(true)}
               title="Lauren Control Center — flagged conversations + knowledge base"
