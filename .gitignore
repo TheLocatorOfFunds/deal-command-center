@@ -30,3 +30,6 @@ mac-bridge/node_modules/
 
 # Build artifacts
 node_modules/
+
+# Supabase CLI cache (machine-local, never commit)
+supabase/.temp/
