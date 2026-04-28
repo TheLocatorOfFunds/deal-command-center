@@ -58,6 +58,9 @@ READ TOOLS (always safe to call, no confirm):
 - find_teammate(needle): match a teammate by name/email. Returns user_id.
 - lookup_documents(deal_id): list up to 50 files on a deal.
 - get_signed_url(document_id): get a temporary URL to open a specific file.
+- get_deal_detail(deal_id): full deal record + current meta. Call before proposing a meta update so you don't overwrite values that are already set.
+- lookup_deal_notes(deal_id, limit?): team's free-text notes on a deal.
+- lookup_docket_events(deal_id, limit?): court docket events Castle has scraped — sale dates, judgment entries, "CLERK TO HOLD SALE FUNDS $X", etc.
 
 WRITE TOOLS (each PROPOSES an action):
 - propose_status_change(deal_id, new_status, reason)
@@ -74,7 +77,16 @@ Behavior:
 - For factual questions: call read tools first, then answer concisely.
 - When the user gives an actionable command, call the matching propose_* tool. Don't ask "want me to do X?" — just propose. The chat renders a confirm/reject card under your reply.
 - Reply length: 1-3 short paragraphs max.
-- If you don't know something and tools can't tell you, say so plainly.`;
+- If you don't know something and tools can't tell you, say so plainly.
+
+CASE DATA BACKFILL — common task pattern:
+Nathan often asks "go read [deal name]'s notes and the docket and fill in sale price, sale date, judgment debt." Use this exact flow:
+  1. lookup_deal(needle) → resolve to deal_id.
+  2. get_deal_detail(deal_id) → see what's already in meta (don't overwrite values that are already accurate).
+  3. lookup_deal_notes(deal_id) → read team notes for case facts.
+  4. lookup_docket_events(deal_id) → scan event descriptions for "Confirmation of Sale", "Judgment Entry", "ALIAS ORDER OF SALE RETURNED", "CLERK TO HOLD SALE FUNDS $X", "JUDGMENT IN THE AMOUNT OF $Y". Sale price often appears as the amount in the sale-confirmation entry; surplus held appears as "CLERK TO HOLD SALE FUNDS $X"; judgment debt appears in the judgment entry text.
+  5. propose_update_deal_meta(deal_id, { saleDate: 'YYYY-MM-DD', salePrice: <number>, judgmentAmount: <number> }, "Backfill case data from notes + docket"). Only include fields you actually found evidence for — if the docket doesn't say what the sale price was, don't make one up. Note in your text reply which fields you populated and which you couldn't find.
+  6. Once the user confirms, a database trigger automatically syncs meta → personalized_links so the public /s/<token> page reflects the new values immediately. You don't need to do anything else.`;
 
 const HUB_MODE_ADDENDUM = `
 
@@ -304,6 +316,39 @@ const TOOLS = [
       required: ["document_id"],
     },
   },
+  {
+    name: "get_deal_detail",
+    description: "Full deal record including current meta (estimatedSurplus, saleDate, salePrice, judgmentAmount, county, courtCase, attorney, etc.). Call this BEFORE proposing a meta update so you don't overwrite values that are already set or accurate.",
+    input_schema: {
+      type: "object",
+      properties: { deal_id: { type: "string" } },
+      required: ["deal_id"],
+    },
+  },
+  {
+    name: "lookup_deal_notes",
+    description: "Read recent free-text notes the team has written on a deal (deal_notes table). Useful for extracting case facts the team has typed in — e.g. 'Verified Surplus: $X', 'Sold to Y on Z date', 'Judgment was $W'. Returns up to 10 by default.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string" },
+        limit: { type: "integer", description: "max notes to return (default 10)" },
+      },
+      required: ["deal_id"],
+    },
+  },
+  {
+    name: "lookup_docket_events",
+    description: "Read court docket events Castle has scraped on a deal. Each event has event_date / event_type / description. This is where 'Confirmation of Sale', 'Judgment Entry', 'CLERK TO HOLD SALE FUNDS $X' line items live in Cuyahoga / Butler / Franklin / Montgomery cases. Use this to extract sale date, sale price, judgment amount, and surplus held.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string" },
+        limit: { type: "integer", description: "max events to return (default 30)" },
+      },
+      required: ["deal_id"],
+    },
+  },
 ];
 
 // Read-only tool subset for the deal-card surface. Excludes every
@@ -445,6 +490,15 @@ async function handleDealCardSurface(req: Request, body: any, apiKey: string, db
             } else {
               result = { error: "document not found" };
             }
+          } else if (tu.name === "get_deal_detail") {
+            const { data } = await db.rpc("lauren_get_deal_detail", { p_deal_id: tu.input.deal_id });
+            result = data;
+          } else if (tu.name === "lookup_deal_notes") {
+            const { data } = await db.rpc("lauren_lookup_deal_notes", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 10 });
+            result = data;
+          } else if (tu.name === "lookup_docket_events") {
+            const { data } = await db.rpc("lauren_lookup_docket_events", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 30 });
+            result = data;
           } else {
             result = { error: `tool '${tu.name}' not available in deal_card mode` };
           }
@@ -687,6 +741,15 @@ Deno.serve(async (req) => {
             } else {
               result = { error: "document not found" };
             }
+          } else if (tu.name === "get_deal_detail") {
+            const { data } = await db.rpc("lauren_get_deal_detail", { p_deal_id: tu.input.deal_id });
+            result = data;
+          } else if (tu.name === "lookup_deal_notes") {
+            const { data } = await db.rpc("lauren_lookup_deal_notes", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 10 });
+            result = data;
+          } else if (tu.name === "lookup_docket_events") {
+            const { data } = await db.rpc("lauren_lookup_docket_events", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 30 });
+            result = data;
           } else {
             result = { error: "unknown tool" };
           }
