@@ -1240,10 +1240,10 @@ function TeamView({ teamMembers }) {
   // Runs once on TeamView mount; if the user has no Lauren DM yet, one is
   // auto-created and shows up in the thread list on next loadThreads().
   useEffect(() => {
-    sb.rpc('lauren_get_or_create_dm').catch(err => {
+    sb.rpc('lauren_get_or_create_dm').then(({ error }) => {
       // Migration may not be applied yet — fail silently and let the rest
       // of TeamView work without the Lauren DM thread.
-      if (err) console.debug('[lauren_get_or_create_dm]', err);
+      if (error) console.debug('[lauren_get_or_create_dm]', error);
     });
   }, []);
 
