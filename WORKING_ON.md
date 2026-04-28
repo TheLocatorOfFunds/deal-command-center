@@ -61,7 +61,7 @@ every session so the other side knows what's in flight.
 - Account Settings save profile (after `phone` column migration applied)
 
 **Open QA (code shipped, browser-test still pending)**:
-- Drag-drop multi-file upload on Documents tab
+- ~~Drag-drop multi-file upload on Documents tab~~ ✅ verified Apr 27 PM — single-file drop and 3-file drop both upload to storage + insert documents rows; deal count went 0→1 then 1→4, then cleaned back to 0. Tested on `surplus-moae92eckadd` via synthetic DragEvent + DataTransfer.
 - Team Chat Phase 3b — reactions render, edit/delete persist, @mention autocomplete suggests + inserts (autocomplete confirmed via @lauren typing; reactions/edit/delete not formally tested)
 
 **Still pending**:
@@ -73,7 +73,7 @@ every session so the other side knows what's in flight.
 
 **Note for Justin**: GitHub Actions auto-rebuild workflow is now live (commit `bf692da`). If you forget `npm run build` before pushing src/app.jsx, the action picks up the slack and commits the rebuilt artifact back with `[skip ci]`.
 
-**Last updated**: Apr 27, 2026 (afternoon)
+**Last updated**: Apr 27, 2026 (evening — drag-drop QA pass)
 
 <!--
 Template:
