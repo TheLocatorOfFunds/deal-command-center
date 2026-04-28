@@ -180,22 +180,37 @@ async function findDealForPhone(phone) {
 
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
 
-/** Ensure Messages.app is running; launch it if not (bridge runs in Aqua session). */
+/**
+ * Ensure Messages.app is running and fully initialised for AppleScript use.
+ * The bridge runs in the Aqua GUI session so `open` and `activate` work.
+ * After a cold launch, Messages.app needs to be activated (brought to foreground
+ * at least once) before it registers its iMessage/SMS services with the
+ * AppleScript runtime — otherwise all service queries return -1728.
+ */
 function ensureMessagesRunning() {
-  try {
-    execFileSync('pgrep', ['-x', 'Messages'], { timeout: 3000 });
-    return; // already running
-  } catch {
-    // Not running — launch it
+  const isRunning = (() => {
+    try { execFileSync('pgrep', ['-x', 'Messages'], { timeout: 3000 }); return true; }
+    catch { return false; }
+  })();
+
+  if (!isRunning) {
     console.log('⚠️  Messages.app not running — launching it now');
     try {
       execFileSync('open', ['-a', 'Messages'], { timeout: 15000 });
-      // Give it time to initialise and sign in
-      execFileSync('sleep', ['5']);
-      console.log('✅  Messages.app launched');
+      execFileSync('sleep', ['4']); // let it start
     } catch (e) {
       console.error('❌  Failed to launch Messages.app:', e.message);
+      return;
     }
+  }
+
+  // Activate via AppleScript so the app fully initialises its services.
+  // Without this, service queries return -1728 even when the app is running.
+  try {
+    execFileSync('osascript', ['-e', 'tell application "Messages" to activate'], { timeout: 10000 });
+    if (!isRunning) console.log('✅  Messages.app launched and activated');
+  } catch (e) {
+    console.log(`⚠️  Messages activate warning: ${e.message.split('\n')[0]}`);
   }
 }
 
@@ -634,6 +649,9 @@ async function tick() {
 }
 
 (async () => {
+  // Activate Messages.app at startup so it registers its services before
+  // the first tick — otherwise iMessage/SMS service queries return -1728.
+  ensureMessagesRunning();
   await tick();
   setInterval(tick, POLL_MS);
 })();
