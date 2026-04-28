@@ -230,7 +230,8 @@ function sendViaMessages(toPhone, body) {
     'tell application "Messages"',
     `  set targetPhone to "${toPhone}"`,
     '  set smsSvc to service "SMS"',
-    '  set targetBuddy to participant targetPhone of smsSvc',
+    // SMS relay uses "buddy" not "participant" (different AppleScript key form)
+    '  set targetBuddy to buddy targetPhone of smsSvc',
     `  send "${escaped}" to targetBuddy`,
     'end tell',
   ].join('\n'));
@@ -291,7 +292,7 @@ function sendFileViaMessages(toPhone, localPath) {
     'tell application "Messages"',
     `  set targetPhone to "${toPhone}"`,
     '  set smsSvc to service "SMS"',
-    '  set targetBuddy to participant targetPhone of smsSvc',
+    '  set targetBuddy to buddy targetPhone of smsSvc',
     `  send POSIX file "${safePath}" to targetBuddy`,
     'end tell',
   ].join('\n'));
