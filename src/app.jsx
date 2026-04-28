@@ -12040,37 +12040,19 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
 }
 
 // ─── "Ask Lauren about this deal" — inline research chat ─────────
-// Calls the website's lauren-chat EF directly (publicly accessible per
-// Justin's handoff) with this deal's data as personalization_context.
-// Visitor_id is prefixed with "internal-" so these queries don't pollute
-// the marketing-site analytics. Conversation isn't logged to lauren_logs
-// (internal use only — clean separation).
+// Calls lauren-team-respond with surface='deal_card'. The EF pre-loads
+// the deal record + recent activity + linked contacts on the server
+// side, so we don't have to ship a context blob from the client. Lauren
+// runs in read-only mode here (no propose_* tools) — for write actions,
+// she tells the user to switch to the team chat. v2 will add inline
+// confirm cards so deal-card Lauren can fire actions directly.
 function AskLaurenAboutDeal({ deal, userId }) {
   const [open, setOpen] = useState(false);
   const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
-  const sessionRef = useRef(null);
   const msgsEl = useRef(null);
   const inputEl = useRef(null);
-
-  // Build the personalization_context block from the deal record. Same
-  // shape Lauren sees when a real visitor is on /s/<token>.
-  const buildContext = () => {
-    const m = deal.meta || {};
-    const lines = [];
-    if (deal.name) lines.push(`Person: ${deal.name}`);
-    if (deal.address) lines.push(`Property: ${deal.address}`);
-    if (m.county) lines.push(`County: ${m.county}`);
-    if (m.courtCase) lines.push(`Case Number: ${m.courtCase}`);
-    if (m.saleDate) lines.push(`Sale Date: ${m.saleDate}`);
-    if (m.salePrice) lines.push(`Sale Price: $${Number(m.salePrice).toLocaleString()}`);
-    if (m.judgmentAmount) lines.push(`Judgment: $${Number(m.judgmentAmount).toLocaleString()}`);
-    if (m.estimatedSurplus) lines.push(`Estimated Surplus: $${Number(m.estimatedSurplus).toLocaleString()}`);
-    if (m.estimatedSurplusLow && m.estimatedSurplusHigh) lines.push(`Surplus Range: $${Number(m.estimatedSurplusLow).toLocaleString()} – $${Number(m.estimatedSurplusHigh).toLocaleString()}`);
-    if (deal.status) lines.push(`Status: ${deal.status}`);
-    return lines.join('\n');
-  };
 
   useEffect(() => {
     if (open && msgs.length === 0) {
@@ -12091,22 +12073,14 @@ function AskLaurenAboutDeal({ deal, userId }) {
     setMsgs(next);
     setBusy(true);
     try {
-      const res = await fetch('https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/lauren-chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: next,
-          session_id: sessionRef.current,
-          visitor_id: `internal-${userId || 'admin'}`,
-          personalization_context: buildContext(),
-        }),
+      const { data, error } = await sb.functions.invoke('lauren-team-respond', {
+        body: { surface: 'deal_card', deal_id: deal.id, messages: next },
       });
-      const data = await res.json();
-      if (data.session_id) sessionRef.current = data.session_id;
-      const reply = data.reply || 'Sorry — I had trouble with that. Try again or rephrase.';
+      if (error) throw error;
+      const reply = data?.reply || 'Sorry — I had trouble with that. Try again or rephrase.';
       setMsgs(m => [...m, { role: 'assistant', content: reply }]);
-    } catch {
-      setMsgs(m => [...m, { role: 'assistant', content: '(Connection error — check the lauren-chat EF is deployed.)' }]);
+    } catch (e) {
+      setMsgs(m => [...m, { role: 'assistant', content: `(Connection error — ${e?.message || 'unknown'}.)` }]);
     }
     setBusy(false);
     setTimeout(() => inputEl.current?.focus(), 50);
@@ -12116,7 +12090,7 @@ function AskLaurenAboutDeal({ deal, userId }) {
     return (
       <div style={{ marginBottom: 16, padding: '12px 14px', background: '#1c1917', border: '1px dashed #44403c', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>
-          <b style={{ color: '#fafaf9' }}>🤖 Ask Lauren about this deal.</b> Test what website Lauren would say to this lead, or use her as a research tool — she'll answer with the case facts pre-loaded as context.
+          <b style={{ color: '#fafaf9' }}>🤖 Ask Lauren about this deal.</b> Internal Lauren, pinned to this deal — she has the facts, recent activity, and linked contacts pre-loaded. Read-only on the deal card; for actions, ask her in the team chat.
         </div>
         <button onClick={() => setOpen(true)} style={{ ...btnPrimary, fontSize: 12, padding: '6px 14px' }}>Open chat</button>
       </div>
@@ -12129,9 +12103,9 @@ function AskLaurenAboutDeal({ deal, userId }) {
         <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9' }}>Ask Lauren about {deal.name || 'this deal'}</div>
-          <div style={{ fontSize: 10, color: '#78716c' }}>Calling website lauren-chat EF · internal visitor_id, not logged to analytics</div>
+          <div style={{ fontSize: 10, color: '#78716c' }}>Internal Lauren · surface: deal_card · read-only</div>
         </div>
-        <button onClick={() => { setOpen(false); setMsgs([]); sessionRef.current = null; }} style={{ ...btnGhost, fontSize: 11 }}>Close</button>
+        <button onClick={() => { setOpen(false); setMsgs([]); }} style={{ ...btnGhost, fontSize: 11 }}>Close</button>
       </div>
       <div ref={msgsEl} style={{ maxHeight: 380, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8, background: '#0f0d0c' }}>
         {msgs.map((m, i) => (
