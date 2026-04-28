@@ -107,26 +107,24 @@ console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
-// ─── Diagnostic: probe available Messages.app services ───────────────────────
-try {
-  const svcScript = `
-tell application "Messages"
-  set out to ""
-  repeat with i from 1 to 5
-    try
-      set s to service i
-      set out to out & i & ": name=" & (name of s) & " "
-    on error
-      exit repeat
-    end try
-  end repeat
-  return out
-end tell`;
-  const svcOut = execFileSync('osascript', ['-e', svcScript], { timeout: 8000 }).toString().trim();
-  console.log(`    Services: ${svcOut || '(none found)'}`);
-} catch (e) {
-  console.log(`    Services: (could not query — ${e.message.split('\n')[0]})`);
+// ─── Diagnostic: probe Messages.app services ─────────────────────────────────
+const svcProbes = [
+  ['iMessage', 'service 1 whose service type = iMessage'],
+  ['SMS',      'service 1 whose service type = SMS'],
+];
+const svcResults = [];
+for (const [label, expr] of svcProbes) {
+  try {
+    const n = execFileSync('osascript', ['-e',
+      `tell application "Messages" to get name of (${expr})`
+    ], { timeout: 6000 }).toString().trim();
+    svcResults.push(`${label}="${n}" ✓`);
+  } catch (e) {
+    const msg = e.message.split('\n').find(l => l.includes('execution error')) || e.message.split('\n')[0];
+    svcResults.push(`${label} ✗ (${msg.trim()})`);
+  }
 }
+console.log(`    Services: ${svcResults.join(' | ')}`);
 console.log('');
 
 // ─── Per-process chat resolution cache ───────────────────────────────────────
