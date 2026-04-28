@@ -12959,6 +12959,15 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [editingNoteBody, setEditingNoteBody] = useState('');
   const [savingNote, setSavingNote] = useState(false);
+  // Per-contact personalized URLs (per Nathan 2026-04-28 — Phase 1 of
+  // hyper-custom flows). contactUrls maps contact_id → row from
+  // personalized_links. ownerUrl is the deal's homeowner URL row, used
+  // as the slug base for non-owner suffixes (e.g. richardmikol-michelle).
+  const [contactUrls, setContactUrls] = useState({}); // { contact_id: { token, relationship, ... } }
+  const [ownerUrl, setOwnerUrl] = useState(null);
+  const [mintingContactId, setMintingContactId] = useState(null);
+  const [contactRelDraft, setContactRelDraft] = useState('child');
+  const [contactUrlCopied, setContactUrlCopied] = useState(null);
   const threadRef = useRef(null);
 
   const startEditNote = (note) => {
@@ -13081,6 +13090,72 @@ function OutboundMessages({ dealId, vendors, deal }) {
     if (data) setDcContacts(data.map(r => r.contacts).filter(Boolean));
   };
 
+  // ── Per-contact personalized URLs ────────────────────────────────────────
+  const loadContactUrls = async () => {
+    const { data } = await sb.from('personalized_links')
+      .select('token, contact_id, relationship, first_name, last_name')
+      .eq('deal_id', dealId);
+    if (!data) return;
+    const owner = data.find(r => !r.contact_id) || null;
+    const byContact = {};
+    data.filter(r => r.contact_id).forEach(r => { byContact[r.contact_id] = r; });
+    setOwnerUrl(owner);
+    setContactUrls(byContact);
+  };
+  // Build a slug for the contact suffix. Lowercase, alphanumeric only.
+  const slugifyContact = (name) => (name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  // Mint a personalized URL for the active contact. Slug =
+  // {ownerSlug}-{contactSlug}, with collision suffix if needed.
+  const mintContactUrl = async (contact, relationship) => {
+    if (!contact?.id) return;
+    setMintingContactId(contact.id);
+    try {
+      const ownerSlug = (ownerUrl?.token || '').split('-')[0] || slugifyContact(deal?.name?.split(' ')[0]) + slugifyContact(deal?.name?.split(' ').slice(1).join(' '));
+      const contactFirst = (contact.name || '').trim().split(/\s+/)[0];
+      const contactSlug = slugifyContact(contactFirst);
+      let token = `${ownerSlug}-${contactSlug}`;
+      // Collision check + suffix
+      for (let n = 2; n <= 99; n++) {
+        const { count } = await sb.from('personalized_links').select('token', { count: 'exact', head: true }).eq('token', token);
+        if (!count) break;
+        token = `${ownerSlug}-${contactSlug}-${n}`;
+      }
+      const m = deal?.meta || {};
+      const surplusSingle = m.estimatedSurplus ?? m.estimated_surplus ?? null;
+      const nameParts = (contact.name || '').trim().split(/\s+/);
+      const cFirst = nameParts[0] || null;
+      const cLast = nameParts.slice(1).join(' ') || null;
+      const phoneRaw = contact.phone ? String(contact.phone).replace(/\D/g, '') : null;
+      const phoneE164 = phoneRaw
+        ? (phoneRaw.length === 10 ? `+1${phoneRaw}` : phoneRaw.length === 11 && phoneRaw[0] === '1' ? `+${phoneRaw}` : `+${phoneRaw}`)
+        : null;
+      const row = {
+        token,
+        deal_id: dealId,
+        contact_id: contact.id,
+        relationship,
+        first_name: cFirst,
+        last_name: cLast,
+        phone: phoneE164,
+        property_address: deal?.address || null,
+        county: m.county || null,
+        case_number: m.courtCase || m.caseNumber || m.case_number || null,
+        sale_date: m.saleDate || m.sale_date || null,
+        sale_price: m.salePrice ?? m.sale_price ?? null,
+        judgment_amount: m.judgmentAmount ?? m.judgment_amount ?? null,
+        estimated_surplus_low: m.estimatedSurplusLow ?? m.estimated_surplus_low ?? surplusSingle,
+        estimated_surplus_high: m.estimatedSurplusHigh ?? m.estimated_surplus_high ?? surplusSingle,
+        source: 'dcc-contact',
+        expires_at: new Date(Date.now() + 90 * 86400 * 1000).toISOString(),
+      };
+      const { error } = await sb.from('personalized_links').insert(row);
+      if (error) { alert('Could not mint URL: ' + error.message); return; }
+      await loadContactUrls();
+    } finally {
+      setMintingContactId(null);
+    }
+  };
+
   // ── Load unmatched inbound for this deal ─────────────────────────────────
   const loadUnmatched = async () => {
     const phones = contacts.map(c => normalizePhone(c.phone)).filter(Boolean);
@@ -13093,6 +13168,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
   useEffect(() => {
     loadDealContacts();
+    loadContactUrls();
     load();
     sb.from('phone_numbers').select('*').eq('active', true).eq('gateway', 'mac_bridge').order('created_at').then(({ data }) => {
       const nums = data || [];
@@ -14018,6 +14094,48 @@ function OutboundMessages({ dealId, vendors, deal }) {
           </div>
         ))}
       </div>
+
+      {/* Per-contact personalized URL panel — shows above the composer
+          when viewing a real contact's tab. Either displays the existing
+          URL pill (with copy) or a Generate button + relationship picker.
+          Per Nathan 2026-04-28 — Phase 1 of hyper-custom flows. */}
+      {activeContact && !activeContact._everyone && !activeContact._group && activeContact.contact_id && (() => {
+        const cid = activeContact.contact_id;
+        const existing = contactUrls[cid];
+        const fname = (activeContact.name || '').split(' ')[0] || 'this contact';
+        if (existing) {
+          const url = `https://refundlocators.com/s/${existing.token}`;
+          return (
+            <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.06em', textTransform: 'uppercase' }}>🔗 {fname}'s URL</span>
+              <code style={{ fontSize: 11, color: '#fafaf9', fontFamily: "'DM Mono', monospace", background: 'transparent' }}>/s/{existing.token}</code>
+              <span style={{ fontSize: 10, color: '#78716c' }}>· {existing.relationship}</span>
+              <button onClick={async () => {
+                try { await navigator.clipboard.writeText(url); setContactUrlCopied(cid); setTimeout(() => setContactUrlCopied(null), 2000); } catch {}
+              }} style={{ background: 'transparent', border: 'none', color: contactUrlCopied === cid ? '#10b981' : '#a8a29e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>
+                {contactUrlCopied === cid ? '✓ copied' : '📋 copy'}
+              </button>
+              <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: '#a8a29e', textDecoration: 'none', fontSize: 11, padding: '0 4px' }}>↗ open</a>
+            </div>
+          );
+        }
+        return (
+          <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, color: '#a8a29e' }}>🔗 Generate {fname}'s URL · relationship to homeowner:</span>
+            <select value={contactRelDraft} onChange={e => setContactRelDraft(e.target.value)} style={{ background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c', borderRadius: 6, padding: '4px 8px', fontSize: 11, fontFamily: 'inherit' }}>
+              <option value="spouse">spouse</option>
+              <option value="child">child</option>
+              <option value="parent">parent</option>
+              <option value="sibling">sibling</option>
+              <option value="other">other</option>
+            </select>
+            <button onClick={() => mintContactUrl(activeContact, contactRelDraft)} disabled={mintingContactId === cid}
+              style={{ background: '#78350f', color: '#fafaf9', border: 0, padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: mintingContactId === cid ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: mintingContactId === cid ? 0.6 : 1 }}>
+              {mintingContactId === cid ? 'Generating…' : '🔗 Generate URL'}
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Compose */}
       {activeContact?._everyone ? (
