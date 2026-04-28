@@ -13057,10 +13057,27 @@ function OutboundMessages({ dealId, vendors, deal }) {
       seen.add(key);
       list.push(c);
     };
+    // Some contacts carry multiple phones in a single comma-separated string
+    // (e.g. "(731) 217-4269, (731) 571-6703, (731) 234-5967"). Split them so
+    // each phone gets its own tab + thread. We keep the same name/role/contact_id
+    // and stamp `_phoneShort` (last 4 digits) on entries 2+ so the tab can
+    // disambiguate them.
+    const expandPhones = (entry) => {
+      const raw = String(entry.phone || '');
+      if (!raw.includes(',')) return [entry];
+      const phones = raw.split(',').map(s => s.trim()).filter(Boolean);
+      return phones.map((p, idx) => {
+        const digits = p.replace(/\D/g, '');
+        const last4 = digits.slice(-4);
+        return { ...entry, phone: p, _phoneShort: idx === 0 ? null : last4 || p };
+      });
+    };
     if (deal?.meta?.homeownerPhone)
-      add({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: deal.meta.homeownerPhone, _homeowner: true });
-    (vendors || []).filter(v => v.phone).forEach(v => add({ name: v.name, role: v.role || 'Vendor', phone: v.phone }));
-    dcContacts.filter(c => c.phone).forEach(c => add({ name: c.name, role: c.kind || 'Contact', phone: c.phone, contact_id: c.id }));
+      expandPhones({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: deal.meta.homeownerPhone, _homeowner: true }).forEach(add);
+    (vendors || []).filter(v => v.phone).forEach(v =>
+      expandPhones({ name: v.name, role: v.role || 'Vendor', phone: v.phone }).forEach(add));
+    dcContacts.filter(c => c.phone).forEach(c =>
+      expandPhones({ name: c.name, role: c.kind || 'Contact', phone: c.phone, contact_id: c.id }).forEach(add));
     extraContacts.forEach(add);
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
@@ -13621,7 +13638,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
                 {count > 0 && <span style={{ fontSize: 9, background: '#292524', color: '#a8a29e', borderRadius: 8, padding: '1px 5px', flexShrink: 0 }}>{count}</span>}
               </div>
               <span style={{ fontSize: 9, color: active ? color : '#44403c', textTransform: 'uppercase', letterSpacing: '0.06em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }}>
-                {c._custom ? c.phone : (c.role || 'Contact')}
+                {c._phoneShort ? `··${c._phoneShort}` : (c._custom ? c.phone : (c.role || 'Contact'))}
               </span>
             </button>
           );
