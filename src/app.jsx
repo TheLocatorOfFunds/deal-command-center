@@ -14144,8 +14144,41 @@ function OutboundMessages({ dealId, vendors, deal }) {
           Per Nathan 2026-04-28 — Phase 1 of hyper-custom flows. */}
       {activeContact && !activeContact._everyone && !activeContact._group && activeContact.contact_id && (() => {
         const cid = activeContact.contact_id;
-        const existing = contactUrls[cid];
         const fname = (activeContact.name || '').split(' ')[0] || 'this contact';
+        // Detect whether the active contact IS the homeowner — they don't
+        // have a "relationship to homeowner" because they ARE one. Three
+        // signals: explicit _homeowner flag (deal.meta.homeownerPhone path),
+        // contact role/kind = 'homeowner', or the contact's phone matches
+        // deal.meta.homeownerPhone.
+        const homeownerPhone = deal?.meta?.homeownerPhone;
+        const isHomeowner = activeContact._homeowner
+          || String(activeContact.role || '').toLowerCase() === 'homeowner'
+          || String(activeContact.kind || '').toLowerCase() === 'homeowner'
+          || (homeownerPhone && normalizePhone(activeContact.phone) === normalizePhone(homeownerPhone));
+        // Homeowner branch: surface the already-minted homeowner URL on
+        // their contact tab so it's reachable from Comms too. No dropdown,
+        // no "relationship" picker. If no URL exists yet, hide the panel
+        // and let them use the deal-overview "Generate personalized URL"
+        // button — the homeowner URL is a deal-level concept, not a
+        // contact-level one.
+        if (isHomeowner) {
+          if (!ownerUrl?.token) return null;
+          const url = `https://refundlocators.com/s/${ownerUrl.token}`;
+          return (
+            <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.06em', textTransform: 'uppercase' }}>🔗 {fname}'s URL</span>
+              <code style={{ fontSize: 11, color: '#fafaf9', fontFamily: "'DM Mono', monospace", background: 'transparent' }}>/s/{ownerUrl.token}</code>
+              <span style={{ fontSize: 10, color: '#78716c' }}>· homeowner</span>
+              <button onClick={async () => {
+                try { await navigator.clipboard.writeText(url); setContactUrlCopied(cid); setTimeout(() => setContactUrlCopied(null), 2000); } catch {}
+              }} style={{ background: 'transparent', border: 'none', color: contactUrlCopied === cid ? '#10b981' : '#a8a29e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>
+                {contactUrlCopied === cid ? '✓ copied' : '📋 copy'}
+              </button>
+              <a href={url} target="_blank" rel="noopener noreferrer" style={{ color: '#a8a29e', textDecoration: 'none', fontSize: 11, padding: '0 4px' }}>↗ open</a>
+            </div>
+          );
+        }
+        const existing = contactUrls[cid];
         if (existing) {
           const url = `https://refundlocators.com/s/${existing.token}`;
           return (
