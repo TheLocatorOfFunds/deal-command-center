@@ -107,12 +107,23 @@ console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
-// ─── Diagnostic: log available Messages.app services ─────────────────────────
+// ─── Diagnostic: probe available Messages.app services ───────────────────────
 try {
-  const svcOut = execFileSync('osascript', ['-e',
-    'tell application "Messages" to get name of every service'
-  ], { timeout: 8000 }).toString().trim();
-  console.log(`    Services: ${svcOut}`);
+  const svcScript = `
+tell application "Messages"
+  set out to ""
+  repeat with i from 1 to 5
+    try
+      set s to service i
+      set out to out & i & ": name=" & (name of s) & " "
+    on error
+      exit repeat
+    end try
+  end repeat
+  return out
+end tell`;
+  const svcOut = execFileSync('osascript', ['-e', svcScript], { timeout: 8000 }).toString().trim();
+  console.log(`    Services: ${svcOut || '(none found)'}`);
 } catch (e) {
   console.log(`    Services: (could not query — ${e.message.split('\n')[0]})`);
 }
@@ -237,18 +248,28 @@ function sendViaMessages(toPhone, body) {
   // ── Attempt 2: SMS relay via iPhone Text Message Forwarding ──────────────────
   console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay`);
   const smsScript = `/tmp/dcc_send_sms_${Date.now()}.applescript`;
-  fs.writeFileSync(smsScript, [
-    'tell application "Messages"',
-    `  set targetPhone to "${toPhone}"`,
-    '  set smsSvc to service "SMS"',
-    // SMS relay uses "buddy" not "participant" (different AppleScript key form)
-    '  set targetBuddy to buddy targetPhone of smsSvc',
-    `  send "${escaped}" to targetBuddy`,
-    'end tell',
-  ].join('\n'));
+  // Try three SMS relay forms — the right one depends on macOS version and whether
+  // iPhone SMS forwarding is currently active.
+  const smsForms = [
+    // Form A: named SMS service with buddy (most-cited in docs)
+    `tell application "Messages"\n  set smsSvc to service "SMS"\n  set b to buddy "${toPhone}" of smsSvc\n  send "${escaped}" to b\nend tell`,
+    // Form B: bare buddy — Messages picks the service (works if number is in contacts)
+    `tell application "Messages"\n  send "${escaped}" to buddy "${toPhone}"\nend tell`,
+  ];
 
-  runAppleScript(smsScript); // throws if SMS relay also fails
-  return 'sms';
+  let lastErr;
+  for (const [i, form] of smsForms.entries()) {
+    const s = `/tmp/dcc_send_sms${i}_${Date.now()}.applescript`;
+    fs.writeFileSync(s, form);
+    try {
+      runAppleScript(s);
+      return 'sms';
+    } catch (e) {
+      lastErr = e;
+      console.log(`📱 SMS form ${i + 1} failed: ${e.message.split('\n').slice(0, 2).join(' ')}`);
+    }
+  }
+  throw lastErr; // all forms failed
 }
 
 /** Download a remote URL to a temp file; returns the local path. */
