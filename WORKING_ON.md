@@ -18,7 +18,23 @@ every session so the other side knows what's in flight.
 
 ## Nathan's session
 
-**Status**: Idle as of Apr 27 afternoon — Lauren + team-management work verified end-to-end. Drag-drop upload is the only feature still untested in browser.
+**Status**: Active — overnight Apr 27 → Apr 28. Drag-drop QA verified. Multiple Lauren-system fixes shipped + applied. Lauren surface-awareness work is open as a branch awaiting Justin's review (his domain).
+
+**Active loose ends:**
+- ⏳ Justin's team-chat alerts not firing — needs his console output for diagnosis (`Notification.permission`, `sb.getChannels()` state). Lauren rooms are being created with both participants but Justin isn't getting alerted on new messages. Hard-refresh didn't fix.
+- ⏳ Cloudflare account inventory — waiting on screenshots from Nathan (Email Routing config, existing `refundlocators` Pages project, DNS records). Account ID confirmed `28ed65e1ddbfe517e809a9fba50de996`. Only `refundlocators.com` is on Cloudflare; `fundlocators.com` = GoDaddy, `defenderfunds.com` = SiteGround.
+- ⏳ `/admin/lauren` redirect — DCC change shipped (`ced35f5`, `?openLauren=1` handler), refundlocators-next redirect shipped (`d5f233d`). Vercel deploy was lagging at last check; verify it's live.
+- ⏳ **PR awaiting Justin's review:** [`nathan/lauren-surface-awareness`](https://github.com/TheLocatorOfFunds/deal-command-center/tree/nathan/lauren-surface-awareness) — option C v1 from Nathan: surface awareness in `lauren-team-respond` EF + deal-card panel switched from `lauren-chat` → internal Lauren with deal context pre-loaded. **Justin: please deploy `lauren-team-respond` after merging** (`supabase functions deploy lauren-team-respond`).
+
+**Shipped overnight Apr 27 → Apr 28:**
+
+| Commit | What |
+|---|---|
+| `1660563` | Drag-drop QA verified end-to-end (single + 3-file via synthetic DragEvent/DataTransfer on `surplus-moae92eckadd`) |
+| `78c6e68` | Migration `20260428020001` — `lauren_conversations_for_deal` table-qualified `token` refs (was throwing "column reference 'token' is ambiguous" on every Lauren-tab load on every deal) |
+| `ca7d176` | Migration `20260428020002` — drop orphan 1-arg `lauren_execute_action`. Was blocking every Confirm click on Lauren proposals with "Could not choose the best candidate function" — `030800_lauren_capabilities` added the 2-arg version but didn't drop the 1-arg one |
+| `ced35f5` | DCC: `?openLauren=1` URL param auto-opens Lauren Control Center (backstop for the website redirect) |
+| `d5f233d` (refundlocators-next) | Replace `/admin/lauren` page with `redirect()` to `app.refundlocators.com/?openLauren=1` — single source of truth for Lauren admin in DCC |
 
 **Last done — afternoon of Apr 27, 2026** (in addition to morning ship below):
 - `f2148f7` Lauren `@`-mention regex fix — `\b` (backspace) → `\y` (word boundary). Bug had silently broken every `@lauren` mention in team chat since Phase 2 shipped. Verified working: Nathan tested `@lauren` in his DM with Justin after toggling her on, she responded.
@@ -73,7 +89,7 @@ every session so the other side knows what's in flight.
 
 **Note for Justin**: GitHub Actions auto-rebuild workflow is now live (commit `bf692da`). If you forget `npm run build` before pushing src/app.jsx, the action picks up the slack and commits the rebuilt artifact back with `[skip ci]`.
 
-**Last updated**: Apr 27, 2026 (evening — drag-drop QA pass)
+**Last updated**: Apr 28, 2026 (early morning — Lauren surface awareness PR open, awaiting Justin)
 
 <!--
 Template:
