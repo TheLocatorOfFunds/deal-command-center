@@ -31,18 +31,26 @@ Context:
 - Casey Jennings is an active wholesale deal at 7260 Jerry Drive, West Chester, OH.
 - Kevin Daubenmire is the JV partner on Casey Jennings (25% share).
 
-READ TOOLS (always safe to call):
+READ TOOLS (always safe to call, no confirm):
 - lookup_deal(needle): fuzzy match a deal. Returns up to 5.
 - recent_activity(deal_id, limit=10): timeline.
 - upcoming_events(window_days=14): hearings + sheriff sales.
 - search_contacts(needle): partner attorneys, title companies, etc.
-- find_teammate(needle): match a teammate by name/email. Returns user_id you can use with propose_relay_to_teammate.
+- find_teammate(needle): match a teammate by name/email. Returns user_id.
+- lookup_documents(deal_id): list up to 50 files on a deal.
+- get_signed_url(document_id): get a temporary URL to open a specific file.
 
-WRITE TOOLS (PROPOSE — Nathan or Justin must click confirm in chat to actually run):
+WRITE TOOLS (each PROPOSES an action):
 - propose_status_change(deal_id, new_status, reason)
 - propose_create_task(deal_id, title, due_date_iso?, assigned_to?)
 - propose_update_deal_meta(deal_id, meta_patch, label)
-- propose_relay_to_teammate(target_user_id, body): forwards the body to your DM with that teammate. Use when the user says "loop X in" / "tell X" / "send this to X". The relayed message will appear in their chat from you (Lauren) with the body. Always look up the teammate via find_teammate first to get the user_id.
+- propose_loop_in_teammate(target_user_id, target_name, intro): create a 3-way Lauren room
+- propose_relay_to_teammate(target_user_id, body): one-shot DM to a teammate
+- propose_send_sms(to, body, deal_id?, contact_id?, recipient_label?): text a phone number via the iPhone bridge
+- propose_send_email(to, subject, body, deal_id?, recipient_label?): email via Resend
+- propose_generate_personalized_url(deal_id): mint a refundlocators.com/s/<token> URL for a lead
+
+BYPASS MODE: each user has a per-account "bypass" toggle. When ON, your propose_* calls auto-fire — no confirm card, the action runs immediately. When OFF (default), the user clicks ✓ Confirm to fire. You don't control the toggle; treat it as transparent. You see it via the response from the tool: if the tool result includes `executed: true`, the action ran. If it includes `note: "Confirm card below…"`, it's pending. Reply naturally either way — for executed actions, confirm what ran ("Texted Casey at 513-555-…"); for pending, say "Proposed — confirm card below."
 
 Behavior:
 - For factual questions: call read tools first, then answer concisely.
@@ -182,6 +190,69 @@ const TOOLS = [
       required: ["target_user_id", "body"],
     },
   },
+  {
+    name: "propose_send_sms",
+    description: "Send an SMS to a phone number. Routes through the iPhone bridge (Justin's hard rule — Twilio is NOT used for outbound). Use for texting clients, leads, contacts. If the user gives you a contact name/role rather than a number, look up their phone via search_contacts or recent_activity first.",
+    input_schema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Phone number (E.164 like +15135551234, or 10 digits — will be normalized)" },
+        body: { type: "string", description: "Message body (concise, conversational; sign as 'Nathan' or context-appropriate)" },
+        deal_id: { type: "string", description: "Optional — link the SMS to a specific deal for activity logging" },
+        contact_id: { type: "string", description: "Optional — link to a contacts row" },
+        recipient_label: { type: "string", description: "Display name for the confirm card (e.g. 'Casey Jennings')" },
+      },
+      required: ["to", "body"],
+    },
+  },
+  {
+    name: "propose_send_email",
+    description: "Send an email via Resend. Use for client/lead/partner emails. From-address auto-set by the send-email function. For internal founder-to-founder emails, use propose_relay_to_teammate or propose_loop_in_teammate instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        to: { type: "string", description: "Recipient email address" },
+        subject: { type: "string", description: "Subject line" },
+        body: { type: "string", description: "Email body — plain text or simple HTML. Sign appropriately." },
+        deal_id: { type: "string", description: "Optional — link the email to a deal" },
+        recipient_label: { type: "string", description: "Display name for the confirm card" },
+      },
+      required: ["to", "subject", "body"],
+    },
+  },
+  {
+    name: "propose_generate_personalized_url",
+    description: "Generate a refundlocators.com/s/<token> personalized URL for a lead-phase deal. Same as the manual button on the deal detail page — pulls name/address/county/etc from the deal and creates a personalized_links row. Returns the new URL for use in subsequent SMS/email.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string", description: "Deal id (e.g. 'sf-jennings-moa9iqzt')" },
+      },
+      required: ["deal_id"],
+    },
+  },
+  {
+    name: "lookup_documents",
+    description: "List up to 50 documents on a deal. Returns id, name, mime_type, size, created_at for each. Useful when the user asks 'what files do we have on X?' or 'find the engagement agreement for Y'.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string" },
+      },
+      required: ["deal_id"],
+    },
+  },
+  {
+    name: "get_signed_url",
+    description: "Get a temporary signed URL for a specific document so the user can click to open it. Pass document_id from lookup_documents. The URL expires in ~10 minutes.",
+    input_schema: {
+      type: "object",
+      properties: {
+        document_id: { type: "string", description: "uuid from lookup_documents" },
+      },
+      required: ["document_id"],
+    },
+  },
 ];
 
 Deno.serve(async (req) => {
@@ -218,6 +289,35 @@ Deno.serve(async (req) => {
   const messages = (history || []).reverse();
   const lastUserMessage = [...messages].reverse().find(m => m.sender_kind !== "lauren");
   const lastUserSenderId = lastUserMessage?.sender_id ?? null;
+
+  // Per-user bypass mode — when true, propose_* tools auto-execute
+  // instead of waiting for the user to click ✓ Confirm.
+  let bypassMode = false;
+  if (lastUserSenderId) {
+    const { data: bm } = await db.rpc("lauren_get_bypass_mode", { p_user_id: lastUserSenderId });
+    bypassMode = bm === true;
+  }
+
+  // Helper that wraps the propose-or-auto-execute pattern. Inserts a
+  // pending action; in bypass mode immediately fires lauren_execute_action.
+  async function proposeOrExecute(action_type: string, action_label: string, action_payload: any) {
+    const { data: row, error } = await db.from("lauren_pending_actions").insert({
+      thread_id, action_type, action_label, action_payload,
+    }).select("id").single();
+    if (error) throw error;
+    if (bypassMode && lastUserSenderId) {
+      const { data: execResult, error: execErr } = await db.rpc("lauren_execute_action", {
+        p_action_id: row.id,
+        p_caller_id: lastUserSenderId,
+      });
+      if (execErr) {
+        return { proposed: true, action_id: row.id, label: action_label, bypass_failed: execErr.message };
+      }
+      return { proposed: true, action_id: row.id, label: action_label, executed: true, result: execResult };
+    }
+    proposedActionIds.push(row.id);
+    return { proposed: true, action_id: row.id, label: action_label, note: "Confirm card below — click ✓ to fire." };
+  }
 
   const senderIds = [...new Set(messages.filter(m => m.sender_id).map(m => m.sender_id))];
   let senderNames = {};
@@ -343,20 +443,42 @@ Deno.serve(async (req) => {
             const { target_user_id, target_name, intro } = tu.input;
             if (!lastUserSenderId) throw new Error("no caller user_id available — cannot create room without a sender");
             const label = `Loop ${target_name || "teammate"} in — open a room with intro: "${(intro || "").slice(0, 80)}${intro && intro.length > 80 ? "…" : ""}"`;
-            const { data: row, error } = await db.from("lauren_pending_actions").insert({
-              thread_id,
-              action_type: "loop_in_teammate",
-              action_label: label,
-              action_payload: {
-                caller_id: lastUserSenderId,
-                target_user_id,
-                target_name: target_name || null,
-                intro: intro || "",
-              },
-            }).select("id").single();
-            if (error) throw error;
-            proposedActionIds.push(row.id);
-            result = { proposed: true, action_id: row.id, label, note: "A confirm card will appear under your reply. Confirm creates the room with the intro posted, and the FAB auto-switches to it." };
+            result = await proposeOrExecute("loop_in_teammate", label, {
+              caller_id: lastUserSenderId,
+              target_user_id,
+              target_name: target_name || null,
+              intro: intro || "",
+            });
+          } else if (tu.name === "propose_send_sms") {
+            const { to, body, deal_id, contact_id, recipient_label } = tu.input;
+            const label = `Text ${recipient_label || to}: "${(body || "").slice(0, 80)}${body && body.length > 80 ? "…" : ""}"`;
+            result = await proposeOrExecute("send_sms", label, {
+              to, body,
+              deal_id: deal_id || null,
+              contact_id: contact_id || null,
+            });
+          } else if (tu.name === "propose_send_email") {
+            const { to, subject, body, deal_id, recipient_label } = tu.input;
+            const label = `Email ${recipient_label || to} · ${subject || "(no subject)"}`;
+            result = await proposeOrExecute("send_email", label, {
+              to, subject, body,
+              deal_id: deal_id || null,
+            });
+          } else if (tu.name === "propose_generate_personalized_url") {
+            const { deal_id } = tu.input;
+            const label = `Generate personalized URL for ${deal_id}`;
+            result = await proposeOrExecute("generate_personalized_url", label, { deal_id });
+          } else if (tu.name === "lookup_documents") {
+            const { data } = await db.rpc("lauren_list_documents", { p_deal_id: tu.input.deal_id });
+            result = data;
+          } else if (tu.name === "get_signed_url") {
+            const { data: meta } = await db.rpc("lauren_get_document_url", { p_document_id: tu.input.document_id });
+            if (meta?.path) {
+              const { data: signed } = await db.storage.from("deal-docs").createSignedUrl(meta.path, 600);
+              result = { ...meta, signed_url: signed?.signedUrl || null };
+            } else {
+              result = { error: "document not found" };
+            }
           } else {
             result = { error: "unknown tool" };
           }

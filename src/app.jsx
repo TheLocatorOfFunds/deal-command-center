@@ -15961,6 +15961,7 @@ function LaurenDCC() {
   const [busy, setBusy] = useState(false);
   const [input, setInput] = useState('');
   const [error, setError] = useState(null);
+  const [bypassMode, setBypassMode] = useState(false);
   const msgsEl = useRef(null);
   const inputEl = useRef(null);
 
@@ -15976,12 +15977,27 @@ function LaurenDCC() {
         const { data: tid, error: rpcErr } = await sb.rpc('lauren_get_or_create_dm');
         if (rpcErr) { setError('Lauren DM not available: ' + rpcErr.message); return; }
         if (tid) { setHomeThreadId(tid); setThreadId(tid); }
+        // Load bypass mode for the user — silently no-op if migration not applied yet.
+        try {
+          const { data: prof } = await sb.from('profiles').select('lauren_bypass_mode').eq('id', user.id).single();
+          if (prof) setBypassMode(prof.lauren_bypass_mode === true);
+        } catch {/* column may not exist yet */}
       } catch (e) {
         setError('Lauren init failed: ' + (e.message || e));
       }
     })();
     return () => window.removeEventListener('dcc:open-lauren', handler);
   }, []);
+
+  const toggleBypass = async () => {
+    const next = !bypassMode;
+    setBypassMode(next);  // optimistic
+    const { error } = await sb.rpc('set_lauren_bypass_mode', { p_on: next });
+    if (error) {
+      setBypassMode(!next);  // rollback
+      alert('Could not change bypass mode: ' + error.message);
+    }
+  };
 
   // Load thread metadata + participants whenever active thread changes
   useEffect(() => {
@@ -16099,17 +16115,21 @@ function LaurenDCC() {
     if (error) alert('Reject failed: ' + error.message);
   };
 
+  // Bypass mode tints the FAB red so you can tell from any view that
+  // Lauren is auto-firing instead of waiting for confirms.
+  const fabBg = bypassMode ? '#dc2626' : '#d97706';
+  const fabGlow = bypassMode ? '220,38,38' : '217,119,6';
   const btnStyle = {
     position: 'fixed', bottom: 24, right: 24, zIndex: 9000,
-    background: '#d97706', color: '#1c0a00', border: 'none',
+    background: fabBg, color: '#1c0a00', border: 'none',
     borderRadius: 24, padding: '0 18px', height: 44,
     display: 'flex', alignItems: 'center', gap: 8,
     fontSize: 13, fontWeight: 700, cursor: 'pointer',
     boxShadow: pendingCount > 0
-      ? '0 4px 30px rgba(217,119,6,.95), 0 0 0 4px rgba(217,119,6,.3)'
-      : '0 4px 20px rgba(217,119,6,.45)',
+      ? `0 4px 30px rgba(${fabGlow},.95), 0 0 0 4px rgba(${fabGlow},.3)`
+      : `0 4px 20px rgba(${fabGlow},.45)`,
     fontFamily: 'inherit',
-    transition: 'transform .1s, box-shadow .25s',
+    transition: 'transform .1s, box-shadow .25s, background .25s',
     animation: pendingCount > 0 ? 'laurenPulse 1.5s ease-in-out infinite' : 'none',
   };
 
@@ -16218,6 +16238,23 @@ function LaurenDCC() {
                 React.createElement('div', { style: { fontSize: 10, color: '#78716c' } }, 'Exec assistant · "loop X in" / ask anything')
               )
         ),
+        // Bypass-mode toggle — when ON, Lauren auto-fires propose_*
+        // tools without a confirm card. When OFF (default), all writes
+        // wait for ✓ Confirm.
+        React.createElement('button', {
+          onClick: toggleBypass,
+          title: bypassMode
+            ? 'BYPASS ON — Lauren acts immediately on every command. Click to require confirms again.'
+            : 'CONFIRM ON — Lauren proposes; you click ✓ to fire. Click to enable bypass (auto-fire).',
+          style: {
+            background: bypassMode ? '#7f1d1d' : '#1c1917',
+            border: '1px solid ' + (bypassMode ? '#dc2626' : '#44403c'),
+            color: bypassMode ? '#fca5a5' : '#a8a29e',
+            fontSize: 10, fontWeight: 700, padding: '4px 8px',
+            borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+            flexShrink: 0, letterSpacing: '0.04em',
+          }
+        }, bypassMode ? '🔓 BYPASS' : '🔒 CONFIRM'),
         React.createElement('button', {
           onClick: () => setOpen(false),
           'aria-label': 'Close chat',
