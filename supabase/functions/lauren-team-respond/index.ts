@@ -1,8 +1,27 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-// Lauren's response engine for Team Chat. Triggered by the pg trigger on
-// team_messages INSERT (see migrations 20260427020000 + 20260427030000).
+// Lauren's response engine.
+//
+// Two entry shapes:
+//
+// 1. THREAD MODE (existing) — `{ thread_id }`
+//    Triggered by the pg trigger on team_messages INSERT. Reads the
+//    thread row + last 15 messages, runs Claude with tools, inserts
+//    Lauren's reply back into team_messages.
+//    Surface is inferred from team_threads.thread_type:
+//      - 'lauren_dm' → Hub mode (always respond, teammate-messaging
+//                      discipline — relay through DM only)
+//      - other       → default channel/deal/dm behavior
+//
+// 2. DEAL CARD MODE (new) — `{ surface: 'deal_card', deal_id, messages }`
+//    Stateless inline chat from the deal-card "Ask Lauren about this
+//    deal" panel. Pre-loads the deal facts + recent activity into the
+//    system prompt, runs the Claude loop on the supplied messages,
+//    returns `{ reply }` to the caller. NOT persisted to team_messages.
+//    Read-only tool surface — Lauren can research and suggest routing
+//    ("relay this to Justin's DM"), but cannot fire propose_* from
+//    the deal card yet. v2 will add inline confirm cards for that.
 //
 // Phase 2: read-only data lookup tools.
 // Phase 3 added: propose_* tools that create a pending action row Nathan
@@ -115,6 +134,27 @@ Example:
   User: "loop Justin in on Casey Jennings"
   You: [call lookup_deal("Casey Jennings")] → [call recent_activity(deal_id)] → [call find_teammate("Justin")] → [call propose_relay_to_teammate(<justin_uuid>, "Justin", "Justin — Nathan's looping you in on Casey Jennings (7260 Jerry Drive, West Chester). <full briefing with recent activity, surplus estimate, what's needed from you>.")]
   You: "Proposed — confirm card below."`;
+
+const DEAL_CARD_ADDENDUM_TEMPLATE = `
+
+YOU ARE BEING CALLED FROM THE DEAL CARD for the deal below. The user is staring at this deal's detail page in DCC and wants research, context, or a sanity-check on this specific case. Treat this as a 1-on-1 chat pinned to this deal.
+
+Naturally reference the surface in your replies — open with phrases like "Looking at {DEAL_NAME}..." or "From the deal card, I can see..." when relevant. Don't be repetitive about it; just enough so the user knows you understand where they're calling you from.
+
+DEAL SNAPSHOT (pre-loaded — you don't need to call lookup_deal for this one):
+{DEAL_BLOCK}
+
+RECENT ACTIVITY (most recent first):
+{ACTIVITY_BLOCK}
+
+LINKED CONTACTS:
+{CONTACTS_BLOCK}
+
+DEAL CARD MODE = READ-ONLY. You have read tools (lookup_deal for OTHER deals, search_contacts, lookup_documents, get_signed_url, etc.) but NO propose_* tools right now. If the user asks you to take an action ("loop Justin in", "text the homeowner", "create a task"):
+- Briefly explain you can't fire actions from the deal card yet.
+- Offer to do it from a Lauren DM instead. Example: "Open a Lauren DM and say 'loop Justin in on this' — I'll relay a full briefing about this deal into Justin's DM with you. v2 will let me do it from here directly."
+
+Don't try to call a propose_* tool — they aren't in your tool list in this mode.`;
 
 const TOOLS = [
   // READ
@@ -266,19 +306,186 @@ const TOOLS = [
   },
 ];
 
+// Read-only tool subset for the deal-card surface. Excludes every
+// propose_* (write) tool — confirm-card UI doesn't exist on the deal
+// card yet, so write tools would create orphan pending actions.
+const READ_ONLY_TOOLS = TOOLS.filter(t => !t.name.startsWith("propose_"));
+
+// ── Deal-card surface ────────────────────────────────────────────
+// Stateless inline chat from the "Ask Lauren about this deal" panel.
+// Pre-loads the deal record + recent activity + linked contacts into
+// the system prompt, runs the Claude tool-use loop on the supplied
+// messages, returns { reply } to the caller. Doesn't write to
+// team_messages — the panel keeps its own client-side history.
+async function handleDealCardSurface(req: Request, body: any, apiKey: string, db: any) {
+  const { deal_id, messages } = body;
+  if (!deal_id) return json({ error: "deal_id required for surface=deal_card" }, 400);
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return json({ error: "messages[] required for surface=deal_card" }, 400);
+  }
+
+  // Pre-load deal context. We compose a snapshot block, recent activity
+  // block, and linked contacts block, then substitute into the addendum
+  // template. If the deal doesn't exist we still proceed — the model
+  // will say so, and the user can fix the caller.
+  const { data: deal } = await db
+    .from("deals")
+    .select("id, name, address, status, type, meta, owner_id")
+    .eq("id", deal_id)
+    .single();
+
+  let dealBlock = `(no deal found for id=${deal_id})`;
+  if (deal) {
+    const m = deal.meta || {};
+    const lines = [
+      `id: ${deal.id}`,
+      `name: ${deal.name || "—"}`,
+      `address: ${deal.address || "—"}`,
+      `status: ${deal.status || "—"}`,
+      `type: ${deal.type || "—"}`,
+    ];
+    if (m.county) lines.push(`county: ${m.county}`);
+    if (m.courtCase) lines.push(`case#: ${m.courtCase}`);
+    if (m.saleDate) lines.push(`sale date: ${m.saleDate}`);
+    if (m.salePrice) lines.push(`sale price: $${Number(m.salePrice).toLocaleString()}`);
+    if (m.judgmentAmount) lines.push(`judgment: $${Number(m.judgmentAmount).toLocaleString()}`);
+    if (m.estimatedSurplus) lines.push(`est. surplus: $${Number(m.estimatedSurplus).toLocaleString()}`);
+    if (m.estimatedSurplusLow && m.estimatedSurplusHigh) {
+      lines.push(`surplus range: $${Number(m.estimatedSurplusLow).toLocaleString()}–$${Number(m.estimatedSurplusHigh).toLocaleString()}`);
+    }
+    dealBlock = lines.join("\n");
+  }
+
+  const { data: activity } = await db.rpc("lauren_recent_activity", { p_deal_id: deal_id, p_limit: 8 });
+  let activityBlock = "(no recent activity)";
+  if (Array.isArray(activity) && activity.length) {
+    activityBlock = activity.map((a: any) => `- ${a.created_at?.slice(0,10) || ""} · ${a.action || a.summary || ""}`).join("\n");
+  }
+
+  const { data: contactRows } = await db
+    .from("contact_deals")
+    .select("relationship, contacts(name, kind, company)")
+    .eq("deal_id", deal_id)
+    .limit(10);
+  let contactsBlock = "(no contacts linked)";
+  if (Array.isArray(contactRows) && contactRows.length) {
+    contactsBlock = contactRows.map((cd: any) => {
+      const c = cd.contacts || {};
+      const role = cd.relationship || c.kind || "contact";
+      const company = c.company ? ` (${c.company})` : "";
+      return `- ${c.name || "—"}${company} · ${role}`;
+    }).join("\n");
+  }
+
+  const systemPrompt = SYSTEM_PROMPT_BASE + DEAL_CARD_ADDENDUM_TEMPLATE
+    .replace(/\{DEAL_NAME\}/g, deal?.name || deal_id)
+    .replace("{DEAL_BLOCK}", dealBlock)
+    .replace("{ACTIVITY_BLOCK}", activityBlock)
+    .replace("{CONTACTS_BLOCK}", contactsBlock);
+
+  // Convert the panel's `[{role, content}]` into Claude messages format.
+  // The panel sends OpenAI-style roles which are 1:1 with Anthropic's.
+  const claudeMessages = messages.map((m: any) => ({ role: m.role, content: m.content }));
+
+  let finalText: string | null = null;
+  for (let round = 0; round < 4; round++) {
+    const r = await fetch(ANTHROPIC_API, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: MAX_TOKENS,
+        system: systemPrompt,
+        tools: READ_ONLY_TOOLS,
+        messages: claudeMessages,
+      }),
+    });
+    if (!r.ok) {
+      const errText = await r.text();
+      console.error("[lauren-team-respond/deal_card] Claude error:", r.status, errText);
+      return json({ reply: "(Lauren had trouble reaching her brain just now — try again in a sec.)" }, 200);
+    }
+    const data = await r.json();
+    const content = data.content || [];
+
+    if (data.stop_reason === "end_turn" || data.stop_reason === "stop_sequence") {
+      finalText = content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n").trim();
+      break;
+    }
+
+    if (data.stop_reason === "tool_use") {
+      claudeMessages.push({ role: "assistant", content });
+      const toolUses = content.filter((c: any) => c.type === "tool_use");
+      const toolResults = await Promise.all(toolUses.map(async (tu: any) => {
+        try {
+          let result;
+          if (tu.name === "lookup_deal") {
+            const { data } = await db.rpc("lauren_lookup_deal", { p_needle: tu.input.needle });
+            result = data;
+          } else if (tu.name === "recent_activity") {
+            const { data } = await db.rpc("lauren_recent_activity", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 10 });
+            result = data;
+          } else if (tu.name === "upcoming_events") {
+            const { data } = await db.rpc("lauren_upcoming_events", { p_window_days: tu.input.window_days ?? 14 });
+            result = data;
+          } else if (tu.name === "search_contacts") {
+            const { data } = await db.rpc("lauren_search_contacts", { p_needle: tu.input.needle });
+            result = data;
+          } else if (tu.name === "find_teammate") {
+            const { data } = await db.rpc("lauren_find_teammate", { p_needle: tu.input.needle });
+            result = data;
+          } else if (tu.name === "lookup_documents") {
+            const { data } = await db.rpc("lauren_list_documents", { p_deal_id: tu.input.deal_id });
+            result = data;
+          } else if (tu.name === "get_signed_url") {
+            const { data: meta } = await db.rpc("lauren_get_document_url", { p_document_id: tu.input.document_id });
+            if (meta?.path) {
+              const { data: signed } = await db.storage.from("deal-docs").createSignedUrl(meta.path, 600);
+              result = { ...meta, signed_url: signed?.signedUrl || null };
+            } else {
+              result = { error: "document not found" };
+            }
+          } else {
+            result = { error: `tool '${tu.name}' not available in deal_card mode` };
+          }
+          return { type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(result || []) };
+        } catch (e: any) {
+          return { type: "tool_result", tool_use_id: tu.id, content: JSON.stringify({ error: e.message }), is_error: true };
+        }
+      }));
+      claudeMessages.push({ role: "user", content: toolResults });
+      continue;
+    }
+
+    finalText = content.filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n").trim();
+    break;
+  }
+
+  if (!finalText) finalText = "(Lauren is thinking but didn't quite finish — give her another nudge.)";
+  return json({ reply: finalText, surface: "deal_card", deal_id });
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
 
   let body;
   try { body = await req.json(); } catch { return json({ error: "bad JSON" }, 400); }
-  const { thread_id } = body;
-  if (!thread_id) return json({ error: "thread_id required" }, 400);
 
   const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
   if (!apiKey) return json({ error: "ANTHROPIC_API_KEY not configured" }, 500);
 
   const db = createClient(Deno.env.get("SUPABASE_URL"), Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
+
+  // Surface dispatch — `surface: 'deal_card'` is a stateless inline chat
+  // from the deal-card "Ask Lauren" panel. Returns early; doesn't touch
+  // team_threads / team_messages.
+  if (body.surface === "deal_card") {
+    return await handleDealCardSurface(req, body, apiKey, db);
+  }
+
+  const { thread_id } = body;
+  if (!thread_id) return json({ error: "thread_id required" }, 400);
 
   // Fetch the thread row so we know whether this is a Lauren DM (Hub mode)
   // or a regular thread (only-respond-on-mention mode).
