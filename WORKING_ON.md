@@ -5,31 +5,54 @@ every session so the other side knows what's in flight.
 
 ---
 
-## 🚨 EMERGENCY — kill Lauren on refundlocators.com (60 seconds)
+## 🚨 EMERGENCY — kill Lauren on refundlocators.com (~90 seconds)
 
 If Lauren is doing something live that needs to STOP RIGHT NOW (saying something embarrassing, leaking data, getting injected):
 
-**Fastest — Supabase dashboard pause (no terminal needed):**
+> **Note:** Supabase no longer has a "Pause function" button. The dashboard's only options are deleting the function (drastic — source isn't in git) or editing the JWT settings. The kill paths below are the working ones as of 2026-04-28.
 
-1. https://supabase.com/dashboard/project/rcfaashkfpurkvtmsmeb/functions/lauren-chat
-2. Top-right `⋯` → **Pause function** → confirm
-3. Done. New chats return 503; widget shows generic error.
-4. To restore: same place → **Resume**.
-
-**Slower but with friendly "we're offline" message (~90 sec):**
+**PRIMARY — Vercel env var kill-switch (~90 sec, friendly offline message):**
 
 ```
 cd ~/Documents/Claude/refundlocators-next
 vercel env add NEXT_PUBLIC_LAUREN_DISABLED production
-# When prompted "What's the value?" — TYPE: true   (don't leave blank)
+# When the CLI prompts "What's the value of NEXT_PUBLIC_LAUREN_DISABLED?"
+# you MUST type the literal word: true   (do NOT press Enter on a blank value)
+# Then accept defaults for the remaining prompts.
 git commit --allow-empty -m "deploy: kill switch on" && git push
 ```
 
-To restore:
+The push triggers Vercel auto-deploy (~60 sec). After it completes, the chat widget on every refundlocators.com page renders: *"Lauren is temporarily offline. Please email hello@refundlocators.com or call (513) 516-2306..."* — with no fetch to lauren-chat happening.
+
+**To restore:**
 ```
+cd ~/Documents/Claude/refundlocators-next
 vercel env rm NEXT_PUBLIC_LAUREN_DISABLED production --yes
 git commit --allow-empty -m "deploy: kill switch off" && git push
 ```
+
+**BACKUP — Replace the Edge Function with a 503 stub (~3 min, breaks gracefully):**
+
+Use only if the Vercel env var path fails (e.g. Vercel down).
+
+1. https://supabase.com/dashboard/project/rcfaashkfpurkvtmsmeb/functions/lauren-chat → **Code** tab
+2. Replace the entire `Deno.serve(...)` body with:
+   ```typescript
+   Deno.serve(() => new Response(
+     JSON.stringify({ reply: "Lauren is offline for maintenance. Please email hello@refundlocators.com — we'll respond within 1 business day." }),
+     { headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" } }
+   ));
+   ```
+3. **BEFORE** clicking Deploy, **download** the current function source (top-right "Download" button) so you have a restore artifact.
+4. Click Deploy.
+
+To restore: paste back the original code → Deploy.
+
+**LAST RESORT — Delete the function (irreversible without saved source):**
+
+Only if you literally have no other option AND you have the source backed up. From Settings tab → Delete edge function.
+
+---
 
 **Full runbook (other incident paths, not just Lauren):**
 `~/Documents/Claude/refundlocators-next/RUNBOOK.md`
