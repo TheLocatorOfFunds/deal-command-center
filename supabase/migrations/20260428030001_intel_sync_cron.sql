@@ -8,7 +8,7 @@
 --
 --   2. EF secrets set in Supabase Dashboard → Edge Functions → Secrets:
 --        INTEL_SUPABASE_URL              — ohio-intel project URL
---        INTEL_SUPABASE_SERVICE_ROLE_KEY — ohio-intel service-role key
+--        INTEL_SUPABASE_SERVICE_KEY — ohio-intel service-role key
 --        INTEL_SYNC_SECRET               — random hex (openssl rand -hex 32)
 --
 --   3. Same INTEL_SYNC_SECRET stored in vault as 'intel_sync_secret'

@@ -9,7 +9,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 //
 // Env (set in Supabase dashboard → Edge Functions → Secrets):
 //   INTEL_SUPABASE_URL              — ohio-intel project URL
-//   INTEL_SUPABASE_SERVICE_ROLE_KEY — ohio-intel service-role key (bypasses RLS)
+//   INTEL_SUPABASE_SERVICE_KEY — ohio-intel service-role key (bypasses RLS)
 //   INTEL_SYNC_SECRET               — shared secret for cron + manual calls
 //
 // Default Supabase secrets (auto-injected, no need to set):
@@ -53,10 +53,10 @@ Deno.serve(async (req) => {
   const dccUrl = Deno.env.get("SUPABASE_URL");
   const dccKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   const intelUrl = Deno.env.get("INTEL_SUPABASE_URL");
-  const intelKey = Deno.env.get("INTEL_SUPABASE_SERVICE_ROLE_KEY");
+  const intelKey = Deno.env.get("INTEL_SUPABASE_SERVICE_KEY");
   if (!dccUrl || !dccKey) return json({ error: "DCC supabase env missing" }, 500);
   if (!intelUrl || !intelKey) {
-    return json({ error: "INTEL_SUPABASE_URL or INTEL_SUPABASE_SERVICE_ROLE_KEY not set in EF secrets" }, 500);
+    return json({ error: "INTEL_SUPABASE_URL or INTEL_SUPABASE_SERVICE_KEY not set in EF secrets" }, 500);
   }
 
   const dcc = createClient(dccUrl, dccKey, { auth: { persistSession: false } });
