@@ -2548,7 +2548,7 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
         setSelectedId(match.id);
         setBody(renderTemplate(match.body_template));
       }
-      const { data: pn } = await sb.from('phone_numbers').select('*').eq('active', true);
+      const { data: pn } = await sb.from('phone_numbers').select('*').eq('active', true).eq('gateway', 'mac_bridge');
       setPhoneNumbers(pn || []);
       if ((pn || []).length > 0) setFromNumber(pn[0].number);
     })();
@@ -5966,7 +5966,7 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const toPhone   = item?.contact_phone || meta.homeownerPhone || '';
 
   React.useEffect(() => {
-    sb.from('phone_numbers').select('number, label, gateway').then(({ data }) => {
+    sb.from('phone_numbers').select('number, label, gateway').eq('gateway', 'mac_bridge').then(({ data }) => {
       if (data) setPhoneNums(data);
     });
   }, []);
@@ -13074,7 +13074,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
   useEffect(() => {
     loadDealContacts();
     load();
-    sb.from('phone_numbers').select('*').eq('active', true).order('created_at').then(({ data }) => {
+    sb.from('phone_numbers').select('*').eq('active', true).eq('gateway', 'mac_bridge').order('created_at').then(({ data }) => {
       const nums = data || [];
       setPhoneNumbers(nums);
       if (nums.length > 0 && !fromNumber) setFromNumber(nums[0].number);
