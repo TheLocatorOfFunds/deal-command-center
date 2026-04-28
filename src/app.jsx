@@ -9887,6 +9887,9 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
             {isAdmin && <Field label="Attorney Fee"><input type="number" value={m.attorneyFee || ""} onChange={e => updateMeta({ attorneyFee: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="$" /></Field>}
             <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
             <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
+            {isAdmin && <Field label="Sale Date"><input type="date" value={m.saleDate || ""} onChange={e => updateMeta({ saleDate: e.target.value })} style={inputStyle} /></Field>}
+            {isAdmin && <Field label="Sale Price"><input type="number" value={m.salePrice ?? ""} onChange={e => updateMeta({ salePrice: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>}
+            {isAdmin && <Field label="Judgment Debt"><input type="number" value={m.judgmentAmount ?? ""} onChange={e => updateMeta({ judgmentAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>}
           </div>
           <CourtPullButton dealId={deal.id} caseNumber={m.courtCase} county={m.county} userId={userId} />
         </Card>
