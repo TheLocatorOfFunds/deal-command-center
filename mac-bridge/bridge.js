@@ -107,6 +107,17 @@ console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
+// ─── Diagnostic: log available Messages.app services ─────────────────────────
+try {
+  const svcOut = execFileSync('osascript', ['-e',
+    'tell application "Messages" to get {name, service type as string} of every service'
+  ], { timeout: 8000 }).toString().trim();
+  console.log(`    Services: ${svcOut}`);
+} catch (e) {
+  console.log(`    Services: (could not query — ${e.message.split('\n')[0]})`);
+}
+console.log('');
+
 // ─── Per-process chat resolution cache ───────────────────────────────────────
 // Maps apple chat_identifier → { dealId: string|null, isGroup: bool, participants: string[] }
 // null dealId means "skip this chat" (personal or unresolvable).
