@@ -7030,6 +7030,16 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
             : `+${phoneClean}`)
         : null;
 
+      // Surplus fallback: most DCC deals carry a single `meta.estimatedSurplus`
+      // (Castle's mid-point estimate) rather than a low/high range. The
+      // personalized_links table only has low/high columns and the website's
+      // /s/<token> page renders $0 when both are null. Use the single estimate
+      // for both bounds when the range fields aren't populated, so the page
+      // shows the deal's actual estimated surplus.
+      const surplusSingle = meta.estimatedSurplus ?? meta.estimated_surplus ?? null;
+      const surplusLow  = meta.estimatedSurplusLow  ?? meta.estimated_surplus_low  ?? surplusSingle;
+      const surplusHigh = meta.estimatedSurplusHigh ?? meta.estimated_surplus_high ?? surplusSingle;
+
       const row = {
         token: newToken,
         deal_id: deal.id,
@@ -7041,8 +7051,8 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
         sale_date: meta.saleDate || meta.sale_date || null,
         sale_price: meta.salePrice ?? meta.sale_price ?? null,
         judgment_amount: meta.judgmentAmount ?? meta.judgment_amount ?? null,
-        estimated_surplus_low: meta.estimatedSurplusLow ?? meta.estimated_surplus_low ?? null,
-        estimated_surplus_high: meta.estimatedSurplusHigh ?? meta.estimated_surplus_high ?? null,
+        estimated_surplus_low: surplusLow,
+        estimated_surplus_high: surplusHigh,
         source: 'dcc-lead',
         expires_at: new Date(Date.now() + 90 * 86400 * 1000).toISOString(),
       };
