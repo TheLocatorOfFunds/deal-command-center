@@ -96,13 +96,14 @@ grant execute on function public.lauren_generate_personalized_url(text) to authe
 
 -- 4. Helper read: list documents on a deal. Lauren can summarize what's
 -- there before Nathan asks "what files do we have on Casey Jennings?".
+-- (documents table doesn't have mime_type; we return what's there.)
 create or replace function public.lauren_list_documents(p_deal_id text)
-returns table(id uuid, name text, mime_type text, size bigint, created_at timestamptz)
+returns table(id uuid, name text, size bigint, created_at timestamptz)
 language sql
 security definer
 set search_path = public
 as $$
-  select id, name, mime_type, size, created_at
+  select id, name, size, created_at
   from public.documents
   where deal_id = p_deal_id
   order by created_at desc
@@ -129,7 +130,6 @@ begin
     'document_id', v_doc.id,
     'name', v_doc.name,
     'path', v_doc.path,
-    'mime_type', v_doc.mime_type,
     'deal_id', v_doc.deal_id
   );
 end;
