@@ -331,6 +331,8 @@ function DealCommandCenter({ session, profile }) {
   const [recentActivity, setRecentActivity] = useState([]);
   const [showLog, setShowLog] = useState(false);
   const [showTeam, setShowTeam] = useState(false);
+  const [showLaurenCC, setShowLaurenCC] = useState(false);
+  const [laurenFlaggedCount, setLaurenFlaggedCount] = useState(0);
   const [showLeads, setShowLeads] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [showMoreSheet, setShowMoreSheet] = useState(false);
@@ -431,6 +433,13 @@ function DealCommandCenter({ session, profile }) {
     setUnackDocketCount(data || 0);
   };
 
+  const loadLaurenFlaggedCount = async () => {
+    try {
+      const { data } = await sb.rpc('lauren_flagged_count');
+      setLaurenFlaggedCount(data || 0);
+    } catch { /* migration may not be applied yet */ }
+  };
+
   const loadPendingWalkthroughs = async () => {
     const { data } = await sb.from('walkthrough_requests')
       .select('*, deals(name, address, meta)')
@@ -472,7 +481,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); }, []);
 
   // Presence heartbeat — every 60s while DCC is open in this tab, ping
   // touch_user_presence() so other team members see "active now". Skipped
@@ -650,6 +659,13 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
           {isTeam && <button onClick={() => setView("team")} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
+          {isAdmin && (
+            <button onClick={() => setShowLaurenCC(true)}
+              title="Lauren Control Center — flagged conversations + knowledge base"
+              style={{ ...btnGhost, fontSize: 11, position: 'relative', borderColor: laurenFlaggedCount > 0 ? '#7f1d1d' : '#44403c', color: laurenFlaggedCount > 0 ? '#fca5a5' : '#a8a29e' }}>
+              🤖 Lauren {laurenFlaggedCount > 0 && <span style={{ display: 'inline-block', marginLeft: 4, background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{laurenFlaggedCount}</span>}
+            </button>
+          )}
           {isAdmin && <button onClick={() => setShowTeam(true)} title="Team management — invite, roles, status" style={{ ...btnGhost, fontSize: 11 }}>👥 Team</button>}
           <button onClick={() => setShowAccount(true)} title="Account settings" style={{ ...btnGhost, fontSize: 11 }}>⚙ Account</button>
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
@@ -664,6 +680,7 @@ function DealCommandCenter({ session, profile }) {
       {showLeads && <LeadsModal onClose={() => { setShowLeads(false); loadLeadCount(); }} userName={userName} onConverted={() => { loadDeals(); loadLeadCount(); }} />}
       {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
       {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
+      {showLaurenCC && <LaurenControlCenter onClose={() => { setShowLaurenCC(false); loadLaurenFlaggedCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowLaurenCC(false); }} />}
       {showContacts && <ContactsModal onClose={() => setShowContacts(false)} isAdmin={isAdmin} userId={session.user.id} deals={deals} onJumpToDeal={(id) => { setActiveDealId(id); setShowContacts(false); }} />}
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
 
@@ -10669,6 +10686,274 @@ function DocketTab({ dealId }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// ─── Lauren Control Center modal ──────────────────────────────────
+// Cross-cutting admin view for both internal Lauren and the website's
+// consumer-facing Lauren. Two tabs:
+//   Alerts — flagged conversations from refundlocators.com that need
+//            Nathan/Justin to read and acknowledge. Backed by
+//            lauren_flagged_conversations() RPC.
+//   Knowledge — editor for lauren_knowledge table. Adding/editing/
+//               deleting rows here changes the website Lauren's
+//               behavior immediately (lauren-chat EF reads from this
+//               table when constructing its prompt).
+//
+// Shared Supabase: same project that the website hits. Edits land
+// instantly across both surfaces.
+function LaurenControlCenter({ onClose, onJumpToDeal }) {
+  const [tab, setTab] = useState("alerts");
+  const [alerts, setAlerts] = useState(null);
+  const [knowledge, setKnowledge] = useState(null);
+  const [openConvoId, setOpenConvoId] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+  // Knowledge composer state
+  const [kbTitle, setKbTitle] = useState('');
+  const [kbContent, setKbContent] = useState('');
+  const [kbTopic, setKbTopic] = useState('');
+  const [kbEditingId, setKbEditingId] = useState(null);
+
+  const loadAlerts = async () => {
+    const { data, error } = await sb.rpc('lauren_flagged_conversations');
+    if (error) { setErr(error.message); return; }
+    setAlerts(data || []);
+  };
+  const loadKnowledge = async () => {
+    const { data, error } = await sb.from('lauren_knowledge').select('*').order('created_at', { ascending: false });
+    if (error) { setErr(error.message); return; }
+    setKnowledge(data || []);
+  };
+
+  useEffect(() => { loadAlerts(); loadKnowledge(); }, []);
+  useEffect(() => {
+    const ch = sb.channel('lauren-cc-rt')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, () => loadAlerts())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_alert_acks' }, () => loadAlerts())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_knowledge' }, () => loadKnowledge())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const ackOne = async (id) => {
+    setBusy(true);
+    const { error } = await sb.rpc('lauren_ack_flagged', { p_conversation_id: id });
+    setBusy(false);
+    if (error) setErr(error.message);
+    await loadAlerts();
+  };
+  const ackAll = async () => {
+    if (!alerts || alerts.length === 0) return;
+    if (!window.confirm(`Acknowledge all ${alerts.length} flagged conversations?`)) return;
+    setBusy(true);
+    const { error } = await sb.rpc('lauren_ack_all_flagged');
+    setBusy(false);
+    if (error) setErr(error.message);
+    await loadAlerts();
+  };
+
+  const saveKb = async () => {
+    if (!kbContent.trim()) return;
+    setBusy(true); setErr(null);
+    if (kbEditingId) {
+      const { error } = await sb.from('lauren_knowledge').update({
+        title: kbTitle.trim() || null,
+        content: kbContent,
+        topic: kbTopic.trim() || null,
+      }).eq('id', kbEditingId);
+      if (error) { setErr(error.message); setBusy(false); return; }
+    } else {
+      const { error } = await sb.from('lauren_knowledge').insert({
+        title: kbTitle.trim() || null,
+        content: kbContent,
+        topic: kbTopic.trim() || null,
+        source_type: 'manual',
+        brand: 'refundlocators',
+      });
+      if (error) { setErr(error.message); setBusy(false); return; }
+    }
+    setBusy(false);
+    setKbTitle(''); setKbContent(''); setKbTopic(''); setKbEditingId(null);
+    await loadKnowledge();
+  };
+  const startEditKb = (row) => {
+    setKbEditingId(row.id);
+    setKbTitle(row.title || '');
+    setKbContent(row.content || '');
+    setKbTopic(row.topic || '');
+  };
+  const cancelEditKb = () => { setKbEditingId(null); setKbTitle(''); setKbContent(''); setKbTopic(''); };
+  const deleteKb = async (id) => {
+    if (!window.confirm('Delete this knowledge entry? Lauren will lose access to this content immediately.')) return;
+    setBusy(true);
+    const { error } = await sb.from('lauren_knowledge').delete().eq('id', id);
+    setBusy(false);
+    if (error) setErr(error.message);
+    await loadKnowledge();
+  };
+
+  const fmtRel = (iso) => {
+    if (!iso) return '—';
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.round(sec / 60) + 'm ago';
+    if (sec < 86400) return Math.round(sec / 3600) + 'h ago';
+    if (sec < 86400 * 7) return Math.round(sec / 86400) + 'd ago';
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <Modal onClose={onClose} title="🤖 Lauren Control Center" wide>
+      <div style={{ display: "flex", gap: 2, borderBottom: "1px solid #292524", marginBottom: 16 }}>
+        <button onClick={() => setTab('alerts')} style={{
+          background: 'transparent', border: 'none', color: tab === 'alerts' ? '#fafaf9' : '#78716c',
+          padding: '8px 14px', fontSize: 13, fontWeight: tab === 'alerts' ? 700 : 500,
+          borderBottom: tab === 'alerts' ? '2px solid #d97706' : '2px solid transparent', marginBottom: -1, cursor: 'pointer', fontFamily: 'inherit',
+        }}>
+          🚨 Alerts {alerts && alerts.length > 0 && <span style={{ marginLeft: 4, fontSize: 10, color: '#fca5a5', fontFamily: "'DM Mono', monospace" }}>({alerts.length})</span>}
+        </button>
+        <button onClick={() => setTab('knowledge')} style={{
+          background: 'transparent', border: 'none', color: tab === 'knowledge' ? '#fafaf9' : '#78716c',
+          padding: '8px 14px', fontSize: 13, fontWeight: tab === 'knowledge' ? 700 : 500,
+          borderBottom: tab === 'knowledge' ? '2px solid #d97706' : '2px solid transparent', marginBottom: -1, cursor: 'pointer', fontFamily: 'inherit',
+        }}>
+          📚 Knowledge {knowledge && <span style={{ marginLeft: 4, fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>({knowledge.length})</span>}
+        </button>
+      </div>
+
+      {err && <div style={{ padding: '8px 12px', background: '#7f1d1d22', border: '1px solid #7f1d1d', borderRadius: 6, color: '#fca5a5', fontSize: 12, marginBottom: 12 }}>{err}</div>}
+
+      {/* ── ALERTS TAB ── */}
+      {tab === 'alerts' && (
+        <>
+          {alerts === null && <div style={{ padding: 30, textAlign: 'center', color: '#78716c' }}>Loading…</div>}
+          {alerts && alerts.length === 0 && (
+            <div style={{ padding: 32, textAlign: 'center', color: '#78716c', fontSize: 13, fontStyle: 'italic', border: '1px dashed #292524', borderRadius: 8 }}>
+              No flagged conversations. Lauren's website chats are clean.
+            </div>
+          )}
+          {alerts && alerts.length > 0 && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                <div style={{ fontSize: 11, color: '#a8a29e' }}>
+                  {alerts.length} flagged conversation{alerts.length === 1 ? '' : 's'} — keywords: scam, legit, sue, lawyer, AG, complaint, refund, cancel, fraud, catch
+                </div>
+                <button onClick={ackAll} disabled={busy} style={{ background: '#78350f', color: '#fafaf9', border: 0, padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  ✓ Acknowledge all {alerts.length}
+                </button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {alerts.map(a => {
+                  const isOpen = openConvoId === a.id;
+                  return (
+                    <div key={a.id} style={{ background: '#1c1917', border: '1px solid ' + (a.submitted_claim ? '#064e3b' : '#7f1d1d'), borderRadius: 10, overflow: 'hidden' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, padding: '12px 14px' }}>
+                        <button onClick={() => setOpenConvoId(isOpen ? null : a.id)} style={{ flex: 1, minWidth: 0, textAlign: 'left', background: 'transparent', border: 0, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{fmtRel(a.last_message_at)}</span>
+                            <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{a.message_count} msgs</span>
+                            {a.deal_name && <span style={{ fontSize: 10, color: '#93c5fd', fontFamily: "'DM Mono', monospace" }}>· {a.deal_name}</span>}
+                            {a.page_origin && <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {a.page_origin}</span>}
+                            {a.submitted_claim && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.18)', color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase' }}>✓ claim</span>}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#fca5a5', fontStyle: 'italic', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: isOpen ? 99 : 2, WebkitBoxOrient: 'vertical' }}>
+                            "{a.first_user_msg || '(no user message)'}"
+                          </div>
+                        </button>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                          {a.deal_id && (
+                            <button onClick={() => onJumpToDeal(a.deal_id)} style={{ ...btnGhost, fontSize: 10, padding: '3px 8px' }}>Open deal →</button>
+                          )}
+                          <button onClick={() => ackOne(a.id)} disabled={busy} style={{ ...btnGhost, fontSize: 10, padding: '3px 8px' }}>Mark seen</button>
+                        </div>
+                      </div>
+                      {isOpen && Array.isArray(a.transcript) && (
+                        <div style={{ borderTop: '1px solid #292524', padding: '12px 14px', background: '#0c0a09', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                          {a.transcript.map((m, i) => (
+                            <div key={i} style={{
+                              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                              maxWidth: '84%', padding: '8px 12px',
+                              background: m.role === 'user' ? '#d97706' : '#292524',
+                              color: m.role === 'user' ? '#1c0a00' : '#fafaf9',
+                              borderRadius: 12,
+                              borderBottomRightRadius: m.role === 'user' ? 3 : 12,
+                              borderBottomLeftRadius: m.role !== 'user' ? 3 : 12,
+                              fontSize: 12, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                              fontWeight: m.role === 'user' ? 500 : 400,
+                            }}>
+                              {m.content}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ── KNOWLEDGE TAB ── */}
+      {tab === 'knowledge' && (
+        <>
+          <div style={{ marginBottom: 14, padding: '10px 12px', background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#a8a29e', lineHeight: 1.5 }}>
+            <b style={{ color: '#fafaf9' }}>This is the website Lauren's brain.</b> Each entry below is read by the lauren-chat Edge Function when it builds her system prompt. Adding/editing here changes how she answers visitors on refundlocators.com immediately. Internal Lauren (your FAB) uses a separate hardcoded prompt.
+          </div>
+
+          <div style={{ background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: 14, marginBottom: 14 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#fafaf9', marginBottom: 10, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+              {kbEditingId ? 'Edit entry' : '＋ New entry'}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+              <input value={kbTitle} onChange={e => setKbTitle(e.target.value)} placeholder="Title (optional)" style={{ ...inputStyle, fontSize: 12 }} />
+              <input value={kbTopic} onChange={e => setKbTopic(e.target.value)} placeholder="Topic (e.g. fees, process, faq)" style={{ ...inputStyle, fontSize: 12 }} />
+            </div>
+            <textarea value={kbContent} onChange={e => setKbContent(e.target.value)}
+              placeholder="Content — what should Lauren know? Plain text. Be specific and concise; she sees this as part of her prompt."
+              rows={6} style={{ ...inputStyle, fontSize: 12, fontFamily: 'inherit', resize: 'vertical', width: '100%' }} />
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+              {kbEditingId && <button onClick={cancelEditKb} style={btnGhost}>Cancel</button>}
+              <button onClick={saveKb} disabled={busy || !kbContent.trim()} style={{ ...btnPrimary, opacity: busy || !kbContent.trim() ? 0.5 : 1 }}>
+                {busy ? 'Saving…' : kbEditingId ? 'Save changes' : 'Add to knowledge'}
+              </button>
+            </div>
+          </div>
+
+          {knowledge === null && <div style={{ padding: 30, textAlign: 'center', color: '#78716c' }}>Loading…</div>}
+          {knowledge && knowledge.length === 0 && (
+            <div style={{ padding: 32, textAlign: 'center', color: '#78716c', fontSize: 13, fontStyle: 'italic', border: '1px dashed #292524', borderRadius: 8 }}>
+              No knowledge entries yet. Add the first one above — common starters: how fees work, what the engagement agreement covers, "is this a scam" rebuttals.
+            </div>
+          )}
+          {knowledge && knowledge.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {knowledge.map(k => (
+                <div key={k.id} style={{ background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
+                        {k.title && <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{k.title}</span>}
+                        {k.topic && <span style={{ fontSize: 9, color: '#fbbf24', padding: '1px 6px', borderRadius: 3, background: 'rgba(217,119,6,0.18)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{k.topic}</span>}
+                        <span style={{ fontSize: 9, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{k.source_type}</span>
+                        <span style={{ fontSize: 9, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>· {fmtRel(k.created_at)}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                      <button onClick={() => startEditKb(k)} title="Edit" style={{ background: 'transparent', border: 'none', color: '#a8a29e', cursor: 'pointer', fontSize: 13, padding: '0 4px' }}>✏️</button>
+                      <button onClick={() => deleteKb(k.id)} title="Delete" style={{ background: 'transparent', border: 'none', color: '#a8a29e', cursor: 'pointer', fontSize: 13, padding: '0 4px' }}>🗑</button>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{k.content}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </Modal>
   );
 }
 
