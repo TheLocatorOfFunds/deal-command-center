@@ -166,10 +166,10 @@ function sendViaMessages(toPhone, body) {
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const lines = [
     'tell application "Messages"',
-    '  activate',
     `  set targetPhone to "${toPhone}"`,
     // Use "1st account" — lets Messages pick iMessage or SMS relay automatically.
     // Avoids forcing iMessage when the recipient isn't on Apple's network (error 22).
+    // Note: no "activate" — on a headless Mac Mini, activate can block indefinitely.
     '  set targetBuddy to participant targetPhone of 1st account',
     `  send "${escaped}" to targetBuddy`,
     'end tell',
@@ -213,9 +213,9 @@ function sendFileViaMessages(toPhone, localPath) {
   const safePath = localPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   const lines = [
     'tell application "Messages"',
-    '  activate',
     `  set targetPhone to "${toPhone}"`,
     // Same as sendViaMessages — no iMessage constraint; allow SMS relay fallback.
+    // No "activate" — headless Mac Mini would block indefinitely.
     '  set targetBuddy to participant targetPhone of 1st account',
     `  send POSIX file "${safePath}" to targetBuddy`,
     'end tell',
