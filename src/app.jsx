@@ -7201,10 +7201,10 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   const isWholesale = deal.type === "wholesale";
   const tabs = isAdmin
     ? (isFlip
-        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "tasks", "files"]
+        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "tasks", "files", "lauren"]
         : isWholesale
-          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "tasks", "files"]
-          : ["overview", "comms", "docket", "contacts", "tasks", "files"])
+          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "tasks", "files", "lauren"]
+          : ["overview", "comms", "docket", "contacts", "tasks", "files", "lauren"])
     : ["overview", "comms", "docket", "contacts", "tasks", "files"];
 
   return (
@@ -7358,7 +7358,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             padding: "10px 16px", fontSize: 13, fontWeight: tab === id ? 700 : 500,
             borderBottom: tab === id ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, whiteSpace: "nowrap",
           }}>
-            {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id === "investor" ? "💵 Investor" : id === "partner" ? "🤝 JV Partner" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
+            {id === "comms" ? "💬 Comms" : id === "files" ? "📁 Files" : id === "investor" ? "💵 Investor" : id === "partner" ? "🤝 JV Partner" : id === "lauren" ? "🤖 Lauren" : id.charAt(0).toUpperCase() + id.slice(1)}{id === "tasks" && tasksHigh > 0 ? " ●" : ""}
             {/* Unread-since-last-seen badge for Comms + Docket — resets when the tab is opened */}
             {((id === "comms" && unreadCounts.comms > 0) || (id === "docket" && unreadCounts.docket > 0)) && (
               <span style={{ marginLeft: 6, display: "inline-block", background: "#ef4444", color: "#fff", borderRadius: 10, padding: "1px 7px", fontSize: 10, fontWeight: 700, lineHeight: 1.3, verticalAlign: "middle" }}>
@@ -7434,6 +7434,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           </div>
         </div>
       )}
+      {tab === "lauren" && <DealLaurenHistory dealId={deal.id} deal={deal} />}
 
       {showPostUpdate && (
         <PostUpdateModal
@@ -11735,6 +11736,188 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         );
       })}
     </Card>
+    </div>
+  );
+}
+
+// ─── Deal-attached Lauren conversation history ──────────────────────
+// Reads consumer-facing chat conversations from website Lauren that are
+// linked to this deal — either via the personalized_links token, or via
+// the same visitor_id (catches cross-page chats from the same browser).
+//
+// Backed by lauren_conversations_for_deal(deal_id) RPC (admin-gated).
+// See refundlocators-next/docs/lauren-handoff-for-dcc.md for full spec.
+function DealLaurenHistory({ dealId, deal }) {
+  const [convos, setConvos] = useState(null);
+  const [error, setError] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const alive = useAliveRef();
+
+  const load = React.useCallback(async () => {
+    const { data, error: rpcErr } = await sb.rpc('lauren_conversations_for_deal', { p_deal_id: dealId });
+    if (!alive.current) return;
+    if (rpcErr) { setError(rpcErr.message); return; }
+    setConvos(data || []);
+  }, [dealId, alive]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Realtime — refresh when a new conversation lands or claim flips
+  useEffect(() => {
+    const ch = sb.channel('lauren-convos-deal-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, () => load())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId, load]);
+
+  const fmtRel = (iso) => {
+    if (!iso) return '—';
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return sec + 's ago';
+    if (sec < 3600) return Math.round(sec / 60) + 'm ago';
+    if (sec < 86400) return Math.round(sec / 3600) + 'h ago';
+    if (sec < 86400 * 7) return Math.round(sec / 86400) + 'd ago';
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const firstUserMsg = (transcript) => {
+    if (!Array.isArray(transcript)) return '';
+    const u = transcript.find(m => m && m.role === 'user');
+    return (u?.content || '').trim();
+  };
+
+  // Keyword-flag for quick triage
+  const ALARM_RE = /\b(scam|legit|sue|lawyer|attorney general|complaint|cancel|refund|fraud|trust|catch)\b/i;
+  const hasAlarm = (transcript) => Array.isArray(transcript) && transcript.some(m => m?.role === 'user' && ALARM_RE.test(m?.content || ''));
+
+  const totalConvos = convos?.length || 0;
+  const convertedConvos = (convos || []).filter(c => c.submitted_claim).length;
+
+  if (error) {
+    return (
+      <div style={{ padding: 20, background: '#7f1d1d22', border: '1px solid #7f1d1d', borderRadius: 8, color: '#fca5a5', fontSize: 13 }}>
+        Could not load Lauren history: {error}
+        <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 6 }}>
+          The migration <code style={{ background: '#0c0a09', padding: '1px 6px', borderRadius: 3 }}>20260428010000_lauren_conversations_for_deal.sql</code> may not be applied yet.
+        </div>
+      </div>
+    );
+  }
+
+  if (convos === null) {
+    return <div style={{ padding: 30, textAlign: 'center', color: '#78716c', fontSize: 13 }}>Loading Lauren history…</div>;
+  }
+
+  if (totalConvos === 0) {
+    return (
+      <div style={{ padding: 40, textAlign: 'center', color: '#a8a29e', fontSize: 13, lineHeight: 1.6, border: '1px dashed #292524', borderRadius: 10 }}>
+        <div style={{ fontSize: 24, marginBottom: 8 }}>🤖</div>
+        <b style={{ color: '#fafaf9', display: 'block', marginBottom: 6 }}>No Lauren conversations yet for this deal.</b>
+        Once a visitor with this deal's personalized URL chats with Lauren on refundlocators.com, the conversation will show up here automatically.
+        {!deal?.refundlocators_token && (
+          <div style={{ marginTop: 14, fontSize: 11, color: '#fbbf24' }}>
+            ⚠ This deal doesn't have a personalized URL yet — generate one from the deal header to enable Lauren tracking.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Stats row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 18 }}>
+        <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #d97706', borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Conversations</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{totalConvos}</div>
+        </div>
+        <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #10b981', borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Converted</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{convertedConvos}</div>
+          <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2 }}>
+            {totalConvos > 0 ? Math.round(100 * convertedConvos / totalConvos) : 0}% rate
+          </div>
+        </div>
+        <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #ef4444', borderRadius: 10, padding: 14 }}>
+          <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Flagged</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{(convos || []).filter(c => hasAlarm(c.transcript)).length}</div>
+          <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2 }}>scam / legit / lawyer keywords</div>
+        </div>
+      </div>
+
+      {/* Conversation list */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {convos.map(c => {
+          const isOpen = openId === c.id;
+          const flagged = hasAlarm(c.transcript);
+          return (
+            <div key={c.id} style={{
+              background: '#1c1917', border: '1px solid ' + (c.submitted_claim ? '#064e3b' : flagged ? '#78350f' : '#292524'),
+              borderRadius: 10, overflow: 'hidden',
+            }}>
+              {/* Row header — click to expand */}
+              <button onClick={() => setOpenId(isOpen ? null : c.id)} style={{
+                width: '100%', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
+                padding: '12px 14px', background: 'transparent', border: 0, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{fmtRel(c.started_at)}</span>
+                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{c.message_count} msgs</span>
+                    {c.page_origin && <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {c.page_origin}</span>}
+                    {c.matched_via === 'visitor' && <span style={{ fontSize: 9, color: '#a8a29e', padding: '1px 6px', borderRadius: 3, background: '#292524', textTransform: 'uppercase', letterSpacing: '0.05em' }}>same visitor</span>}
+                    {c.submitted_claim && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.18)', color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase' }}>✓ claim submitted</span>}
+                    {flagged && !c.submitted_claim && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(239,68,68,0.18)', color: '#fca5a5', letterSpacing: '0.05em', textTransform: 'uppercase' }}>⚠ flagged</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#a8a29e', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', fontStyle: 'italic' }}>
+                    "{firstUserMsg(c.transcript) || (c.seed_message || '(no user message)')}"
+                  </div>
+                </div>
+                <div style={{ fontSize: 14, color: '#78716c', flexShrink: 0 }}>{isOpen ? '▾' : '▸'}</div>
+              </button>
+
+              {/* Expanded transcript */}
+              {isOpen && (
+                <div style={{ borderTop: '1px solid #292524', padding: '14px 16px', background: '#0c0a09' }}>
+                  {Array.isArray(c.transcript) && c.transcript.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {c.transcript.map((m, i) => (
+                        <div key={i} style={{
+                          alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                          maxWidth: '84%', padding: '8px 12px',
+                          background: m.role === 'user' ? '#d97706' : '#292524',
+                          color: m.role === 'user' ? '#1c0a00' : '#fafaf9',
+                          borderRadius: 12,
+                          borderBottomRightRadius: m.role === 'user' ? 3 : 12,
+                          borderBottomLeftRadius: m.role !== 'user' ? 3 : 12,
+                          fontSize: 12, lineHeight: 1.55,
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                          fontWeight: m.role === 'user' ? 500 : 400,
+                        }}>
+                          {m.content}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div style={{ color: '#78716c', fontSize: 12, fontStyle: 'italic' }}>No messages logged yet for this conversation.</div>
+                  )}
+                  {/* Meta footer */}
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #292524', fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+                    <span>visitor: {c.visitor_id?.slice(0, 12)}…</span>
+                    {c.token && <span>token: {c.token}</span>}
+                    <span>started: {new Date(c.started_at).toLocaleString()}</span>
+                    <span>last: {new Date(c.last_message_at).toLocaleString()}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ marginTop: 18, padding: 12, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        Conversations linked to this deal via the personalized URL token, or from the same browser visitor within the last 30 days. Read-only — Lauren on the website is Justin's lane. Coming next: keyword alerts in the DCC inbox + "Ask Lauren about this deal" button.
+      </div>
     </div>
   );
 }
