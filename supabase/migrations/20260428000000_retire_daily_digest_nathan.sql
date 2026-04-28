@@ -9,33 +9,18 @@
 -- per-deal AI summaries, per-deal overnight signals, pending-draft
 -- review prompts).
 --
--- This migration:
---   1. Deactivates `daily-digest-nathan` (reversible — set active=true
---      to bring it back if the new path breaks unexpectedly)
---   2. Leaves public.send_daily_digest() in place. The function's
---      original CREATE migration is missing from git (created via
---      SQL editor), so dropping it loses the implementation. Leave
---      it parked; can drop in a follow-up after a stability window.
+-- Note: direct UPDATE on cron.job is permission-locked in Supabase
+-- (ERROR 42501). The supported API is cron.unschedule(), which is
+-- SECURITY DEFINER and bypasses the row-level lock. This removes the
+-- job entry entirely.
+--
+-- public.send_daily_digest() is left in place. Its CREATE migration
+-- isn't in git (created via SQL editor), so dropping it loses the
+-- implementation. Leave it parked; can drop in a follow-up after a
+-- stability window.
+--
+-- Reversal (only if needed):
+--   select cron.schedule('daily-digest-nathan', '0 12 * * *',
+--                         'SELECT public.send_daily_digest();');
 
-update cron.job
-set    active = false
-where  jobname = 'daily-digest-nathan';
-
--- Sanity check: verify the morning-sweep cron is still active and
--- nothing else has crept in scheduled at 12:00 UTC.
-do $$
-declare
-  remaining int;
-begin
-  select count(*) into remaining
-  from cron.job
-  where active = true and schedule = '0 12 * * *';
-
-  if remaining = 0 then
-    raise exception 'No active cron at 12:00 UTC after retirement — aborting';
-  end if;
-
-  if remaining > 1 then
-    raise notice 'Multiple active crons at 12:00 UTC (% jobs) — review before relying on this migration', remaining;
-  end if;
-end $$;
+select cron.unschedule('daily-digest-nathan');
