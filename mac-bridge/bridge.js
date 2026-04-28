@@ -181,25 +181,62 @@ function ensureMessagesRunning() {
 
 let consecutiveOscriptTimeouts = 0;
 
+/**
+ * Run an AppleScript file, clean it up, and return the trimmed stdout.
+ * Throws on non-zero exit or timeout.
+ */
+function runAppleScript(scriptPath, timeoutMs = 30000) {
+  try {
+    const out = execFileSync('osascript', [scriptPath], { timeout: timeoutMs });
+    return (out || '').toString().trim();
+  } finally {
+    try { fs.unlinkSync(scriptPath); } catch {}
+  }
+}
+
+/**
+ * Send a text message via Messages.app.
+ * Tries iMessage first; if the number is not on iMessage (error -1728 / error 22),
+ * falls back to SMS relay via the iPhone's Text Message Forwarding.
+ * Returns 'imessage' or 'sms' indicating which service was used.
+ */
 function sendViaMessages(toPhone, body) {
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const lines = [
+
+  // ── Attempt 1: iMessage ──────────────────────────────────────────────────────
+  const iMsgScript = `/tmp/dcc_send_${Date.now()}.applescript`;
+  fs.writeFileSync(iMsgScript, [
     'tell application "Messages"',
     `  set targetPhone to "${toPhone}"`,
-    // Force iMessage — "1st account" hangs for unknown numbers doing iMessage lookup.
-    // Non-iMessage numbers return apple_error=22 which delivery tracking catches and
-    // marks as failed (rather than silently swallowing as before).
     '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
     `  send "${escaped}" to targetBuddy`,
     'end tell',
-  ];
-  const tmpPath = `/tmp/dcc_send_${Date.now()}.applescript`;
-  fs.writeFileSync(tmpPath, lines.join('\n'));
+  ].join('\n'));
+
   try {
-    execFileSync('osascript', [tmpPath], { timeout: 30000 });
-  } finally {
-    fs.unlinkSync(tmpPath);
+    runAppleScript(iMsgScript);
+    return 'imessage';
+  } catch (err) {
+    // -1728 = "Can't get service type of participant" = number not on iMessage.
+    // Also catch the string "22" (apple_error 22 = not an iMessage user).
+    const notIMessage = err.message.includes('-1728') || err.message.includes('error 22');
+    if (!notIMessage) throw err; // real error — propagate up
   }
+
+  // ── Attempt 2: SMS relay via iPhone Text Message Forwarding ──────────────────
+  console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay`);
+  const smsScript = `/tmp/dcc_send_sms_${Date.now()}.applescript`;
+  fs.writeFileSync(smsScript, [
+    'tell application "Messages"',
+    `  set targetPhone to "${toPhone}"`,
+    '  set smsSvc to service "SMS"',
+    '  set targetBuddy to participant targetPhone of smsSvc',
+    `  send "${escaped}" to targetBuddy`,
+    'end tell',
+  ].join('\n'));
+
+  runAppleScript(smsScript); // throws if SMS relay also fails
+  return 'sms';
 }
 
 /** Download a remote URL to a temp file; returns the local path. */
@@ -227,23 +264,40 @@ function downloadMediaToTmp(url) {
   });
 }
 
-/** Send a local file (image/video) via iMessage AppleScript. */
+/** Send a local file (image/video) via Messages.app — iMessage first, SMS relay fallback. */
 function sendFileViaMessages(toPhone, localPath) {
   const safePath = localPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const lines = [
+
+  const iMsgScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
+  fs.writeFileSync(iMsgScript, [
     'tell application "Messages"',
     `  set targetPhone to "${toPhone}"`,
     '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
     `  send POSIX file "${safePath}" to targetBuddy`,
     'end tell',
-  ];
-  const tmpScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
-  fs.writeFileSync(tmpScript, lines.join('\n'));
+  ].join('\n'));
+
   try {
-    execFileSync('osascript', [tmpScript], { timeout: 60000 }); // longer timeout for large files
-  } finally {
-    fs.unlinkSync(tmpScript);
+    runAppleScript(iMsgScript, 60000);
+    return 'imessage';
+  } catch (err) {
+    const notIMessage = err.message.includes('-1728') || err.message.includes('error 22');
+    if (!notIMessage) throw err;
   }
+
+  console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay for file`);
+  const smsScript = `/tmp/dcc_send_file_sms_${Date.now()}.applescript`;
+  fs.writeFileSync(smsScript, [
+    'tell application "Messages"',
+    `  set targetPhone to "${toPhone}"`,
+    '  set smsSvc to service "SMS"',
+    '  set targetBuddy to participant targetPhone of smsSvc',
+    `  send POSIX file "${safePath}" to targetBuddy`,
+    'end tell',
+  ].join('\n'));
+
+  runAppleScript(smsScript, 60000);
+  return 'sms';
 }
 
 async function processPendingOutbound() {
@@ -269,18 +323,18 @@ async function processPendingOutbound() {
       if (msg.media_url) {
         console.log(`⬇ DOWNLOAD  ${msg.media_url}`);
         tmpMediaPath = await downloadMediaToTmp(msg.media_url);
-        sendFileViaMessages(msg.to_number, tmpMediaPath);
-        console.log(`⬆ SENT FILE  ${msg.to_number}  ${path.basename(tmpMediaPath)}`);
+        const fileChannel = sendFileViaMessages(msg.to_number, tmpMediaPath);
+        console.log(`⬆ SENT FILE (${fileChannel})  ${msg.to_number}  ${path.basename(tmpMediaPath)}`);
         // Send text caption as a follow-up message if present
         if (msg.body && msg.body.trim()) {
-          sendViaMessages(msg.to_number, msg.body.trim());
-          console.log(`⬆ SENT CAPTION  ${msg.to_number}`);
+          const capChannel = sendViaMessages(msg.to_number, msg.body.trim());
+          console.log(`⬆ SENT CAPTION (${capChannel})  ${msg.to_number}`);
         }
       } else {
-        // ── Text-only path (unchanged) ─────────────────────────────────────────
-        sendViaMessages(msg.to_number, msg.body);
+        // ── Text-only path ─────────────────────────────────────────────────────
+        const channel = sendViaMessages(msg.to_number, msg.body);
         const preview = (msg.body || '').length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
-        console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
+        console.log(`⬆ SENT (${channel})  ${msg.to_number}  "${preview}"`);
       }
       consecutiveOscriptTimeouts = 0;
       // Mark as handed off — NOT sent. Delivery is confirmed later via chat.db
