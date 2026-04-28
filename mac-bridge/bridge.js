@@ -168,8 +168,9 @@ function sendViaMessages(toPhone, body) {
     'tell application "Messages"',
     '  activate',
     `  set targetPhone to "${toPhone}"`,
-    '  set targetService to 1st service whose service type = iMessage',
-    '  set targetBuddy to participant targetPhone of targetService',
+    // Use "1st account" — lets Messages pick iMessage or SMS relay automatically.
+    // Avoids forcing iMessage when the recipient isn't on Apple's network (error 22).
+    '  set targetBuddy to participant targetPhone of 1st account',
     `  send "${escaped}" to targetBuddy`,
     'end tell',
   ];
@@ -214,8 +215,8 @@ function sendFileViaMessages(toPhone, localPath) {
     'tell application "Messages"',
     '  activate',
     `  set targetPhone to "${toPhone}"`,
-    '  set targetService to 1st service whose service type = iMessage',
-    '  set targetBuddy to participant targetPhone of targetService',
+    // Same as sendViaMessages — no iMessage constraint; allow SMS relay fallback.
+    '  set targetBuddy to participant targetPhone of 1st account',
     `  send POSIX file "${safePath}" to targetBuddy`,
     'end tell',
   ];
@@ -264,7 +265,9 @@ async function processPendingOutbound() {
         console.log(`⬆ SENT  ${msg.to_number}  "${preview}"`);
       }
       consecutiveOscriptTimeouts = 0;
-      await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
+      // Mark as handed off — NOT sent. Delivery is confirmed later via chat.db
+      // (syncFromChatDb flips to 'sent' or 'failed' once is_sent/error are known).
+      await sb.from('messages_outbound').update({ status: 'handed_off_to_mac' }).eq('id', msg.id);
     } catch (err) {
       if (err.message.includes('ETIMEDOUT')) {
         consecutiveOscriptTimeouts++;
@@ -318,6 +321,8 @@ async function syncFromChatDb() {
         m.text,
         m.date,
         m.is_from_me,
+        m.is_sent,                             -- 1 = confirmed sent to Apple servers
+        m.error           AS apple_error,      -- 0 = ok; 22 = not iMessage; non-zero = failure
         m.associated_message_type,
         m.associated_message_guid,
         h.id              AS sender_handle,    -- who sent this specific message
@@ -455,25 +460,47 @@ async function syncFromChatDb() {
     };
 
     // For outbound (is_from_me) messages: check if a DCC-originated row already
-    // exists with the same body + to_number sent within the last 10 minutes.
-    // DCC rows have no twilio_sid, so the upsert wouldn't conflict — this
-    // prevents a duplicate bubble appearing for every DCC-sent iMessage.
+    // exists (status='handed_off_to_mac', no twilio_sid yet) matching on
+    // body + to_number within the last 30 minutes.  Once found, resolve delivery:
+    //
+    //   apple_error ≠ 0            → 'failed'  (e.g. error 22 = not on iMessage)
+    //   is_sent = 1 AND error = 0  → 'sent'
+    //   is_sent = 0 AND error = 0  → still in flight; don't stamp guid yet so
+    //                                 the next tick re-evaluates with fresh state.
     if (!isInbound) {
-      const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
       const { data: existing } = await sb
         .from('messages_outbound')
-        .select('id')
+        .select('id, status')
         .eq('to_number', msgData.to_number)
         .eq('body', msgData.body)
         .eq('direction', 'outbound')
         .is('twilio_sid', null)
-        .gte('created_at', tenMinAgo)
+        .gte('created_at', thirtyMinAgo)
         .limit(1);
+
       if (existing && existing.length > 0) {
-        // Stamp the DCC row with the chat.db guid so future syncs don't re-check
-        await sb.from('messages_outbound')
-          .update({ twilio_sid: guid })
-          .eq('id', existing[0].id);
+        const isSent    = row.is_sent    === 1;
+        const hasError  = row.apple_error !== 0;
+
+        if (hasError) {
+          // Definitive failure — stamp guid so we don't re-process, mark failed.
+          const errMsg = `iMessage error ${row.apple_error} (is_sent=${row.is_sent})`;
+          await sb.from('messages_outbound')
+            .update({ twilio_sid: guid, status: 'failed', error_message: errMsg })
+            .eq('id', existing[0].id);
+          console.error(`❌ DELIVERY FAIL  ${msgData.to_number}  apple_error=${row.apple_error}`);
+        } else if (isSent) {
+          // Confirmed delivered to Apple servers — stamp and mark sent.
+          await sb.from('messages_outbound')
+            .update({ twilio_sid: guid, status: 'sent' })
+            .eq('id', existing[0].id);
+        } else {
+          // Still in flight (is_sent=0, error=0).
+          // Do NOT stamp guid — next tick will re-evaluate with fresher chat.db state.
+          console.log(`⏳ IN-FLIGHT  ${msgData.to_number}  (is_sent=0, no error yet)`);
+        }
+
         maxRowid = Math.max(maxRowid, row.ROWID);
         continue;  // skip inserting duplicate
       }
