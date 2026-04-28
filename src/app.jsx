@@ -9346,10 +9346,11 @@ function IntelTile({ label, value, tone = 'neutral', subtle = false }) {
 // docket_events. Renders latest request status inline so Nathan can see
 // what's happening without leaving the deal.
 //
-// Currently supported counties (Castle side): Butler, Franklin. Others
-// accept the request but Castle will mark them failed with "scraper not
-// built yet" — that's the signal to build the scraper.
-const COURT_PULL_SUPPORTED_COUNTIES = new Set(['Butler', 'Franklin']);
+// Currently supported counties (Castle side): Butler, Cuyahoga, Franklin,
+// Montgomery. Others accept the request but Castle will mark them failed
+// with "scraper not built yet" — that's the signal to build the scraper.
+// Keep this list in lockstep with Castle's COURT_PULL_AGENTS map.
+const COURT_PULL_SUPPORTED_COUNTIES = new Set(['Butler', 'Cuyahoga', 'Franklin', 'Montgomery']);
 
 function CourtPullButton({ dealId, caseNumber, county, userId }) {
   const [latest, setLatest] = useState(null);
