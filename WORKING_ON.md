@@ -18,7 +18,15 @@ every session so the other side knows what's in flight.
 
 ## Nathan's session
 
-**Status**: Active — overnight Apr 27 → Apr 28. Drag-drop QA verified. Multiple Lauren-system fixes shipped + applied. Lauren surface-awareness work is open as a branch awaiting Justin's review (his domain).
+**Status**: Active — overnight Apr 27 → into Apr 28. Drag-drop QA verified. Multiple Lauren-system fixes shipped + applied. Lauren surface-awareness PR awaiting Justin's review. **ohio-intel → DCC bridge LIVE** (Phase 2 of the migration plan).
+
+**Big new thing — `intel-sync` is live:**
+- DCC deals with case_number + county auto-subscribe via trigger to ohio-intel monitoring (table `intel_subscriptions`).
+- New EF `intel-sync` runs every 30 min via pg_cron (`intel-sync-30min`), pulls matching cases from ohio-intel's Supabase, upserts events into DCC.docket_events with `source='ohio_intel'`. Castle's existing direct writes get tagged `source='castle'`. Option C "tag-and-tolerate" — duplicates allowed during transition.
+- First run on apply: 30 subs → 8 matched, 5 no_match, 17 county_unbuilt, **794 docket events synced**, 0 errors. Top deal: Cuyahoga case CV-25-119683 with 142 events.
+- Schema: `intel_subscriptions(deal_id, case_number, county, intel_case_id, status, last_synced_at, events_synced_count)`. `docket_events.source` column added (default 'castle' for backfill).
+- Auth: shared `INTEL_SYNC_SECRET` (rotated once already during deploy after a transient leak in transcript). Stored in EF env + vault.
+- Migration history was repaired (14 backlog migrations marked applied) — Nathan had been applying via SQL editor, the file-based history was out of sync. `supabase db push` now works cleanly.
 
 **Active loose ends:**
 - ⏳ Justin's team-chat alerts not firing — needs his console output for diagnosis (`Notification.permission`, `sb.getChannels()` state). Lauren rooms are being created with both participants but Justin isn't getting alerted on new messages. Hard-refresh didn't fix.
@@ -89,7 +97,7 @@ every session so the other side knows what's in flight.
 
 **Note for Justin**: GitHub Actions auto-rebuild workflow is now live (commit `bf692da`). If you forget `npm run build` before pushing src/app.jsx, the action picks up the slack and commits the rebuilt artifact back with `[skip ci]`.
 
-**Last updated**: Apr 28, 2026 (early morning — Lauren surface awareness PR open, awaiting Justin)
+**Last updated**: Apr 28, 2026 (mid-morning — intel-sync bridge LIVE, 794 ohio-intel events flowed into DCC on first run)
 
 <!--
 Template:
