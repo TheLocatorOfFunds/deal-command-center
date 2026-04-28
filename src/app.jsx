@@ -7049,10 +7049,28 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
       const first_name = nameParts[0] || null;
       const last_name = nameParts.slice(1).join(' ') || null;
 
-      // Name-based slug per Nathan 2026-04-28 (option A from the security
-      // tradeoff conversation — readable URL beats enumeration-resistance
-      // at this volume). Lowercase, alphanumeric only. Append integer
-      // suffix on collision; fall back to random if no name or 99 collisions.
+      // Reuse an existing homeowner row if one is already on the deal.
+      // The migration that added per-contact URLs created a partial unique
+      // constraint on (deal_id, contact_id IS NULL) — so a blind insert
+      // throws when a homeowner row exists but deals.refundlocators_token
+      // wasn't synced (legacy rows, trigger lag, manual SQL, etc.). Find-
+      // or-create avoids the duplicate-key error and self-heals the deal.
+      const { data: existing } = await sb
+        .from('personalized_links')
+        .select('token')
+        .eq('deal_id', deal.id)
+        .is('contact_id', null)
+        .maybeSingle();
+
+      if (existing?.token) {
+        // Force-sync the deal's token field. The sync trigger should have
+        // done this, but if the deal got here it didn't — backfill it now.
+        await sb.from('deals').update({ refundlocators_token: existing.token }).eq('id', deal.id);
+        if (logAct) logAct(`Reused existing personalized URL — refundlocators.com/s/${existing.token}`, ['team']);
+        if (reload) await reload();
+        return;
+      }
+
       const newToken = await mintPersonalizedLinkSlug(first_name, last_name);
       const phoneRaw = meta.phone || meta.homeownerPhone || meta.contactPhone || meta.homeowner_phone || null;
       const phoneClean = phoneRaw ? String(phoneRaw).replace(/\D/g, '') : null;
@@ -7062,12 +7080,6 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
             : `+${phoneClean}`)
         : null;
 
-      // Surplus fallback: most DCC deals carry a single `meta.estimatedSurplus`
-      // (Castle's mid-point estimate) rather than a low/high range. The
-      // personalized_links table only has low/high columns and the website's
-      // /s/<token> page renders $0 when both are null. Use the single estimate
-      // for both bounds when the range fields aren't populated, so the page
-      // shows the deal's actual estimated surplus.
       const surplusSingle = meta.estimatedSurplus ?? meta.estimated_surplus ?? null;
       const surplusLow  = meta.estimatedSurplusLow  ?? meta.estimated_surplus_low  ?? surplusSingle;
       const surplusHigh = meta.estimatedSurplusHigh ?? meta.estimated_surplus_high ?? surplusSingle;
@@ -7092,8 +7104,6 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
       const { error } = await sb.from('personalized_links').insert(row);
       if (error) throw error;
       if (logAct) logAct(`Generated personalized URL — refundlocators.com/s/${newToken}`, ['team']);
-      // Trigger sync_refundlocators_token copies token to deals.refundlocators_token.
-      // Reload to pick it up.
       if (reload) await reload();
     } catch (e) {
       alert('Could not generate URL: ' + (e.message || e));
@@ -13110,6 +13120,18 @@ function OutboundMessages({ dealId, vendors, deal }) {
     if (!contact?.id) return;
     setMintingContactId(contact.id);
     try {
+      // Self-heal: if a URL was already minted for this (deal, contact),
+      // just refresh the panel — don't try to insert again.
+      const { data: existing } = await sb
+        .from('personalized_links')
+        .select('token')
+        .eq('deal_id', dealId)
+        .eq('contact_id', contact.id)
+        .maybeSingle();
+      if (existing?.token) {
+        await loadContactUrls();
+        return;
+      }
       const ownerSlug = (ownerUrl?.token || '').split('-')[0] || slugifyContact(deal?.name?.split(' ')[0]) + slugifyContact(deal?.name?.split(' ').slice(1).join(' '));
       const contactFirst = (contact.name || '').trim().split(/\s+/)[0];
       const contactSlug = slugifyContact(contactFirst);
