@@ -16718,12 +16718,8 @@ function LaurenDCC() {
   }
 
   const confirmAction = async (id) => {
-    const { data, error } = await sb.rpc('lauren_execute_action', { p_action_id: id });
+    const { error } = await sb.rpc('lauren_execute_action', { p_action_id: id });
     if (error) { alert('Confirm failed: ' + error.message); return; }
-    // If we just confirmed a loop_in_teammate, switch the FAB to the new room.
-    if (data && typeof data === 'object' && data.room_thread_id) {
-      setThreadId(data.room_thread_id);
-    }
   };
   const rejectAction = async (id) => {
     const { error } = await sb.rpc('lauren_reject_action', { p_action_id: id });

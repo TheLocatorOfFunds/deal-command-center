@@ -44,8 +44,7 @@ WRITE TOOLS (each PROPOSES an action):
 - propose_status_change(deal_id, new_status, reason)
 - propose_create_task(deal_id, title, due_date_iso?, assigned_to?)
 - propose_update_deal_meta(deal_id, meta_patch, label)
-- propose_loop_in_teammate(target_user_id, target_name, intro): create a 3-way Lauren room
-- propose_relay_to_teammate(target_user_id, body): one-shot DM to a teammate
+- propose_relay_to_teammate(target_user_id, body): post a Lauren-authored message into the existing teammate DM (Chat tab). Use this for any "tell X" / "loop X in" / "forward to X" intent — Lauren never creates a separate room.
 - propose_send_sms(to, body, deal_id?, contact_id?, recipient_label?): text a phone number via the iPhone bridge
 - propose_send_email(to, subject, body, deal_id?, recipient_label?): email via Resend
 - propose_generate_personalized_url(deal_id): mint a refundlocators.com/s/<token> URL for a lead
@@ -66,30 +65,55 @@ YOU ARE IN A LAUREN DM (your dedicated thread with this user — they have you a
 - If they ask a question or give a command, act on it.
 - Don't proactively suggest features. They know what you can do.
 
-CRITICAL — LOOP-IN DISCIPLINE (most important rule in your prompt):
+CRITICAL — TEAMMATE-MESSAGING DISCIPLINE (most important rule in your prompt):
 
-When the user says "loop X in" / "pull X in" / "get X here" / "bring X in" / "add X to this" — that means "create a real shared room with X so the three of us can talk together." You MUST call propose_loop_in_teammate. The user does NOT want a one-off message sent to X's DM; they want X to actually appear in the conversation.
+You are an assistant. You do NOT host inter-human conversations. When the user
+asks you to communicate with a teammate — by ANY phrasing, including "loop X
+in" / "pull X in" / "tell X" / "send to X" / "forward to X" / "bring X in" —
+the destination is ALWAYS the existing teammate DM in the Chat tab. You post
+a single Lauren-authored message there via propose_relay_to_teammate. You do
+NOT create rooms, threads, or any new chat surfaces. The Chat tab is where
+humans talk to each other; you stay in your DM.
 
-When the user says "tell X" / "send to X" / "forward this to X" — that's a one-off. Use propose_relay_to_teammate (no shared room created).
+You do NOT have the ability to communicate with teammates by typing text in
+this chat. Typing "Justin — heads up..." does NOT send anything to Justin.
+Only a propose_relay_to_teammate call does. Period.
 
-You do NOT have the ability to communicate with teammates by typing text in this chat. Typing "Justin — heads up..." does NOT send anything to Justin. Only a tool call does. Period.
-
-Required sequence for "loop X in":
+Required sequence:
   1. Call find_teammate(needle) to get target_user_id.
-  2. Call propose_loop_in_teammate(target_user_id, target_name, intro) where intro is the first message you'll post in the new room — written to the target by name, with all the context they need (don't make them ask). Pull from recent activity / lookup_deal as needed before composing the intro.
-  3. Reply ONE short line in chat: "Proposed — confirm card below." The chat will render a confirm/reject card. The user clicks confirm and the room gets created with the intro posted.
-  4. After the room is created, the FAB will auto-switch to it. In the new room you (Lauren) are QUIET — only respond when explicitly @-mentioned with @lauren.
+  2. Call propose_relay_to_teammate(target_user_id, target_name, body) where
+     body is the full message you want posted in the existing teammate DM —
+     written TO the target by name, with all the context they need
+     (don't make them ask). Pull from recent activity / lookup_deal as
+     needed before composing.
+  3. Reply ONE short line in chat: "Proposed — confirm card below." The
+     chat will render a confirm/reject card. On confirm, the body gets
+     posted into the caller↔target DM. The teammate sees it as an unread
+     in their Chat tab.
+
+Sizing: for "loop X in"-style intents (where the target needs full context
+to start contributing), the body should be a thorough briefing — not a
+curt one-liner. Treat it as the first message of a thread the target will
+take over. Include deal name, address, recent activity, and what's expected
+of them. For pure "tell X this one thing" intents, keep it short.
 
 NEVER do these things:
-- DON'T type a message addressed to a teammate without first calling propose_loop_in_teammate or propose_relay_to_teammate. That's a hallucination — the message goes nowhere.
-- DON'T claim "I already looped X in" or "I created the room" if you have not called the tool in THIS turn.
+- DON'T type a message addressed to a teammate without first calling
+  propose_relay_to_teammate. That's a hallucination — the message goes
+  nowhere.
+- DON'T claim "I already looped X in" or "I sent that" if you have not
+  called the tool in THIS turn.
 - DON'T ask the user to forward the message themselves. Use the tool.
+- DON'T mention rooms, separate threads, or "creating a space for the
+  three of us." That isn't how this works anymore.
 
-If the user is vague (e.g. just "loop Justin in" with no topic), pull context from the recent conversation if obvious; otherwise ask ONE short question: "What's the context — what should I open the room with?"
+If the user is vague (e.g. just "loop Justin in" with no topic), pull
+context from the recent conversation if obvious; otherwise ask ONE short
+question: "What's the context — what should I send him?"
 
 Example:
   User: "loop Justin in on Casey Jennings"
-  You: [call lookup_deal("Casey Jennings")] → [call recent_activity(deal_id)] → [call find_teammate("Justin")] → [call propose_loop_in_teammate(<justin_uuid>, "Justin", "Justin — Nathan's looping you in on Casey Jennings (7260 Jerry Drive, West Chester). Recent: <summary>. Wanted to make sure you're tracking.")]
+  You: [call lookup_deal("Casey Jennings")] → [call recent_activity(deal_id)] → [call find_teammate("Justin")] → [call propose_relay_to_teammate(<justin_uuid>, "Justin", "Justin — Nathan's looping you in on Casey Jennings (7260 Jerry Drive, West Chester). <full briefing with recent activity, surplus estimate, what's needed from you>.")]
   You: "Proposed — confirm card below."`;
 
 const TOOLS = [
@@ -165,27 +189,14 @@ const TOOLS = [
     },
   },
   {
-    name: "propose_loop_in_teammate",
-    description: "Add a teammate to the current conversation as a real participant — creates a 3-way room (current user + target + you/Lauren) and posts an intro message there. Use when the user says 'loop X in' / 'pull X in' / 'get X here' / 'add X' / 'bring X in'. After the room is created, you (Lauren) go quiet there unless @-mentioned. Call find_teammate first to get target_user_id.",
-    input_schema: {
-      type: "object",
-      properties: {
-        target_user_id: { type: "string", description: "uuid from find_teammate" },
-        target_name: { type: "string", description: "Display name (e.g. 'Justin')" },
-        intro: { type: "string", description: "First message you'll post in the new room as Lauren — sets context. Include any links/context from the original conversation. Address it to the target by name (e.g. 'Justin — Nathan wanted to loop you in on...')." },
-      },
-      required: ["target_user_id", "intro"],
-    },
-  },
-  {
     name: "propose_relay_to_teammate",
-    description: "Send a one-off message to a teammate's DM without creating a shared room. Use when the user says 'tell X' / 'send to X' / 'forward to X' (one-shot, no ongoing conversation). For most 'loop X in' requests, use propose_loop_in_teammate instead — that creates a real shared room.",
+    description: "Post a Lauren-authored message into the caller's existing DM with the target teammate (Chat tab). Use this for ANY 'loop X in' / 'tell X' / 'send to X' / 'forward to X' / 'bring X in' intent — Lauren never creates a separate room or thread. For 'loop in'-style intents the body should be a full briefing (deal context, recent activity, what's needed); for one-shot 'tell X' intents it can be short. Call find_teammate first to get target_user_id.",
     input_schema: {
       type: "object",
       properties: {
         target_user_id: { type: "string", description: "uuid from find_teammate" },
-        body: { type: "string", description: "The message to relay." },
-        target_name: { type: "string", description: "Display name of the recipient." },
+        body: { type: "string", description: "Full message to post in the teammate DM — addressed to the target by name. For loop-in intents, include all context the target needs to contribute without asking." },
+        target_name: { type: "string", description: "Display name of the recipient (e.g. 'Justin')." },
       },
       required: ["target_user_id", "body"],
     },
@@ -207,7 +218,7 @@ const TOOLS = [
   },
   {
     name: "propose_send_email",
-    description: "Send an email via Resend. Use for client/lead/partner emails. From-address auto-set by the send-email function. For internal founder-to-founder emails, use propose_relay_to_teammate or propose_loop_in_teammate instead.",
+    description: "Send an email via Resend. Use for client/lead/partner emails. From-address auto-set by the send-email function. For internal founder-to-founder messages, use propose_relay_to_teammate (lands in the Chat tab DM) — never email between Nathan and Justin.",
     input_schema: {
       type: "object",
       properties: {
@@ -439,16 +450,6 @@ Deno.serve(async (req) => {
             if (error) throw error;
             proposedActionIds.push(row.id);
             result = { proposed: true, action_id: row.id, label, note: "A confirm/reject card will appear under your reply." };
-          } else if (tu.name === "propose_loop_in_teammate") {
-            const { target_user_id, target_name, intro } = tu.input;
-            if (!lastUserSenderId) throw new Error("no caller user_id available — cannot create room without a sender");
-            const label = `Loop ${target_name || "teammate"} in — open a room with intro: "${(intro || "").slice(0, 80)}${intro && intro.length > 80 ? "…" : ""}"`;
-            result = await proposeOrExecute("loop_in_teammate", label, {
-              caller_id: lastUserSenderId,
-              target_user_id,
-              target_name: target_name || null,
-              intro: intro || "",
-            });
           } else if (tu.name === "propose_send_sms") {
             const { to, body, deal_id, contact_id, recipient_label } = tu.input;
             const label = `Text ${recipient_label || to}: "${(body || "").slice(0, 80)}${body && body.length > 80 ? "…" : ""}"`;
