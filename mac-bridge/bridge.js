@@ -160,6 +160,25 @@ async function findDealForPhone(phone) {
 
 // ─── Outbound: send via Messages.app AppleScript ─────────────────────────────
 
+/** Ensure Messages.app is running; launch it if not (bridge runs in Aqua session). */
+function ensureMessagesRunning() {
+  try {
+    execFileSync('pgrep', ['-x', 'Messages'], { timeout: 3000 });
+    return; // already running
+  } catch {
+    // Not running — launch it
+    console.log('⚠️  Messages.app not running — launching it now');
+    try {
+      execFileSync('open', ['-a', 'Messages'], { timeout: 15000 });
+      // Give it time to initialise and sign in
+      execFileSync('sleep', ['5']);
+      console.log('✅  Messages.app launched');
+    } catch (e) {
+      console.error('❌  Failed to launch Messages.app:', e.message);
+    }
+  }
+}
+
 let consecutiveOscriptTimeouts = 0;
 
 function sendViaMessages(toPhone, body) {
@@ -228,6 +247,7 @@ function sendFileViaMessages(toPhone, localPath) {
 }
 
 async function processPendingOutbound() {
+  ensureMessagesRunning(); // no-op if already running; launches if crashed/killed
   const { data: pending, error } = await sb
     .from('messages_outbound')
     .select('id, to_number, body, media_url')
