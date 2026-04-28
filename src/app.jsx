@@ -351,6 +351,19 @@ function DealCommandCenter({ session, profile }) {
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
   const isTeam = isAdmin || profile.role === 'va';
 
+  // refundlocators.com/admin/lauren redirects here with ?openLauren=1.
+  // Pop the modal once and strip the param so a reload doesn't re-open it.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    if (sp.get('openLauren') !== '1') return;
+    if (!isAdmin) return;
+    setShowLaurenCC(true);
+    sp.delete('openLauren');
+    const qs = sp.toString();
+    window.history.replaceState({}, '',
+      window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+  }, [isAdmin]);
+
   // ── Team chat notifications ────────────────────────────────────────
   // Subscribes globally (not just inside TeamView) to new team_messages
   // and pings the user when one lands. Audio chirp if the tab is focused;
