@@ -23,3 +23,15 @@ enabled = true
 
 [analytics]
 enabled = false
+
+# ── Per-function settings ─────────────────────────────────────────────────
+# `verify_jwt = false` lets the function be invoked without an Authorization
+# header. Required for any function fired by a pg_net.http_post trigger
+# (the trigger doesn't include auth). Without this pinned in config, every
+# `supabase functions deploy` from a session that forgets `--no-verify-jwt`
+# will silently re-enable JWT verification and break the trigger path.
+# (See WORKING_ON.md / docs for the foot-gun history.)
+
+[functions.lauren-team-respond]
+# Fired by the pg trigger on team_messages INSERT (no auth header).
+verify_jwt = false
