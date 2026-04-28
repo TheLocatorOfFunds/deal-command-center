@@ -167,10 +167,10 @@ function sendViaMessages(toPhone, body) {
   const lines = [
     'tell application "Messages"',
     `  set targetPhone to "${toPhone}"`,
-    // Use "1st account" — lets Messages pick iMessage or SMS relay automatically.
-    // Avoids forcing iMessage when the recipient isn't on Apple's network (error 22).
-    // Note: no "activate" — on a headless Mac Mini, activate can block indefinitely.
-    '  set targetBuddy to participant targetPhone of 1st account',
+    // Force iMessage — "1st account" hangs for unknown numbers doing iMessage lookup.
+    // Non-iMessage numbers return apple_error=22 which delivery tracking catches and
+    // marks as failed (rather than silently swallowing as before).
+    '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
     `  send "${escaped}" to targetBuddy`,
     'end tell',
   ];
@@ -214,9 +214,7 @@ function sendFileViaMessages(toPhone, localPath) {
   const lines = [
     'tell application "Messages"',
     `  set targetPhone to "${toPhone}"`,
-    // Same as sendViaMessages — no iMessage constraint; allow SMS relay fallback.
-    // No "activate" — headless Mac Mini would block indefinitely.
-    '  set targetBuddy to participant targetPhone of 1st account',
+    '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
     `  send POSIX file "${safePath}" to targetBuddy`,
     'end tell',
   ];
