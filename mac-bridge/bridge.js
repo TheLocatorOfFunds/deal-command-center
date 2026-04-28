@@ -110,7 +110,7 @@ console.log('');
 // ─── Diagnostic: log available Messages.app services ─────────────────────────
 try {
   const svcOut = execFileSync('osascript', ['-e',
-    'tell application "Messages" to get {name, service type as string} of every service'
+    'tell application "Messages" to get name of every service'
   ], { timeout: 8000 }).toString().trim();
   console.log(`    Services: ${svcOut}`);
 } catch (e) {
