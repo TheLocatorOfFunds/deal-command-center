@@ -13117,8 +13117,12 @@ function OutboundMessages({ dealId, vendors, deal }) {
   // Mint a personalized URL for the active contact. Slug =
   // {ownerSlug}-{contactSlug}, with collision suffix if needed.
   const mintContactUrl = async (contact, relationship) => {
-    if (!contact?.id) return;
-    setMintingContactId(contact.id);
+    // Composer-thread entries use `contact_id` for the underlying contacts.id
+    // (and reserve `id` for the thread row). The contacts-tab list uses `id`
+    // directly. Accept either shape so this function works from both.
+    const contactId = contact?.contact_id || contact?.id;
+    if (!contactId) return;
+    setMintingContactId(contactId);
     try {
       // Self-heal: if a URL was already minted for this (deal, contact),
       // just refresh the panel — don't try to insert again.
@@ -13126,7 +13130,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
         .from('personalized_links')
         .select('token')
         .eq('deal_id', dealId)
-        .eq('contact_id', contact.id)
+        .eq('contact_id', contactId)
         .maybeSingle();
       if (existing?.token) {
         await loadContactUrls();
@@ -13154,7 +13158,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
       const row = {
         token,
         deal_id: dealId,
-        contact_id: contact.id,
+        contact_id: contactId,
         relationship,
         first_name: cFirst,
         last_name: cLast,
