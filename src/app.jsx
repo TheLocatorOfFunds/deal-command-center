@@ -7451,7 +7451,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           </div>
         </div>
       )}
-      {tab === "lauren" && <DealLaurenHistory dealId={deal.id} deal={deal} />}
+      {tab === "lauren" && <DealLaurenHistory dealId={deal.id} deal={deal} userId={userId} />}
 
       {showPostUpdate && (
         <PostUpdateModal
@@ -12025,6 +12025,135 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   );
 }
 
+// ─── "Ask Lauren about this deal" — inline research chat ─────────
+// Calls the website's lauren-chat EF directly (publicly accessible per
+// Justin's handoff) with this deal's data as personalization_context.
+// Visitor_id is prefixed with "internal-" so these queries don't pollute
+// the marketing-site analytics. Conversation isn't logged to lauren_logs
+// (internal use only — clean separation).
+function AskLaurenAboutDeal({ deal, userId }) {
+  const [open, setOpen] = useState(false);
+  const [msgs, setMsgs] = useState([]);
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const sessionRef = useRef(null);
+  const msgsEl = useRef(null);
+  const inputEl = useRef(null);
+
+  // Build the personalization_context block from the deal record. Same
+  // shape Lauren sees when a real visitor is on /s/<token>.
+  const buildContext = () => {
+    const m = deal.meta || {};
+    const lines = [];
+    if (deal.name) lines.push(`Person: ${deal.name}`);
+    if (deal.address) lines.push(`Property: ${deal.address}`);
+    if (m.county) lines.push(`County: ${m.county}`);
+    if (m.courtCase) lines.push(`Case Number: ${m.courtCase}`);
+    if (m.saleDate) lines.push(`Sale Date: ${m.saleDate}`);
+    if (m.salePrice) lines.push(`Sale Price: $${Number(m.salePrice).toLocaleString()}`);
+    if (m.judgmentAmount) lines.push(`Judgment: $${Number(m.judgmentAmount).toLocaleString()}`);
+    if (m.estimatedSurplus) lines.push(`Estimated Surplus: $${Number(m.estimatedSurplus).toLocaleString()}`);
+    if (m.estimatedSurplusLow && m.estimatedSurplusHigh) lines.push(`Surplus Range: $${Number(m.estimatedSurplusLow).toLocaleString()} – $${Number(m.estimatedSurplusHigh).toLocaleString()}`);
+    if (deal.status) lines.push(`Status: ${deal.status}`);
+    return lines.join('\n');
+  };
+
+  useEffect(() => {
+    if (open && msgs.length === 0) {
+      setMsgs([{ role: 'assistant', content: `Hi — I'm Lauren. I can answer anything about ${deal.name || 'this case'}. What do you want to know?` }]);
+    }
+    if (open) setTimeout(() => inputEl.current?.focus(), 80);
+  }, [open]);
+
+  useEffect(() => {
+    if (msgsEl.current) msgsEl.current.scrollTop = msgsEl.current.scrollHeight;
+  }, [msgs, busy]);
+
+  const send = async () => {
+    if (busy || !input.trim()) return;
+    const text = input.trim();
+    setInput('');
+    const next = [...msgs, { role: 'user', content: text }];
+    setMsgs(next);
+    setBusy(true);
+    try {
+      const res = await fetch('https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/lauren-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: next,
+          session_id: sessionRef.current,
+          visitor_id: `internal-${userId || 'admin'}`,
+          personalization_context: buildContext(),
+        }),
+      });
+      const data = await res.json();
+      if (data.session_id) sessionRef.current = data.session_id;
+      const reply = data.reply || 'Sorry — I had trouble with that. Try again or rephrase.';
+      setMsgs(m => [...m, { role: 'assistant', content: reply }]);
+    } catch {
+      setMsgs(m => [...m, { role: 'assistant', content: '(Connection error — check the lauren-chat EF is deployed.)' }]);
+    }
+    setBusy(false);
+    setTimeout(() => inputEl.current?.focus(), 50);
+  };
+
+  if (!open) {
+    return (
+      <div style={{ marginBottom: 16, padding: '12px 14px', background: '#1c1917', border: '1px dashed #44403c', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>
+          <b style={{ color: '#fafaf9' }}>🤖 Ask Lauren about this deal.</b> Test what website Lauren would say to this lead, or use her as a research tool — she'll answer with the case facts pre-loaded as context.
+        </div>
+        <button onClick={() => setOpen(true)} style={{ ...btnPrimary, fontSize: 12, padding: '6px 14px' }}>Open chat</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginBottom: 16, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #292524', background: '#0c0a09' }}>
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80', flexShrink: 0 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9' }}>Ask Lauren about {deal.name || 'this deal'}</div>
+          <div style={{ fontSize: 10, color: '#78716c' }}>Calling website lauren-chat EF · internal visitor_id, not logged to analytics</div>
+        </div>
+        <button onClick={() => { setOpen(false); setMsgs([]); sessionRef.current = null; }} style={{ ...btnGhost, fontSize: 11 }}>Close</button>
+      </div>
+      <div ref={msgsEl} style={{ maxHeight: 380, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8, background: '#0f0d0c' }}>
+        {msgs.map((m, i) => (
+          <div key={i} style={{
+            alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+            maxWidth: '84%', padding: '8px 12px',
+            background: m.role === 'user' ? '#d97706' : '#292524',
+            color: m.role === 'user' ? '#1c0a00' : '#fafaf9',
+            borderRadius: 12,
+            borderBottomRightRadius: m.role === 'user' ? 3 : 12,
+            borderBottomLeftRadius: m.role !== 'user' ? 3 : 12,
+            fontSize: 12, lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            fontWeight: m.role === 'user' ? 500 : 400,
+          }}>
+            {m.content}
+          </div>
+        ))}
+        {busy && (
+          <div style={{ alignSelf: 'flex-start', background: '#292524', borderRadius: 12, borderBottomLeftRadius: 3, padding: '8px 12px', display: 'flex', gap: 5 }}>
+            {[0,1,2].map(i => (
+              <div key={i} style={{ width: 6, height: 6, borderRadius: '50%', background: '#78716c', animation: `dotPulse 1.2s ease-in-out ${i*0.2}s infinite` }} />
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #292524' }}>
+        <textarea ref={inputEl} value={input} onChange={e => setInput(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          rows={1} placeholder="Ask anything about this case…"
+          style={{ flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, padding: '8px 12px', color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'none', outline: 'none' }} />
+        <button onClick={send} disabled={busy || !input.trim()} style={{ ...btnPrimary, fontSize: 12, padding: '6px 14px' }}>{busy ? '…' : 'Send'}</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Deal-attached Lauren conversation history ──────────────────────
 // Reads consumer-facing chat conversations from website Lauren that are
 // linked to this deal — either via the personalized_links token, or via
@@ -12032,7 +12161,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
 //
 // Backed by lauren_conversations_for_deal(deal_id) RPC (admin-gated).
 // See refundlocators-next/docs/lauren-handoff-for-dcc.md for full spec.
-function DealLaurenHistory({ dealId, deal }) {
+function DealLaurenHistory({ dealId, deal, userId }) {
   const [convos, setConvos] = useState(null);
   const [error, setError] = useState(null);
   const [openId, setOpenId] = useState(null);
@@ -12095,21 +12224,25 @@ function DealLaurenHistory({ dealId, deal }) {
 
   if (totalConvos === 0) {
     return (
-      <div style={{ padding: 40, textAlign: 'center', color: '#a8a29e', fontSize: 13, lineHeight: 1.6, border: '1px dashed #292524', borderRadius: 10 }}>
-        <div style={{ fontSize: 24, marginBottom: 8 }}>🤖</div>
-        <b style={{ color: '#fafaf9', display: 'block', marginBottom: 6 }}>No Lauren conversations yet for this deal.</b>
-        Once a visitor with this deal's personalized URL chats with Lauren on refundlocators.com, the conversation will show up here automatically.
-        {!deal?.refundlocators_token && (
-          <div style={{ marginTop: 14, fontSize: 11, color: '#fbbf24' }}>
-            ⚠ This deal doesn't have a personalized URL yet — generate one from the deal header to enable Lauren tracking.
-          </div>
-        )}
+      <div>
+        <AskLaurenAboutDeal deal={deal} userId={userId} />
+        <div style={{ padding: 40, textAlign: 'center', color: '#a8a29e', fontSize: 13, lineHeight: 1.6, border: '1px dashed #292524', borderRadius: 10 }}>
+          <div style={{ fontSize: 24, marginBottom: 8 }}>🤖</div>
+          <b style={{ color: '#fafaf9', display: 'block', marginBottom: 6 }}>No Lauren conversations yet for this deal.</b>
+          Once a visitor with this deal's personalized URL chats with Lauren on refundlocators.com, the conversation will show up here automatically.
+          {!deal?.refundlocators_token && (
+            <div style={{ marginTop: 14, fontSize: 11, color: '#fbbf24' }}>
+              ⚠ This deal doesn't have a personalized URL yet — generate one from the deal header to enable Lauren tracking.
+            </div>
+          )}
+        </div>
       </div>
     );
   }
 
   return (
     <div>
+      <AskLaurenAboutDeal deal={deal} userId={userId} />
       {/* Stats row */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 18 }}>
         <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #d97706', borderRadius: 10, padding: 14 }}>
