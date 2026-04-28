@@ -7,8 +7,20 @@ every session so the other side knows what's in flight.
 
 ## Justin's session
 
-**Status**: Idle
-**Last updated**: Apr 21, 2026
+**Status**: Diagnosed two bugs in iMessage bridge. NOT pushing code from this session.
+**Last updated**: Apr 28, 2026
+
+**Bug A — Bridge silently fails for non-iMessage recipients:**
+- `mac-bridge/bridge.js` AppleScript forces `service type = iMessage` (lines ~171 and ~217 in current Mac copy). When recipient isn't on iMessage, the send fails with error 22 in chat.db (`is_sent=0`, `is_delivered=0`).
+- Bridge marks `status='sent'` immediately after `osascript` exit 0 (line ~267) — so failures look like successes in DCC.
+- Verified on defender-mini: 5 silent failures in last 4 days (Richard Mikol +12165770123 today × 2, +16149374957 on Apr 24 × 2 + Apr 27 × 1). 52/52 outbound from this Mac = iMessage; SMS service never used; SMS forwarding iPhone → Mac is not enabled.
+- Fix needs: (1) post-send chat.db verification (poll for matching outbound row, set status to `sent` only if `error=0 AND is_sent=1`, else `failed`); (2) drop forced iMessage service; (3) Nathan enables Text Message Forwarding to Defender Mini on iPhone; (4) optional pre-flight check against chat.db history.
+- Did NOT push fix because Mac is at e6ac7bce, 5 bridge commits ahead of my branch (thread_key, group-chat, MMS, PID lock, single-instance). Fix belongs in your session.
+
+**Bug B — Personal iMessage group chats leak into deals (full report given to Justin verbally for paste into your session). Your in-progress group-chat work should kill it as a byproduct if it routes by chat-id rather than phone match.**
+
+**Touching**: only WORKING_ON.md (read-only diagnosis everywhere else)
+**ETA**: handed off
 
 <!--
 Template:
