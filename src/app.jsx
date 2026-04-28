@@ -4311,9 +4311,50 @@ function LeadsOutreachView() {
   );
 }
 
+// Mint a personalized_links token. Per Nathan's call 2026-04-28 (option A
+// from the security tradeoff conversation): readable name-based slug like
+// "richardmikol" rather than the historical 8-char random nanoid. Same
+// shape works for both PersonalizedUrlControl (Generate URL on a deal)
+// and ManualLeadForm (ad-hoc lead entry).
+//
+// Slug format: lowercase, alphanumeric only, no separator (e.g.
+// "richardmikol", "marysmith"). Collision handling: append 2, 3, ... up to
+// 99, then fall back to a random nanoid. Random nanoid is also the fallback
+// when both first and last names are missing.
+//
+// SECURITY NOTE: name-based slugs are guessable. /s/jonesmary, /s/smithbob
+// etc. can find other leads. We accepted this tradeoff for branding +
+// SMS-friendliness at current deal volume (~12 active). Revisit if DCC
+// scales — see chat 2026-04-28 for the full discussion.
+async function mintPersonalizedLinkSlug(firstName, lastName) {
+  const slugify = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const base = slugify(firstName) + slugify(lastName);
+
+  const randomNanoid = () => {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const arr = new Uint8Array(8);
+    crypto.getRandomValues(arr);
+    let id = '';
+    for (let i = 0; i < 8; i++) id += alphabet[arr[i] % alphabet.length];
+    return id;
+  };
+
+  if (!base) return randomNanoid();
+
+  let candidate = base;
+  for (let suffix = 1; suffix <= 99; suffix++) {
+    const { count } = await sb.from('personalized_links')
+      .select('token', { count: 'exact', head: true })
+      .eq('token', candidate);
+    if (!count) return candidate;
+    candidate = base + (suffix + 1);
+  }
+  return randomNanoid();
+}
+
 // Manual entry form for ad-hoc personalized_links rows.
-// Generates an 8-char token via crypto.getRandomValues (compatible with
-// the nanoid alphabet Castle uses), source='dcc-manual', expires_at=+90d.
+// Token comes from mintPersonalizedLinkSlug() — name-based slug per
+// Nathan's 2026-04-28 call. source='dcc-manual', expires_at=+90d.
 function ManualLeadForm({ onCancel, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -4330,15 +4371,6 @@ function ManualLeadForm({ onCancel, onCreated }) {
   const [caseNum, setCaseNum] = useState('');
   const [showOpt, setShowOpt] = useState(false);
 
-  const nanoid8 = () => {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const arr = new Uint8Array(8);
-    crypto.getRandomValues(arr);
-    let id = '';
-    for (let i = 0; i < 8; i++) id += alphabet[arr[i] % alphabet.length];
-    return id;
-  };
-
   const submit = async () => {
     setErr(null);
     if (!first.trim() || !last.trim() || !phone.trim() || !address.trim() || !county.trim()) {
@@ -4348,7 +4380,7 @@ function ManualLeadForm({ onCancel, onCreated }) {
     const phoneClean = phone.replace(/\D/g, '');
     if (phoneClean.length < 10) { setErr('Phone needs at least 10 digits.'); return; }
     setBusy(true);
-    const token = nanoid8();
+    const token = await mintPersonalizedLinkSlug(first.trim(), last.trim());
     const e164 = phoneClean.length === 10 ? `+1${phoneClean}` : phoneClean.length === 11 && phoneClean[0] === '1' ? `+${phoneClean}` : `+${phoneClean}`;
     const row = {
       token,
@@ -7012,16 +7044,16 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
     if (busy) return;
     setBusy(true);
     try {
-      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-      const arr = new Uint8Array(8);
-      crypto.getRandomValues(arr);
-      let newToken = '';
-      for (let i = 0; i < 8; i++) newToken += alphabet[arr[i] % alphabet.length];
-
       const meta = deal.meta || {};
       const nameParts = (deal.name || '').trim().split(/\s+/);
       const first_name = nameParts[0] || null;
       const last_name = nameParts.slice(1).join(' ') || null;
+
+      // Name-based slug per Nathan 2026-04-28 (option A from the security
+      // tradeoff conversation — readable URL beats enumeration-resistance
+      // at this volume). Lowercase, alphanumeric only. Append integer
+      // suffix on collision; fall back to random if no name or 99 collisions.
+      const newToken = await mintPersonalizedLinkSlug(first_name, last_name);
       const phoneRaw = meta.phone || meta.homeownerPhone || meta.contactPhone || meta.homeowner_phone || null;
       const phoneClean = phoneRaw ? String(phoneRaw).replace(/\D/g, '') : null;
       const phoneE164 = phoneClean
