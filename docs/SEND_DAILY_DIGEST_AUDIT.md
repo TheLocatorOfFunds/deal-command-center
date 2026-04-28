@@ -1,6 +1,8 @@
-# Audit: `public.send_daily_digest()` — possibly dead code
+# Audit: `public.send_daily_digest()` — RETIRED 2026-04-27
 
-**Audited 2026-04-27.** This pg function is referenced in `CLAUDE.md` as the daily 8am digest, but the more-recent `morning-sweep` Edge Function fires at the same time and does a richer version of the same job. Likely an obsolete predecessor that's still scheduled and silently sending duplicate emails — or already disabled and we just need to clean up the references.
+**Status:** Retired by migration `20260428000000_retire_daily_digest_nathan.sql`. The pg_cron job `daily-digest-nathan` is now `active=false`. Function `public.send_daily_digest()` is left in place pending a stability window (see "Follow-up" below).
+
+**Original audit (2026-04-27):** This pg function was referenced in `CLAUDE.md` as the daily 8am digest, but the more-recent `morning-sweep` Edge Function was firing at the same time and doing a richer version of the same job. The query against `cron.job` confirmed both were `active=true` at `0 12 * * *` — duplicate emails landing every morning at 8am EDT.
 
 ## Why this audit exists
 
@@ -113,14 +115,28 @@ Three reasons:
 2. **Step 2 is irreversible-feeling enough** (an email pipeline disappearing) that explicit approval is the safer path.
 3. **Step 3 requires reading the live function definition** before deciding keep-vs-retire. Can't pre-write the migration without seeing the contents.
 
-## Sequence to action this
+## Sequence to action this — DONE 2026-04-27
 
-1. Open https://supabase.com/dashboard/project/rcfaashkfpurkvtmsmeb/sql/new
-2. Paste the Step 1 query, run it, screenshot or paste the result back to a Claude session
-3. Based on result, follow Step 2 (if needed) and Step 3
-4. After Step 3 lands, update `CLAUDE.md` to either remove the `send_daily_digest` line entirely (if retired) or fix the timing reference (if kept on a different schedule)
+1. ✅ Ran the cron audit query — confirmed both jobs active at `0 12 * * *`
+2. ✅ Migration `20260428000000_retire_daily_digest_nathan.sql` deactivates the legacy cron
+3. ✅ `CLAUDE.md` updated to remove the `send_daily_digest` reference
 
-~15 minutes total once you start.
+## Follow-up (later — not blocking)
+
+The `public.send_daily_digest()` function body is still in the live DB but its CREATE migration isn't in git. Two follow-up tasks worth doing eventually:
+
+1. **Snapshot the function definition** before any drop, so we have a record:
+   ```sql
+   select pg_get_functiondef('public.send_daily_digest'::regproc);
+   ```
+   Save the output as `docs/archive/legacy_send_daily_digest_definition.sql` for forensics.
+
+2. **After ~1 week of clean morning-sweep operation** with no need to revert, drop the function and unschedule the cron entirely:
+   ```sql
+   drop function if exists public.send_daily_digest();
+   select cron.unschedule('daily-digest-nathan');
+   ```
+   Wrap that in a new migration. Reversible only by re-creating from the snapshot.
 
 ## Related
 
