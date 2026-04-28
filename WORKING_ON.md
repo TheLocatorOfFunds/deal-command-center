@@ -5,6 +5,40 @@ every session so the other side knows what's in flight.
 
 ---
 
+## 🚨 EMERGENCY — kill Lauren on refundlocators.com (60 seconds)
+
+If Lauren is doing something live that needs to STOP RIGHT NOW (saying something embarrassing, leaking data, getting injected):
+
+**Fastest — Supabase dashboard pause (no terminal needed):**
+
+1. https://supabase.com/dashboard/project/rcfaashkfpurkvtmsmeb/functions/lauren-chat
+2. Top-right `⋯` → **Pause function** → confirm
+3. Done. New chats return 503; widget shows generic error.
+4. To restore: same place → **Resume**.
+
+**Slower but with friendly "we're offline" message (~90 sec):**
+
+```
+cd ~/Documents/Claude/refundlocators-next
+vercel env add NEXT_PUBLIC_LAUREN_DISABLED production
+# When prompted "What's the value?" — TYPE: true   (don't leave blank)
+git commit --allow-empty -m "deploy: kill switch on" && git push
+```
+
+To restore:
+```
+vercel env rm NEXT_PUBLIC_LAUREN_DISABLED production --yes
+git commit --allow-empty -m "deploy: kill switch off" && git push
+```
+
+**Full runbook (other incident paths, not just Lauren):**
+`~/Documents/Claude/refundlocators-next/RUNBOOK.md`
+
+**Long-term hardening plan (Justin's lane, 7 tasks):**
+`~/Documents/Claude/deal-command-center/JUSTIN_LAUREN_PROMPT_INJECTION_HARDENING.md`
+
+---
+
 ## Justin's session
 
 **Status**: Active — Apr 27, 2026
