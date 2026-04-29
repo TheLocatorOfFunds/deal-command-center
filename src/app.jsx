@@ -16395,36 +16395,58 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
   };
 
   const importOne = async (row) => {
-    const dealId = await resolveDealId(row.deal.id);
-    // 1. Insert deal — `deals.owner_id` (NOT created_by; that column lives
-    // on contact_deals + deal_notes but not on deals).
-    const { error: dealErr } = await sb.from('deals').insert({
-      ...row.deal,
-      id: dealId,
-      owner_id: userId,
-    });
-    if (dealErr) throw dealErr;
+    // Order: contact → deal → contact_deals. If the deal insert fails after
+    // the contact succeeded, we delete the orphan contact so we don't leave
+    // litter. If the contact step itself fails, no deal is ever created —
+    // so the DB never gets an orphan deal (deal-with-no-homeowner) again.
+    // Background: an earlier importer build inserted deal first, then contact;
+    // when contact failed on a NOT NULL constraint the deal stayed orphaned.
 
-    // 2. Insert homeowner contact
+    // 1. Insert homeowner contact first.
     const { data: contact, error: contactErr } = await sb.from('contacts')
       .insert({ ...row.homeownerContact, owner_id: userId })
       .select('id').single();
     if (contactErr) throw contactErr;
 
-    // 3. Link homeowner via contact_deals
-    await sb.from('contact_deals').insert({
+    // 2. Resolve deal id (may collide; resolveDealId tries -2, -3, … -99).
+    let dealId;
+    try { dealId = await resolveDealId(row.deal.id); }
+    catch (e) {
+      await sb.from('contacts').delete().eq('id', contact.id); // cleanup
+      throw e;
+    }
+
+    // 3. Insert deal — owner_id is the column on deals (not created_by).
+    const { error: dealErr } = await sb.from('deals').insert({
+      ...row.deal,
+      id: dealId,
+      owner_id: userId,
+    });
+    if (dealErr) {
+      await sb.from('contacts').delete().eq('id', contact.id); // cleanup
+      throw dealErr;
+    }
+
+    // 4. Link homeowner via contact_deals (relationship='homeowner').
+    const { error: linkErr } = await sb.from('contact_deals').insert({
       contact_id: contact.id,
       deal_id: dealId,
       relationship: 'homeowner',
       created_by: userId,
     });
+    if (linkErr) {
+      // Deal + contact both exist but the link broke. Try to clean up both.
+      await sb.from('deals').delete().eq('id', dealId);
+      await sb.from('contacts').delete().eq('id', contact.id);
+      throw linkErr;
+    }
 
-    // 4. Insert family contacts + link
+    // 5. Family contacts + their contact_deals links. Failures are non-blocking.
     for (const fc of row.familyContacts) {
       const { data: fcRow, error: fcErr } = await sb.from('contacts')
         .insert({ ...fc, owner_id: userId })
         .select('id').single();
-      if (fcErr) continue; // skip silently; family contacts aren't blocking
+      if (fcErr) continue;
       await sb.from('contact_deals').insert({
         contact_id: fcRow.id,
         deal_id: dealId,
@@ -16433,7 +16455,7 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
       });
     }
 
-    // 5. Deal note for General Notes content
+    // 6. Deal note for General Notes content.
     if (row.generalNotes) {
       await sb.from('deal_notes').insert({
         deal_id: dealId,
