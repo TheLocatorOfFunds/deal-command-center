@@ -156,6 +156,47 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 **Last updated**: Apr 28, 2026 (mid-morning — intel-sync bridge LIVE, 794 ohio-intel events flowed into DCC on first run)
 
+---
+
+## Nathan's session — Apr 29, 2026 evening
+
+**Status**: Active. CSV importer cycle finished (B-leads CSV in DB, 30 deals). Cleaning up data fields + UX polish. New Claude Code session prep.
+
+**Just finished (chronological)**:
+- Per-contact personalized URLs (`/s/charlottemorrow-katherine` etc.) with relationship-aware copy on the rendered page (refundlocators-next), OG image, and iMessage preview
+- Sale Date / Sale Price / Judgment Debt fields in Case Details (deal Overview) — admin-gated
+- 30-Days-to-Sale (`is_30dts`) + 🔥 badge
+- Deceased flag (`contacts.deceased` + UI toggle in contact editor) + 🕊️ pill on Comms tabs (with strikethrough)
+- Account Settings: phone made optional, owner-only (Nathan + Justin) Team Access section to promote VAs to Admin in one click
+- 📥 Import modal — CSV importer with three-way decision per row (Create / Merge audit / Skip), auto-dedup by case#/address/phone, handles GHL rich-export header signature, batched executes with progress + per-row error log
+- Date timezone bug fixed (`parseAuctionDate` is now manual regex, no `Date()` for date-only strings)
+- Family contact insert bug fixed (was spreading `relationship` into the `contacts` insert; column doesn't exist there)
+- Insert order refactored: contact → deal → contact_deals + cleanup-on-fail at every step (no more orphans)
+- Merge mode: re-uploading the CSV audits existing deals, fills any null fields, adds missing family contacts + GHL notes
+- Acknowledge ALL docket events RPC + UI (the modal button now bulk-clears 1811 events in one statement)
+- Tier-based name color on deal headers (A=green, B=red+🕊️, C=neutral)
+- Comprehensive Case Details card form fields — every CSV column has a corresponding editable input on the deal Overview, organized into Lead Classification / Case Identity / Financial / Sale & Timeline / Liens / Attorney & Fees / Links / Source
+
+**Active gaps Eric is hand-cleaning**:
+- Sale dates on the first 22 imported deals are off by one day (TZ bug from older importer build). Eric is correcting them manually OR Nathan can clear `meta.saleDate` for `source='ghl-import'` and re-merge to backfill.
+- Family contact relationships are all `'other'` from import — Eric's labeling them as `child`, `spouse`, etc.
+- 0 family contacts on the 30 imports (the bug-era version dropped them silently). Re-uploading the same CSV in Merge mode will add them.
+
+**Up next**:
+- C-leads CSV import (queued — ready when Eric is)
+- Cloudflare audit completion (Pages project + Maps key restriction)
+- Obsidian vault v0 bootstrap
+- Phone-type detection (parked, not yet built)
+
+**Touching**: `src/app.jsx`, `supabase/migrations/`, `docs/IMPORTING_LEADS_FROM_GHL.md`, `TRANSFER_TO_NEW_CLAUDE_CODE.md`, `CLAUDE.md` (no changes), `WORKING_ON.md`
+
+**Migrations applied 2026-04-29**:
+- `20260428090000_contacts_deceased.sql`
+- `20260428100000_profiles_phone_nullable.sql` (was actually run as `add column phone text` since the column didn't exist yet)
+- `20260429120000_acknowledge_all_docket_events.sql`
+
+**Last updated**: Apr 29, 2026 (evening — after Tier-color shipment + transfer doc refresh)
+
 <!--
 Template:
 **Working on**: [feature name]

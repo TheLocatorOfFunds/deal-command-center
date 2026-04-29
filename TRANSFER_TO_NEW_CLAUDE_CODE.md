@@ -4,7 +4,155 @@
 
 **Written for**: Nathan's next Claude Code session (primary), secondarily any future owner or contractor assuming control of the business.
 
-**Date of last full refresh**: 2026-04-20 (end of Session 13).
+**Date of last full refresh**: 2026-04-29 (after the GHL CSV import + Tier-color shipment).
+
+> **New Claude Code sessions: read Section 0 first.** Sections 1–17 are the durable architectural / business context. Section 0 is the recent-changes log — what's shipped since the last full refresh, what migrations need applying, what's mid-flight. After Section 0, the rest of the doc gives you the long-form picture.
+
+---
+
+## 0 — Recent state changes (read first if you're a new Claude Code session)
+
+This section captures everything that's shipped or shifted between **2026-04-21** and **2026-04-29** so a fresh session doesn't re-derive context the older sections don't yet reflect. The older sections are still mostly accurate; treat any conflict between this section and a later section as: **Section 0 wins.**
+
+### Build pipeline (CHANGED 2026-04-26)
+
+The DCC source moved from inline JSX in `index.html` to a separate file: **`src/app.jsx`** (~17,000 lines). It's pre-compiled by **esbuild** to **`app.js`** (~670KB minified) via `npm run build`. `index.html` is now a 12KB shell that loads React + Supabase from CDN and `<script src="app.js">`. **Edit `src/app.jsx`, not `index.html`.** Always commit `app.js` along with the source — GitHub Pages serves it directly.
+
+If `app.js` is stale relative to `src/app.jsx` on push, GitHub Actions auto-rebuilds via `.github/workflows/build.yml` and commits the rebuilt artifact back to `main` with `[skip ci]`. So forgetting to run `npm run build` doesn't break deploys, but it does cost you a follow-up commit.
+
+### Top nav was collapsed → re-expanded
+
+The 15-tab nav was collapsed into 6 hub-style tabs around 2026-04-23 (Today / Attention / Outreach / Forecast / Pipeline / Tasks), but additional tabs are showing up in production again (Team, Active, Flagged, Hygiene, Closed Deals, Reports, Analytics, Traffic). Total ≈ 14 tabs as of 2026-04-29. CLAUDE.md's "Top-level views" section is the source of truth for what should be visible.
+
+### Top-header additions
+
+In addition to the original 🔍 search / ⚖ Docket / 👥 Contacts / 📚 Library / 👥 Team / ⚙ Account / Sign out, there are now:
+
+- **📥 Import** (admin-only) — CSV importer for GHL exports
+- **🤖 Lauren** (admin-only) — Lauren Control Center, with a flagged-conversation badge
+
+### New tables (in addition to Section 6's list)
+
+- `library_documents`, `library_folders`, `deal_library_pins` — Phase 3 Library (templates / SOPs / brand assets / DocuSign templates / Claude-Vision-OCR-extracted)
+- `lauren_*` (multiple) — Lauren AI conversations + pgvector embeddings (Justin's domain)
+- `scraper_agents`, `castle_health_log` — Castle agent catalog + daily health snapshots
+- `court_pull_requests` — DCC → Castle "scrape this case on demand" queue
+- `foreclosure_cases` — Castle's auction sweep target list (sheriff sale calendar)
+- `outreach_queue`, `messages_outbound` — Justin's SMS pipeline (active path)
+
+### New columns on existing tables
+
+| Table | Columns added | Purpose |
+|---|---|---|
+| `deals` | `lead_tier` (A/B/C), `is_30dts` (boolean), `surplus_estimate`, `death_signal` | Castle's classification fields |
+| `deals.meta` (jsonb) | `estimatedSurplus`, `estimatedAvailableEquity`, `verifiedSurplus`, `judgmentAmount`, `totalDebt`, `estimatedLoanBalance`, `saleDate`, `salePrice`, `confirmationOfSaleDate`, `foreclosureFileDate`, `redemptionDeadline`, `minimumBidAmount`, `courtAppraisalOrderDate`, `courtAppraisalValue`, `mortgageBalance1`, `lienBalance1`, `mortgageHistory`, `openLiens`, `openLiensCount`, `involuntaryLiensDetails`, `isPostAuction`, `homeownerName`, `homeownerPhone`, `zillowLink`, `sheriffDocketLink`, `documentLinks`, `ghl_lead_id`, `ghl_lead_status`, `ghl_case_pack_status`, `ghl_occupancy_status`, `ghl_lead_rating`, `ghl_contact_type`, `verified` (Eric-set boolean) | All editable in the SurplusOverview Case Details card |
+| `contacts` | `do_not_text`, `do_not_call`, `dnd_set_at`, `dnd_reason` (DND, 2026-04-25) — and `deceased`, `deceased_at`, `deceased_source` (2026-04-28) | Outreach gating + tier classification |
+| `personalized_links` | `mailing_address`, `claim_submitted_at` (2026-04-25); `contact_id` + `relationship` (2026-04-28); `sale_date`, `sale_price`, `judgment_amount` | Per-contact URL system |
+| `messages_outbound` | `read_by_team_at` (2026-04-25 for Reply Inbox) | — |
+| `docket_events` | `litigation_stage`, `deadline_metadata`, `attorney_appearance` (2026-04-25 — Castle's K.1/K.3/H.b sprint) | — |
+| `profiles` | `phone` (added 2026-04-29; was missing) | — |
+
+### Major shipped features (2026-04-21 → 2026-04-29)
+
+- **Lauren AI integration** (Justin's domain) — pgvector knowledge base, Lauren Control Center, flagged-conversation alerts, "Ask Lauren about this deal" inline chat, deal-card surface awareness, bypass mode toggle, `?openLauren=1` deep-link
+- **Phase 3 Library** — Phase 3 PR 1 shipped 2026-04-26. Folder/document tree, three-pane layout, Claude-Vision OCR on upload, role-scoped visibility (admin_only / team / attorney / client)
+- **DND on contacts** — `do_not_text` / `do_not_call` flags wired into outreach gating
+- **Per-contact personalized URLs** — each contact on a deal gets their own `/s/{token}` URL with relationship-aware copy. Schema is `(deal_id, contact_id)` with NULLS NOT DISTINCT partial unique index. Slug pattern: `richardmikol` (homeowner) and `richardmikol-michelle` (daughter)
+- **Site copy on `refundlocators.com/s/[token]`** — relationship-aware page rendering ([refundlocators-next repo](https://github.com/TheLocatorOfFunds/refundlocators-next)). Hero context line, empathy/advocacy section, CTA all read from `copyFor()` based on `personalized_links.relationship`. Daughter sees "Your parent's home was sold" instead of "Your home was sold." OG image + iMessage preview also relationship-aware.
+- **Sale Date / Sale Price / Judgment Debt fields** in Case Details (2026-04-28) — became required for downstream calc
+- **30-Days-To-Sale (`is_30dts`)** — boolean column on deals; gets a 🔥 badge in the UI; controls whether Castle treats the lead as urgent
+- **Deceased flag on contacts** + 🕊️ pill in Comms tab (strikethrough on tabs) — drives Tier B classification
+- **Owner-only Team Access section** in Account Settings (2026-04-28) — Nathan + Justin only (hardcoded `OWNER_EMAILS`); promote a VA → Admin in one click. Existing 👥 Team modal stays available for any admin
+- **📥 Import modal** — bulk CSV importer for GHL exports. Admin-only. Auto-detects GHL rich-export header signature. Per-row dedup (case#, address, phone) with three decisions per row: **Create / Merge (audit) / Skip**. Merge mode fills any null/empty fields on existing deals + adds missing family contacts + adds GHL note if absent. Family contacts come in as `kind='other'`, relationship='other', tagged `unlabeled-relationship`. Doc: `docs/IMPORTING_LEADS_FROM_GHL.md`
+- **Tier-based name coloring** on deal headers (2026-04-29) — A=green, B=red+🕊️, C/null=white. Pure derivation from `deal.lead_tier`, no extra DB query
+- **Acknowledge ALL docket events** RPC — `public.acknowledge_all_docket_events()` (admin only). Modal button now bulk-clears in one statement instead of looping over the 100 loaded
+- **Lauren as Mac bridge messaging gateway** — outbound SMS routes through Nathan's iPhone via the `mac_bridge` daemon (Justin's domain). Twilio is no longer the primary outbound path; legacy fallback only
+
+### Migrations applied (in chronological order, 2026-04-25+)
+
+```
+20260425000000_dnd_on_contacts.sql
+20260425010000_messages_read_by_team.sql
+20260425020000_personalized_links_mailing_claim_submitted.sql
+20260425030000_docket_events_litigation_stage.sql
+20260427000000_lauren_*.sql                                  (multiple)
+20260428000000_retire_daily_digest_nathan.sql
+20260428050000_personalized_links_admin_policy.sql
+20260428060000_sync_personalized_link_from_deal.sql
+20260428070000_lauren_case_data_lookups.sql
+20260428080000_personalized_links_per_contact.sql
+20260428080001_sync_trigger_contact_aware.sql
+20260428090000_contacts_deceased.sql                         (applied 2026-04-29)
+20260428100000_profiles_phone_nullable.sql                   (applied 2026-04-29 as ADD column instead — phone didn't exist yet)
+20260429120000_acknowledge_all_docket_events.sql             (applied 2026-04-29)
+```
+
+### Migrations sitting in `supabase/migrations/` that haven't been applied yet
+
+None known as of 2026-04-29. Verify by comparing `supabase/migrations/` with the Supabase Dashboard's migration history before assuming everything's in sync.
+
+### Known data state (2026-04-29 evening)
+
+- **30 deals** imported from the GHL B-leads CSV (`Export_Contacts_B_Leads__SF__Apr_2026_7_23_PM.csv`). All tagged `meta.source='ghl-import'`, `lead_tier='B'`, `is_30dts=true`. Sale dates on the first 22 are off by one day from a TZ bug that's now fixed (parser uses manual regex, no `Date()`). Eric is hand-correcting them. The 0 family contacts on these deals is a known gap from the original buggy importer — Nathan can re-upload the CSV in **Merge** mode to backfill family contacts via `mergeOne()`.
+- **C-leads CSV** is queued — Eric runs that next once Nathan signs off on the B-leads cleanup.
+- **Castle** is producing docket events; the modal had ~1811 unacked events at one point and now uses the bulk-ack RPC.
+
+### Recent bugs worth knowing about (so you don't re-trip them)
+
+1. **Date timezone shift on import** — `new Date("May 05 2026").toISOString()` slices to "2026-05-04" when the user is east of UTC (Eric is in PH, UTC+8). Fixed: `parseAuctionDate()` is now a manual regex parser. Don't reintroduce `new Date()` for date-only strings.
+2. **Family contacts dropped silently** — the importer was spreading `relationship` into the `contacts` insert; `contacts` has no relationship column (it's on `contact_deals`). Fixed: strip `relationship` before insert. The pattern of `if (err) continue;` to "swallow" inserts is dangerous — log or report errors instead.
+3. **Orphan deals from contact-after-deal insert order** — first version of importer inserted deal → contact → link. When the contact step failed (NOT NULL on deceased), the deal was already in. Fixed: contact → deal → link, with cleanup-on-fail at every step.
+4. **`deals.created_by` doesn't exist** — the column is `owner_id`. `created_by` lives on `contact_deals` and `deal_notes` only.
+5. **NOT NULL booleans need `false`, not `null`** — Postgres rejects explicit NULL on NOT NULL columns even when there's a default. Use `!!value` for `is_30dts` and `deceased`.
+6. **Pages deploy occasionally flakes** — build job ✅ but deploy job ❌. Push an empty commit to retrigger.
+7. **Browser cache is sticky on `app.js`** — `Cache-Control: max-age=600`. After a deploy, hard-refresh (Cmd+Shift+R) is required. DevTools → Network → check Last-Modified header to verify which build you're on.
+
+### What's mid-flight / not yet shipped (as of 2026-04-29)
+
+- **Cloudflare audit** — partially through; restricted Google Maps key + Pages project inspection still TODO
+- **Obsidian vault v0** — central knowledge base at `~/Documents/Claude/FundLocators-Vault/`; bootstrapping not yet started
+- **Phone-type detection** — Nathan asked "can we know if a number is iPhone vs SMS vs landline?" — parked, build later
+- **Family contacts manual cleanup** — Eric is labeling relationships ('child', 'spouse', etc.) on the unlabeled imports
+- **Sale-date hand-correction on existing 30 GHL imports** — Eric is going through them
+- **Inbound email at refundlocators.com** — blocked by apex CNAME → pages.dev; needs Bulk Redirect refactor first (full plan in CLAUDE.md "Inbound email reality" section)
+- **Lauren prompt-injection hardening** — handoff plan exists, work scheduled with Justin
+
+### Owners (hardcoded for the role-management UI)
+
+```js
+const OWNER_EMAILS = new Set([
+  'nathan@fundlocators.com',
+  'nathan@refundlocators.com',
+  'justin@fundlocators.com',
+  'justin@refundlocators.com',
+]);
+```
+
+This client-side gate restricts who sees the 👑 Team Access section in Account Settings. It's NOT enforced in the DB yet — a future migration should add an RLS policy on `profiles` UPDATE that checks the email is in the owner list, otherwise an admin who knows the schema could promote themselves.
+
+### Where the most recent code changes live (file:line, useful for grep targets)
+
+- **CSV importer** — `src/app.jsx:~16100-16700` (`function ImportLeadsModal`, `mapGhlRowToDcc`, `findDuplicates`, `mergeOne`, `importOne`, `parseAuctionDate`, `parseCsv`, `isGhlRichExport`)
+- **Account Settings + Team Access** — `src/app.jsx:~14690-14900` (`function AccountSettingsModal`, `OWNER_EMAILS`)
+- **Case Details form expansion** — `src/app.jsx:~9890-10000` (inside `function SurplusOverview`)
+- **Tier-colored name** — `src/app.jsx:~3200-3240` (inside `function InlineEditableName`)
+- **Docket bulk-ack** — `src/app.jsx:~11150-11220` (inside `function DocketOverviewModal`)
+- **Per-contact URL panel in Comms** — `src/app.jsx:~13100-14160` (`mintContactUrl`, the `activeContact && !activeContact._everyone…` block)
+- **Multi-phone split into per-phone tabs** — `src/app.jsx:~13050-13070` (`expandPhones` helper inside the `contacts` useMemo)
+
+### Domain ownership (still authoritative — see CLAUDE.md for the full table)
+
+| Domain | Owner |
+|---|---|
+| Outreach SMS / mac_bridge | Justin |
+| Lauren AI / pgvector | Justin |
+| Castle / docket / Edge functions writing to docket | Nathan |
+| Client portal (`portal.html`) | Nathan |
+| Attorney portal (`attorney-portal.html`) | Nathan |
+| Lead intake (`lead-intake.html`) | Nathan |
+| Library (Phase 3) | Nathan |
+| **CSV importer + Case Details + Team Access UI** (recent additions) | Nathan |
+| Shared (deals, vendors, tasks, expenses, activity, deal_notes, documents, contacts, contact_deals, index.html shell) | Both |
 
 ---
 
