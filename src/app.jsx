@@ -15104,9 +15104,20 @@ function AccountSettingsModal({ onClose, userId, userEmail }) {
             </div>
 
             {teamLoading && <div style={{ fontSize: 12, color: '#78716c' }}>Loading team…</div>}
-            {!teamLoading && teamMembers.length > 0 && (
+            {!teamLoading && teamMembers.length > 0 && (() => {
+              // Hide client + attorney rows from the owner Team Access UI —
+              // they're managed per-deal via the deal's Counsel/Client portal
+              // cards, not from Account Settings. This keeps the section
+              // focused on team members (admin/va) only.
+              const visible = teamMembers.filter(m => ['admin', 'user', 'va'].includes(m.role));
+              if (visible.length === 0) return (
+                <div style={{ fontSize: 12, color: '#78716c', fontStyle: 'italic' }}>
+                  No team members yet (besides owners). Invite someone above.
+                </div>
+              );
+              return (
               <div style={{ border: '1px solid #1c1917', borderRadius: 8, overflow: 'hidden' }}>
-                {teamMembers.map(m => {
+                {visible.map(m => {
                   const memberIsOwner = m.email && OWNER_EMAILS.has(String(m.email).toLowerCase());
                   const memberIsSelf = m.id === userId;
                   return (
@@ -15135,7 +15146,8 @@ function AccountSettingsModal({ onClose, userId, userEmail }) {
                   );
                 })}
               </div>
-            )}
+              );
+            })()}
           </div>
         )}
 
@@ -15181,6 +15193,11 @@ function TeamModal({ onClose, currentUserId }) {
   const [msg, setMsg] = useState(null);
   const [editingName, setEditingName] = useState(null);
   const [editNameVal, setEditNameVal] = useState('');
+  // Hide client + attorney rows by default — they're managed from the
+  // deal page (client_access / contact_deals), not from Team Management.
+  // Per Nathan: the modal got noisy mixing 16+ portal users with the 2-3
+  // actual teammates. Toggle reveals them when needed.
+  const [showPortalUsers, setShowPortalUsers] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -15297,15 +15314,39 @@ function TeamModal({ onClose, currentUserId }) {
         </div>
       </div>
 
-      <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>Current members ({members.length})</div>
+      {(() => {
+        const teamMembers = members.filter(m => ['admin', 'user', 'va'].includes(m.role));
+        const portalUsers = members.filter(m => ['client', 'attorney'].includes(m.role));
+        const visibleMembers = showPortalUsers ? members : teamMembers;
+        return (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 10, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                {showPortalUsers
+                  ? `All members (${members.length})`
+                  : `Team (${teamMembers.length})`}
+              </div>
+              {portalUsers.length > 0 && (
+                <button onClick={() => setShowPortalUsers(v => !v)}
+                  style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', padding: '4px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {showPortalUsers
+                    ? `← Hide portal users (${portalUsers.length})`
+                    : `Show portal users (${portalUsers.length}) →`}
+                </button>
+              )}
+            </div>
 
-      {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
+            {loading && <div style={{ fontSize: 12, color: "#78716c" }}>Loading…</div>}
 
-      {!loading && members.length === 0 && <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic" }}>No team members yet.</div>}
+            {!loading && visibleMembers.length === 0 && (
+              <div style={{ fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
+                {showPortalUsers ? 'No members yet.' : 'No team members yet. Invite Eric, Justin, or another VA above.'}
+              </div>
+            )}
 
-      {!loading && members.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {members.map(m => (
+            {!loading && visibleMembers.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {visibleMembers.map(m => (
             <div key={m.id} style={{ padding: "14px 16px", background: "#0c0a09", border: "1px solid #292524", borderRadius: 8 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ flex: 1, minWidth: 200 }}>
@@ -15382,9 +15423,12 @@ function TeamModal({ onClose, currentUserId }) {
                 </div>
               </div>
             </div>
-          ))}
-        </div>
-      )}
+                ))}
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {msg && (
         <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
