@@ -14674,6 +14674,19 @@ function SearchModal({ deals, onClose, onSelect }) {
 // Each user manages their own profile here: avatar photo, display name,
 // phone, password. Display name + avatar drive how they appear in Team
 // Chat (and anywhere else profile names are shown).
+// Owners can manage other users' access levels. Hardcoded by email so
+// promotion/demotion isn't possible by setting your own profile.role to
+// 'admin' in the DB — it's gated client-side here AND should be enforced
+// via RLS at the DB level (TODO: add a `profiles_role_update_owner_only`
+// policy that checks email IN owner_emails). For now, client-side is
+// the only fence. Update this list when adding/removing owners.
+const OWNER_EMAILS = new Set([
+  'nathan@fundlocators.com',
+  'nathan@refundlocators.com',
+  'justin@fundlocators.com',
+  'justin@refundlocators.com',
+]);
+
 function AccountSettingsModal({ onClose, userId, userEmail }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -14687,6 +14700,50 @@ function AccountSettingsModal({ onClose, userId, userEmail }) {
   const [pw2, setPw2] = useState('');
   const [msg, setMsg] = useState(null);
   const fileRef = useRef(null);
+
+  // Team access section (owner-only).
+  const isOwner = userEmail && OWNER_EMAILS.has(String(userEmail).toLowerCase());
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamBusy, setTeamBusy] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState('va');
+
+  const loadTeam = async () => {
+    if (!isOwner) return;
+    setTeamLoading(true);
+    const { data, error } = await sb.rpc('admin_get_team_users');
+    if (!error && data) setTeamMembers(data);
+    setTeamLoading(false);
+  };
+  useEffect(() => { if (isOwner) loadTeam(); }, [isOwner]);
+
+  const updateTeamRole = async (id, role) => {
+    setTeamBusy(true); setMsg(null);
+    const { error } = await sb.from('profiles').update({ role }).eq('id', id);
+    if (error) setMsg({ kind: 'err', text: 'Could not update role: ' + error.message });
+    else setMsg({ kind: 'ok', text: 'Role updated.' });
+    await loadTeam();
+    setTeamBusy(false);
+    setTimeout(() => setMsg(null), 3000);
+  };
+
+  const sendInvite = async () => {
+    const addr = inviteEmail.trim().toLowerCase();
+    if (!addr) return;
+    setTeamBusy(true); setMsg(null);
+    try {
+      const appUrl = window.location.href.split('?')[0].split('#')[0].replace(/[^/]*$/, '');
+      const { error } = await sb.auth.signInWithOtp({ email: addr, options: { emailRedirectTo: appUrl } });
+      if (error) throw error;
+      setMsg({ kind: 'ok', text: `Magic link sent to ${addr}. They'll appear below after first sign-in — set their role then.` });
+      setInviteEmail('');
+    } catch (e) {
+      setMsg({ kind: 'err', text: e.message });
+    } finally {
+      setTeamBusy(false);
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -14831,14 +14888,75 @@ function AccountSettingsModal({ onClose, userId, userEmail }) {
             <Field label="Email">
               <input value={userEmail || ''} disabled style={{ ...inputStyle, opacity: 0.6, cursor: 'not-allowed' }} />
             </Field>
-            <Field label="Phone (for SMS)">
-              <input value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} placeholder="513-555-0100" />
+            <Field label="Phone (optional)">
+              <input value={phone} onChange={e => setPhone(e.target.value)} style={inputStyle} placeholder="513-555-0100 — leave blank if you don't want to receive SMS" />
             </Field>
           </div>
           <button onClick={saveProfile} disabled={savingProfile} style={{ ...btnPrimary, marginTop: 12 }}>
             {savingProfile ? 'Saving…' : 'Save profile'}
           </button>
         </div>
+
+        {/* Team access — owner-only. Lets Nathan/Justin promote a VA to admin
+            (so they can text leads + use the importer) or demote an admin to
+            VA, without leaving Account Settings. The full Team Management
+            modal (👥 Team in the top header) still has invite + name editing
+            for any admin. */}
+        {isOwner && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>👑 Team access (owner-only)</div>
+            <div style={{ fontSize: 11, color: '#78716c', marginBottom: 12, lineHeight: 1.55 }}>
+              Promote a VA to Admin so they can run the lead importer + text leads. Demote an Admin to VA to remove those abilities. Owners (you and Justin) keep their access regardless.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+              <input type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)} placeholder="invite a teammate by email…"
+                onKeyDown={e => e.key === 'Enter' && inviteEmail && sendInvite()}
+                style={{ ...inputStyle, flex: 1, minWidth: 220 }} />
+              <select value={inviteRole} onChange={e => setInviteRole(e.target.value)} style={{ ...inputStyle, width: 140, padding: '8px 10px' }}>
+                <option value="va">Virtual Assistant</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button onClick={sendInvite} disabled={teamBusy || !inviteEmail} style={{ ...btnPrimary, opacity: (teamBusy || !inviteEmail) ? 0.4 : 1 }}>
+                {teamBusy ? 'Sending…' : 'Send magic link'}
+              </button>
+            </div>
+
+            {teamLoading && <div style={{ fontSize: 12, color: '#78716c' }}>Loading team…</div>}
+            {!teamLoading && teamMembers.length > 0 && (
+              <div style={{ border: '1px solid #1c1917', borderRadius: 8, overflow: 'hidden' }}>
+                {teamMembers.map(m => {
+                  const memberIsOwner = m.email && OWNER_EMAILS.has(String(m.email).toLowerCase());
+                  const memberIsSelf = m.id === userId;
+                  return (
+                    <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderBottom: '1px solid #1c1917' }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', display: 'flex', alignItems: 'center', gap: 6 }}>
+                          {memberIsOwner && <span title="Owner" style={{ fontSize: 12 }}>👑</span>}
+                          {m.name || m.email}
+                          {memberIsSelf && <span style={{ fontSize: 10, color: '#78716c', fontWeight: 400 }}>(you)</span>}
+                        </div>
+                        <div style={{ fontSize: 11, color: '#78716c' }}>{m.email}</div>
+                      </div>
+                      <select
+                        value={m.role || 'va'}
+                        onChange={e => updateTeamRole(m.id, e.target.value)}
+                        disabled={teamBusy || memberIsOwner || memberIsSelf}
+                        title={memberIsOwner ? 'Owners cannot be demoted from this UI.' : memberIsSelf ? 'Use Justin\'s account to change yours.' : 'Change role'}
+                        style={{ ...inputStyle, width: 140, padding: '6px 8px', fontSize: 12, opacity: (memberIsOwner || memberIsSelf) ? 0.5 : 1, cursor: (memberIsOwner || memberIsSelf) ? 'not-allowed' : 'pointer' }}>
+                        <option value="va">Virtual Assistant</option>
+                        <option value="admin">Admin</option>
+                        <option value="user">Admin (legacy)</option>
+                        <option value="attorney">Attorney</option>
+                        <option value="client">Client</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Password */}
         <div>
