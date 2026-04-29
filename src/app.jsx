@@ -16239,7 +16239,9 @@ function mapGhlRowToDcc(row, headers) {
       name: fullName,
       address: fullAddress,
       lead_tier,
-      is_30dts: is30dts || null,
+      // is_30dts is a NOT NULL boolean on deals — send false when there's
+      // no "30dts" tag, never null.
+      is_30dts: !!is30dts,
       meta: {
         county,
         state: stateRaw || (fullAddress && (fullAddress.match(/,\s*([A-Z]{2})\s*,?\s*\d{5}/) || [])[1]) || null,
@@ -16270,7 +16272,8 @@ function mapGhlRowToDcc(row, headers) {
       kind: 'homeowner',
       tags: ['ghl-import', ...tags].filter(Boolean),
       notes: ghlId ? `GHL Contact ID: ${ghlId}\nGHL Lead Status: ${ghlStatus}` : null,
-      deceased: deceased || null,
+      // contacts.deceased is NOT NULL default false — always send a boolean.
+      deceased: !!deceased,
       deceased_source: deceased ? 'GHL-import' : null,
     },
     familyContacts,
