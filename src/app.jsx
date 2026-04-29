@@ -3200,21 +3200,38 @@ function InlineEditableName({ deal, canEdit, onSave }) {
     );
   }
 
+  // Life-status color on the deal name — quickly identify alive vs deceased
+  // at a glance when scanning between deals. Per Nathan: Tier A = alive
+  // (green), Tier B = deceased (red), C / unclassified = neutral white.
+  // Tier comes from the dropdown in Case Details; flipping it re-colors
+  // the name immediately because the parent re-renders this component.
+  let nameColor = '#fafaf9'; // default white
+  let nameTitle = 'Click to edit the client name';
+  if (deal.lead_tier === 'A') {
+    nameColor = '#22c55e'; // alive
+    nameTitle = 'Tier A · alive · click to edit';
+  } else if (deal.lead_tier === 'B') {
+    nameColor = '#ef4444'; // deceased
+    nameTitle = 'Tier B · deceased · click to edit';
+  }
+
   return (
     <div
       className="page-title"
       onClick={startEdit}
-      title={canEdit ? 'Click to edit the client name' : clientName}
+      title={canEdit ? nameTitle : clientName}
       style={{
         fontSize: 26, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.1,
         marginTop: 4, cursor: canEdit ? 'pointer' : 'default',
         padding: '3px 6px', margin: '4px -6px 0', borderRadius: 6,
-        transition: 'background 0.12s',
+        transition: 'background 0.12s, color 0.12s',
+        color: nameColor,
       }}
       onMouseEnter={e => { if (canEdit) e.currentTarget.style.background = '#1c1917'; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
     >
       {clientName}
+      {deal.lead_tier === 'B' && <span title="Deceased" style={{ marginLeft: 10, fontSize: 18 }}>🕊️</span>}
       {canEdit && <span style={{ fontSize: 11, color: '#57534e', marginLeft: 10, fontWeight: 400, letterSpacing: 0 }}>✎</span>}
     </div>
   );
