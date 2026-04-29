@@ -16522,11 +16522,14 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
       const dataRows = allRows.slice(1).filter(r => r.some(c => (c || '').trim()));
       const mappedRows = dataRows.map(r => mapGhlRowToDcc(r, headers));
       const withDups = await findDuplicates(mappedRows);
-      // Default decision per row: skip if duplicate, create otherwise.
+      // Default decision per row: merge if duplicate (audit + fill blanks),
+      // create if new, skip if invalid. "merge" is per Nathan's audit pattern
+      // — re-uploading the same CSV patches existing leads with any
+      // missing data rather than skipping or duplicating.
       const initDecisions = {};
       withDups.forEach((m, i) => {
         if (!m.valid) initDecisions[i] = 'skip';
-        else if (m.duplicate) initDecisions[i] = 'skip';
+        else if (m.duplicate) initDecisions[i] = 'merge';
         else initDecisions[i] = 'create';
       });
       setMapped(withDups);
@@ -16559,6 +16562,142 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
     }
     reservedIds.add(id);
     return id;
+  };
+
+  // Audit-merge: when a CSV row matches an existing deal, fill in any
+  // null/empty fields with CSV values WITHOUT overwriting populated ones.
+  // Add missing family contacts. Add the GHL note if no GHL note exists.
+  // Per Nathan: re-uploading the same CSV should patch leads that didn't
+  // get full data on the first import (e.g. family contacts that the
+  // first version of the importer dropped silently).
+  const mergeOne = async (row, existingDealId) => {
+    // Pull the existing deal so we know which fields are blank.
+    const { data: existing, error: exErr } = await sb.from('deals').select('*').eq('id', existingDealId).single();
+    if (exErr || !existing) throw exErr || new Error('Deal not found: ' + existingDealId);
+
+    // Build a deal patch — only fields that are null/empty in `existing`.
+    const dealPatch = {};
+    const isBlank = (v) => v == null || v === '' || (typeof v === 'number' && v === 0);
+    if (isBlank(existing.address) && row.deal.address) dealPatch.address = row.deal.address;
+    if (isBlank(existing.lead_tier) && row.deal.lead_tier) dealPatch.lead_tier = row.deal.lead_tier;
+    if (existing.is_30dts === false && row.deal.is_30dts === true) dealPatch.is_30dts = true;
+    if (isBlank(existing.name) && row.deal.name) dealPatch.name = row.deal.name;
+
+    // Meta merge — fill blanks per key. Don't touch keys that already have a value.
+    const metaPatch = { ...(existing.meta || {}) };
+    let metaChanged = false;
+    for (const [key, val] of Object.entries(row.deal.meta || {})) {
+      if (val == null || val === '') continue;
+      if (isBlank(metaPatch[key])) {
+        metaPatch[key] = val;
+        metaChanged = true;
+      }
+    }
+    if (metaChanged) dealPatch.meta = metaPatch;
+
+    let fieldsFilled = Object.keys(dealPatch).length + (metaChanged ? Object.keys(metaPatch).length - Object.keys(existing.meta || {}).length : 0);
+    if (Object.keys(dealPatch).length > 0) {
+      const { error } = await sb.from('deals').update(dealPatch).eq('id', existingDealId);
+      if (error) throw error;
+    }
+
+    // Look up existing contact_deals + contacts for this deal so we can
+    // (a) find / patch the homeowner, (b) skip family phones that are
+    // already linked.
+    const { data: cdRows } = await sb.from('contact_deals')
+      .select('id, relationship, contact_id, contacts(id, name, phone, email, kind, deceased, tags)')
+      .eq('deal_id', existingDealId);
+    const linkedRows = cdRows || [];
+    const homeownerLink = linkedRows.find(cd => cd.relationship === 'homeowner');
+    let familyAdded = 0;
+
+    if (homeownerLink?.contacts) {
+      const existingHo = homeownerLink.contacts;
+      const cPatch = {};
+      if (isBlank(existingHo.phone) && row.homeownerContact.phone) cPatch.phone = row.homeownerContact.phone;
+      if (isBlank(existingHo.email) && row.homeownerContact.email) cPatch.email = row.homeownerContact.email;
+      if (!existingHo.deceased && row.homeownerContact.deceased) {
+        cPatch.deceased = true;
+        cPatch.deceased_source = 'GHL-import';
+      }
+      // Tags: union (don't drop existing tags).
+      const existingTags = new Set(existingHo.tags || []);
+      let tagsChanged = false;
+      for (const t of (row.homeownerContact.tags || [])) {
+        if (!existingTags.has(t)) { existingTags.add(t); tagsChanged = true; }
+      }
+      if (tagsChanged) cPatch.tags = Array.from(existingTags);
+      if (Object.keys(cPatch).length > 0) {
+        await sb.from('contacts').update(cPatch).eq('id', existingHo.id);
+        fieldsFilled += Object.keys(cPatch).length;
+      }
+    } else if (row.homeownerContact.name) {
+      // No homeowner — orphan deal from the early buggy importer. Create + link.
+      const { data: newC, error: newCErr } = await sb.from('contacts')
+        .insert({ ...row.homeownerContact, owner_id: userId })
+        .select('id').single();
+      if (!newCErr && newC) {
+        await sb.from('contact_deals').insert({
+          contact_id: newC.id,
+          deal_id: existingDealId,
+          relationship: 'homeowner',
+          created_by: userId,
+        });
+        fieldsFilled += 1;
+      }
+    }
+
+    // Family contacts — add any whose primary phone isn't already linked
+    // to this deal. Don't try to patch existing family contacts since we
+    // can't tell which CSV "Family N" maps to which existing contact.
+    const linkedPhones = new Set();
+    linkedRows.forEach(cd => {
+      const ph = cd.contacts?.phone;
+      if (!ph) return;
+      String(ph).split(/[,;]/).forEach(p => {
+        const norm = p.trim().replace(/\D/g, '');
+        if (norm) linkedPhones.add(norm);
+      });
+    });
+    for (const fc of row.familyContacts) {
+      const fcPrimaryDigits = (String(fc.phone || '').split(/[,;]/)[0] || '').replace(/\D/g, '');
+      if (!fcPrimaryDigits) continue;
+      if (linkedPhones.has(fcPrimaryDigits)) continue;
+      const { relationship: fcRel, ...fcInsert } = fc;
+      const { data: fcRow, error: fcErr } = await sb.from('contacts')
+        .insert({ ...fcInsert, owner_id: userId })
+        .select('id').single();
+      if (fcErr) continue;
+      await sb.from('contact_deals').insert({
+        contact_id: fcRow.id,
+        deal_id: existingDealId,
+        relationship: fcRel || 'other',
+        created_by: userId,
+      });
+      // Mark this phone linked so subsequent family entries don't double-add.
+      linkedPhones.add(fcPrimaryDigits);
+      familyAdded++;
+    }
+
+    // Deal note — add only if no GHL note already exists for this deal.
+    if (row.generalNotes) {
+      const { data: existingGhlNote } = await sb.from('deal_notes')
+        .select('id')
+        .eq('deal_id', existingDealId)
+        .ilike('title', 'GHL%')
+        .limit(1).maybeSingle();
+      if (!existingGhlNote) {
+        await sb.from('deal_notes').insert({
+          deal_id: existingDealId,
+          title: 'GHL — General Notes',
+          body: row.generalNotes,
+          author_id: userId,
+        });
+        fieldsFilled += 1;
+      }
+    }
+
+    return { dealId: existingDealId, fieldsFilled, familyAdded };
   };
 
   const importOne = async (row) => {
@@ -16644,18 +16783,25 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
   const execute = async () => {
     const queue = mapped
       .map((m, i) => ({ m, i, decision: decisions[i] }))
-      .filter(x => x.decision === 'create' && x.m.valid);
+      .filter(x => (x.decision === 'create' || x.decision === 'merge') && x.m.valid);
     if (!queue.length) return;
     setStage('executing');
     setProgress({ done: 0, total: queue.length });
-    const out = { created: 0, skipped: mapped.length - queue.length, failed: 0, errors: [] };
+    const out = { created: 0, merged: 0, fieldsFilled: 0, familyAdded: 0, skipped: mapped.length - queue.length, failed: 0, errors: [] };
     for (let n = 0; n < queue.length; n++) {
-      const { m, i } = queue[n];
+      const { m, i, decision } = queue[n];
       try {
-        const newId = await importOne(m);
-        out.created++;
-        // Stamp the result back into the row for the summary view.
-        m._importedDealId = newId;
+        if (decision === 'merge' && m.duplicate?.dealId) {
+          const result = await mergeOne(m, m.duplicate.dealId);
+          out.merged++;
+          out.fieldsFilled += result.fieldsFilled || 0;
+          out.familyAdded += result.familyAdded || 0;
+          m._importedDealId = result.dealId;
+        } else {
+          const newId = await importOne(m);
+          out.created++;
+          m._importedDealId = newId;
+        }
       } catch (e) {
         out.failed++;
         out.errors.push({ idx: i, name: m.deal.name, error: e?.message || String(e) });
@@ -16677,14 +16823,14 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
   }, [mapped]);
 
   const decisionCounts = useMemo(() => {
-    let create = 0, skip = 0, dup = 0, invalid = 0;
+    let create = 0, merge = 0, skip = 0, invalid = 0;
     mapped.forEach((m, i) => {
       if (!m.valid) invalid++;
       else if (decisions[i] === 'create') create++;
-      else if (m.duplicate) dup++;
+      else if (decisions[i] === 'merge') merge++;
       else skip++;
     });
-    return { create, skip, dup, invalid };
+    return { create, merge, skip, invalid };
   }, [mapped, decisions]);
 
   return (
@@ -16737,9 +16883,9 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
                   <div style={{ fontSize: 10, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Will create</div>
                   <div style={{ fontSize: 22, fontWeight: 700, color: '#22c55e' }}>{decisionCounts.create}</div>
                 </div>
-                <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #78350f', borderRadius: 6 }}>
-                  <div style={{ fontSize: 10, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Duplicates skipped</div>
-                  <div style={{ fontSize: 22, fontWeight: 700, color: '#d97706' }}>{decisionCounts.dup}</div>
+                <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #1e3a8a', borderRadius: 6 }}>
+                  <div style={{ fontSize: 10, color: '#93c5fd', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Will merge (audit)</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#3b82f6' }}>{decisionCounts.merge}</div>
                 </div>
                 <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #7f1d1d', borderRadius: 6 }}>
                   <div style={{ fontSize: 10, color: '#fca5a5', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Invalid (no name/addr)</div>
@@ -16774,6 +16920,7 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
                       <select value={d || 'skip'} onChange={e => setDecision(i, e.target.value)} disabled={!m.valid}
                         style={{ background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c', borderRadius: 4, padding: '3px 6px', fontSize: 11, fontFamily: 'inherit' }}>
                         <option value="create">Create</option>
+                        {m.duplicate && <option value="merge">Merge (audit)</option>}
                         <option value="skip">Skip</option>
                       </select>
                     </div>
@@ -16795,10 +16942,19 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
 
           {stage === 'done' && results && (
             <div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
                 <div style={{ padding: 14, background: '#0c0a09', border: '1px solid #14532d', borderRadius: 6, textAlign: 'center' }}>
                   <div style={{ fontSize: 10, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Created</div>
                   <div style={{ fontSize: 32, fontWeight: 700, color: '#22c55e' }}>{results.created}</div>
+                </div>
+                <div style={{ padding: 14, background: '#0c0a09', border: '1px solid #1e3a8a', borderRadius: 6, textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#93c5fd', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Merged</div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: '#3b82f6' }}>{results.merged || 0}</div>
+                  {(results.fieldsFilled > 0 || results.familyAdded > 0) && (
+                    <div style={{ fontSize: 10, color: '#78716c', marginTop: 4 }}>
+                      {results.fieldsFilled} field{results.fieldsFilled === 1 ? '' : 's'} filled · {results.familyAdded} family added
+                    </div>
+                  )}
                 </div>
                 <div style={{ padding: 14, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, textAlign: 'center' }}>
                   <div style={{ fontSize: 10, color: '#a8a29e', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Skipped</div>
@@ -16828,11 +16984,15 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
         {stage === 'preview' && (
           <div style={{ padding: '12px 18px', borderTop: '1px solid #1c1917', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
             <span style={{ fontSize: 11, color: '#78716c', marginRight: 'auto' }}>
-              {decisionCounts.create} ready to import · {decisionCounts.dup} dups · {decisionCounts.invalid} invalid
+              {decisionCounts.create} new · {decisionCounts.merge} audit · {decisionCounts.skip} skip · {decisionCounts.invalid} invalid
             </span>
             <button onClick={() => setStage('upload')} style={{ ...btnGhost, fontSize: 11 }}>← Back</button>
-            <button onClick={execute} disabled={decisionCounts.create === 0} style={{ ...btnPrimary, opacity: decisionCounts.create === 0 ? 0.4 : 1 }}>
-              Import {decisionCounts.create} {decisionCounts.create === 1 ? 'lead' : 'leads'}
+            <button onClick={execute} disabled={(decisionCounts.create + decisionCounts.merge) === 0} style={{ ...btnPrimary, opacity: (decisionCounts.create + decisionCounts.merge) === 0 ? 0.4 : 1 }}>
+              {decisionCounts.create > 0 && decisionCounts.merge > 0
+                ? `Create ${decisionCounts.create} + Audit ${decisionCounts.merge}`
+                : decisionCounts.create > 0
+                  ? `Create ${decisionCounts.create} ${decisionCounts.create === 1 ? 'lead' : 'leads'}`
+                  : `Audit ${decisionCounts.merge} existing ${decisionCounts.merge === 1 ? 'lead' : 'leads'}`}
             </button>
           </div>
         )}
