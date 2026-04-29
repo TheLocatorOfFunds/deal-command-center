@@ -16043,6 +16043,72 @@ function ContactsTab({ dealId, userId, isAdmin }) {
   const linkedIds = new Set(links.map(l => l.contact_id));
   const unlinkedContacts = allContacts.filter(c => !linkedIds.has(c.id));
 
+  // ── Family cleanup panel ────────────────────────────────────────────────
+  // Family contacts imported from GHL come in tagged 'unlabeled-relationship'
+  // because the CSV doesn't tell us "Family 1 = Daughter" vs "Family 1 = Son".
+  // This panel shows ALL unlabeled family contacts on a deal so Eric can
+  // rename them (off the placeholder "Charlotte Morrow — Family 1") and
+  // pick a real relationship (child/spouse/parent/sibling/other) in one
+  // screen, then "Save All" — instead of full-edit-mode-per-contact.
+  const unlabeledFamily = links.filter(l =>
+    Array.isArray(l.contacts?.tags) && l.contacts.tags.includes('unlabeled-relationship')
+  );
+  const [familyDrafts, setFamilyDrafts] = useState({}); // linkId → { name, relationship }
+  const [familySaving, setFamilySaving] = useState(false);
+  const [familyMsg, setFamilyMsg] = useState(null);
+
+  // Re-init drafts whenever the underlying unlabeled list changes (load, save).
+  useEffect(() => {
+    const drafts = {};
+    unlabeledFamily.forEach(l => {
+      drafts[l.id] = {
+        name: l.contacts?.name || '',
+        relationship: ['homeowner','spouse','child','parent','sibling','other'].includes(l.relationship)
+          ? l.relationship
+          : 'other',
+      };
+    });
+    setFamilyDrafts(drafts);
+    // We intentionally only re-init when the SET of unlabeled link IDs
+    // changes — not on every keystroke. JSON-stringifying the IDs keeps
+    // typing in the inputs from blowing the drafts away.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(unlabeledFamily.map(l => l.id))]);
+
+  const setFamilyDraft = (linkId, field, value) =>
+    setFamilyDrafts(prev => ({ ...prev, [linkId]: { ...prev[linkId], [field]: value } }));
+
+  const saveFamilyOne = async (link) => {
+    const draft = familyDrafts[link.id];
+    if (!draft) return;
+    const c = link.contacts || {};
+    const newName = (draft.name || '').trim() || c.name;
+    const newRel = draft.relationship || 'other';
+    const newTags = (c.tags || []).filter(t => t !== 'unlabeled-relationship');
+    const cPatch = {};
+    if (newName !== c.name) cPatch.name = newName;
+    if ((c.tags || []).includes('unlabeled-relationship')) cPatch.tags = newTags;
+    if (Object.keys(cPatch).length > 0) await sb.from('contacts').update(cPatch).eq('id', link.contact_id);
+    if (newRel !== link.relationship) await sb.from('contact_deals').update({ relationship: newRel }).eq('id', link.id);
+  };
+
+  const saveFamilyAll = async () => {
+    if (familySaving || unlabeledFamily.length === 0) return;
+    setFamilySaving(true);
+    setFamilyMsg(null);
+    let saved = 0, failed = 0;
+    for (const link of unlabeledFamily) {
+      try { await saveFamilyOne(link); saved++; }
+      catch (e) { failed++; }
+    }
+    await load();
+    setFamilySaving(false);
+    setFamilyMsg({ kind: failed ? 'err' : 'ok', text: failed
+      ? `Saved ${saved}, failed ${failed}. Try again or check console.`
+      : `Labeled ${saved} family contact${saved === 1 ? '' : 's'}.` });
+    setTimeout(() => setFamilyMsg(null), 3000);
+  };
+
   return (
     <div>
       {err && (
@@ -16052,6 +16118,70 @@ function ContactsTab({ dealId, userId, isAdmin }) {
         <div style={{ fontSize: 12, color: "#78716c", padding: 20 }}>Loading contacts…</div>
       ) : (
         <>
+          {/* Family cleanup panel — only renders when there are
+              GHL-imported family contacts that haven't been labeled yet. */}
+          {unlabeledFamily.length > 0 && (
+            <div style={{ marginBottom: 16, padding: 14, background: '#0c0a09', border: '1px solid #78350f', borderRadius: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase' }}>🧹 Family Cleanup</div>
+                  <div style={{ fontSize: 11, color: '#78716c', marginTop: 4 }}>
+                    {unlabeledFamily.length} unlabeled family contact{unlabeledFamily.length === 1 ? '' : 's'} from the GHL import. Rename + pick a relationship, then save all at once.
+                  </div>
+                </div>
+                <button onClick={saveFamilyAll} disabled={familySaving}
+                  style={{ ...btnPrimary, opacity: familySaving ? 0.6 : 1, whiteSpace: 'nowrap' }}>
+                  {familySaving ? 'Saving…' : `Save all ${unlabeledFamily.length}`}
+                </button>
+              </div>
+              {familyMsg && (
+                <div style={{ fontSize: 11, marginBottom: 8, padding: '6px 10px', borderRadius: 6, background: familyMsg.kind === 'err' ? '#7f1d1d' : '#064e3b', color: familyMsg.kind === 'err' ? '#fecaca' : '#bbf7d0' }}>
+                  {familyMsg.text}
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 8, fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', padding: '4px 6px', borderBottom: '1px solid #292524' }}>
+                <div>Name</div>
+                <div>Phone</div>
+                <div>Relationship</div>
+                <div></div>
+              </div>
+              {unlabeledFamily.map(l => {
+                const draft = familyDrafts[l.id] || { name: '', relationship: 'other' };
+                const c = l.contacts || {};
+                const phoneDisplay = (c.phone || '').split(',')[0].trim() || '—';
+                return (
+                  <div key={l.id} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: 8, alignItems: 'center', padding: '6px 6px', borderBottom: '1px solid #1c1917' }}>
+                    <input
+                      value={draft.name}
+                      onChange={e => setFamilyDraft(l.id, 'name', e.target.value)}
+                      placeholder={c.name || 'Family member name'}
+                      style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
+                    />
+                    <span style={{ fontSize: 11, color: '#a8a29e', fontFamily: "'DM Mono', monospace", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{phoneDisplay}</span>
+                    <select
+                      value={draft.relationship}
+                      onChange={e => setFamilyDraft(l.id, 'relationship', e.target.value)}
+                      style={{ ...inputStyle, padding: '6px 8px', fontSize: 12 }}
+                    >
+                      <option value="spouse">spouse</option>
+                      <option value="child">child</option>
+                      <option value="parent">parent</option>
+                      <option value="sibling">sibling</option>
+                      <option value="other">other</option>
+                    </select>
+                    <button
+                      onClick={async () => { await saveFamilyOne(l); await load(); }}
+                      title="Save just this one"
+                      disabled={familySaving}
+                      style={{ ...btnGhost, fontSize: 11, padding: '4px 8px' }}>
+                      ✓
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           {links.length === 0 ? (
             <div style={{ fontSize: 13, color: "#78716c", padding: 32, textAlign: "center", fontStyle: "italic", border: "1px dashed #292524", borderRadius: 8, marginBottom: 16 }}>
               No contacts linked to this deal yet. Link the attorney, title company, referral source, or anyone else tied to this case.
