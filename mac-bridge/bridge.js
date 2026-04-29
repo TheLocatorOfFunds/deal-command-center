@@ -364,6 +364,38 @@ function sendFileViaMessages(toPhone, localPath) {
   return 'sms';
 }
 
+/**
+ * Check chat.db for the most recent outbound message to `toPhone` that was
+ * created after `afterAppleNanos`.  Returns the row or null.
+ *
+ * On macOS 26+ the `text` column in the message table is always NULL for
+ * outbound messages (content is in attributedBody blob). We query by
+ * is_from_me + chat_identifier + timestamp instead of by text body.
+ */
+function pollOutboundDelivery(toPhone, afterAppleNanos) {
+  const db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`
+      SELECT m.ROWID, m.is_sent, m.error
+      FROM message m
+      JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
+      JOIN chat c                ON cmj.chat_id = c.ROWID
+      WHERE m.is_from_me = 1
+        AND c.chat_identifier = ?
+        AND m.date >= ?
+      ORDER BY m.ROWID DESC
+      LIMIT 1
+    `).get(toPhone, afterAppleNanos) || null;
+  } finally {
+    db.close();
+  }
+}
+
+/** Apple nanosecond timestamp for "now". */
+function appleNow() {
+  return BigInt(Math.round((Date.now() / 1000 - APPLE_EPOCH) * 1e9));
+}
+
 async function processPendingOutbound() {
   ensureMessagesRunning(); // no-op if already running; launches if crashed/killed
   const { data: pending, error } = await sb
@@ -387,6 +419,7 @@ async function processPendingOutbound() {
       if (msg.media_url) {
         console.log(`⬇ DOWNLOAD  ${msg.media_url}`);
         tmpMediaPath = await downloadMediaToTmp(msg.media_url);
+        const fileSendTime = appleNow();
         const fileChannel = sendFileViaMessages(msg.to_number, tmpMediaPath);
         console.log(`⬆ SENT FILE (${fileChannel})  ${msg.to_number}  ${path.basename(tmpMediaPath)}`);
         // Send text caption as a follow-up message if present
@@ -394,15 +427,42 @@ async function processPendingOutbound() {
           const capChannel = sendViaMessages(msg.to_number, msg.body.trim());
           console.log(`⬆ SENT CAPTION (${capChannel})  ${msg.to_number}`);
         }
+        msg._sendTime = fileSendTime;
       } else {
         // ── Text-only path ─────────────────────────────────────────────────────
+        const sendTimeBefore = appleNow(); // capture before send — row date will be ≥ this
         const channel = sendViaMessages(msg.to_number, msg.body);
         const preview = (msg.body || '').length > 60 ? msg.body.slice(0, 57) + '…' : msg.body;
         console.log(`⬆ SENT (${channel})  ${msg.to_number}  "${preview}"`);
+        msg._sendTime = sendTimeBefore; // pass to post-send check below
       }
       consecutiveOscriptTimeouts = 0;
-      // Mark as handed off — NOT sent. Delivery is confirmed later via chat.db
-      // (syncFromChatDb flips to 'sent' or 'failed' once is_sent/error are known).
+
+      // ── Post-send delivery check ───────────────────────────────────────────
+      // AppleScript returning without error only means Messages.app accepted the
+      // request. On macOS 26 the text column is always NULL so syncFromChatDb
+      // can't match by body — we instead poll chat.db directly by phone +
+      // timestamp and read the error code Apple sets within a second or two.
+      const sendTime  = msg._sendTime ?? appleNow();
+      await new Promise(r => setTimeout(r, 2500)); // let Messages.app process
+      const delivery  = pollOutboundDelivery(msg.to_number, sendTime);
+      if (delivery && delivery.error !== 0) {
+        const appleErr = delivery.error;
+        let errMsg = `Messages error ${appleErr}`;
+        if (appleErr === 4)  errMsg = `SMS relay unavailable (error 4) — Nathan's iPhone must be on the same WiFi with Text Message Forwarding enabled`;
+        if (appleErr === 22) errMsg = `Not an iMessage user (error 22) — number is not on iMessage`;
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: errMsg })
+          .eq('id', msg.id);
+        console.error(`❌ DELIVERY FAIL  ${msg.to_number}  apple_error=${appleErr}`);
+        continue;
+      }
+      if (delivery && delivery.is_sent === 1 && delivery.error === 0) {
+        await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
+        console.log(`✅ DELIVERED  ${msg.to_number}`);
+        continue;
+      }
+      // No chat.db row yet (iMessage may still be in flight) → handed_off state
       await sb.from('messages_outbound').update({ status: 'handed_off_to_mac' }).eq('id', msg.id);
     } catch (err) {
       if (err.message.includes('ETIMEDOUT')) {
