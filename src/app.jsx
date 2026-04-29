@@ -579,37 +579,53 @@ function DealCommandCenter({ session, profile }) {
           intuitive grouping — same kanban column / same list view. */}
       <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          {activeDeal && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-                ← All Deals
-              </button>
-              {(() => {
-                const peers = deals.filter(d => d.status === activeDeal.status);
-                const peerIndex = peers.findIndex(d => d.id === activeDealId);
-                const prevDeal = peerIndex > 0 ? peers[peerIndex - 1] : null;
-                const nextDeal = peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null;
-                if (peers.length <= 1) return null;
-                return (
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6, padding: '0 4px', borderLeft: '1px solid #292524' }}>
+          {activeDeal && (() => {
+            const peers = deals.filter(d => d.status === activeDeal.status);
+            const peerIndex = peers.findIndex(d => d.id === activeDealId);
+            const prevDeal = peerIndex > 0 ? peers[peerIndex - 1] : null;
+            const nextDeal = peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null;
+            const showNav = peers.length > 1;
+            // Single compact pill: [← All]  ◀  3 / 91  ▶
+            // Tight icon-only prev/next with the counter inline. No multi-
+            // line text wrapping (whiteSpace: nowrap on every element).
+            const pillBtn = (color, cursor) => ({
+              background: 'transparent',
+              border: 'none',
+              color,
+              cursor,
+              fontSize: 16,
+              fontWeight: 600,
+              padding: '4px 10px',
+              fontFamily: 'inherit',
+              lineHeight: 1,
+            });
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 2, whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <button onClick={() => setActiveDealId(null)} title="Back to all deals"
+                  style={{ background: 'transparent', border: 'none', color: '#a8a29e', padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                  ← All
+                </button>
+                {showNav && (
+                  <>
+                    <span style={{ width: 1, alignSelf: 'stretch', background: '#292524', margin: '4px 2px' }} />
                     <button onClick={() => prevDeal && setActiveDealId(prevDeal.id)} disabled={!prevDeal}
-                      title={prevDeal ? `Prev: ${prevDeal.name || prevDeal.id}` : 'No previous deal in this status'}
-                      style={{ background: 'transparent', border: '1px solid #292524', color: prevDeal ? '#a8a29e' : '#44403c', padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: prevDeal ? 'pointer' : 'not-allowed', marginLeft: 6 }}>
-                      ← Prev
+                      title={prevDeal ? `Prev: ${prevDeal.name || prevDeal.id}` : 'First deal in this status'}
+                      style={pillBtn(prevDeal ? '#a8a29e' : '#44403c', prevDeal ? 'pointer' : 'not-allowed')}>
+                      ◀
                     </button>
-                    <span style={{ fontSize: 11, color: '#78716c', padding: '0 8px', whiteSpace: 'nowrap' }}>
-                      {peerIndex + 1} of {peers.length}
+                    <span style={{ fontSize: 11, color: '#78716c', padding: '0 6px', whiteSpace: 'nowrap', fontFamily: "'DM Mono', monospace" }}>
+                      {peerIndex + 1} / {peers.length}
                     </span>
                     <button onClick={() => nextDeal && setActiveDealId(nextDeal.id)} disabled={!nextDeal}
-                      title={nextDeal ? `Next: ${nextDeal.name || nextDeal.id}` : 'No next deal in this status'}
-                      style={{ background: 'transparent', border: '1px solid #292524', color: nextDeal ? '#a8a29e' : '#44403c', padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: nextDeal ? 'pointer' : 'not-allowed' }}>
-                      Next →
+                      title={nextDeal ? `Next: ${nextDeal.name || nextDeal.id}` : 'Last deal in this status'}
+                      style={pillBtn(nextDeal ? '#a8a29e' : '#44403c', nextDeal ? 'pointer' : 'not-allowed')}>
+                      ▶
                     </button>
-                  </div>
-                );
-              })()}
-            </div>
-          )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
           <div>
             <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
               {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "RefundLocators Deal Hub"}
