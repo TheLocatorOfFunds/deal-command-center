@@ -9888,6 +9888,18 @@ function CaseIntelligence({ dealId, deal, onJumpToTab }) {
   );
 }
 
+// Tiny visual divider used inside the Case Details card to group fields
+// (Lead Classification, Case Identity, Financial, Sale & Timeline, etc.).
+// Keeps the card readable when there are 20+ fields without forcing a
+// modal or a tab split.
+function SubLabel({ children }) {
+  return (
+    <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8, marginTop: 4, paddingTop: 6, borderTop: '1px solid #1c1917' }}>
+      {children}
+    </div>
+  );
+}
+
 function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
@@ -9898,17 +9910,119 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Case Details">
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            {isAdmin && <Field label="Estimated Surplus"><input type="number" value={m.estimatedSurplus || ""} onChange={e => updateMeta({ estimatedSurplus: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>}
-            {isAdmin && <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>}
-            <Field label="Attorney"><input value={m.attorney || ""} onChange={e => updateMeta({ attorney: e.target.value })} style={inputStyle} /></Field>
-            {isAdmin && <Field label="Attorney Fee"><input type="number" value={m.attorneyFee || ""} onChange={e => updateMeta({ attorneyFee: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="$" /></Field>}
-            <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} /></Field>
-            <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
-            {isAdmin && <Field label="Sale Date"><input type="date" value={m.saleDate || ""} onChange={e => updateMeta({ saleDate: e.target.value })} style={inputStyle} /></Field>}
-            {isAdmin && <Field label="Sale Price"><input type="number" value={m.salePrice ?? ""} onChange={e => updateMeta({ salePrice: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>}
-            {isAdmin && <Field label="Judgment Debt"><input type="number" value={m.judgmentAmount ?? ""} onChange={e => updateMeta({ judgmentAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>}
+          {/* Lead classification — Eric grades A/B/C here. Tier and is_30dts
+              live as columns on the deal (not meta), so use onUpdateDeal
+              directly. Deceased status comes from the homeowner contact
+              and is editable from the contact card; surfaced read-only here
+              for context. */}
+          <SubLabel>Lead Classification</SubLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Field label="Lead Tier">
+              <select value={deal.lead_tier || ''} onChange={e => onUpdateDeal({ lead_tier: e.target.value || null })} style={{ ...inputStyle, padding: '8px 10px' }}>
+                <option value="">—</option>
+                <option value="A">A · ≥$100k + alive</option>
+                <option value="B">B · ≥$100k + deceased</option>
+                <option value="C">C · &lt;$100k</option>
+              </select>
+            </Field>
+            <Field label="30 Days to Sale">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, height: 22, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!deal.is_30dts} onChange={e => onUpdateDeal({ is_30dts: e.target.checked })} style={{ accentColor: '#ef4444' }} />
+                <span style={{ fontSize: 12 }}>{deal.is_30dts ? '🔥 30 DTS active' : 'not 30dts'}</span>
+              </label>
+            </Field>
+            <Field label="Verified">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, height: 22, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!m.verified} onChange={e => updateMeta({ verified: e.target.checked, verifiedAt: e.target.checked ? new Date().toISOString() : null })} style={{ accentColor: '#22c55e' }} />
+                <span style={{ fontSize: 12 }}>{m.verified ? '✓ verified' : 'not verified'}</span>
+              </label>
+            </Field>
           </div>
+
+          <SubLabel>Case Identity</SubLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Field label="Court Case #"><input value={m.courtCase || ""} onChange={e => updateMeta({ courtCase: e.target.value })} style={inputStyle} placeholder="e.g. 25CV6822" /></Field>
+            <Field label="County"><input value={m.county || ""} onChange={e => updateMeta({ county: e.target.value })} style={inputStyle} /></Field>
+            <Field label="State"><input value={m.state || ""} onChange={e => updateMeta({ state: e.target.value })} style={inputStyle} placeholder="OH" maxLength={2} /></Field>
+            <Field label="Foreclosure File Date"><input type="date" value={m.foreclosureFileDate || ""} onChange={e => updateMeta({ foreclosureFileDate: e.target.value || null })} style={inputStyle} /></Field>
+          </div>
+
+          {isAdmin && <>
+            <SubLabel>Financial</SubLabel>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <Field label="Est. Available Equity (pre-auction)"><input type="number" value={m.estimatedAvailableEquity ?? ""} onChange={e => updateMeta({ estimatedAvailableEquity: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Estimated Surplus (post-auction)"><input type="number" value={m.estimatedSurplus ?? ""} onChange={e => updateMeta({ estimatedSurplus: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Verified Surplus (court-confirmed)"><input type="number" value={m.verifiedSurplus ?? ""} onChange={e => updateMeta({ verifiedSurplus: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Judgment Debt"><input type="number" value={m.judgmentAmount ?? ""} onChange={e => updateMeta({ judgmentAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Total Debt"><input type="number" value={m.totalDebt ?? ""} onChange={e => updateMeta({ totalDebt: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Estimated Loan Balance"><input type="number" value={m.estimatedLoanBalance ?? ""} onChange={e => updateMeta({ estimatedLoanBalance: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Mortgage Balance 1"><input type="number" value={m.mortgageBalance1 ?? ""} onChange={e => updateMeta({ mortgageBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Lien Balance 1"><input type="number" value={m.lienBalance1 ?? ""} onChange={e => updateMeta({ lienBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+            </div>
+
+            <SubLabel>Sale & Timeline</SubLabel>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <Field label="Sale Date (auction)"><input type="date" value={m.saleDate || ""} onChange={e => updateMeta({ saleDate: e.target.value || null })} style={inputStyle} /></Field>
+              <Field label="Sale Price (sold at auction)"><input type="number" value={m.salePrice ?? ""} onChange={e => updateMeta({ salePrice: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Confirmation of Sale Date"><input type="date" value={m.confirmationOfSaleDate || ""} onChange={e => updateMeta({ confirmationOfSaleDate: e.target.value || null })} style={inputStyle} /></Field>
+              <Field label="Redemption Deadline"><input type="date" value={m.redemptionDeadline || ""} onChange={e => updateMeta({ redemptionDeadline: e.target.value || null })} style={inputStyle} /></Field>
+              <Field label="Minimum Bid Amount"><input type="number" value={m.minimumBidAmount ?? ""} onChange={e => updateMeta({ minimumBidAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Court Appraisal Date"><input type="date" value={m.courtAppraisalOrderDate || ""} onChange={e => updateMeta({ courtAppraisalOrderDate: e.target.value || null })} style={inputStyle} /></Field>
+              <Field label="Court Appraisal Value"><input type="number" value={m.courtAppraisalValue ?? ""} onChange={e => updateMeta({ courtAppraisalValue: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+            </div>
+
+            <SubLabel>Liens (open / mortgage history)</SubLabel>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <Field label="Open Liens Count"><input type="number" value={m.openLiensCount ?? ""} onChange={e => updateMeta({ openLiensCount: e.target.value === "" ? null : parseInt(e.target.value, 10) })} style={inputStyle} /></Field>
+              <Field label="Open Liens (text)"><input value={m.openLiens || ""} onChange={e => updateMeta({ openLiens: e.target.value })} style={inputStyle} /></Field>
+            </div>
+            <Field label="Mortgage History" style={{ marginBottom: 12 }}>
+              <textarea value={m.mortgageHistory || ""} onChange={e => updateMeta({ mortgageHistory: e.target.value })} rows={3} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} placeholder="Recorded mortgages + lien history" />
+            </Field>
+            <Field label="Involuntary Liens Details" style={{ marginBottom: 12 }}>
+              <textarea value={m.involuntaryLiensDetails || ""} onChange={e => updateMeta({ involuntaryLiensDetails: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+            </Field>
+          </>}
+
+          <SubLabel>Attorney & Fees</SubLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+            <Field label="Attorney"><input value={m.attorney || ""} onChange={e => updateMeta({ attorney: e.target.value })} style={inputStyle} /></Field>
+            {isAdmin && <Field label="Fee %"><input type="number" step="0.5" value={m.feePct || ""} onChange={e => updateMeta({ feePct: parseFloat(e.target.value) || 0 })} style={inputStyle} /></Field>}
+            {isAdmin && <Field label="Attorney Fee"><input type="number" value={m.attorneyFee || ""} onChange={e => updateMeta({ attorneyFee: parseFloat(e.target.value) || 0 })} style={inputStyle} placeholder="$" /></Field>}
+          </div>
+
+          <SubLabel>Links & External References</SubLabel>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 8, marginBottom: 12 }}>
+            <Field label="Zillow Link">
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input value={m.zillowLink || ""} onChange={e => updateMeta({ zillowLink: e.target.value })} style={{ ...inputStyle, flex: 1 }} placeholder="https://zillow.com/..." />
+                {m.zillowLink && <a href={m.zillowLink} target="_blank" rel="noopener noreferrer" style={{ ...btnGhost, fontSize: 11, textDecoration: 'none', display: 'flex', alignItems: 'center' }}>↗ open</a>}
+              </div>
+            </Field>
+            <Field label="Sheriff Docket Link">
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input value={m.sheriffDocketLink || ""} onChange={e => updateMeta({ sheriffDocketLink: e.target.value })} style={{ ...inputStyle, flex: 1 }} placeholder="https://salesweb.civilview.com/..." />
+                {m.sheriffDocketLink && <a href={m.sheriffDocketLink} target="_blank" rel="noopener noreferrer" style={{ ...btnGhost, fontSize: 11, textDecoration: 'none', display: 'flex', alignItems: 'center' }}>↗ open</a>}
+              </div>
+            </Field>
+            <Field label="Document Links">
+              <textarea value={m.documentLinks || ""} onChange={e => updateMeta({ documentLinks: e.target.value })} rows={2} style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} placeholder="One URL per line" />
+            </Field>
+          </div>
+
+          {/* GHL traceability — only renders when this deal came from a GHL import. */}
+          {(m.ghl_lead_id || m.source === 'ghl-import') && (
+            <>
+              <SubLabel>Source · GHL Import (read-only)</SubLabel>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12, opacity: 0.75 }}>
+                <Field label="GHL Contact ID"><input value={m.ghl_lead_id || ""} disabled style={{ ...inputStyle, fontFamily: "'DM Mono', monospace", fontSize: 11 }} /></Field>
+                <Field label="GHL Lead Status"><input value={m.ghl_lead_status || ""} disabled style={inputStyle} /></Field>
+                <Field label="Case Pack Status"><input value={m.ghl_case_pack_status || ""} disabled style={inputStyle} /></Field>
+                <Field label="Occupancy Status"><input value={m.ghl_occupancy_status || ""} disabled style={inputStyle} /></Field>
+              </div>
+            </>
+          )}
+
           <CourtPullButton dealId={deal.id} caseNumber={m.courtCase} county={m.county} userId={userId} />
         </Card>
         {isAdmin && <Card title="Financial Summary" style={{ marginTop: 16 }}>
@@ -16120,12 +16234,34 @@ function num(v) {
   return isFinite(n) ? n : null;
 }
 
-// Parse "Auction Date" like "Jan 14 2026" or "May 05 2026" → ISO date string.
+// Parse "Auction Date" like "Jan 14 2026", "5/05/2026", "2026-05-05" →
+// ISO date string. TZ-immune: never goes through Date() for the common
+// formats, because new Date("May 05 2026").toISOString() shifts a day
+// when the user is east of UTC (e.g. Philippines UTC+8 → "May 05 2026"
+// becomes "2026-05-04"). That was Nathan's "sale date rolls back a day"
+// bug. Extract Y/M/D as integers and emit "YYYY-MM-DD" directly.
 function parseAuctionDate(s) {
   if (!s) return null;
+  s = String(s).trim();
+  if (!s) return null;
+  const monthNames = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  // "Mon DD YYYY" — e.g. "May 05 2026"
+  let m = s.match(/^([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})$/);
+  if (m) {
+    const mi = monthNames.indexOf(m[1].toLowerCase().slice(0, 3));
+    if (mi >= 0) return `${m[3]}-${String(mi + 1).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  }
+  // "M/D/YYYY" or "MM/DD/YYYY"
+  m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`;
+  // "YYYY-MM-DD" or "YYYY/MM/DD"
+  m = s.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+  if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`;
+  // Last-resort Date() parse, then read UTC components (still TZ-shifted on
+  // exotic input but at least consistent).
   const d = new Date(s);
   if (isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 10);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
 }
 
 // Build a structured representation of one CSV row, ready for insert.
@@ -16250,8 +16386,22 @@ function mapGhlRowToDcc(row, headers) {
         salePrice: soldAt,
         estimatedSurplus: estSurplus ?? null,
         estimatedAvailableEquity: estEquity ?? null,
+        verifiedSurplus: num(get('Verified Surplus')),
         judgmentAmount,
         totalDebt,
+        estimatedLoanBalance: num(get('Estimated Loan Balance')),
+        confirmationOfSaleDate: parseAuctionDate(get('Confirmation of Sale Date')),
+        foreclosureFileDate: parseAuctionDate(get('Foreclosure File Date')),
+        redemptionDeadline: parseAuctionDate(get('Redemption Deadline')),
+        minimumBidAmount: num(get('Minimum Bid Amount')),
+        courtAppraisalOrderDate: parseAuctionDate(get('Court Appraisal Order Date')),
+        courtAppraisalValue: num(get('Court Appraisal Value')),
+        mortgageBalance1: num(get('Mortgage Balance 1')),
+        lienBalance1: num(get('Lien Balance 1')),
+        mortgageHistory: get('Mortgage History') || null,
+        openLiens: get('Open Liens') || null,
+        openLiensCount: num(get('Open Liens Count')),
+        involuntaryLiensDetails: get('Involuntary Liens Details') || null,
         isPostAuction,
         homeownerName: fullName,
         homeownerPhone: primaryPhone,
@@ -16262,6 +16412,8 @@ function mapGhlRowToDcc(row, headers) {
         ghl_lead_status: ghlStatus,
         ghl_case_pack_status: get('Case Pack Status'),
         ghl_occupancy_status: get('Occupancy Status'),
+        ghl_lead_rating: ghlRating,
+        ghl_contact_type: get('Contact Type'),
         source: 'ghl-import',
       },
     },
@@ -16442,15 +16594,21 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
     }
 
     // 5. Family contacts + their contact_deals links. Failures are non-blocking.
+    // The mapper attaches a `relationship` field to family contact objects
+    // so the link step knows what relationship to write — but `contacts`
+    // doesn't have a relationship column (that's contact_deals). Strip it
+    // before the contacts insert or Postgres rejects the row silently
+    // (which is how the first 30-row import landed 0 family contacts).
     for (const fc of row.familyContacts) {
+      const { relationship: fcRelationship, ...fcInsert } = fc;
       const { data: fcRow, error: fcErr } = await sb.from('contacts')
-        .insert({ ...fc, owner_id: userId })
+        .insert({ ...fcInsert, owner_id: userId })
         .select('id').single();
       if (fcErr) continue;
       await sb.from('contact_deals').insert({
         contact_id: fcRow.id,
         deal_id: dealId,
-        relationship: fc.relationship || 'other',
+        relationship: fcRelationship || 'other',
         created_by: userId,
       });
     }
