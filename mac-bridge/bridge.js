@@ -109,10 +109,11 @@ console.log('');
 
 // ─── Diagnostic: probe Messages.app services ─────────────────────────────────
 const svcProbes = [
-  ['count',    'count services'],
-  ['iMessage', 'name of (service 1 whose service type = iMessage)'],
-  ['SMS-name', 'name of service "SMS"'],
-  ['service2', 'name of service 2'],
+  ['svc-count',  'count services'],
+  ['acct-count', 'count accounts'],
+  ['acct-names', 'name of every account'],
+  ['SMS-acct',   'name of account "SMS"'],
+  ['acct1',      'name of account 1'],
 ];
 const svcResults = [];
 for (const [label, expr] of svcProbes) {
@@ -123,7 +124,7 @@ for (const [label, expr] of svcProbes) {
     svcResults.push(`${label}=${n}`);
   } catch (e) {
     const errLine = e.message.split('\n').find(l => l.includes('execution error') || l.includes('ETIMEDOUT')) || e.message.split('\n')[0];
-    svcResults.push(`${label}✗(${errLine.trim().slice(0,60)})`);
+    svcResults.push(`${label}✗`);
   }
 }
 console.log(`    Services: ${svcResults.join(' | ')}`);
@@ -266,12 +267,16 @@ function sendViaMessages(toPhone, body) {
   // Try three SMS relay forms — the right one depends on macOS version and whether
   // iPhone SMS forwarding is currently active.
   const smsForms = [
-    // Form A: named SMS service with buddy (works when iPhone relay is active)
+    // A: service "SMS" + buddy
     `tell application "Messages"\n  set smsSvc to service "SMS"\n  set b to buddy "${toPhone}" of smsSvc\n  send "${escaped}" to b\nend tell`,
-    // Form B: bare buddy (works for existing conversations in Nathan's Messages)
+    // B: account "SMS" + buddy (newer macOS uses account not service)
+    `tell application "Messages"\n  set smsAcct to account "SMS"\n  set b to buddy "${toPhone}" of smsAcct\n  send "${escaped}" to b\nend tell`,
+    // C: account whose service type = SMS
+    `tell application "Messages"\n  set smsAcct to account 1 whose service type = SMS\n  set b to buddy "${toPhone}" of smsAcct\n  send "${escaped}" to b\nend tell`,
+    // D: bare buddy (works for existing conversations)
     `tell application "Messages"\n  send "${escaped}" to buddy "${toPhone}"\nend tell`,
-    // Form C: open new SMS chat — works for brand-new numbers not yet in Messages
-    `tell application "Messages"\n  set smsSvc to service "SMS"\n  set newChat to make new chat with properties {participants: {buddy "${toPhone}" of smsSvc}, service: smsSvc}\n  send "${escaped}" to newChat\nend tell`,
+    // E: make new chat via account "SMS" for brand-new numbers
+    `tell application "Messages"\n  set smsAcct to account "SMS"\n  set newChat to make new chat with properties {participants: {buddy "${toPhone}" of smsAcct}, service: smsAcct}\n  send "${escaped}" to newChat\nend tell`,
   ];
 
   let lastErr;
