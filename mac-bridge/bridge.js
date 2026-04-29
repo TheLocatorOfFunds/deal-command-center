@@ -264,10 +264,12 @@ function sendViaMessages(toPhone, body) {
   // Try three SMS relay forms — the right one depends on macOS version and whether
   // iPhone SMS forwarding is currently active.
   const smsForms = [
-    // Form A: named SMS service with buddy (most-cited in docs)
+    // Form A: named SMS service with buddy (works when iPhone relay is active)
     `tell application "Messages"\n  set smsSvc to service "SMS"\n  set b to buddy "${toPhone}" of smsSvc\n  send "${escaped}" to b\nend tell`,
-    // Form B: bare buddy — Messages picks the service (works if number is in contacts)
+    // Form B: bare buddy (works for existing conversations in Nathan's Messages)
     `tell application "Messages"\n  send "${escaped}" to buddy "${toPhone}"\nend tell`,
+    // Form C: open new SMS chat — works for brand-new numbers not yet in Messages
+    `tell application "Messages"\n  set smsSvc to service "SMS"\n  set newChat to make new chat with properties {participants: {buddy "${toPhone}" of smsSvc}, service: smsSvc}\n  send "${escaped}" to newChat\nend tell`,
   ];
 
   let lastErr;
