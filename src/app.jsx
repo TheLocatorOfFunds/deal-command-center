@@ -1,4 +1,19 @@
 const { useState, useEffect, useCallback, useRef, useMemo } = React;
+
+// Owners can manage other users' access levels and reach Lauren Control
+// Center / Team Management surfaces. Hardcoded by email so promotion /
+// demotion isn't possible by setting your own profile.role to 'admin'
+// in the DB. The 20260429xx_owner_role_guard.sql migration adds a DB
+// trigger that enforces this server-side too — even an admin who SQL-
+// updates their own role gets rejected unless their email is in this set.
+// To add/remove an owner: update this list AND the matching list in the
+// migration's is_owner() function.
+const OWNER_EMAILS = new Set([
+  'nathan@fundlocators.com',
+  'nathan@refundlocators.com',
+  'justin@fundlocators.com',
+  'justin@refundlocators.com',
+]);
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -345,12 +360,17 @@ function DealCommandCenter({ session, profile }) {
   const [showContacts, setShowContacts] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
   const userName = profile.name;
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
   const isTeam = isAdmin || profile.role === 'va';
+  // Owner-only surfaces (Team Management, Lauren Control Center, role
+  // changes) gate on email match against the OWNER_EMAILS set defined
+  // module-scope. Currently Nathan + Justin only.
+  const isOwner = !!session.user.email && OWNER_EMAILS.has(String(session.user.email).toLowerCase());
 
   // refundlocators.com/admin/lauren redirects here with ?openLauren=1.
   // Pop the modal once and strip the param so a reload doesn't re-open it.
@@ -641,15 +661,22 @@ function DealCommandCenter({ session, profile }) {
         <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
           <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
-          <button onClick={() => setShowSearch(true)} title="Search (⌘K)" style={{ ...btnGhost, fontSize: 11, display: "flex", alignItems: "center", gap: 6 }}>
-            🔍 <span style={{ fontSize: 9, color: "#78716c", fontFamily: "'DM Mono', monospace", padding: "1px 5px", background: "#292524", borderRadius: 3 }}>⌘K</span>
-          </button>
-          {isTeam && <button onClick={() => setShowLeads(true)} style={{ ...btnGhost, fontSize: 11, position: "relative" }}>
-            Leads {newLeadCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{newLeadCount}</span>}
-          </button>}
-          {isTeam && <button onClick={() => setShowDocket(true)} title="Docket events + scraper health" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: unackDocketCount > 0 ? "#78350f" : "#44403c", color: unackDocketCount > 0 ? "#fbbf24" : "#78716c" }}>
-            ⚖ Docket {unackDocketCount > 0 && <span style={{ display: "inline-block", marginLeft: 4, background: "#f59e0b", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{unackDocketCount}</span>}
-          </button>}
+          {/* Search — icon-only, ⌘K shortcut shown on hover */}
+          <button onClick={() => setShowSearch(true)} title="Search (⌘K)" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>🔍</button>
+          {/* Docket — badge-only, just the count. Click opens the full modal. */}
+          {isTeam && (
+            <button onClick={() => setShowDocket(true)} title={`Docket events · ${unackDocketCount} unacked`}
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: unackDocketCount > 0 ? '#78350f' : '#44403c', color: unackDocketCount > 0 ? '#fbbf24' : '#78716c', display: 'flex', alignItems: 'center', gap: 4 }}>
+              ⚖ {unackDocketCount > 0 && <span style={{ background: '#f59e0b', color: '#0c0a09', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{unackDocketCount}</span>}
+            </button>
+          )}
+          {/* Leads — badge-only, only renders when there are new leads */}
+          {isTeam && newLeadCount > 0 && (
+            <button onClick={() => setShowLeads(true)} title={`Lead intake · ${newLeadCount} new`}
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#78350f', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 4 }}>
+              📋 <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{newLeadCount}</span>
+            </button>
+          )}
           {isTeam && pendingWalkthroughs.length > 0 && (
             <button onClick={() => setShowWalkthroughs(true)} title="Investor walkthrough requests" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#78350f", color: "#fbbf24" }}>
               🏠 Walkthroughs <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingWalkthroughs.length}</span>
@@ -672,16 +699,46 @@ function DealCommandCenter({ session, profile }) {
           )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
-          {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
           {isTeam && <button onClick={() => { setActiveDealId(null); setView("team"); }} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
-          {isAdmin && (
+          {/* Owner-only: Lauren badge with flagged-count. The Team modal +
+              Lauren Control Center moved into Account Settings → Owner Tools
+              per Nathan's audit, but the flagged-count needs an at-a-glance
+              indicator since flagged Lauren convos are time-sensitive. The
+              badge itself opens Lauren CC. Hidden from non-owners. */}
+          {isOwner && laurenFlaggedCount > 0 && (
             <button onClick={() => setShowLaurenCC(true)}
-              title="Lauren Control Center — flagged conversations + knowledge base"
-              style={{ ...btnGhost, fontSize: 11, position: 'relative', borderColor: laurenFlaggedCount > 0 ? '#7f1d1d' : '#44403c', color: laurenFlaggedCount > 0 ? '#fca5a5' : '#a8a29e' }}>
-              🤖 Lauren {laurenFlaggedCount > 0 && <span style={{ display: 'inline-block', marginLeft: 4, background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{laurenFlaggedCount}</span>}
+              title={`Lauren Control Center — ${laurenFlaggedCount} flagged conversation${laurenFlaggedCount === 1 ? '' : 's'}`}
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#7f1d1d', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
+              🤖 <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{laurenFlaggedCount}</span>
             </button>
           )}
-          {isAdmin && <button onClick={() => setShowTeam(true)} title="Team management — invite, roles, status" style={{ ...btnGhost, fontSize: 11 }}>👥 Team</button>}
+          {/* More menu — collects infrequent surfaces (Library, Lead intake
+              form link, etc.). Hidden by default to keep the header clean. */}
+          {isTeam && (
+            <div style={{ position: 'relative' }}>
+              <button onClick={() => setShowMoreMenu(v => !v)} title="More" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>⋯</button>
+              {showMoreMenu && (
+                <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, minWidth: 240, boxShadow: '0 8px 20px rgba(0,0,0,0.5)', zIndex: 1000, overflow: 'hidden' }}>
+                  <button onClick={() => { setShowLibrary(true); setShowMoreMenu(false); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                    📚 <span>Library</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 10, color: '#57534e' }}>templates · SOPs · legal</span>
+                  </button>
+                  <button onClick={() => { setShowLeads(true); setShowMoreMenu(false); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', borderTop: '1px solid #1c1917' }}>
+                    📋 <span>Lead intake pipeline</span>
+                    {newLeadCount > 0 && <span style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700 }}>{newLeadCount}</span>}
+                  </button>
+                  <a href="https://app.refundlocators.com/lead-intake.html" target="_blank" rel="noopener noreferrer"
+                    onClick={() => setShowMoreMenu(false)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', borderTop: '1px solid #1c1917', textDecoration: 'none' }}>
+                    🌱 <span>Public intake form</span>
+                    <span style={{ marginLeft: 'auto', fontSize: 10, color: '#57534e' }}>↗ open</span>
+                  </a>
+                </div>
+              )}
+            </div>
+          )}
           <button onClick={() => setShowAccount(true)} title="Account settings" style={{ ...btnGhost, fontSize: 11 }}>⚙ Account</button>
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
@@ -691,7 +748,7 @@ function DealCommandCenter({ session, profile }) {
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
-      {showAccount && <AccountSettingsModal onClose={() => setShowAccount(false)} userId={session.user.id} userEmail={session.user.email} />}
+      {showAccount && <AccountSettingsModal onClose={() => setShowAccount(false)} userId={session.user.id} userEmail={session.user.email} onOpenLaurenCC={() => { setShowAccount(false); setShowLaurenCC(true); }} />}
       {showLeads && <LeadsModal onClose={() => { setShowLeads(false); loadLeadCount(); }} userName={userName} onConverted={() => { loadDeals(); loadLeadCount(); }} />}
       {showSearch && <SearchModal deals={deals} onClose={() => setShowSearch(false)} onSelect={(id) => { setActiveDealId(id); setShowSearch(false); }} />}
       {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
@@ -14855,20 +14912,7 @@ function SearchModal({ deals, onClose, onSelect }) {
 // Each user manages their own profile here: avatar photo, display name,
 // phone, password. Display name + avatar drive how they appear in Team
 // Chat (and anywhere else profile names are shown).
-// Owners can manage other users' access levels. Hardcoded by email so
-// promotion/demotion isn't possible by setting your own profile.role to
-// 'admin' in the DB — it's gated client-side here AND should be enforced
-// via RLS at the DB level (TODO: add a `profiles_role_update_owner_only`
-// policy that checks email IN owner_emails). For now, client-side is
-// the only fence. Update this list when adding/removing owners.
-const OWNER_EMAILS = new Set([
-  'nathan@fundlocators.com',
-  'nathan@refundlocators.com',
-  'justin@fundlocators.com',
-  'justin@refundlocators.com',
-]);
-
-function AccountSettingsModal({ onClose, userId, userEmail }) {
+function AccountSettingsModal({ onClose, userId, userEmail, onOpenLaurenCC }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -15078,14 +15122,32 @@ function AccountSettingsModal({ onClose, userId, userEmail }) {
           </button>
         </div>
 
+        {/* ── Owner Tools — owner-only (Nathan + Justin) ──────────────────
+            Per Nathan's audit 2026-04-29: Lauren Control Center + Team
+            Management both moved out of the global header into this Owner
+            Tools section. The header stays clean for everyday ops; ownership
+            controls live one level deeper, behind the Account button. */}
+        {isOwner && onOpenLaurenCC && (
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>👑 Owner Tools</div>
+            <button onClick={onOpenLaurenCC}
+              style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '14px 16px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <span style={{ fontSize: 22 }}>🤖</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>Lauren Control Center</div>
+                <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>Flagged conversations · knowledge base · prompt config</div>
+              </div>
+              <span style={{ fontSize: 14, color: '#57534e' }}>→</span>
+            </button>
+          </div>
+        )}
+
         {/* Team access — owner-only. Lets Nathan/Justin promote a VA to admin
             (so they can text leads + use the importer) or demote an admin to
-            VA, without leaving Account Settings. The full Team Management
-            modal (👥 Team in the top header) still has invite + name editing
-            for any admin. */}
+            VA, without leaving Account Settings. */}
         {isOwner && (
           <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>👑 Team access (owner-only)</div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 4 }}>👑 Team access</div>
             <div style={{ fontSize: 11, color: '#78716c', marginBottom: 12, lineHeight: 1.55 }}>
               Promote a VA to Admin so they can run the lead importer + text leads. Demote an Admin to VA to remove those abilities. Owners (you and Justin) keep their access regardless.
             </div>
