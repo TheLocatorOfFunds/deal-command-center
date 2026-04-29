@@ -572,60 +572,13 @@ function DealCommandCenter({ session, profile }) {
   return (
     <Shell>
       {/* Header */}
-      {/* Peer-deal navigation: when a deal is active, cycle through deals
-          with the same status. Per Eric: when he's working through new-leads
-          one at a time (verifying CSV-imported data), Next should jump to
-          the next new-lead, not back to the dashboard. Status is the most
-          intuitive grouping — same kanban column / same list view. */}
       <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          {activeDeal && (() => {
-            const peers = deals.filter(d => d.status === activeDeal.status);
-            const peerIndex = peers.findIndex(d => d.id === activeDealId);
-            const prevDeal = peerIndex > 0 ? peers[peerIndex - 1] : null;
-            const nextDeal = peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null;
-            const showNav = peers.length > 1;
-            // Single compact pill: [← All]  ◀  3 / 91  ▶
-            // Tight icon-only prev/next with the counter inline. No multi-
-            // line text wrapping (whiteSpace: nowrap on every element).
-            const pillBtn = (color, cursor) => ({
-              background: 'transparent',
-              border: 'none',
-              color,
-              cursor,
-              fontSize: 16,
-              fontWeight: 600,
-              padding: '4px 10px',
-              fontFamily: 'inherit',
-              lineHeight: 1,
-            });
-            return (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 2, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                <button onClick={() => setActiveDealId(null)} title="Back to all deals"
-                  style={{ background: 'transparent', border: 'none', color: '#a8a29e', padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
-                  ← All
-                </button>
-                {showNav && (
-                  <>
-                    <span style={{ width: 1, alignSelf: 'stretch', background: '#292524', margin: '4px 2px' }} />
-                    <button onClick={() => prevDeal && setActiveDealId(prevDeal.id)} disabled={!prevDeal}
-                      title={prevDeal ? `Prev: ${prevDeal.name || prevDeal.id}` : 'First deal in this status'}
-                      style={pillBtn(prevDeal ? '#a8a29e' : '#44403c', prevDeal ? 'pointer' : 'not-allowed')}>
-                      ◀
-                    </button>
-                    <span style={{ fontSize: 11, color: '#78716c', padding: '0 6px', whiteSpace: 'nowrap', fontFamily: "'DM Mono', monospace" }}>
-                      {peerIndex + 1} / {peers.length}
-                    </span>
-                    <button onClick={() => nextDeal && setActiveDealId(nextDeal.id)} disabled={!nextDeal}
-                      title={nextDeal ? `Next: ${nextDeal.name || nextDeal.id}` : 'Last deal in this status'}
-                      style={pillBtn(nextDeal ? '#a8a29e' : '#44403c', nextDeal ? 'pointer' : 'not-allowed')}>
-                      ▶
-                    </button>
-                  </>
-                )}
-              </div>
-            );
-          })()}
+          {activeDeal && (
+            <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: 'nowrap', flexShrink: 0 }}>
+              ← All Deals
+            </button>
+          )}
           <div>
             <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
               {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "RefundLocators Deal Hub"}
@@ -755,7 +708,21 @@ function DealCommandCenter({ session, profile }) {
           updateDealMeta(id, { meta: { ...m, flagged: !m.flagged } });
         }} />
       ) : (
-        <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} />
+        {(() => {
+          // Pre-compute peer navigation (cycle through deals in the same
+          // status). Lives at the parent so DealDetail can stay agnostic
+          // about how peers are determined.
+          const peers = deals.filter(d => d.status === activeDeal.status);
+          const peerIndex = peers.findIndex(d => d.id === activeDeal.id);
+          const peerNav = {
+            peerIndex,
+            peerCount: peers.length,
+            prevDeal: peerIndex > 0 ? peers[peerIndex - 1] : null,
+            nextDeal: peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null,
+            onNav: setActiveDealId,
+          };
+          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} />;
+        })()}
       )}
 
       {/* Mobile FAB — only visible on phone via CSS */}
@@ -7217,7 +7184,7 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
 }
 
 // ─── Deal Detail ─────────────────────────────────────────────────────
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab }) {
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav }) {
   const [tab, setTab] = useState(initialTab || "overview");
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
 
@@ -7364,6 +7331,27 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   return (
     <div>
       <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+        {/* Peer-deal nav lives inline with the other deal-action buttons.
+            Same-status cycling so Eric working through a status column can
+            tap Next without going back to the dashboard. Only renders when
+            there's more than one peer. */}
+        {peerNav && peerNav.peerCount > 1 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 0, background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, whiteSpace: 'nowrap', flexShrink: 0 }}>
+            <button onClick={() => peerNav.prevDeal && peerNav.onNav(peerNav.prevDeal.id)} disabled={!peerNav.prevDeal}
+              title={peerNav.prevDeal ? `Prev: ${peerNav.prevDeal.name || peerNav.prevDeal.id}` : 'First deal in this status'}
+              style={{ background: 'transparent', border: 'none', color: peerNav.prevDeal ? '#a8a29e' : '#44403c', padding: '4px 10px', fontSize: 14, fontWeight: 600, cursor: peerNav.prevDeal ? 'pointer' : 'not-allowed', fontFamily: 'inherit', lineHeight: 1 }}>
+              ◀
+            </button>
+            <span style={{ fontSize: 10, color: '#78716c', padding: '0 6px', whiteSpace: 'nowrap', fontFamily: "'DM Mono', monospace" }}>
+              {peerNav.peerIndex + 1} / {peerNav.peerCount}
+            </span>
+            <button onClick={() => peerNav.nextDeal && peerNav.onNav(peerNav.nextDeal.id)} disabled={!peerNav.nextDeal}
+              title={peerNav.nextDeal ? `Next: ${peerNav.nextDeal.name || peerNav.nextDeal.id}` : 'Last deal in this status'}
+              style={{ background: 'transparent', border: 'none', color: peerNav.nextDeal ? '#a8a29e' : '#44403c', padding: '4px 10px', fontSize: 14, fontWeight: 600, cursor: peerNav.nextDeal ? 'pointer' : 'not-allowed', fontFamily: 'inherit', lineHeight: 1 }}>
+              ▶
+            </button>
+          </div>
+        )}
         <span style={{ fontSize: 11, color: "#78716c" }}>Status:</span>
         <select value={deal.status} onChange={e => {
           const prev = deal.status;
