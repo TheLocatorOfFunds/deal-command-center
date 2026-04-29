@@ -107,27 +107,29 @@ console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
-// ─── Diagnostic: probe Messages.app services ─────────────────────────────────
-const svcProbes = [
-  ['svc-count',  'count services'],
-  ['acct-count', 'count accounts'],
-  ['acct-names', 'name of every account'],
-  ['SMS-acct',   'name of account "SMS"'],
-  ['acct1',      'name of account 1'],
-];
-const svcResults = [];
-for (const [label, expr] of svcProbes) {
+// ─── SMS service UUID discovery ───────────────────────────────────────────────
+// On macOS 26+ the Messages AppleScript dictionary no longer exposes account names
+// or service types by index. We discover the SMS relay service UUID by querying
+// chat.db (which stores account_id on every chat row) and cache it for the
+// lifetime of this process. If no SMS chats exist yet, the UUID stays null and
+// SMS sends will fall back to graceful failure with a clear error.
+let SMS_SERVICE_UUID = null;
+{
+  const db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
   try {
-    const n = execFileSync('osascript', ['-e',
-      `tell application "Messages" to get ${expr}`
-    ], { timeout: 6000 }).toString().trim();
-    svcResults.push(`${label}=${n}`);
-  } catch (e) {
-    const errLine = e.message.split('\n').find(l => l.includes('execution error') || l.includes('ETIMEDOUT')) || e.message.split('\n')[0];
-    svcResults.push(`${label}✗`);
+    const row = db.prepare(
+      "SELECT account_id FROM chat WHERE service_name = 'SMS' AND account_id IS NOT NULL LIMIT 1"
+    ).get();
+    if (row) {
+      SMS_SERVICE_UUID = row.account_id;
+      console.log(`    SMS UUID : ${SMS_SERVICE_UUID}`);
+    } else {
+      console.log('    SMS UUID : none yet (no SMS history in chat.db)');
+    }
+  } finally {
+    db.close();
   }
 }
-console.log(`    Services: ${svcResults.join(' | ')}`);
 console.log('');
 
 // ─── Per-process chat resolution cache ───────────────────────────────────────
@@ -196,22 +198,23 @@ function ensureMessagesRunning() {
     catch { return false; }
   })();
 
-  if (!isRunning) {
-    console.log('⚠️  Messages.app not running — launching it now');
-    try {
-      execFileSync('open', ['-a', 'Messages'], { timeout: 15000 });
-      execFileSync('sleep', ['4']); // let it start
-    } catch (e) {
-      console.error('❌  Failed to launch Messages.app:', e.message);
-      return;
-    }
+  if (isRunning) return; // already up — nothing to do
+
+  console.log('⚠️  Messages.app not running — launching it now');
+  try {
+    execFileSync('open', ['-a', 'Messages'], { timeout: 15000 });
+    execFileSync('sleep', ['4']); // let it start before activating
+  } catch (e) {
+    console.error('❌  Failed to launch Messages.app:', e.message);
+    return;
   }
 
-  // Activate via AppleScript so the app fully initialises its services.
-  // Without this, service queries return -1728 even when the app is running.
+  // Activate so the app fully initialises its iMessage/SMS services.
+  // Without activation, AppleScript service queries return -1728.
   try {
     execFileSync('osascript', ['-e', 'tell application "Messages" to activate'], { timeout: 10000 });
-    if (!isRunning) console.log('✅  Messages.app launched and activated');
+    execFileSync('sleep', ['8']); // wait for accounts to connect after activate
+    console.log('✅  Messages.app launched and activated');
   } catch (e) {
     console.log(`⚠️  Messages activate warning: ${e.message.split('\n')[0]}`);
   }
@@ -262,36 +265,42 @@ function sendViaMessages(toPhone, body) {
   }
 
   // ── Attempt 2: SMS relay via iPhone Text Message Forwarding ──────────────────
+  // On macOS 26+ the AppleScript dictionary no longer lets us access accounts by
+  // name ("SMS") or by service type — both return -10002 / -1728.  The only
+  // working pattern is `participant phone of service id "UUID"` where the UUID
+  // is the SMS relay account identifier, discovered at startup from chat.db.
   console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay`);
-  const smsScript = `/tmp/dcc_send_sms_${Date.now()}.applescript`;
-  // Try three SMS relay forms — the right one depends on macOS version and whether
-  // iPhone SMS forwarding is currently active.
-  const smsForms = [
-    // A: service "SMS" + buddy
-    `tell application "Messages"\n  set smsSvc to service "SMS"\n  set b to buddy "${toPhone}" of smsSvc\n  send "${escaped}" to b\nend tell`,
-    // B: account "SMS" + buddy (newer macOS uses account not service)
-    `tell application "Messages"\n  set smsAcct to account "SMS"\n  set b to buddy "${toPhone}" of smsAcct\n  send "${escaped}" to b\nend tell`,
-    // C: account whose service type = SMS
-    `tell application "Messages"\n  set smsAcct to account 1 whose service type = SMS\n  set b to buddy "${toPhone}" of smsAcct\n  send "${escaped}" to b\nend tell`,
-    // D: bare buddy (works for existing conversations)
-    `tell application "Messages"\n  send "${escaped}" to buddy "${toPhone}"\nend tell`,
-    // E: make new chat via account "SMS" for brand-new numbers
-    `tell application "Messages"\n  set smsAcct to account "SMS"\n  set newChat to make new chat with properties {participants: {buddy "${toPhone}" of smsAcct}, service: smsAcct}\n  send "${escaped}" to newChat\nend tell`,
-  ];
 
-  let lastErr;
-  for (const [i, form] of smsForms.entries()) {
-    const s = `/tmp/dcc_send_sms${i}_${Date.now()}.applescript`;
-    fs.writeFileSync(s, form);
-    try {
-      runAppleScript(s);
-      return 'sms';
-    } catch (e) {
-      lastErr = e;
-      console.log(`📱 SMS form ${i + 1} failed: ${e.message.split('\n').slice(0, 2).join(' ')}`);
-    }
+  if (!SMS_SERVICE_UUID) {
+    throw new Error(
+      'SMS relay service UUID unknown — no SMS history in chat.db yet. ' +
+      'Once any SMS conversation appears in Messages.app the bridge will auto-learn the UUID.'
+    );
   }
-  throw lastErr; // all forms failed
+
+  const smsScript = `/tmp/dcc_send_sms_${Date.now()}.applescript`;
+  fs.writeFileSync(smsScript, [
+    'tell application "Messages"',
+    `  set smsSvc to service id "${SMS_SERVICE_UUID}"`,
+    `  set p to participant "${toPhone}" of smsSvc`,
+    `  send "${escaped}" to p`,
+    'end tell',
+  ].join('\n'));
+
+  try {
+    runAppleScript(smsScript);
+    return 'sms';
+  } catch (e) {
+    // error 4 = kIMMessageErrorCodeSMSForwardingNotAvailable
+    // This means Nathan's iPhone is not currently reachable for SMS relay.
+    if (e.message.includes('error 4') || e.message.includes('(-4)')) {
+      throw new Error(
+        `SMS relay unavailable (error 4): Nathan's iPhone must be on the same WiFi as the Mac Mini ` +
+        `with Text Message Forwarding enabled (iPhone Settings → Messages → Text Message Forwarding).`
+      );
+    }
+    throw e;
+  }
 }
 
 /** Download a remote URL to a temp file; returns the local path. */
@@ -341,13 +350,13 @@ function sendFileViaMessages(toPhone, localPath) {
   }
 
   console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay for file`);
+  if (!SMS_SERVICE_UUID) throw new Error('SMS relay UUID unknown — no SMS history in chat.db');
   const smsScript = `/tmp/dcc_send_file_sms_${Date.now()}.applescript`;
   fs.writeFileSync(smsScript, [
     'tell application "Messages"',
-    `  set targetPhone to "${toPhone}"`,
-    '  set smsSvc to service "SMS"',
-    '  set targetBuddy to buddy targetPhone of smsSvc',
-    `  send POSIX file "${safePath}" to targetBuddy`,
+    `  set smsSvc to service id "${SMS_SERVICE_UUID}"`,
+    `  set p to participant "${toPhone}" of smsSvc`,
+    `  send POSIX file "${safePath}" to p`,
     'end tell',
   ].join('\n'));
 
