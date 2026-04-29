@@ -109,19 +109,21 @@ console.log('');
 
 // ─── Diagnostic: probe Messages.app services ─────────────────────────────────
 const svcProbes = [
-  ['iMessage', 'service 1 whose service type = iMessage'],
-  ['SMS',      'service 1 whose service type = SMS'],
+  ['count',    'count services'],
+  ['iMessage', 'name of (service 1 whose service type = iMessage)'],
+  ['SMS-name', 'name of service "SMS"'],
+  ['service2', 'name of service 2'],
 ];
 const svcResults = [];
 for (const [label, expr] of svcProbes) {
   try {
     const n = execFileSync('osascript', ['-e',
-      `tell application "Messages" to get name of (${expr})`
+      `tell application "Messages" to get ${expr}`
     ], { timeout: 6000 }).toString().trim();
-    svcResults.push(`${label}="${n}" ✓`);
+    svcResults.push(`${label}=${n}`);
   } catch (e) {
-    const msg = e.message.split('\n').find(l => l.includes('execution error')) || e.message.split('\n')[0];
-    svcResults.push(`${label} ✗ (${msg.trim()})`);
+    const errLine = e.message.split('\n').find(l => l.includes('execution error') || l.includes('ETIMEDOUT')) || e.message.split('\n')[0];
+    svcResults.push(`${label}✗(${errLine.trim().slice(0,60)})`);
   }
 }
 console.log(`    Services: ${svcResults.join(' | ')}`);
