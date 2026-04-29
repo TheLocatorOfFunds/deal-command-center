@@ -708,7 +708,7 @@ function DealCommandCenter({ session, profile }) {
           updateDealMeta(id, { meta: { ...m, flagged: !m.flagged } });
         }} />
       ) : (
-        {(() => {
+        (() => {
           // Pre-compute peer navigation (cycle through deals in the same
           // status). Lives at the parent so DealDetail can stay agnostic
           // about how peers are determined.
@@ -722,7 +722,7 @@ function DealCommandCenter({ session, profile }) {
             onNav: setActiveDealId,
           };
           return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} />;
-        })()}
+        })()
       )}
 
       {/* Mobile FAB — only visible on phone via CSS */}
