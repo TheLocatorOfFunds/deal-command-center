@@ -11154,20 +11154,26 @@ function LaurenControlCenter({ onClose, onJumpToDeal }) {
 function DocketOverviewModal({ onClose, onJumpToDeal }) {
   const [tab, setTab] = useState("events");
   const [events, setEvents] = useState([]);
+  const [totalUnacked, setTotalUnacked] = useState(0);
   const [health, setHealth] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
     setLoading(true);
-    const [eventsRes, healthRes] = await Promise.all([
+    const [eventsRes, countRes, healthRes] = await Promise.all([
       sb.from('docket_events')
         .select('*, deals(name, status)')
         .is('acknowledged_at', null)
         .order('event_date', { ascending: false })
         .limit(100),
+      // Separate count query so the "Acknowledge all" button shows the
+      // TRUE unacked total (could be 1800+) rather than just the 100
+      // loaded into events.
+      sb.from('docket_events').select('id', { count: 'exact', head: true }).is('acknowledged_at', null),
       sb.from('scraper_health').select('*'),
     ]);
     setEvents(eventsRes.data || []);
+    setTotalUnacked(countRes.count || 0);
     setHealth(healthRes.data || []);
     setLoading(false);
   };
@@ -11181,14 +11187,20 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
 
   const [ackingAll, setAckingAll] = useState(false);
   const ackAll = async () => {
-    if (events.length === 0 || ackingAll) return;
-    if (!window.confirm(`Acknowledge all ${events.length} unacknowledged docket event${events.length === 1 ? '' : 's'}?`)) return;
+    if (totalUnacked === 0 || ackingAll) return;
+    if (!window.confirm(`Acknowledge ALL ${totalUnacked} unacknowledged docket event${totalUnacked === 1 ? '' : 's'}? This clears the queue across every deal.`)) return;
     setAckingAll(true);
     try {
-      // Fire all RPC calls in parallel — they're idempotent and Supabase
-      // handles concurrent UPSERTs fine. ~50 events finishes in <2s.
-      await Promise.all(events.map(e => sb.rpc('acknowledge_docket_event', { p_event_id: e.id })));
+      // Server-side bulk update — single statement, no loop. RPC returns the
+      // count of rows actually updated (in case anyone else acked some
+      // between our count query and this call).
+      const { data: count, error } = await sb.rpc('acknowledge_all_docket_events');
+      if (error) throw error;
       await load();
+      // Soft confirmation so Nathan knows it worked.
+      if (typeof count === 'number') {
+        // No alert — load() already shows the empty state.
+      }
     } catch (e) {
       alert('Acknowledge-all failed: ' + (e.message || e));
     } finally {
@@ -11220,7 +11232,7 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
           padding: "8px 14px", fontSize: 13, fontWeight: tab === "events" ? 700 : 500,
           borderBottom: tab === "events" ? "2px solid #d97706" : "2px solid transparent", marginBottom: -1, cursor: "pointer", fontFamily: "inherit",
         }}>
-          Unacknowledged {events.length > 0 ? `(${events.length})` : ''}
+          Unacknowledged {totalUnacked > 0 ? `(${totalUnacked})` : ''}
         </button>
         <button onClick={() => setTab("health")} style={{
           background: "transparent", border: "none", color: tab === "health" ? "#fafaf9" : "#78716c",
@@ -11240,10 +11252,13 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 4 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: 'center', marginBottom: 4, gap: 10 }}>
+              <span style={{ fontSize: 11, color: '#78716c' }}>
+                Showing {events.length} of {totalUnacked} unacked · most recent first
+              </span>
               <button onClick={ackAll} disabled={ackingAll}
                 style={{ background: ackingAll ? '#44403c' : '#78350f', color: '#fafaf9', border: 0, padding: '6px 14px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: ackingAll ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: ackingAll ? 0.7 : 1 }}>
-                {ackingAll ? `Acknowledging ${events.length}…` : `✓ Acknowledge all ${events.length}`}
+                {ackingAll ? `Acknowledging all ${totalUnacked}…` : `✓ Acknowledge ALL ${totalUnacked}`}
               </button>
             </div>
             {events.map(e => {
