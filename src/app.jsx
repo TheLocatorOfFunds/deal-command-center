@@ -16393,11 +16393,12 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
 
   const importOne = async (row) => {
     const dealId = await resolveDealId(row.deal.id);
-    // 1. Insert deal
+    // 1. Insert deal — `deals.owner_id` (NOT created_by; that column lives
+    // on contact_deals + deal_notes but not on deals).
     const { error: dealErr } = await sb.from('deals').insert({
       ...row.deal,
       id: dealId,
-      created_by: userId,
+      owner_id: userId,
     });
     if (dealErr) throw dealErr;
 
