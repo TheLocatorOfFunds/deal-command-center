@@ -13077,7 +13077,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
     (vendors || []).filter(v => v.phone).forEach(v =>
       expandPhones({ name: v.name, role: v.role || 'Vendor', phone: v.phone }).forEach(add));
     dcContacts.filter(c => c.phone).forEach(c =>
-      expandPhones({ name: c.name, role: c.kind || 'Contact', phone: c.phone, contact_id: c.id }).forEach(add));
+      expandPhones({ name: c.name, role: c.kind || 'Contact', phone: c.phone, contact_id: c.id, deceased: !!c.deceased }).forEach(add));
     extraContacts.forEach(add);
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
@@ -13112,7 +13112,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
   // ── Load contacts from contact_deals ─────────────────────────────────────
   const loadDealContacts = async () => {
     const { data } = await sb.from('contact_deals')
-      .select('contacts(id, name, phone, email, kind)')
+      .select('contacts(id, name, phone, email, kind, deceased)')
       .eq('deal_id', dealId);
     if (data) setDcContacts(data.map(r => r.contacts).filter(Boolean));
   };
@@ -13632,7 +13632,8 @@ function OutboundMessages({ dealId, vendors, deal }) {
             <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? `2px solid ${color}` : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
-                <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                {c.deceased && <span title="Deceased — outreach disabled" style={{ fontSize: 11, flexShrink: 0 }}>🕊️</span>}
+                <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textDecoration: c.deceased ? 'line-through' : 'none' }}>
                   {c.name.split(' ')[0]}
                 </span>
                 {count > 0 && <span style={{ fontSize: 9, background: '#292524', color: '#a8a29e', borderRadius: 8, padding: '1px 5px', flexShrink: 0 }}>{count}</span>}
@@ -15558,6 +15559,34 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
             style={inputStyle} />
         </Field>
       )}
+
+      {/* Deceased toggle — drives Tier B (estate / probate cases) and
+          stops outreach from ever texting/calling the deceased person.
+          When checked, the UI also surfaces a 🕊️ pill on the contact's
+          tabs in Comms so the team can never accidentally message them. */}
+      <div style={{ marginTop: 12, padding: '10px 12px', background: contact.deceased ? '#1a0e1f' : '#0c0a09', border: '1px solid ' + (contact.deceased ? '#5b21b6' : '#1c1917'), borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={!!contact.deceased}
+            onChange={e => {
+              const v = e.target.checked;
+              onChange({
+                deceased: v,
+                deceased_at: v ? (contact.deceased_at || new Date().toISOString()) : null,
+                deceased_source: v ? (contact.deceased_source || '') : null,
+              });
+            }}
+            style={{ accentColor: '#a855f7', cursor: 'pointer' }} />
+          <span style={{ fontSize: 12, fontWeight: 700, color: contact.deceased ? '#c084fc' : '#a8a29e', letterSpacing: '0.04em' }}>
+            🕊️ Deceased
+          </span>
+        </label>
+        {contact.deceased && (
+          <input value={contact.deceased_source || ''}
+            onChange={e => onChange({ deceased_source: e.target.value })}
+            placeholder="Source — obituary, family, GHL-import…"
+            style={{ ...inputStyle, flex: 1, minWidth: 200, fontSize: 11, padding: '6px 10px' }} />
+        )}
+      </div>
 
       <Field label="Notes" style={{ marginTop: 12 }}>
         <textarea value={contact.notes || ''} onChange={e => onChange({ notes: e.target.value })}
