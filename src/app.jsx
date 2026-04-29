@@ -1,4 +1,4 @@
-const { useState, useEffect, useCallback, useRef } = React;
+const { useState, useEffect, useCallback, useRef, useMemo } = React;
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -344,6 +344,7 @@ function DealCommandCenter({ session, profile }) {
   const [showDocket, setShowDocket] = useState(false);
   const [showContacts, setShowContacts] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
@@ -670,6 +671,7 @@ function DealCommandCenter({ session, profile }) {
             </button>
           )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
+          {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
           {isTeam && <button onClick={() => setShowLibrary(true)} title="Library (templates, SOPs, brand, legal)" style={{ ...btnGhost, fontSize: 11 }}>📚 Library</button>}
           {isTeam && <button onClick={() => { setActiveDealId(null); setView("team"); }} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
           {isAdmin && (
@@ -695,6 +697,7 @@ function DealCommandCenter({ session, profile }) {
       {showDocket && <DocketOverviewModal onClose={() => { setShowDocket(false); loadDocketCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowDocket(false); }} />}
       {showLaurenCC && <LaurenControlCenter onClose={() => { setShowLaurenCC(false); loadLaurenFlaggedCount(); }} onJumpToDeal={(id) => { setActiveDealId(id); setShowLaurenCC(false); }} />}
       {showContacts && <ContactsModal onClose={() => setShowContacts(false)} isAdmin={isAdmin} userId={session.user.id} deals={deals} onJumpToDeal={(id) => { setActiveDealId(id); setShowContacts(false); }} />}
+      {showImport && <ImportLeadsModal onClose={() => setShowImport(false)} userId={session.user.id} onDone={() => loadDeals()} />}
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
 
       {!activeDeal ? (
@@ -5016,8 +5019,13 @@ function ReportsView({ deals, onSelect }) {
   const activeSurplus = active.filter(d => d.type === 'surplus');
   const activeFlip = active.filter(d => d.type === 'flip');
 
-  // surplus_estimate is the column Castle populates; meta.estimatedSurplus is the hand-entered one
-  const dealSurplus = (d) => Number(d.surplus_estimate) || Number(d.meta?.estimatedSurplus) || 0;
+  // surplus_estimate is the column Castle populates; meta.estimatedSurplus is the hand-entered one.
+  // Pre-auction leads (NOD, 30DTS — not yet sold) use meta.estimatedAvailableEquity instead,
+  // since "surplus" only exists once the home has actually sold at sheriff's auction. The
+  // Importer maps GHL's "Est. Available Equity" → estimatedAvailableEquity, "Estimated Surplus"
+  // → estimatedSurplus. dealSurplus() picks whichever is populated so tier math + UI work
+  // for both stages without the team having to think about it.
+  const dealSurplus = (d) => Number(d.surplus_estimate) || Number(d.meta?.estimatedSurplus) || Number(d.meta?.estimatedAvailableEquity) || 0;
   const dealFlipValue = (d) => Number(d.meta?.listPrice) || Number(d.meta?.contractPrice) || 0;
 
   const surplusPipeline = activeSurplus.reduce((s, d) => s + dealSurplus(d), 0);
@@ -15904,6 +15912,614 @@ function ContactsTab({ dealId, userId, isAdmin }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Import Leads Modal — bulk CSV importer for GHL → DCC ────────
+//
+// Per Nathan 2026-04-28: Eric is moving the GHL surplus-fund leads
+// (A/B/C) into the DCC. The "rich" GHL export has the case data we
+// need (address, case number, county, deceased flag, multi-phone +
+// family contacts, surplus/equity, GHL notes). The "thin" export only
+// has identity. This modal handles the rich export.
+//
+// Lifecycle: upload → parse → preview (with dedup flags) → confirm →
+// execute (batched) → result summary.
+//
+// Per row in the CSV we create:
+//   1 deals row (id = sf-<lastname>-<suffix>, type='surplus', status='new-lead')
+//   1 homeowner contacts row (kind='homeowner', deceased flag, all phones
+//      comma-joined into the phone field — DCC's Comms tab splits them
+//      into per-phone tabs automatically)
+//   N family contacts rows (one per "Family X Phone" present), kind='other',
+//      linked to the deal via contact_deals with relationship='other'
+//   1 contact_deals row for the homeowner (relationship='homeowner')
+//   1 deal_notes row if "General Notes" is non-empty (so the rich GHL note
+//      shows up in the deal's Notes panel, not buried in contact.notes)
+//
+// Tier-driving equity: pre-auction (no Sold-at-Auction amount) uses
+// "Est. Available Equity"; post-auction uses "Estimated Surplus". Both
+// raw values are stored in meta for traceability; the canonical equity
+// figure also lands in meta.estimatedSurplus or meta.estimatedAvailableEquity
+// so dealSurplus() picks it up regardless of stage.
+//
+// Dedup matches against existing DCC deals on case_number, address, and
+// homeowner primary phone. Each duplicate gets a per-row choice in the
+// preview: skip (default) or import anyway.
+
+// ── CSV parser — minimal, handles quoted fields with embedded commas + newlines ──
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; } // escaped quote
+        else inQuotes = false;
+      } else {
+        field += c;
+      }
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++; // CRLF
+        row.push(field); rows.push(row); row = []; field = '';
+      } else {
+        field += c;
+      }
+    }
+  }
+  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length > 1 || (r.length === 1 && r[0] !== ''));
+}
+
+// Header signature: returns true if this looks like the rich GHL export.
+function isGhlRichExport(headers) {
+  const must = ['Contact Id', 'First Name', 'Lead Rating', 'Case Number', 'Full Address'];
+  return must.every(h => headers.includes(h));
+}
+
+function normalizeE164(raw) {
+  if (!raw) return null;
+  const d = String(raw).replace(/\D/g, '');
+  if (!d) return null;
+  if (d.length === 10) return '+1' + d;
+  if (d.length === 11 && d.startsWith('1')) return '+' + d;
+  if (d.length >= 10) return '+' + d;
+  return null;
+}
+
+function slugifyName(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+function num(v) {
+  if (v == null || v === '') return null;
+  const n = Number(String(v).replace(/[^\d.-]/g, ''));
+  return isFinite(n) ? n : null;
+}
+
+// Parse "Auction Date" like "Jan 14 2026" or "May 05 2026" → ISO date string.
+function parseAuctionDate(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().slice(0, 10);
+}
+
+// Build a structured representation of one CSV row, ready for insert.
+function mapGhlRowToDcc(row, headers) {
+  const get = (k) => {
+    const i = headers.indexOf(k);
+    return i >= 0 ? (row[i] || '').trim() : '';
+  };
+
+  const firstName = get('First Name');
+  const lastName = get('Last Name');
+  const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+  const ghlId = get('Contact Id');
+  const ghlRating = get('Lead Rating'); // 'A' / 'B' / 'C'
+  const ghlStatus = get('Lead Status');
+  const deceased = (get('Deceased') || '').toLowerCase() === 'yes';
+  const caseNumber = get('Case Number').replace(/\s+/g, ' ').trim() || null;
+  const county = get('County') || null;
+  const stateRaw = get('State') || null;
+  const fullAddress = get('Full Address') || get('Verified Address') || null;
+
+  // All homeowner phones (Phone + Phone 1..10 + Additional Phones).
+  const phoneSet = new Set();
+  const pushPhone = (raw) => {
+    if (!raw) return;
+    String(raw).split(/[,;]/).forEach(p => {
+      const n = normalizeE164(p);
+      if (n) phoneSet.add(n);
+    });
+  };
+  pushPhone(get('Phone'));
+  for (let i = 1; i <= 10; i++) pushPhone(get('Phone ' + i));
+  pushPhone(get('Additional Phones'));
+  const homeownerPhones = Array.from(phoneSet);
+  const phonesJoined = homeownerPhones.join(', ');
+  const primaryPhone = homeownerPhones[0] || null;
+
+  // All homeowner emails.
+  const emailSet = new Set();
+  const pushEmail = (raw) => {
+    if (!raw) return;
+    String(raw).split(/[,;]/).map(s => s.trim()).filter(Boolean).forEach(e => emailSet.add(e.toLowerCase()));
+  };
+  pushEmail(get('Email'));
+  pushEmail(get('Additional Emails'));
+  for (let i = 1; i <= 10; i++) pushEmail(get('Email ' + i));
+  const emailsJoined = Array.from(emailSet).join(', ');
+
+  // Family contacts (Family 1..10) — each becomes a separate contact, kind='other'.
+  const familyContacts = [];
+  for (let i = 1; i <= 10; i++) {
+    const fPhonesRaw = [get('Family ' + i + ' Phone'), get('Family ' + i + ' Additional phones')].filter(Boolean).join(', ');
+    const fEmail = get('Family ' + i + ' Email');
+    if (!fPhonesRaw && !fEmail) continue;
+    const fPhoneSet = new Set();
+    fPhonesRaw.split(/[,;]/).forEach(p => {
+      const n = normalizeE164(p);
+      if (n) fPhoneSet.add(n);
+    });
+    const fPhones = Array.from(fPhoneSet);
+    if (!fPhones.length && !fEmail) continue;
+    familyContacts.push({
+      name: `${fullName} — Family ${i}`, // placeholder name; Eric/Nathan refines later
+      phone: fPhones.join(', ') || null,
+      email: fEmail || null,
+      kind: 'other',
+      relationship: 'other', // unknown; refined manually after import
+      tags: ['ghl-import', 'family-contact', 'unlabeled-relationship'],
+    });
+  }
+
+  // Equity / surplus phase logic. Pre-auction = no Sold at Auction Amount.
+  const soldAt = num(get('Sold at Auction Amount'));
+  const estSurplus = num(get('Estimated Surplus'));
+  const estEquity = num(get('Est. Available Equity'));
+  const judgmentAmount = num(get('Judgment Amount'));
+  const totalDebt = num(get('Total Debt'));
+  const isPostAuction = !!soldAt;
+
+  // Tier calculation: B if rated B; A if equity ≥ 100k + alive; C otherwise.
+  // Trust the GHL Rating column when present (Eric's already classified).
+  // The "equity figure" used for tier is whichever is populated for the case stage.
+  const tierEquity = isPostAuction ? (estSurplus ?? estEquity) : (estEquity ?? estSurplus);
+  let lead_tier = ghlRating;
+  if (!lead_tier) {
+    if ((tierEquity || 0) >= 100000) lead_tier = deceased ? 'B' : 'A';
+    else lead_tier = 'C';
+  }
+
+  // 30dts tag drives is_30dts on the deal.
+  const tagsRaw = get('Tags');
+  const tags = tagsRaw.split(',').map(s => s.trim()).filter(Boolean);
+  const is30dts = tags.some(t => t.toLowerCase() === '30dts');
+
+  // Notes: General Notes is the long detailed text. Becomes a deal_notes row.
+  const generalNotes = get('General Notes');
+
+  // Deal id: sf-<lastname>; suffix added later if collision.
+  const baseId = 'sf-' + (slugifyName(lastName) || slugifyName(firstName) || 'lead');
+
+  return {
+    valid: !!fullName && !!fullAddress,
+    validationErrors: [
+      !fullName && 'Missing name',
+      !fullAddress && 'Missing address',
+    ].filter(Boolean),
+    deal: {
+      id: baseId, // suffix-resolved at execute time
+      type: 'surplus',
+      status: 'new-lead',
+      name: fullName,
+      address: fullAddress,
+      lead_tier,
+      is_30dts: is30dts || null,
+      meta: {
+        county,
+        state: stateRaw || (fullAddress && (fullAddress.match(/,\s*([A-Z]{2})\s*,?\s*\d{5}/) || [])[1]) || null,
+        courtCase: caseNumber,
+        saleDate: parseAuctionDate(get('Auction Date')),
+        salePrice: soldAt,
+        estimatedSurplus: estSurplus ?? null,
+        estimatedAvailableEquity: estEquity ?? null,
+        judgmentAmount,
+        totalDebt,
+        isPostAuction,
+        homeownerName: fullName,
+        homeownerPhone: primaryPhone,
+        zillowLink: get('Zillow Link') || null,
+        sheriffDocketLink: get('Sheriff Docket Link') || null,
+        documentLinks: get('Document Links') || null,
+        ghl_lead_id: ghlId,
+        ghl_lead_status: ghlStatus,
+        ghl_case_pack_status: get('Case Pack Status'),
+        ghl_occupancy_status: get('Occupancy Status'),
+        source: 'ghl-import',
+      },
+    },
+    homeownerContact: {
+      name: fullName,
+      phone: phonesJoined || null,
+      email: emailsJoined || null,
+      kind: 'homeowner',
+      tags: ['ghl-import', ...tags].filter(Boolean),
+      notes: ghlId ? `GHL Contact ID: ${ghlId}\nGHL Lead Status: ${ghlStatus}` : null,
+      deceased: deceased || null,
+      deceased_source: deceased ? 'GHL-import' : null,
+    },
+    familyContacts,
+    generalNotes: generalNotes || null,
+    matchKeys: {
+      caseNumber: caseNumber ? caseNumber.toLowerCase().replace(/\s+/g, '') : null,
+      addressNorm: fullAddress ? fullAddress.toLowerCase().replace(/[^a-z0-9]/g, '') : null,
+      primaryPhone,
+    },
+  };
+}
+
+// Bulk dedup: query DB for any existing deals matching case number, address, or homeowner phone.
+async function findDuplicates(mapped) {
+  const caseNumbers = mapped.map(m => m.matchKeys.caseNumber).filter(Boolean);
+  const addresses = mapped.map(m => m.matchKeys.addressNorm).filter(Boolean);
+  const phones = mapped.map(m => m.matchKeys.primaryPhone).filter(Boolean);
+
+  // Pull candidate deals + meta keys we need to compare against.
+  const dupes = new Map(); // matchKey → { dealId, reason }
+
+  if (caseNumbers.length) {
+    // Pull all deals; client-side compare against meta.courtCase (jsonb). Cheap for <10k deals.
+    const { data } = await sb.from('deals').select('id, meta, address').not('meta', 'is', null);
+    if (data) {
+      data.forEach(d => {
+        const m = d.meta || {};
+        const cc = m.courtCase ? String(m.courtCase).toLowerCase().replace(/\s+/g, '') : null;
+        const addrNorm = (d.address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const ph = (m.homeownerPhone || '').replace(/\D/g, '');
+        if (cc) dupes.set('case:' + cc, { dealId: d.id, reason: 'case#' });
+        if (addrNorm) dupes.set('addr:' + addrNorm, { dealId: d.id, reason: 'address' });
+        if (ph) dupes.set('phone:' + ph, { dealId: d.id, reason: 'phone' });
+      });
+    }
+  }
+
+  return mapped.map(m => {
+    const k = m.matchKeys;
+    const hits = [];
+    if (k.caseNumber) {
+      const hit = dupes.get('case:' + k.caseNumber);
+      if (hit) hits.push(hit);
+    }
+    if (k.addressNorm && !hits.length) {
+      const hit = dupes.get('addr:' + k.addressNorm);
+      if (hit) hits.push(hit);
+    }
+    if (k.primaryPhone && !hits.length) {
+      const hit = dupes.get('phone:' + k.primaryPhone.replace(/\D/g, ''));
+      if (hit) hits.push(hit);
+    }
+    return { ...m, duplicate: hits[0] || null };
+  });
+}
+
+function ImportLeadsModal({ onClose, userId, onDone }) {
+  const [stage, setStage] = useState('upload'); // upload | parsing | preview | executing | done
+  const [fileName, setFileName] = useState('');
+  const [parseError, setParseError] = useState(null);
+  const [mapped, setMapped] = useState([]); // array of mapped rows + dup flags
+  const [decisions, setDecisions] = useState({}); // idx → 'create' | 'skip'
+  const [progress, setProgress] = useState({ done: 0, total: 0 });
+  const [results, setResults] = useState(null);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setFileName(file.name);
+    setParseError(null);
+    setStage('parsing');
+    try {
+      const text = await file.text();
+      const allRows = parseCsv(text);
+      if (!allRows.length) throw new Error('CSV is empty');
+      const headers = allRows[0];
+      if (!isGhlRichExport(headers)) {
+        throw new Error('This does not look like a GHL rich export. Expected columns including Contact Id, First Name, Lead Rating, Case Number, Full Address.');
+      }
+      const dataRows = allRows.slice(1).filter(r => r.some(c => (c || '').trim()));
+      const mappedRows = dataRows.map(r => mapGhlRowToDcc(r, headers));
+      const withDups = await findDuplicates(mappedRows);
+      // Default decision per row: skip if duplicate, create otherwise.
+      const initDecisions = {};
+      withDups.forEach((m, i) => {
+        if (!m.valid) initDecisions[i] = 'skip';
+        else if (m.duplicate) initDecisions[i] = 'skip';
+        else initDecisions[i] = 'create';
+      });
+      setMapped(withDups);
+      setDecisions(initDecisions);
+      setStage('preview');
+    } catch (e) {
+      setParseError(String(e?.message || e));
+      setStage('upload');
+    }
+  };
+
+  const setDecision = (idx, val) => setDecisions(prev => ({ ...prev, [idx]: val }));
+
+  // Resolve a unique deal id given a base. Try `base`, `base-2`, ..., `base-99`.
+  const reservedIds = useMemo(() => new Set(), []);
+  const resolveDealId = async (base) => {
+    let candidate = base;
+    if (reservedIds.has(candidate)) {
+      for (let n = 2; n <= 99; n++) {
+        const try_ = base + '-' + n;
+        if (!reservedIds.has(try_)) { candidate = try_; break; }
+      }
+    }
+    // Confirm against DB.
+    let id = candidate;
+    for (let n = 2; n <= 99; n++) {
+      const { data } = await sb.from('deals').select('id').eq('id', id).maybeSingle();
+      if (!data) break;
+      id = base + '-' + n;
+    }
+    reservedIds.add(id);
+    return id;
+  };
+
+  const importOne = async (row) => {
+    const dealId = await resolveDealId(row.deal.id);
+    // 1. Insert deal
+    const { error: dealErr } = await sb.from('deals').insert({
+      ...row.deal,
+      id: dealId,
+      created_by: userId,
+    });
+    if (dealErr) throw dealErr;
+
+    // 2. Insert homeowner contact
+    const { data: contact, error: contactErr } = await sb.from('contacts')
+      .insert({ ...row.homeownerContact, owner_id: userId })
+      .select('id').single();
+    if (contactErr) throw contactErr;
+
+    // 3. Link homeowner via contact_deals
+    await sb.from('contact_deals').insert({
+      contact_id: contact.id,
+      deal_id: dealId,
+      relationship: 'homeowner',
+      created_by: userId,
+    });
+
+    // 4. Insert family contacts + link
+    for (const fc of row.familyContacts) {
+      const { data: fcRow, error: fcErr } = await sb.from('contacts')
+        .insert({ ...fc, owner_id: userId })
+        .select('id').single();
+      if (fcErr) continue; // skip silently; family contacts aren't blocking
+      await sb.from('contact_deals').insert({
+        contact_id: fcRow.id,
+        deal_id: dealId,
+        relationship: fc.relationship || 'other',
+        created_by: userId,
+      });
+    }
+
+    // 5. Deal note for General Notes content
+    if (row.generalNotes) {
+      await sb.from('deal_notes').insert({
+        deal_id: dealId,
+        title: 'GHL — General Notes',
+        body: row.generalNotes,
+        author_id: userId,
+      });
+    }
+
+    return dealId;
+  };
+
+  const execute = async () => {
+    const queue = mapped
+      .map((m, i) => ({ m, i, decision: decisions[i] }))
+      .filter(x => x.decision === 'create' && x.m.valid);
+    if (!queue.length) return;
+    setStage('executing');
+    setProgress({ done: 0, total: queue.length });
+    const out = { created: 0, skipped: mapped.length - queue.length, failed: 0, errors: [] };
+    for (let n = 0; n < queue.length; n++) {
+      const { m, i } = queue[n];
+      try {
+        const newId = await importOne(m);
+        out.created++;
+        // Stamp the result back into the row for the summary view.
+        m._importedDealId = newId;
+      } catch (e) {
+        out.failed++;
+        out.errors.push({ idx: i, name: m.deal.name, error: e?.message || String(e) });
+      }
+      setProgress({ done: n + 1, total: queue.length });
+    }
+    setResults(out);
+    setStage('done');
+    if (onDone) onDone();
+  };
+
+  const tierCounts = useMemo(() => {
+    const c = { A: 0, B: 0, C: 0, other: 0 };
+    mapped.forEach(m => {
+      const t = m.deal?.lead_tier;
+      if (t === 'A' || t === 'B' || t === 'C') c[t]++; else c.other++;
+    });
+    return c;
+  }, [mapped]);
+
+  const decisionCounts = useMemo(() => {
+    let create = 0, skip = 0, dup = 0, invalid = 0;
+    mapped.forEach((m, i) => {
+      if (!m.valid) invalid++;
+      else if (decisions[i] === 'create') create++;
+      else if (m.duplicate) dup++;
+      else skip++;
+    });
+    return { create, skip, dup, invalid };
+  }, [mapped, decisions]);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={(e) => e.target === e.currentTarget && stage !== 'executing' && onClose()}>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, maxWidth: 980, width: '95vw', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', gap: 12 }}>
+          <span style={{ fontSize: 16, fontWeight: 700 }}>📥 Import leads from CSV</span>
+          <span style={{ fontSize: 11, color: '#78716c', marginLeft: 'auto' }}>{fileName}</span>
+          <button onClick={onClose} disabled={stage === 'executing'} style={{ ...btnGhost, fontSize: 11, opacity: stage === 'executing' ? 0.4 : 1 }}>{stage === 'done' ? 'Close' : 'Cancel'}</button>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+          {stage === 'upload' && (
+            <div>
+              <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 14, lineHeight: 1.6 }}>
+                Drop a GoHighLevel CSV export. The importer expects the <strong>rich</strong> export
+                (with columns like <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Case Number</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Full Address</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Estimated Surplus</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Family 1 Phone</code>…).
+                Each row becomes one <strong>deal</strong> + one <strong>homeowner contact</strong> + N family contacts (relationship='other').
+              </div>
+              <label style={{ display: 'block', border: '2px dashed #44403c', borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: '#0c0a09' }}>
+                <input type="file" accept=".csv,text/csv" onChange={e => handleFile(e.target.files[0])} style={{ display: 'none' }} />
+                <div style={{ fontSize: 32, marginBottom: 8 }}>📁</div>
+                <div style={{ fontSize: 14, color: '#fafaf9', fontWeight: 600 }}>Click to choose a CSV</div>
+                <div style={{ fontSize: 11, color: '#78716c', marginTop: 4 }}>or drag & drop a file here</div>
+              </label>
+              {parseError && (
+                <div style={{ marginTop: 14, padding: 10, background: '#450a0a', border: '1px solid #7f1d1d', borderRadius: 6, fontSize: 12, color: '#fca5a5' }}>
+                  ⚠ {parseError}
+                </div>
+              )}
+            </div>
+          )}
+
+          {stage === 'parsing' && (
+            <div style={{ textAlign: 'center', padding: 60, color: '#a8a29e' }}>
+              <div style={{ fontSize: 24, marginBottom: 10 }}>⏳</div>
+              <div>Parsing CSV + checking for duplicates…</div>
+            </div>
+          )}
+
+          {stage === 'preview' && (
+            <div>
+              {/* Summary tiles */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+                <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #1c1917', borderRadius: 6 }}>
+                  <div style={{ fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total rows</div>
+                  <div style={{ fontSize: 22, fontWeight: 700 }}>{mapped.length}</div>
+                </div>
+                <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #14532d', borderRadius: 6 }}>
+                  <div style={{ fontSize: 10, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Will create</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#22c55e' }}>{decisionCounts.create}</div>
+                </div>
+                <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #78350f', borderRadius: 6 }}>
+                  <div style={{ fontSize: 10, color: '#fbbf24', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Duplicates skipped</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#d97706' }}>{decisionCounts.dup}</div>
+                </div>
+                <div style={{ padding: 10, background: '#0c0a09', border: '1px solid #7f1d1d', borderRadius: 6 }}>
+                  <div style={{ fontSize: 10, color: '#fca5a5', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Invalid (no name/addr)</div>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#ef4444' }}>{decisionCounts.invalid}</div>
+                </div>
+              </div>
+
+              <div style={{ fontSize: 11, color: '#78716c', marginBottom: 10 }}>
+                Tier breakdown: A={tierCounts.A} · B={tierCounts.B} · C={tierCounts.C}{tierCounts.other > 0 ? ' · other=' + tierCounts.other : ''}
+              </div>
+
+              {/* Row list */}
+              <div style={{ border: '1px solid #1c1917', borderRadius: 6, overflow: 'hidden' }}>
+                {mapped.map((m, i) => {
+                  const d = decisions[i];
+                  const t = m.deal?.lead_tier;
+                  const tierColor = t === 'A' ? '#d8b560' : t === 'B' ? '#8b5cf6' : t === 'C' ? '#44403c' : '#44403c';
+                  return (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid #1c1917', background: !m.valid ? '#1f0a0a' : m.duplicate ? '#1f1408' : 'transparent' }}>
+                      <span style={{ fontSize: 10, color: tierColor, fontWeight: 700, fontFamily: "'DM Mono', monospace", minWidth: 14 }}>{t || '?'}</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#fafaf9', minWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.deal.name || '(no name)'}</span>
+                      <span style={{ fontSize: 11, color: '#a8a29e', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.deal.address || '(no address)'}</span>
+                      {m.deal.meta?.courtCase && <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{m.deal.meta.courtCase}</span>}
+                      {m.homeownerContact.deceased && <span title="Deceased" style={{ fontSize: 11 }}>🕊️</span>}
+                      {m.familyContacts.length > 0 && <span style={{ fontSize: 10, color: '#78716c' }}>+{m.familyContacts.length} fam</span>}
+                      {!m.valid && <span style={{ fontSize: 10, color: '#ef4444' }}>⚠ {m.validationErrors.join(', ')}</span>}
+                      {m.duplicate && (
+                        <span style={{ fontSize: 10, color: '#fbbf24' }}>
+                          dup ({m.duplicate.reason}) · → {m.duplicate.dealId}
+                        </span>
+                      )}
+                      <select value={d || 'skip'} onChange={e => setDecision(i, e.target.value)} disabled={!m.valid}
+                        style={{ background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c', borderRadius: 4, padding: '3px 6px', fontSize: 11, fontFamily: 'inherit' }}>
+                        <option value="create">Create</option>
+                        <option value="skip">Skip</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {stage === 'executing' && (
+            <div style={{ textAlign: 'center', padding: 60 }}>
+              <div style={{ fontSize: 24, marginBottom: 10 }}>⏳</div>
+              <div style={{ fontSize: 14, color: '#fafaf9', marginBottom: 6 }}>Importing {progress.done} / {progress.total}…</div>
+              <div style={{ height: 6, background: '#1c1917', borderRadius: 3, overflow: 'hidden', maxWidth: 400, margin: '12px auto' }}>
+                <div style={{ height: '100%', width: progress.total ? (100 * progress.done / progress.total) + '%' : '0%', background: '#22c55e', transition: 'width 200ms' }} />
+              </div>
+            </div>
+          )}
+
+          {stage === 'done' && results && (
+            <div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginBottom: 14 }}>
+                <div style={{ padding: 14, background: '#0c0a09', border: '1px solid #14532d', borderRadius: 6, textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Created</div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: '#22c55e' }}>{results.created}</div>
+                </div>
+                <div style={{ padding: 14, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#a8a29e', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Skipped</div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: '#a8a29e' }}>{results.skipped}</div>
+                </div>
+                <div style={{ padding: 14, background: '#0c0a09', border: '1px solid #7f1d1d', borderRadius: 6, textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#fca5a5', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Failed</div>
+                  <div style={{ fontSize: 32, fontWeight: 700, color: '#ef4444' }}>{results.failed}</div>
+                </div>
+              </div>
+              {results.errors.length > 0 && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#fca5a5', marginBottom: 6 }}>Errors:</div>
+                  <div style={{ maxHeight: 200, overflowY: 'auto', border: '1px solid #1c1917', borderRadius: 6 }}>
+                    {results.errors.map((er, i) => (
+                      <div key={i} style={{ padding: '6px 10px', borderBottom: '1px solid #1c1917', fontSize: 11, fontFamily: 'monospace' }}>
+                        <span style={{ color: '#fafaf9' }}>{er.name}:</span> <span style={{ color: '#ef4444' }}>{er.error}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {stage === 'preview' && (
+          <div style={{ padding: '12px 18px', borderTop: '1px solid #1c1917', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
+            <span style={{ fontSize: 11, color: '#78716c', marginRight: 'auto' }}>
+              {decisionCounts.create} ready to import · {decisionCounts.dup} dups · {decisionCounts.invalid} invalid
+            </span>
+            <button onClick={() => setStage('upload')} style={{ ...btnGhost, fontSize: 11 }}>← Back</button>
+            <button onClick={execute} disabled={decisionCounts.create === 0} style={{ ...btnPrimary, opacity: decisionCounts.create === 0 ? 0.4 : 1 }}>
+              Import {decisionCounts.create} {decisionCounts.create === 1 ? 'lead' : 'leads'}
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
