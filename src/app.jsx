@@ -572,12 +572,43 @@ function DealCommandCenter({ session, profile }) {
   return (
     <Shell>
       {/* Header */}
+      {/* Peer-deal navigation: when a deal is active, cycle through deals
+          with the same status. Per Eric: when he's working through new-leads
+          one at a time (verifying CSV-imported data), Next should jump to
+          the next new-lead, not back to the dashboard. Status is the most
+          intuitive grouping — same kanban column / same list view. */}
       <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
           {activeDeal && (
-            <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
-              ← All Deals
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>
+                ← All Deals
+              </button>
+              {(() => {
+                const peers = deals.filter(d => d.status === activeDeal.status);
+                const peerIndex = peers.findIndex(d => d.id === activeDealId);
+                const prevDeal = peerIndex > 0 ? peers[peerIndex - 1] : null;
+                const nextDeal = peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null;
+                if (peers.length <= 1) return null;
+                return (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginLeft: 6, padding: '0 4px', borderLeft: '1px solid #292524' }}>
+                    <button onClick={() => prevDeal && setActiveDealId(prevDeal.id)} disabled={!prevDeal}
+                      title={prevDeal ? `Prev: ${prevDeal.name || prevDeal.id}` : 'No previous deal in this status'}
+                      style={{ background: 'transparent', border: '1px solid #292524', color: prevDeal ? '#a8a29e' : '#44403c', padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: prevDeal ? 'pointer' : 'not-allowed', marginLeft: 6 }}>
+                      ← Prev
+                    </button>
+                    <span style={{ fontSize: 11, color: '#78716c', padding: '0 8px', whiteSpace: 'nowrap' }}>
+                      {peerIndex + 1} of {peers.length}
+                    </span>
+                    <button onClick={() => nextDeal && setActiveDealId(nextDeal.id)} disabled={!nextDeal}
+                      title={nextDeal ? `Next: ${nextDeal.name || nextDeal.id}` : 'No next deal in this status'}
+                      style={{ background: 'transparent', border: '1px solid #292524', color: nextDeal ? '#a8a29e' : '#44403c', padding: '6px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: nextDeal ? 'pointer' : 'not-allowed' }}>
+                      Next →
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
           )}
           <div>
             <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
