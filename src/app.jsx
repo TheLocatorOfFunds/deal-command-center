@@ -1091,7 +1091,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "team" ? (
-            <TeamView teamMembers={teamMembers} />
+            <TeamView teamMembers={teamMembers} isOwner={isOwner} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -1285,7 +1285,7 @@ function DealCardName({ deal }) {
 //
 // Schema lives in 20260427000000_team_chat_phase1.sql:
 //   team_threads · team_messages · team_message_reads · team_reactions
-function TeamView({ teamMembers }) {
+function TeamView({ teamMembers, isOwner }) {
   const [threads, setThreads] = useState([]);
   const [activeThreadId, setActiveThreadId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -1305,6 +1305,8 @@ function TeamView({ teamMembers }) {
   const [editingMessageId, setEditingMessageId] = useState(null);
   const [editingBody, setEditingBody] = useState('');
   const [mentionState, setMentionState] = useState(null);  // { open, prefix, anchorPos }
+  const [showEodModal, setShowEodModal] = useState(false);
+  const [showActivityFor, setShowActivityFor] = useState(null); // userId | null — opens "today's activity" panel
   const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
@@ -1734,30 +1736,60 @@ function TeamView({ teamMembers }) {
         <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
           {threads.map(t => {
             const icon = t.thread_type === 'dm' ? '💬' : t.thread_type === 'deal' ? '🏠' : '#';
-            // For DMs, show the OTHER participant's name (not your own)
             let label = t.title;
             if (t.thread_type === 'dm') {
               const others = (participantsByThreadId[t.id] || []).filter(uid => uid !== me.id);
               const otherProf = others[0] && profilesById[others[0]];
               if (otherProf) label = otherProf.display_name || otherProf.name || t.title;
             }
+            const isActive = activeThreadId === t.id;
             return (
-              <button
+              <div
                 key={t.id}
-                onClick={() => setActiveThreadId(t.id)}
-                style={{
-                  display: 'block', width: '100%', textAlign: 'left',
-                  background: activeThreadId === t.id ? '#1c1917' : 'transparent',
-                  color: activeThreadId === t.id ? '#fafaf9' : '#a8a29e',
-                  border: 'none',
-                  padding: '10px 12px', borderRadius: 6,
-                  fontSize: 13, fontWeight: 600,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  marginBottom: 2,
-                }}
+                style={{ display: 'flex', alignItems: 'center', gap: 0, marginBottom: 2, borderRadius: 6, background: isActive ? '#1c1917' : 'transparent' }}
+                onMouseEnter={e => e.currentTarget.dataset.hover = '1'}
+                onMouseLeave={e => delete e.currentTarget.dataset.hover}
               >
-                <span style={{ marginRight: 6 }}>{icon}</span>{label}
-              </button>
+                <button
+                  onClick={() => setActiveThreadId(t.id)}
+                  style={{
+                    flex: 1, display: 'block', textAlign: 'left',
+                    background: 'transparent',
+                    color: isActive ? '#fafaf9' : '#a8a29e',
+                    border: 'none',
+                    padding: '10px 12px',
+                    fontSize: 13, fontWeight: 600,
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ marginRight: 6 }}>{icon}</span>{label}
+                </button>
+                {/* Owner-only delete button. Per Nathan: as owner he wants to
+                    be able to clean up old/dead threads. Hidden for everyone
+                    else (admins, VAs) — they can archive but not destroy. */}
+                {isOwner && (
+                  <button
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (!window.confirm(`Permanently delete the thread "${label}" and all its messages?\n\nThis cannot be undone.`)) return;
+                      // Cascade delete handled by FK ON DELETE CASCADE
+                      // (team_messages, team_message_reads, team_reactions
+                      // all reference team_threads.id with cascade).
+                      const { error } = await sb.from('team_threads').delete().eq('id', t.id);
+                      if (error) { alert('Could not delete: ' + error.message); return; }
+                      if (activeThreadId === t.id) setActiveThreadId(null);
+                      await loadThreads();
+                    }}
+                    title="Delete thread (owner-only)"
+                    style={{ background: 'transparent', border: 'none', color: '#57534e', padding: '6px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', opacity: 0.4 }}
+                    onMouseOver={e => { e.currentTarget.style.opacity = 1; e.currentTarget.style.color = '#ef4444'; }}
+                    onMouseOut={e => { e.currentTarget.style.opacity = 0.4; e.currentTarget.style.color = '#57534e'; }}
+                  >
+                    🗑
+                  </button>
+                )}
+              </div>
             );
           })}
           {threads.length === 0 && (
@@ -1799,32 +1831,79 @@ function TeamView({ teamMembers }) {
                   {activeThread.lauren_enabled && <> · 🤖 mention <code style={{ background: '#0c0a09', padding: '0 4px', borderRadius: 3 }}>@lauren</code> to summon</>}
                 </div>
               </div>
-              {(me.role === 'admin' || me.role === 'user') && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                {/* Video call — opens a Jitsi Meet room scoped to this
+                    thread, then posts the link as a message so others can
+                    join. Free, no signup, no API key. */}
                 <button
                   onClick={async () => {
-                    const next = !activeThread.lauren_enabled;
-                    // Optimistic local update — realtime sub will reconcile.
-                    setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, lauren_enabled: next } : t));
-                    const { error } = await sb.from('team_threads')
-                      .update({ lauren_enabled: next })
-                      .eq('id', activeThread.id);
-                    if (error) {
-                      setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, lauren_enabled: !next } : t));
-                      alert('Could not toggle Lauren: ' + error.message);
-                    }
+                    const room = `dcc-${activeThread.id}-${Date.now()}`;
+                    const url = `https://meet.jit.si/${room}`;
+                    window.open(url, '_blank', 'noopener,noreferrer');
+                    // Auto-post link so other people see it
+                    await sb.from('team_messages').insert({
+                      thread_id: activeThread.id,
+                      sender_id: me.id,
+                      sender_role: me.role,
+                      body: `📹 ${me.name || 'Someone'} started a video call: ${url}`,
+                    });
                   }}
-                  title={activeThread.lauren_enabled ? 'Lauren is on for this thread — click to turn off' : 'Lauren is off for this thread — click to turn on'}
-                  style={{
-                    fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
-                    border: '1px solid ' + (activeThread.lauren_enabled ? '#78350f' : '#292524'),
-                    background: activeThread.lauren_enabled ? '#1c1209' : '#0c0a09',
-                    color: activeThread.lauren_enabled ? '#fbbf24' : '#78716c',
-                    cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-                  }}
-                >
-                  🤖 Lauren: {activeThread.lauren_enabled ? 'On' : 'Off'}
+                  title="Start a Jitsi video call for this thread (free, opens in new tab)"
+                  style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: '1px solid #14532d', background: '#052e16', color: '#86efac', cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                  📹 Video
                 </button>
-              )}
+                {/* End-of-day report — opens a structured form, saves to
+                    eod_reports + posts the summary as a message in this
+                    thread so the team sees it too. */}
+                <button
+                  onClick={() => setShowEodModal(true)}
+                  title="Submit your end-of-day report"
+                  style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: '1px solid #292524', background: '#0c0a09', color: '#a8a29e', cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                  📋 EOD
+                </button>
+                {/* Teammate activity — visible when viewing a DM with another
+                    person. Owners (and that person themselves) can see what
+                    they actually did in DCC today. Replaces the
+                    "watch-them-on-Google-Meet" pattern with a derived view
+                    of their real DCC actions. */}
+                {activeThread.thread_type === 'dm' && (() => {
+                  const others = (participantsByThreadId[activeThread.id] || []).filter(uid => uid !== me.id);
+                  const peerId = others[0];
+                  if (!peerId) return null;
+                  return (
+                    <button onClick={() => setShowActivityFor(peerId)}
+                      title={`See what ${profilesById[peerId]?.name || 'they'} actually did in DCC today`}
+                      style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: '1px solid #1e3a8a', background: '#0c1838', color: '#93c5fd', cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                      👤 Activity
+                    </button>
+                  );
+                })()}
+                {(me.role === 'admin' || me.role === 'user') && (
+                  <button
+                    onClick={async () => {
+                      const next = !activeThread.lauren_enabled;
+                      setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, lauren_enabled: next } : t));
+                      const { error } = await sb.from('team_threads')
+                        .update({ lauren_enabled: next })
+                        .eq('id', activeThread.id);
+                      if (error) {
+                        setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, lauren_enabled: !next } : t));
+                        alert('Could not toggle Lauren: ' + error.message);
+                      }
+                    }}
+                    title={activeThread.lauren_enabled ? 'Lauren is on — click to turn off' : 'Lauren is off — click to turn on'}
+                    style={{
+                      fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6,
+                      border: '1px solid ' + (activeThread.lauren_enabled ? '#78350f' : '#292524'),
+                      background: activeThread.lauren_enabled ? '#1c1209' : '#0c0a09',
+                      color: activeThread.lauren_enabled ? '#fbbf24' : '#78716c',
+                      cursor: 'pointer', whiteSpace: 'nowrap',
+                    }}
+                  >
+                    🤖 Lauren: {activeThread.lauren_enabled ? 'On' : 'Off'}
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Message list */}
@@ -2088,6 +2167,213 @@ function TeamView({ teamMembers }) {
           onCreated={(newThreadId) => { setShowNewThreadModal(false); setActiveThreadId(newThreadId); }}
         />
       )}
+      {showEodModal && (
+        <EodReportModal
+          me={me}
+          activeThread={activeThread}
+          onClose={() => setShowEodModal(false)}
+          onPosted={() => setShowEodModal(false)}
+        />
+      )}
+      {showActivityFor && (
+        <TeammateActivityModal
+          userId={showActivityFor}
+          profile={profilesById[showActivityFor]}
+          onClose={() => setShowActivityFor(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// EOD report — replaces the Google Meet "what did you do today" ritual.
+// Per Nathan: Eric and Inaam currently leave updates in Google Meet; this
+// gives them a structured form in DCC instead. Saves to eod_reports +
+// auto-posts a summary to the active team chat thread so the team sees it.
+function EodReportModal({ me, activeThread, onClose, onPosted }) {
+  const [workedOn, setWorkedOn] = useState('');
+  const [blocked, setBlocked] = useState('');
+  const [nextUp, setNextUp] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+  const [existing, setExisting] = useState(null);
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Pre-fill if user already submitted today (idempotent re-edit).
+  useEffect(() => {
+    (async () => {
+      if (!me?.id) return;
+      const { data } = await sb.from('eod_reports')
+        .select('*').eq('user_id', me.id).eq('report_date', today).maybeSingle();
+      if (data) {
+        setExisting(data);
+        setWorkedOn(data.worked_on || '');
+        setBlocked(data.blocked || '');
+        setNextUp(data.next_up || '');
+      }
+    })();
+  }, [me?.id]);
+
+  const submit = async () => {
+    if (saving) return;
+    if (!workedOn.trim()) { setErr('"What did you work on today" is required'); return; }
+    setSaving(true); setErr(null);
+    try {
+      const row = {
+        user_id: me.id,
+        report_date: today,
+        worked_on: workedOn.trim() || null,
+        blocked: blocked.trim() || null,
+        next_up: nextUp.trim() || null,
+      };
+      const { error: upErr } = await sb.from('eod_reports')
+        .upsert(row, { onConflict: 'user_id,report_date' });
+      if (upErr) throw upErr;
+
+      // Post a summary to the active thread so the team sees it.
+      if (activeThread?.id) {
+        const summary = [
+          `📋 **EOD — ${me.name || 'someone'} · ${today}**`,
+          `**Worked on:** ${workedOn.trim()}`,
+          blocked.trim() ? `**Blocked:** ${blocked.trim()}` : null,
+          nextUp.trim() ? `**Next up:** ${nextUp.trim()}` : null,
+        ].filter(Boolean).join('\n\n');
+        await sb.from('team_messages').insert({
+          thread_id: activeThread.id,
+          sender_id: me.id,
+          sender_role: me.role,
+          body: summary,
+        });
+      }
+      onPosted && onPosted();
+    } catch (e) {
+      setErr(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, maxWidth: 560, width: '95vw', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>📋 End-of-day report · {today}</div>
+            <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+              {existing ? 'Editing today\'s report — submit to update' : 'Submit your daily standup'}
+            </div>
+          </div>
+          <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+        </div>
+        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Field label="What did you work on today? *">
+            <textarea value={workedOn} onChange={e => setWorkedOn(e.target.value)} rows={4}
+              placeholder="The 3-5 things you actually got done. Bullet points are great."
+              style={{ ...inputStyle, fontFamily: 'inherit', resize: 'vertical' }} autoFocus />
+          </Field>
+          <Field label="Anything blocked or stuck?">
+            <textarea value={blocked} onChange={e => setBlocked(e.target.value)} rows={2}
+              placeholder="What's keeping you from finishing something? Leave blank if nothing."
+              style={{ ...inputStyle, fontFamily: 'inherit', resize: 'vertical' }} />
+          </Field>
+          <Field label="What's next tomorrow?">
+            <textarea value={nextUp} onChange={e => setNextUp(e.target.value)} rows={2}
+              placeholder="The 2-3 things you'll tackle first thing tomorrow."
+              style={{ ...inputStyle, fontFamily: 'inherit', resize: 'vertical' }} />
+          </Field>
+          {err && <div style={{ padding: 8, background: '#7f1d1d', color: '#fecaca', borderRadius: 6, fontSize: 12 }}>{err}</div>}
+        </div>
+        <div style={{ padding: '12px 18px', borderTop: '1px solid #1c1917', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {existing && <span style={{ fontSize: 10, color: '#78716c', alignSelf: 'center', marginRight: 'auto' }}>Already submitted at {new Date(existing.created_at).toLocaleTimeString()}</span>}
+          <button onClick={submit} disabled={saving || !workedOn.trim()} style={{ ...btnPrimary, opacity: (saving || !workedOn.trim()) ? 0.5 : 1 }}>
+            {saving ? 'Saving…' : (existing ? 'Update + post to thread' : 'Submit + post to thread')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Per-teammate activity feed — derived from the existing `activity` table.
+// Per Nathan: "if the video watched their screen all day, it would not
+// know what they did." This reads what they ACTUALLY changed in DCC —
+// every deal touched, every contact updated, every message sent.
+function TeammateActivityModal({ userId, profile, onClose }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState('today'); // 'today' | 'week' | 'month'
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const since = new Date();
+      if (range === 'today') since.setHours(0, 0, 0, 0);
+      else if (range === 'week') since.setDate(since.getDate() - 7);
+      else since.setDate(since.getDate() - 30);
+      const { data } = await sb.from('activity')
+        .select('id, deal_id, action, created_at, deals(name, status)')
+        .eq('user_id', userId)
+        .gte('created_at', since.toISOString())
+        .order('created_at', { ascending: false })
+        .limit(500);
+      setItems(data || []);
+      setLoading(false);
+    })();
+  }, [userId, range]);
+
+  const grouped = useMemo(() => {
+    const m = new Map();
+    items.forEach(i => {
+      const day = new Date(i.created_at).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      if (!m.has(day)) m.set(day, []);
+      m.get(day).push(i);
+    });
+    return Array.from(m.entries());
+  }, [items]);
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, maxWidth: 760, width: '95vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>👤 {profile?.display_name || profile?.name || 'Teammate'}'s activity</div>
+            <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>{items.length} action{items.length === 1 ? '' : 's'} · {range}</div>
+          </div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {['today','week','month'].map(r => (
+              <button key={r} onClick={() => setRange(r)}
+                style={{ background: range === r ? '#1c1917' : 'transparent', border: '1px solid ' + (range === r ? '#44403c' : '#292524'), color: range === r ? '#fafaf9' : '#78716c', padding: '4px 10px', borderRadius: 4, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                {r}
+              </button>
+            ))}
+            <button onClick={onClose} style={{ ...btnGhost, fontSize: 11, marginLeft: 6 }}>Close</button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+          {loading && <div style={{ fontSize: 12, color: '#78716c' }}>Loading…</div>}
+          {!loading && items.length === 0 && (
+            <div style={{ fontSize: 13, color: '#78716c', fontStyle: 'italic', padding: 32, textAlign: 'center' }}>
+              No activity in this window.
+            </div>
+          )}
+          {!loading && grouped.map(([day, dayItems]) => (
+            <div key={day} style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 8 }}>{day} · {dayItems.length}</div>
+              <div style={{ borderLeft: '2px solid #1c1917', paddingLeft: 12 }}>
+                {dayItems.map(i => (
+                  <div key={i.id} style={{ marginBottom: 6, fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>
+                    <span style={{ color: '#57534e', fontFamily: "'DM Mono', monospace", fontSize: 10, marginRight: 8 }}>
+                      {new Date(i.created_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                    </span>
+                    <span>{i.action}</span>
+                    {i.deals?.name && <span style={{ color: '#78716c', marginLeft: 6 }}>· {i.deals.name}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
