@@ -15200,7 +15200,7 @@ function AccountSettingsModal({ onClose, userId, userEmail, onOpenLaurenCC }) {
                         style={{ ...inputStyle, width: 140, padding: '6px 8px', fontSize: 12, opacity: (memberIsOwner || memberIsSelf) ? 0.5 : 1, cursor: (memberIsOwner || memberIsSelf) ? 'not-allowed' : 'pointer' }}>
                         <option value="va">Virtual Assistant</option>
                         <option value="admin">Admin</option>
-                        <option value="user">Admin (legacy)</option>
+                        <option value="user">Owner</option>
                         <option value="attorney">Attorney</option>
                         <option value="client">Client</option>
                       </select>
@@ -15344,7 +15344,7 @@ function TeamModal({ onClose, currentUserId }) {
   const roleLabel = (r) => {
     return ({
       admin: 'Admin',
-      user: 'Admin (legacy)',
+      user: 'Owner',
       va: 'Virtual Assistant',
       attorney: 'Attorney',
       client: 'Client',
@@ -15352,7 +15352,7 @@ function TeamModal({ onClose, currentUserId }) {
   };
   const roleDesc = (r) => ({
     admin: 'Full access to everything.',
-    user: 'Full access (same as Admin). Promote to "admin" to make it explicit.',
+    user: 'Owner — full access including role management. Reserved for Nathan + Justin (the OWNER_EMAILS allowlist enforced at the DB layer).',
     va: 'Can manage deals, tasks, vendors, clients, documents. Cannot see financial data (expenses, fees, profit).',
     attorney: 'Scoped read-only access to cases they\'re assigned to. Cannot see other deals or financials.',
     client: 'Portal-only access to their own case. Cannot access DCC.',
@@ -15477,7 +15477,7 @@ function TeamModal({ onClose, currentUserId }) {
                     title={m.id === currentUserId ? "You can't change your own role" : undefined}
                   >
                     <option value="admin">Admin</option>
-                    <option value="user">Admin (legacy)</option>
+                    <option value="user">Owner</option>
                     <option value="va">Virtual Assistant</option>
                     <option value="attorney">Attorney</option>
                     <option value="client">Client</option>
