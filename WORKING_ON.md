@@ -1,12 +1,13 @@
 # Currently Working On
 
-**Live state.** What each Claude Code session is doing right now. Pair with
-`session_archives/` (durable per-session learnings) and `memory/` (long-term
-user-level knowledge).
+**Live state.** What Justin's and Nathan's Claude Code sessions are doing
+right now. Pair with `session_archives/` (durable per-session learnings)
+and `memory/` (long-term user-level knowledge).
 
 > **Convention:** edit ONLY your own section. Update as you work — not just at
 > session start/end. Other sessions `git pull` to refresh. Conflict-free as long
-> as everyone respects the section boundaries.
+> as everyone respects the section boundaries. Erik works in the DCC UI, not
+> Claude Code in this repo, so this doesn't apply to him.
 
 ---
 
@@ -129,13 +130,13 @@ Claude Code session prep.
 
 ---
 
-## Erik's session
+## Erik
 
-**Status:** Not yet onboarded. Erik is a new VA hire with a Claude Code
-premium seat. When his first session starts, he replaces this stub.
-
-**Onboarding doc / playbook:** see `session_archives/` for the conversation
-where the onboarding plan was sketched (search for "Erik onboarding").
+Erik is a VA who works directly in the DCC UI (data entry, skip-tracing,
+contact cleanup, brand-voice drafts). He's not running Claude Code in
+this repo, so the live-session-state convention doesn't apply to him.
+If that changes, add an "Erik's session" section in this same shape and
+his mapping is already wired in `.claude/hooks/touch-working-on.sh`.
 
 ---
 
