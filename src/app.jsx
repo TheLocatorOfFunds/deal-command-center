@@ -5739,7 +5739,11 @@ function AttentionView({ deals, onSelect }) {
         )}
       </div>
 
-      <ScraperAlertStrip />
+      {/* ScraperAlertStrip removed from Attention 2026-04-30 per Nathan —
+          88 realsheriff_* agents made the strip a wall of pills, redundant
+          with the proper Docket Center → Scraper Health drill-in. The
+          strip component is kept defined for potential reuse elsewhere
+          (e.g. ReportsView), but Attention surfaces only deal-level work. */}
       <DeadlineAlertStrip onSelect={onSelect} />
 
       {rows.length === 0 && (
