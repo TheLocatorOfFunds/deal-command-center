@@ -200,10 +200,13 @@ Post a note and wait for the other session to coordinate.
 
 ### Session start ritual
 ```bash
-git pull                                    # always — Nathan may have pushed
-cat WORKING_ON.md                           # see what the other session is doing
+git pull                                    # always — Nathan / Erik may have pushed
+cat WORKING_ON.md                           # see what each session is currently doing
+ls session_archives/                        # skim recent archives for relevant context
+cat session_archives/index.md               # one-line summaries of past sessions
 ```
-Then update `WORKING_ON.md` with what you're about to work on.
+Then update **your own section** of `WORKING_ON.md` with what you're about
+to work on. Per-user sections (Justin / Nathan / Erik) — edit only your own.
 
 ### Branch strategy
 - Work on a short-lived branch: `git checkout -b justin/your-feature-name`
@@ -218,10 +221,60 @@ Then update `WORKING_ON.md` with what you're about to work on.
 4. Apply via Supabase SQL editor (not `supabase db push` — no local DB)
 5. Commit the `.sql` file in the same commit as the feature that needs it
 
+### Live state — update WORKING_ON.md as you work
+Don't wait for session end. As you make decisions or shift focus,
+update YOUR section of `WORKING_ON.md` and push (small commits are
+fine). Other sessions running concurrently `git pull` to refresh — so
+the more recent your section is, the less likely they are to step on
+your work. Conflict-free as long as everyone edits only their own
+section. **Never edit another user's section.**
+
 ### Session end ritual
-1. Commit everything (including any migration files)
-2. Update `WORKING_ON.md` — clear your entry or note what's left
-3. Push branch (or merge to `main` if it's stable and tested)
+1. Commit everything (including any migration files).
+2. Update **your own section** of `WORKING_ON.md` — mark idle if you
+   wrapped, note "crashed at <step>, resume from <file>" if you didn't.
+3. **If the session was substantive** (architectural decisions made,
+   non-obvious gotchas hit, or work future sessions need to know about):
+   write a `session_archives/YYYY-MM-DD-<short-slug>.md` entry using
+   the template at `session_archives/_TEMPLATE.md`, and add a one-line
+   summary to `session_archives/index.md`. Skip for trivial sessions
+   (typo fixes, small bug PRs — those are sufficiently captured in the
+   PR + git log).
+4. Push branch (or merge to `main` if it's stable and tested).
+
+### Why this matters
+Multiple Claude Code sessions run in parallel — Justin, Nathan, Erik,
+each sometimes with a couple of worktrees going. Without live state in
+`WORKING_ON.md` and durable learnings in `session_archives/`, every
+session re-discovers the same architectural quirks (iframe forms,
+Twilio JWT flag, Postgres function overload ambiguity, etc.). The
+convention above closes the loop: live state for "what's happening
+now," archives for "what's been figured out before," `memory/` for
+"what survives across many sessions."
+
+### Stop hook safety net (`.claude/hooks/touch-working-on.sh`)
+A Stop hook fires after every Claude turn and updates a
+`**Last updated (auto):**` timestamp in your section of
+`WORKING_ON.md` — automatically, even if Claude itself forgets to
+update its content. The hook:
+- Maps your OS user (`$USER`) → DCC name (`Justin`/`Nathan`/`Erik`)
+- Updates only the timestamp line in your section (never touches others')
+- Auto-commits the heartbeat if the file's last commit is > 2 min old
+  (avoids commit spam while still surfacing state to other sessions
+  on their next `git pull`)
+- Never pushes — Claude pushes as part of normal commit flow
+- Always exits 0 (best-effort; never blocks a session)
+
+This closes the failure modes where Claude forgets to update on its
+own — context compaction dropping the rule, auto-mode skipping
+"non-essential" reads, subagents not following the convention,
+focus drift over long sessions, and mid-session crashes. The
+timestamp moves regardless. Other sessions can see "active 2 min
+ago" vs "stale 6 hours, probably crashed."
+
+If the hook ever causes problems, disable it by removing the `Stop`
+block from `.claude/settings.json` — the convention still works
+without it, just less robustly.
 
 ### RLS convention (hard rule — applies to both sessions)
 Always use the helper functions — never inline role checks:
