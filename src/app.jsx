@@ -14751,6 +14751,34 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [rvmResult, setRvmResult] = useState(null);
   const [mediaUrl, setMediaUrl] = useState('');
   const [showMediaInput, setShowMediaInput] = useState(false);
+  // Drag-drop state for the composer. Per Nathan: drop screenshots
+  // straight into the message box, no URL paste required. We upload
+  // to deal-docs/{deal}/comms/{ts}-{name}.png, sign a 7-day URL, and
+  // shove that into mediaUrl so the existing send path picks it up.
+  const [composerDragOver, setComposerDragOver] = useState(false);
+  const [composerUploading, setComposerUploading] = useState(false);
+  const composerDragDepth = React.useRef(0);
+
+  const uploadComposerMedia = async (file) => {
+    if (!file || !file.type?.startsWith('image/')) return;
+    setComposerUploading(true);
+    try {
+      const ext = file.name?.includes('.') ? file.name.split('.').pop() : 'png';
+      const safeName = (file.name || 'screenshot.png').replace(/[^\w.-]/g, '_').slice(-60);
+      const ts = Date.now();
+      const path = `${dealId || 'unscoped'}/comms/${ts}-${safeName.endsWith('.' + ext) ? safeName : safeName + '.' + ext}`;
+      const { error: upErr } = await sb.storage.from('deal-docs').upload(path, file, {
+        contentType: file.type, upsert: false,
+      });
+      if (upErr) { setSendErr('Upload failed: ' + upErr.message); return; }
+      // 7-day signed URL — long enough for MMS gateways to fetch + cache.
+      const { data, error: signErr } = await sb.storage.from('deal-docs').createSignedUrl(path, 60 * 60 * 24 * 7);
+      if (signErr || !data?.signedUrl) { setSendErr('Could not sign URL: ' + (signErr?.message || 'unknown')); return; }
+      setMediaUrl(data.signedUrl);
+    } finally {
+      setComposerUploading(false);
+    }
+  };
   const [editingNoteId, setEditingNoteId] = useState(null);
   const [editingNoteBody, setEditingNoteBody] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -16110,12 +16138,24 @@ function OutboundMessages({ dealId, vendors, deal }) {
       {activeContact?.phone && !activeContact?._everyone && (() => {
         const e164 = normalizePhone(activeContact.phone);
         const intel = phoneIntel[e164];
-        const probing = probingPhones[e164] || intel?.status === 'queued' || intel?.status === 'probing';
-        let label, color, route;
-        if (probing) {
-          label = 'Probing iMessage capability…'; color = '#fbbf24'; route = 'Mac Mini bridge is running the probe — refresh in ~30s.';
+        const stuckMs = intel?.requested_at ? (Date.now() - new Date(intel.requested_at).getTime()) : 0;
+        const isStuck = (intel?.status === 'queued' || intel?.status === 'probing') && stuckMs > 2 * 60 * 1000;
+        const probingNow = probingPhones[e164];
+        let label, color, route, showStuckReset = false;
+        if (probingNow) {
+          label = 'Queuing probe…'; color = '#fbbf24'; route = 'Inserting probe request.';
+        } else if (isStuck) {
+          label = '⚠ Probe stuck'; color = '#f97316';
+          route = `Queued ${Math.round(stuckMs / 60000)}m ago — Mac bridge probe daemon hasn't run yet (Justin's session is still wiring it up). Reset to clear, then re-probe once the bridge is live.`;
+          showStuckReset = true;
+        } else if (intel?.status === 'queued') {
+          label = '⏳ Queued for probe'; color = '#fbbf24'; route = 'Waiting for Mac bridge daemon to pick this up.';
+        } else if (intel?.status === 'probing') {
+          label = '🔄 Bridge probing now'; color = '#fbbf24'; route = 'Bridge has it — refresh in ~30s.';
         } else if (!intel) {
-          label = 'Not yet probed'; color = '#78716c'; route = 'Click Probe to ask the Mac Mini bridge whether this number is iMessage-capable.';
+          label = 'Not yet probed'; color = '#78716c'; route = 'Click Probe to queue an iMessage capability check via the Mac bridge.';
+        } else if (intel.status === 'failed') {
+          label = '✗ Probe failed'; color = '#ef4444'; route = intel.probe_error || 'Re-probe to retry.';
         } else if (intel.imessage_capable === true) {
           label = '🔵 iMessage capable'; color = '#3b82f6'; route = 'Outbound routes via iPhone bridge (513-516-2306 — currently DOWN per memory; falls back to Twilio until restored).';
         } else if (intel.imessage_capable === false) {
@@ -16129,10 +16169,18 @@ function OutboundMessages({ dealId, vendors, deal }) {
           <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: '0.04em' }}>{label}</span>
             <span style={{ fontSize: 10, color: '#78716c', flex: 1, minWidth: 200 }}>{route}</span>
-            <button onClick={() => probePhone(activeContact.phone)} disabled={probing}
-              title="Open Messages.app on the Mac Mini bridge, address this number, read whether the bubble turns blue (iMessage) or green (SMS). Result cached for next time."
-              style={{ background: probing ? '#1c1917' : '#78350f', color: probing ? '#78716c' : '#fbbf24', border: '1px solid #92400e', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: probing ? 'wait' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-              {probing ? '…probing' : (intel ? 'Re-probe' : 'Probe')}
+            {showStuckReset && (
+              <button onClick={async () => {
+                await sb.from('phone_intel').update({ status: 'failed', probe_error: 'manual reset — bridge unresponsive' }).eq('phone_e164', e164);
+                await loadPhoneIntel();
+              }} style={{ background: '#7f1d1d', color: '#fca5a5', border: '1px solid #b91c1c', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+                Reset
+              </button>
+            )}
+            <button onClick={() => probePhone(activeContact.phone)} disabled={probingNow}
+              title="Queue an iMessage probe. Mac Mini bridge picks up queued rows and probes via Messages.app — result cached on phone_intel."
+              style={{ background: probingNow ? '#1c1917' : '#78350f', color: probingNow ? '#78716c' : '#fbbf24', border: '1px solid #92400e', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: probingNow ? 'wait' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+              {probingNow ? '…' : (intel ? 'Re-probe' : 'Probe')}
             </button>
             {intel?.probed_at && <span style={{ fontSize: 9, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>last: {new Date(intel.probed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
           </div>
@@ -16149,36 +16197,87 @@ function OutboundMessages({ dealId, vendors, deal }) {
           </button>
         </div>
       ) : (activeContact || newMode) && (
-        <div className="composer" style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '8px 10px', flexShrink: 0 }}>
-          {showMediaInput && (
-            <div style={{ marginBottom: 6 }}>
+        <div className="composer"
+          onDragEnter={(e) => {
+            if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+            e.preventDefault();
+            composerDragDepth.current += 1;
+            setComposerDragOver(true);
+          }}
+          onDragLeave={(e) => {
+            composerDragDepth.current = Math.max(0, composerDragDepth.current - 1);
+            if (composerDragDepth.current === 0) setComposerDragOver(false);
+          }}
+          onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; }}
+          onDrop={async (e) => {
+            e.preventDefault();
+            composerDragDepth.current = 0;
+            setComposerDragOver(false);
+            const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type?.startsWith('image/'));
+            if (files.length === 0) { setSendErr('Drop an image (PNG / JPG / etc.)'); return; }
+            // First image only for v1 — composer takes one media URL at a time
+            await uploadComposerMedia(files[0]);
+          }}
+          style={{
+            borderTop: '1px solid #1c1917',
+            background: composerDragOver ? '#1c1209' : '#141210',
+            padding: '8px 10px', flexShrink: 0,
+            outline: composerDragOver ? '2px dashed #d97706' : 'none', outlineOffset: -2,
+            transition: 'background 0.12s, outline-color 0.12s',
+            position: 'relative',
+          }}>
+          {composerDragOver && (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', fontSize: 13, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.04em', textShadow: '0 0 8px rgba(0,0,0,0.5)', zIndex: 1 }}>
+              ⬇ Drop image to attach
+            </div>
+          )}
+          {(showMediaInput || mediaUrl) && (
+            <div style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
+              {mediaUrl && /\.(png|jpe?g|gif|webp|heic)/i.test(mediaUrl) && (
+                <img src={mediaUrl} alt="attachment preview" style={{ height: 36, borderRadius: 4, border: '1px solid #44403c' }} />
+              )}
               <input
                 value={mediaUrl}
                 onChange={e => setMediaUrl(e.target.value)}
-                placeholder="Paste image / video URL (https://…)"
-                style={{ width: '100%', background: '#1c1917', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', padding: '7px 12px', fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }}
+                placeholder="Paste image / video URL — or drag a screenshot anywhere on this composer"
+                style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', padding: '7px 12px', fontSize: 12, fontFamily: 'inherit', outline: 'none', boxSizing: 'border-box' }}
               />
+              {mediaUrl && (
+                <button onClick={() => setMediaUrl('')} title="Remove attachment"
+                  style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}>×</button>
+              )}
             </div>
           )}
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <button
               onClick={() => setShowMediaInput(v => !v)}
-              title="Attach image or video URL"
+              title="Attach image or video URL — or drag a screenshot directly into the composer"
               style={{ width: 34, height: 34, borderRadius: '50%', background: (showMediaInput || mediaUrl) ? '#78350f' : '#1c1917', border: `1px solid ${(showMediaInput || mediaUrl) ? '#d97706' : '#292524'}`, color: (showMediaInput || mediaUrl) ? '#fbbf24' : '#57534e', fontSize: 16, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'all 0.15s' }}>
-              📎
+              {composerUploading ? '⏳' : '📎'}
             </button>
             <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={handleKeyDown}
-              placeholder={activeContact ? `Message ${activeContact.name.split(' ')[0]}…` : 'Enter a number above first'}
+              onPaste={async (e) => {
+                // Paste-screenshot-from-clipboard support — Cmd+Shift+4 then
+                // Cmd+V right into the composer drops the image as media.
+                const items = Array.from(e.clipboardData?.items || []);
+                const imgItem = items.find(it => it.type?.startsWith('image/'));
+                if (!imgItem) return;
+                const file = imgItem.getAsFile();
+                if (!file) return;
+                e.preventDefault();
+                await uploadComposerMedia(file);
+              }}
+              placeholder={activeContact ? `Message ${activeContact.name.split(' ')[0]}… (drag or paste an image to attach)` : 'Enter a number above first'}
               disabled={!activeContact} rows={2}
               style={{ flex: 1, background: '#1c1917', border: '1px solid #292524', borderRadius: 18, color: '#fafaf9', padding: '8px 14px', fontSize: 13, fontFamily: 'inherit', resize: 'none', outline: 'none', lineHeight: 1.5, opacity: activeContact ? 1 : 0.4 }} />
-            <button onClick={send} disabled={!canSend}
-              style={{ width: 34, height: 34, borderRadius: '50%', background: canSend ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', fontSize: 17, cursor: canSend ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
+            <button onClick={send} disabled={!canSend || composerUploading}
+              style={{ width: 34, height: 34, borderRadius: '50%', background: (canSend && !composerUploading) ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', fontSize: 17, cursor: (canSend && !composerUploading) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, transition: 'background 0.15s' }}>
               ↑
             </button>
           </div>
           {sendErr && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 5, paddingLeft: 4 }}>⚠ {sendErr}</div>}
           <div style={{ fontSize: 10, color: '#44403c', marginTop: 4, paddingLeft: 4 }}>
-            {mediaUrl ? '📎 media attached · ' : ''}⌘↵ to send
+            {composerUploading ? '⏳ uploading attachment…' : (mediaUrl ? '📎 media attached · ' : '')}⌘↵ to send · drag or paste an image to attach
           </div>
         </div>
       )}
