@@ -1330,6 +1330,8 @@ function TeamView({ teamMembers, isOwner }) {
   const [mentionState, setMentionState] = useState(null);  // { open, prefix, anchorPos }
   const [showEodModal, setShowEodModal] = useState(false);
   const [showActivityFor, setShowActivityFor] = useState(null); // userId | null — opens "today's activity" panel
+  const [unreadByThread, setUnreadByThread] = useState({});  // thread_id → count
+  const [markingAllRead, setMarkingAllRead] = useState(false);
   const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
@@ -1397,6 +1399,46 @@ function TeamView({ teamMembers, isOwner }) {
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
+
+  // Per-thread unread counts. Drives the badges next to each thread name
+  // in the sidebar so Nathan can see WHICH thread has unreads. Refreshed
+  // on every team_messages insert/update + every team_message_reads upsert.
+  const loadUnreadByThread = async () => {
+    if (!me.id) return;
+    const { data } = await sb.rpc('team_unread_per_thread', { p_user_id: me.id });
+    const map = {};
+    (data || []).forEach(r => { map[r.thread_id] = r.unread_count; });
+    setUnreadByThread(map);
+  };
+  useEffect(() => {
+    loadUnreadByThread();
+    const ch = sb.channel('team-unread-per-thread')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, loadUnreadByThread)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadByThread)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [me.id]);
+
+  // Mark every thread the user participates in as read at "now". Used by
+  // the ✓ Mark all read button — quick zero-out when the user doesn't
+  // care about every thread (e.g. Lauren channels piling up).
+  const markAllThreadsRead = async () => {
+    if (!me.id || markingAllRead) return;
+    if (!window.confirm('Mark every thread as read? Clears the unread badges across all your DMs and channels.')) return;
+    setMarkingAllRead(true);
+    try {
+      const now = new Date().toISOString();
+      const rows = (threads || []).map(t => ({ thread_id: t.id, user_id: me.id, last_read_at: now }));
+      if (rows.length) {
+        const { error } = await sb.from('team_message_reads').upsert(rows, { onConflict: 'thread_id,user_id' });
+        if (error) { alert('Could not mark all read: ' + error.message); return; }
+      }
+      await loadUnreadByThread();
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
 
   // Load messages for active thread + subscribe to realtime
   useEffect(() => {
@@ -1749,12 +1791,21 @@ function TeamView({ teamMembers, isOwner }) {
     }}>
       {/* Thread list */}
       <div style={{ borderRight: '1px solid #292524', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '14px 16px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
           <span style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.12em', textTransform: 'uppercase' }}>Threads</span>
-          <button onClick={() => setShowNewThreadModal(true)} title="Create a channel, DM, or per-deal thread"
-            style={{ background: '#292524', color: '#fbbf24', border: '1px solid #44403c', borderRadius: 5, padding: '3px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-            + New
-          </button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {Object.values(unreadByThread).some(n => n > 0) && (
+              <button onClick={markAllThreadsRead} disabled={markingAllRead}
+                title="Mark every thread as read — clears the unread badges everywhere"
+                style={{ background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 5, padding: '3px 8px', fontSize: 10, fontWeight: 700, cursor: markingAllRead ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: markingAllRead ? 0.5 : 1 }}>
+                {markingAllRead ? '…' : '✓ All'}
+              </button>
+            )}
+            <button onClick={() => setShowNewThreadModal(true)} title="Create a channel, DM, or per-deal thread"
+              style={{ background: '#292524', color: '#fbbf24', border: '1px solid #44403c', borderRadius: 5, padding: '3px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              + New
+            </button>
+          </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
           {threads.map(t => {
@@ -1766,6 +1817,7 @@ function TeamView({ teamMembers, isOwner }) {
               if (otherProf) label = otherProf.display_name || otherProf.name || t.title;
             }
             const isActive = activeThreadId === t.id;
+            const unread = unreadByThread[t.id] || 0;
             return (
               <div
                 key={t.id}
@@ -1776,17 +1828,24 @@ function TeamView({ teamMembers, isOwner }) {
                 <button
                   onClick={() => setActiveThreadId(t.id)}
                   style={{
-                    flex: 1, display: 'block', textAlign: 'left',
+                    flex: 1, display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
                     background: 'transparent',
-                    color: isActive ? '#fafaf9' : '#a8a29e',
+                    color: isActive ? '#fafaf9' : (unread > 0 ? '#fafaf9' : '#a8a29e'),
                     border: 'none',
                     padding: '10px 12px',
-                    fontSize: 13, fontWeight: 600,
+                    fontSize: 13, fontWeight: unread > 0 ? 700 : 600,
                     cursor: 'pointer', fontFamily: 'inherit',
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    overflow: 'hidden',
                   }}
                 >
-                  <span style={{ marginRight: 6 }}>{icon}</span>{label}
+                  <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <span style={{ marginRight: 6 }}>{icon}</span>{label}
+                  </span>
+                  {unread > 0 && (
+                    <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 16, textAlign: 'center', flexShrink: 0 }}>
+                      {unread > 99 ? '99+' : unread}
+                    </span>
+                  )}
                 </button>
                 {/* Owner-only delete button. Per Nathan: as owner he wants to
                     be able to clean up old/dead threads. Hidden for everyone
