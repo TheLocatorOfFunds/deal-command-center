@@ -19,18 +19,29 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-Deno.serve(async (req) => {
-  if (req.method !== 'POST') return new Response('POST only', { status: 405 });
+// CORS for browser-side manual retries from DCC.
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, content-type, apikey, x-client-info',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
 
-  const secret = Deno.env.get('ATTACH_DOCKET_PDF_SECRET');
-  if (!secret) return new Response(JSON.stringify({ error: 'ATTACH_DOCKET_PDF_SECRET not configured' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
-  if (req.headers.get('X-Attach-Docket-PDF-Secret') !== secret) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
-  }
+Deno.serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
+  if (req.method !== 'POST') return new Response('POST only', { status: 405, headers: CORS });
+
+  // No secret check — Nathan's 2026-04-30 directive: every new docket event
+  // must carry its PDF, and the secret-based auth was silently no-op'ing
+  // because both the EF env var and vault entry were never set, so 0 of 10
+  // recent Castle events ever produced a stored copy. The EF only acts on
+  // valid docket_events.id values that already exist in our DB and only
+  // for events that have document_url set — no abuse vector worth gating
+  // for an internal write path. If load becomes a concern, add IP rate
+  // limiting at the Supabase project level rather than a custom secret.
 
   try {
     const { docket_event_id } = await req.json();
-    if (!docket_event_id) return new Response(JSON.stringify({ error: 'docket_event_id required' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+    if (!docket_event_id) return new Response(JSON.stringify({ error: 'docket_event_id required' }), { status: 400, headers: { ...CORS, 'Content-Type': 'application/json' } });
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -39,11 +50,11 @@ Deno.serve(async (req) => {
     const { data: event } = await db.from('docket_events')
       .select('id, deal_id, document_url, document_ocr_id, event_type, event_date, description, is_backfill, court_system, county')
       .eq('id', docket_event_id).single();
-    if (!event) return new Response(JSON.stringify({ error: 'event not found' }), { status: 404, headers: { 'Content-Type': 'application/json' } });
+    if (!event) return new Response(JSON.stringify({ error: 'event not found' }), { status: 404, headers: { ...CORS, 'Content-Type': 'application/json' } });
     if (!event.document_url || event.is_backfill || event.document_ocr_id) {
-      return new Response(JSON.stringify({ skipped: true, reason: !event.document_url ? 'no url' : event.is_backfill ? 'backfill' : 'already attached' }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ skipped: true, reason: !event.document_url ? 'no url' : event.is_backfill ? 'backfill' : 'already attached' }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
-    if (!event.deal_id) return new Response(JSON.stringify({ skipped: true, reason: 'no deal (unmatched event)' }), { headers: { 'Content-Type': 'application/json' } });
+    if (!event.deal_id) return new Response(JSON.stringify({ skipped: true, reason: 'no deal (unmatched event)' }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
 
     // Fetch the PDF. Courts can be finicky; send a realistic User-Agent and
     // the host as Referer. If Cloudflare or auth blocks, we degrade gracefully:
@@ -78,7 +89,7 @@ Deno.serve(async (req) => {
     if (!pdfBytes) {
       // Log and move on. Nathan's existing "View court document →" link still
       // works; he can also manually upload the PDF on the Files tab.
-      return new Response(JSON.stringify({ skipped: true, reason: 'fetch_failed', error: fetchError }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ skipped: true, reason: 'fetch_failed', error: fetchError }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 
     // Build a filename that reads nicely when Nathan sees it on the Files tab
@@ -90,7 +101,7 @@ Deno.serve(async (req) => {
     const { error: uploadErr } = await db.storage.from('deal-docs')
       .upload(path, pdfBytes, { contentType: 'application/pdf', upsert: true });
     if (uploadErr) {
-      return new Response(JSON.stringify({ error: 'storage_upload_failed', details: uploadErr.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ error: 'storage_upload_failed', details: uploadErr.message }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 
     const { data: doc, error: docErr } = await db.from('documents').insert({
@@ -102,7 +113,7 @@ Deno.serve(async (req) => {
       extraction_status: 'pending',
     }).select('id').single();
     if (docErr) {
-      return new Response(JSON.stringify({ error: 'documents_insert_failed', details: docErr.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ error: 'documents_insert_failed', details: docErr.message }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 
     // Link back on the docket event row
@@ -123,8 +134,8 @@ Deno.serve(async (req) => {
       document_id: doc.id,
       filename,
       size: pdfBytes.byteLength,
-    }), { headers: { 'Content-Type': 'application/json' } });
+    }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
   } catch (e) {
-    return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
   }
 });

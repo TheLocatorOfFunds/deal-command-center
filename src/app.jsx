@@ -11685,11 +11685,13 @@ function DocketTab({ dealId }) {
                         </div>
                       </div>
                     )}
-                    {/* PDF row — always rendered per Nathan's 2026-04-30 spec
-                        ("every docket update needs a PDF link, no-PDF gets
-                        an obvious slashed indicator"). Three sources, in
-                        priority order: stored OCR doc → upstream court URL
-                        → muted "no PDF available" badge. */}
+                    {/* PDF row — only opens when we have a stored copy. Per
+                        Nathan 2026-04-30: county-portal upstream URLs (e.g.
+                        Franklin's imageLinkProcessor.pdf?…) require a session
+                        and bounce visitors back to case search, so opening
+                        them is broken UX. Castle/Ohio-Intel scrapers must
+                        upload the PDF during scrape; downstream we either
+                        have it or we don't. */}
                     <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
                       {e.document_ocr_id ? (
                         <button
@@ -11701,12 +11703,24 @@ function DocketTab({ dealId }) {
                             window.open(data.signedUrl, '_blank');
                           }}
                           style={{ fontSize: 11, color: "#6ee7b7", background: "#064e3b22", border: "1px solid #065f46", borderRadius: 5, padding: "3px 10px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                          📎 Open attached PDF
+                          📎 Open PDF
                         </button>
                       ) : e.document_url ? (
-                        <a href={e.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#93c5fd", textDecoration: "none", fontWeight: 600 }}>
-                          📄 View on court site →
-                        </a>
+                        <button
+                          onClick={async () => {
+                            const { data, error } = await sb.functions.invoke('attach-docket-pdf', { body: { docket_event_id: e.id } });
+                            if (error) { alert('Fetch failed: ' + error.message); return; }
+                            if (data?.attached) { await load(); return; }
+                            if (data?.skipped && data.reason === 'fetch_failed') {
+                              alert("Court portal didn't return a PDF (it requires a session). Castle's scrapers need to upload PDFs during scrape — flag this with whoever owns the upstream scraper.");
+                            } else {
+                              alert('Result: ' + JSON.stringify(data));
+                            }
+                          }}
+                          title="Try fetching the PDF from the court portal — usually fails for portals that require a session"
+                          style={{ fontSize: 11, color: "#fbbf24", background: "#78350f22", border: "1px solid #92400e", borderRadius: 5, padding: "3px 10px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                          ⏳ Try to fetch PDF
+                        </button>
                       ) : (
                         <span title="No PDF attached to this docket update — Castle / Ohio Intel didn't capture one"
                           style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#57534e", background: "#0c0a0922", border: "1px solid #292524", borderRadius: 5, padding: "3px 10px", fontWeight: 600, position: "relative" }}>
@@ -12141,17 +12155,34 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                      {e.document_url ? (
-                        <a href={e.document_url} target="_blank" rel="noopener noreferrer"
-                          title="Open the PDF for this docket update"
-                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, background: "#1c1917", border: "1px solid #44403c", color: "#fbbf24", textDecoration: "none", fontSize: 14, lineHeight: 1, cursor: "pointer" }}>
-                          📄
-                        </a>
+                      {e.document_ocr_id ? (
+                        <button onClick={async () => {
+                          const { data: doc } = await sb.from('documents').select('path').eq('id', e.document_ocr_id).single();
+                          if (!doc?.path) { alert('PDF not found in storage.'); return; }
+                          const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
+                          if (error || !data?.signedUrl) { alert("Couldn't open PDF: " + (error?.message || 'unknown')); return; }
+                          window.open(data.signedUrl, '_blank');
+                        }} title="Open the stored PDF for this docket update"
+                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, background: "#064e3b22", border: "1px solid #065f46", color: "#6ee7b7", fontSize: 14, lineHeight: 1, cursor: "pointer", fontFamily: "inherit" }}>
+                          📎
+                        </button>
+                      ) : e.document_url ? (
+                        <button onClick={async () => {
+                          const { data, error } = await sb.functions.invoke('attach-docket-pdf', { body: { docket_event_id: e.id } });
+                          if (error) { alert('Fetch failed: ' + error.message); return; }
+                          if (data?.attached) { await load(); return; }
+                          alert(data?.reason === 'fetch_failed'
+                            ? "Court portal didn't return a PDF (session-required). Castle scrapers need to upload PDFs during scrape."
+                            : 'Result: ' + JSON.stringify(data));
+                        }} title="Try fetching the PDF from the court portal"
+                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, background: "#78350f22", border: "1px solid #92400e", color: "#fbbf24", fontSize: 12, lineHeight: 1, cursor: "pointer", fontFamily: "inherit" }}>
+                          ⏳
+                        </button>
                       ) : (
                         <span title="No PDF attached to this docket update"
                           style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, background: "#1c1917", border: "1px solid #292524", color: "#57534e", fontSize: 14, lineHeight: 1, position: "relative", cursor: "not-allowed" }}>
                           📄
-                          <span style={{ position: "absolute", top: -1, left: -1, right: -1, bottom: -1, border: "2px solid #ef4444", borderRadius: "50%", background: "transparent", boxShadow: "inset 0 0 0 0 transparent", pointerEvents: "none" }} />
+                          <span style={{ position: "absolute", top: -1, left: -1, right: -1, bottom: -1, border: "2px solid #ef4444", borderRadius: "50%", background: "transparent", pointerEvents: "none" }} />
                           <span style={{ position: "absolute", top: "50%", left: "10%", right: "10%", height: 2, background: "#ef4444", transform: "rotate(-45deg)", transformOrigin: "center", pointerEvents: "none" }} />
                         </span>
                       )}
