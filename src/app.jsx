@@ -367,6 +367,14 @@ function DealCommandCenter({ session, profile }) {
   // [{user_id, name, url, started_at}] — derived from recent team_messages
   // posts of the form "📹 X started a video call: https://meet.jit.si/..."
   const [activeCalls, setActiveCalls] = useState([]);
+  // Toast queue for new team-chat messages — top-right popups that the
+  // user must Reply to or Dismiss (no auto-timeout). Per Nathan: "I just
+  // want to make it so that they don't have to click a bunch of buttons
+  // to go to the notification."
+  const [chatToasts, setChatToasts] = useState([]);
+  // When set, TeamView will switch to this thread on mount/update —
+  // wired up so the Reply button on a chat toast jumps straight there.
+  const [chatJumpThreadId, setChatJumpThreadId] = useState(null);
   const [pendingWalkthroughs, setPendingWalkthroughs] = useState([]);
   const [showWalkthroughs, setShowWalkthroughs] = useState(false);
   const [pendingOffersCount, setPendingOffersCount] = useState(0);
@@ -518,6 +526,53 @@ function DealCommandCenter({ session, profile }) {
     setUnreadChatCount(data || 0);
   };
 
+  // Push a chat toast for a newly-arrived team_messages row. Skip own
+  // messages, skip if user is already in the team chat tab, skip stale
+  // messages (sub reconnect could replay older rows). Looks up the
+  // sender + thread for friendly labels.
+  const handleNewMessageToast = async (msg) => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    if (msg.sender_id === uid) return;
+    if (view === 'team') return;
+    if (Date.now() - new Date(msg.created_at).getTime() > 30_000) return;
+    if (msg.deleted_at) return;
+    const [{ data: sender }, { data: thread }] = await Promise.all([
+      sb.from('profiles').select('name, display_name').eq('id', msg.sender_id).maybeSingle(),
+      sb.from('team_threads').select('title, thread_type').eq('id', msg.thread_id).maybeSingle(),
+    ]);
+    if (!thread) return;
+    const senderName = sender?.display_name || sender?.name || 'Someone';
+    let threadLabel;
+    if (thread.thread_type === 'dm') threadLabel = 'sent you a DM';
+    else if (thread.thread_type === 'deal') threadLabel = `in ${thread.title || 'a deal thread'}`;
+    else threadLabel = `in #${thread.title || 'channel'}`;
+    setChatToasts(prev => {
+      if (prev.some(t => t.id === msg.id)) return prev;
+      const next = [{
+        id: msg.id,
+        sender_name: senderName,
+        thread_id: msg.thread_id,
+        thread_label: threadLabel,
+        body: msg.body || '',
+        created_at: msg.created_at,
+      }, ...prev];
+      return next.slice(0, 6);  // cap at 6 visible
+    });
+  };
+  const dismissChatToast = (id) => setChatToasts(prev => prev.filter(t => t.id !== id));
+  const replyToChatToast = (toast) => {
+    setActiveDealId(null);
+    setView('team');
+    setChatJumpThreadId(toast.thread_id);
+    dismissChatToast(toast.id);
+  };
+  // Once the user enters the chat view, clear toasts — per-thread badges
+  // + sidebar do the work from there, no need to nag.
+  useEffect(() => {
+    if (view === 'team' && chatToasts.length > 0) setChatToasts([]);
+  }, [view]);
+
   // Active video calls. Derived from "📹 X started a video call: <url>"
   // posts in team_messages within the last 30 min — dedupe by sender,
   // keep most recent per teammate. RLS naturally hides messages from
@@ -641,7 +696,11 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, loadPendingWalkthroughs)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers' }, loadPendingOffersCount)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, () => { loadUnreadChatCount(); loadActiveCalls(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, (payload) => {
+        loadUnreadChatCount();
+        loadActiveCalls();
+        if (payload.eventType === 'INSERT' && payload.new) handleNewMessageToast(payload.new);
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
@@ -896,7 +955,7 @@ function DealCommandCenter({ session, profile }) {
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -1022,13 +1081,76 @@ function DealCommandCenter({ session, profile }) {
           onExpand={() => setRecordingMinimized(false)}
         />
       )}
+      {chatToasts.length > 0 && (
+        <ChatToastStack
+          toasts={chatToasts}
+          onReply={replyToChatToast}
+          onDismiss={dismissChatToast}
+          onDismissAll={() => setChatToasts([])}
+        />
+      )}
     </Shell>
     </RecordingContext.Provider>
   );
 }
 
+// Top-right stack of new-message popups. Sits at zIndex above the
+// recording pill but below modals. No auto-timeout — user must Reply
+// or Dismiss each one (per Nathan's spec). Stacks newest-on-top, capped
+// upstream at 6; "Dismiss all" appears once 3+ pile up.
+function ChatToastStack({ toasts, onReply, onDismiss, onDismissAll }) {
+  return (
+    <div style={{
+      position: 'fixed', top: 18, right: 18, zIndex: 1200,
+      display: 'flex', flexDirection: 'column', gap: 10,
+      maxWidth: 340, width: 'min(340px, calc(100vw - 36px))',
+      pointerEvents: 'none',
+    }}>
+      {toasts.length >= 3 && (
+        <div style={{ pointerEvents: 'auto', textAlign: 'right' }}>
+          <button onClick={onDismissAll}
+            style={{ background: '#0c0a09', border: '1px solid #44403c', color: '#a8a29e', borderRadius: 6, padding: '4px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+            Dismiss all ({toasts.length})
+          </button>
+        </div>
+      )}
+      {toasts.map(t => (
+        <div key={t.id} style={{
+          pointerEvents: 'auto',
+          background: '#1c1917', border: '1px solid #44403c', borderRadius: 10,
+          padding: '12px 14px', boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+            <div style={{ fontSize: 12, color: '#fafaf9' }}>
+              <span style={{ fontWeight: 800, color: '#fbbf24' }}>{t.sender_name}</span>
+              <span style={{ color: '#a8a29e' }}> {t.thread_label}</span>
+            </div>
+            <button onClick={() => onDismiss(t.id)} title="Dismiss"
+              style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 16, padding: 0, lineHeight: 1, flexShrink: 0 }}>
+              ×
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: '#fafaf9', lineHeight: 1.5, marginBottom: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+            {t.body.length > 220 ? t.body.slice(0, 220) + '…' : t.body}
+          </div>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button onClick={() => onDismiss(t.id)}
+              style={{ background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Dismiss
+            </button>
+            <button onClick={() => onReply(t)}
+              style={{ background: '#d97706', color: '#1c0a00', border: 'none', borderRadius: 6, padding: '5px 14px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              Reply →
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, chatJumpThreadId, onChatJumpConsumed }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
@@ -1275,7 +1397,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "team" ? (
-            <TeamView teamMembers={teamMembers} isOwner={isOwner} />
+            <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -1492,7 +1614,7 @@ function DealCardName({ deal }) {
 //
 // Schema lives in 20260427000000_team_chat_phase1.sql:
 //   team_threads · team_messages · team_message_reads · team_reactions
-function TeamView({ teamMembers, isOwner }) {
+function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const [threads, setThreads] = useState([]);
   const [activeThreadId, setActiveThreadId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -1575,6 +1697,14 @@ function TeamView({ teamMembers, isOwner }) {
     })();
     // eslint-disable-next-line
   }, []);
+
+  // When App sets jumpToThreadId (e.g. user clicked Reply on a chat-toast),
+  // open that thread and clear the request so it doesn't keep firing.
+  useEffect(() => {
+    if (!jumpToThreadId) return;
+    setActiveThreadId(jumpToThreadId);
+    onJumpConsumed && onJumpConsumed();
+  }, [jumpToThreadId]);
 
   // Subscribe to thread-list changes (so a new thread created from another device shows up)
   useEffect(() => {
