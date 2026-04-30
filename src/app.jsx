@@ -12128,7 +12128,23 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
                         {e.case_number && <span> · Case {e.case_number}</span>}
                       </div>
                     </div>
-                    <button onClick={() => ack(e.id)} style={{ ...btnGhost, fontSize: 11, whiteSpace: "nowrap" }}>Acknowledge</button>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+                      {e.document_url ? (
+                        <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                          title="Open the PDF for this docket update"
+                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, background: "#1c1917", border: "1px solid #44403c", color: "#fbbf24", textDecoration: "none", fontSize: 14, lineHeight: 1, cursor: "pointer" }}>
+                          📄
+                        </a>
+                      ) : (
+                        <span title="No PDF attached to this docket update"
+                          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, borderRadius: 6, background: "#1c1917", border: "1px solid #292524", color: "#57534e", fontSize: 14, lineHeight: 1, position: "relative", cursor: "not-allowed" }}>
+                          📄
+                          <span style={{ position: "absolute", top: -1, left: -1, right: -1, bottom: -1, border: "2px solid #ef4444", borderRadius: "50%", background: "transparent", boxShadow: "inset 0 0 0 0 transparent", pointerEvents: "none" }} />
+                          <span style={{ position: "absolute", top: "50%", left: "10%", right: "10%", height: 2, background: "#ef4444", transform: "rotate(-45deg)", transformOrigin: "center", pointerEvents: "none" }} />
+                        </span>
+                      )}
+                      <button onClick={() => ack(e.id)} style={{ ...btnGhost, fontSize: 11, whiteSpace: "nowrap" }}>Acknowledge</button>
+                    </div>
                   </div>
                 </div>
               );
