@@ -5,84 +5,107 @@ number(s) under A2P 10DLC. It captures the audit results, the exact
 text/screenshots to submit to The Campaign Registry (TCR), and the gaps
 that have to be closed first.
 
-**Status as of 2026-04-30:** Not yet submitted. Three site-side gaps
-must be closed before submission (see "Pre-flight gaps" below).
+**Status as of 2026-04-30:** Brand registration submitted (in TCR
+review, 1-3 day wait). Campaign filing pending Brand approval. One
+small website patch needed (HELP/STOP phone number — see §2).
 
 ---
 
 ## TL;DR — what to do, in order
 
-1. **Add an SMS consent checkbox** to the `/s/{token}` claim modal (on the marketing site repo, not this repo). Copy in §1.
-2. **Patch fundlocators.com privacy policy** — fix the HELP/STOP phone number to match the actual sending number. Patch in §2.
-3. **Add SMS clauses to fundlocators.com Terms** (optional but improves approval odds). Patch in §3.
-4. **File the Brand registration** in Twilio Console with the values in §4.
-5. **File the Campaign registration** with the description, samples, and opt-in flow in §5.
-6. **Wait 1-7 days** for approval; iterate on rejections using the gotchas list in §6.
+1. **Patch the HELP/STOP phone number** on fundlocators.com — appears
+   in two places (privacy policy AND the home-page form's consent
+   checkbox label). Both currently say `+1 513-951-3014`; update to
+   the real sending number. Detail in §2.
+2. **Wait for Brand approval** in Twilio Console (1-3 days).
+3. **File the Campaign registration** with the description, samples,
+   and opt-in flow in §5.
+4. **Wait 1-7 days** for Campaign approval; iterate on rejections
+   using the gotchas list in §6.
+5. **Port the GHL number** in parallel (separate flow — 7-10 days).
 
 The TCPA caveat (§7) is the single most important thing to read before
 submitting. It's a legal/operational issue, not a registration issue.
 
 ---
 
-## §1 — Claim modal consent checkbox
+## §1 — Opt-in form audit (CORRECTED 2026-04-30)
 
-**Audit finding:** the `/s/{token}` claim modal has no SMS consent
-checkbox. The only contact disclaimer is helper text under the phone
-field: *"No email. No account. No password. Lauren, your case agent,
-texts you back — usually in under 4 hours."* This implies texting but
-**is not express written consent** under TCPA, and TCR reviewers
-won't accept a screenshot of it as proof of opt-in.
+**The opt-in form already exists on fundlocators.com homepage and is
+properly built.** It contains everything TCR needs:
 
-**Add this checkbox above the "Send to Lauren" submit button**
-(unchecked by default — pre-checked checkboxes are not valid consent):
+| Required element | Status |
+|---|---|
+| Phone number field labeled "Phone Number*" | ✅ Present |
+| Unchecked-by-default SMS consent checkbox | ✅ Present |
+| Consent label includes: opt-in language, STOP/HELP keywords, message frequency, msg & data rates, "we do not share or sell your data," links to Privacy Policy + Terms | ✅ All carrier-required clauses present |
+| Form will not submit without consent checked | ✅ Verified (required attribute) |
+| Submit button: "SEND MESSAGE" | ✅ |
 
-```html
-<label class="sms-consent">
-  <input type="checkbox" name="sms_consent" required />
-  <span>
-    By checking this box, I agree to receive recurring text messages
-    from RefundLocators (FundLocators LLC) at the mobile number I
-    provided, including case updates, document requests, and follow-ups
-    from my case agent. Message and data rates may apply. Message
-    frequency varies. Reply HELP for help, STOP to cancel. Consent is
-    not a condition of any service. See our
-    <a href="https://fundlocators.com/privacypolicy" target="_blank">Privacy Policy</a>
-    and
-    <a href="https://fundlocators.com/terms-and-conditions" target="_blank">Terms</a>.
-  </span>
-</label>
-```
+**Whoever your agency is (Magnetix Agency per the footer) built that
+form correctly.** No new HTML needs to be added.
 
-**Notes for whoever ships this:**
-- Must be `required` — the form should not submit without it checked.
-- Must NOT be `checked` by default — TCR explicitly rejects pre-checked.
-- Hyperlinks must open the correct policy URLs in a new tab.
-- The phrase "Consent is not a condition of any service" is required
-  by the FCC's 2024 update — leave it in.
-- After you ship it, take a clean screenshot at desktop resolution
-  showing the entire form WITH the checkbox visible and the labels
-  legible. That's your TCR opt-in proof image.
+The form lives in an iframe widget on the home page. That's why my
+first audit erroneously reported "no forms" — `document.querySelectorAll`
+doesn't traverse iframe contents from the parent document, and a static
+fetch of the home page returns the shell, not the iframe payload.
+**Future audit lesson:** when checking opt-in UX on a marketing site,
+always inspect iframes and live-render the page, don't trust static
+HTML or top-level DOM queries.
+
+**The consent label as it currently reads on the form** (verified
+2026-04-30):
+
+> "I consent to receive SMS notifications, alerts, and communication
+> from Fund Locators LLC. Message frequency varies. Message & data
+> rates may apply. Text HELP to +1 513-951-3014 for support. Reply
+> STOP to unsubscribe at any time. Information collected is used
+> solely by Fund Locators LLC for direct communication regarding
+> your property. We do not share or sell your data. Review our
+> Privacy Policy and Terms and Conditions."
+
+This passes carrier review **except for one issue:** the HELP number
+`+1 513-951-3014` doesn't match the number we'll actually be sending
+from. See §2 for the patch.
+
+The previous draft of this doc recommended adding a checkbox to the
+`refundlocators.com/s/{token}` claim modal. **That recommendation is
+withdrawn** — fundlocators.com is the canonical opt-in URL for the
+campaign because that's where the existing properly-built form lives.
+The `/s/{token}` modal still has no checkbox, but it's not the
+opt-in surface for the registered campaign — it's a follow-up tool
+for already-contacted homeowners (see §7).
 
 ---
 
-## §2 — Privacy policy phone-number patch
+## §2 — Phone-number patch (TWO places on fundlocators.com)
 
-**Audit finding:** `https://fundlocators.com/privacypolicy` lists
-`+1 513-951-3014` as the HELP/STOP number. That's not Nathan's iPhone
-(`+1 513-516-2306`), not the Twilio FundLocators Main number
-(`+1 513-998-5440`), and we don't have any record of who owns it.
-TCR rejects campaigns where the HELP/STOP number on the policy doesn't
-match the registered sending number.
+**Audit finding:** the HELP/STOP number `+1 513-951-3014` appears in
+two places on fundlocators.com that need to match each other and the
+actual sending number:
 
-**Patch (replace the existing HELP/STOP line in the policy):**
+1. **Privacy policy** at `/privacypolicy` — in the SMS consent clause
+2. **Home-page consent checkbox label** — in the SMS consent text
+   under the lead form
 
-> "Text HELP to **+1 (513) 998-5440** for support. Text STOP at any
-> time to opt out of further messages."
+That number (951-3014) appears to be a leftover from an earlier GHL
+configuration. The number we're actually keeping/porting is
+**`+1 513-951-8855`** (the GHL number being ported to Twilio).
 
-**Why `+1 513-998-5440`:** that's the FundLocators Main Twilio number
-already on the account, the one we'll register against the campaign.
-If you decide to register a different/new number, change the policy
-to that one before submitting to TCR.
+**Patch (apply in both places):**
+
+Replace every occurrence of `+1 513-951-3014` with **`+1 513-951-8855`**.
+That's it — one number, two locations.
+
+**Why `+1 513-951-8855`:** that's the operational outreach number
+that's been used through GHL for a while and is being ported to
+Twilio. The `+1 513-998-5440` Twilio main is administrative; consumers
+won't recognize it. Best to keep the HELP/STOP number on the recognized
+public-facing line.
+
+**Action:** Justin will give Claude access to the Magnetix Agency CMS
+backend; Claude will make both edits, screenshot before/after, and
+nothing else gets touched.
 
 **Also confirm the rest of the SMS clause stays as-is** — the policy
 already correctly contains:
@@ -219,29 +242,31 @@ ceilings. If a field caps shorter, trim from the front.)
 
 ### Opt-in flow description (paste verbatim)
 
-> Opt-in occurs at refundlocators.com/s/<token>, a personalized claim
-> page sent to identified property owners after our research team
-> matches them to a public court record. The form has three required
-> fields (mailing address, mobile number, signature) plus an
+> Opt-in occurs on the FundLocators homepage at https://fundlocators.com,
+> in the "Get Your Money Today" lead form. The form has four fields
+> (Name, Phone Number, Email, "Tell us about your case") plus an
 > unchecked SMS consent checkbox with the following label:
 >
-> "By checking this box, I agree to receive recurring text messages
-> from RefundLocators (FundLocators LLC) at the mobile number I
-> provided, including case updates, document requests, and follow-ups
-> from my case agent. Message and data rates may apply. Message
-> frequency varies. Reply HELP for help, STOP to cancel. Consent is
-> not a condition of any service. See our Privacy Policy and Terms."
+> "I consent to receive SMS notifications, alerts, and communication
+> from Fund Locators LLC. Message frequency varies. Message & data
+> rates may apply. Text HELP to +1 513-951-8855 for support. Reply
+> STOP to unsubscribe at any time. Information collected is used
+> solely by Fund Locators LLC for direct communication regarding
+> your property. We do not share or sell your data. Review our
+> Privacy Policy and Terms and Conditions."
 >
 > The form will not submit unless the checkbox is checked. After
-> submission, our case agent texts the user from the registered
-> Twilio number within 4 hours.
+> submission, our team contacts the user from the registered Twilio
+> number within 24 hours regarding their property and any potentially
+> recoverable surplus funds.
 
 ### Opt-in screenshot
 
-Upload a desktop screenshot of the `/s/{token}` claim form **after
-§1's checkbox is shipped**, showing the entire form with the
-checkbox visible and label legible. Recommended: zoom to ~125% before
-screenshotting so the small print is readable in the upload.
+Upload a desktop screenshot of the fundlocators.com home page lead
+form **after §2's phone-number patch is shipped** (so the HELP number
+shown matches the registered sending number). Capture the full form
+with the consent checkbox visible and label legible. Recommended:
+zoom to ~125% before screenshotting so the small print reads cleanly.
 
 ### Opt-in keywords
 `START, YES, UNSTOP`
@@ -263,7 +288,7 @@ screenshotting so the small print is readable in the upload.
 > messages. Reply START to resubscribe.
 
 **Help reply (after HELP):**
-> RefundLocators (FundLocators LLC): For support call (513) 998-5440 or
+> RefundLocators (FundLocators LLC): For support call (513) 951-8855 or
 > email hello@fundlocators.com. Reply STOP to opt out. Msg&data rates
 > may apply.
 
@@ -274,8 +299,8 @@ screenshotting so the small print is readable in the upload.
 `https://fundlocators.com/terms-and-conditions`
 
 ### Embedded link / phone number
-- Embedded link: `Yes` (we link `refundlocators.com/s/<token>` URLs)
-- Embedded phone number: `Yes` (HELP replies include `(513) 998-5440`)
+- Embedded link: `Yes` (we link `refundlocators.com/s/<token>` URLs in case follow-ups)
+- Embedded phone number: `Yes` (HELP replies include `(513) 951-8855`)
 
 ### Affiliate marketing
 `No` (don't check this even though tempting — affiliate flag triggers
@@ -288,7 +313,8 @@ extra scrutiny and we don't actually have affiliates)
 `No` (we recover money owed, we don't lend)
 
 ### Number pool
-Assign `+1 513-998-5440` (and any future numbers).
+- `+1 513-998-5440` (FundLocators Main Twilio — already on account, available immediately for the campaign while the port is in flight)
+- `+1 513-951-8855` (currently on GHL — assign to this campaign once the port lands ~7-10 days)
 
 ---
 
@@ -297,8 +323,8 @@ Assign `+1 513-998-5440` (and any future numbers).
 | Rejection reason | Likely cause | Fix |
 |---|---|---|
 | "Privacy policy missing required mobile information clause" | Carriers grep for "mobile information will not be shared" | Already present in fundlocators.com policy — verify the exact phrase wasn't accidentally edited |
-| "Opt-in flow does not constitute express written consent" | Pre-checked checkbox, no checkbox at all, or vague language | §1 fixes this — must be unchecked-by-default and use the FCC's "consent is not a condition" language |
-| "Sample messages do not match opt-in flow" | Sample says "Hi {firstname}" but opt-in flow doesn't capture first name | Either capture first name on the form OR change samples to use the property address as identifier |
+| "Opt-in flow does not constitute express written consent" | Pre-checked checkbox, no checkbox at all, or vague language | The fundlocators.com form already passes (unchecked, required, full clauses). Verify nothing has been edited recently. |
+| "Sample messages do not match opt-in flow" | Sample says "Hi {firstname}" — fundlocators.com form does capture Name, so this should pass. Could fail if samples reference fields the form doesn't capture. | Cross-check sample placeholders against form field names |
 | "Use case mismatch — appears to be Marketing not Customer Care" | Description sounded promotional | Re-emphasize "money already owed", "1-to-1", "case-specific". Strip any "save money", "claim your", marketing-y language |
 | "Brand DBA mismatch with website" | Submitting RefundLocators as DBA but website is fundlocators.com | This is fine — the policy/terms cite both entities — but be ready to attest in writing |
 | "Sample messages must include opt-out language" | Carriers want STOP / opt-out language in initial messages, not just buried in auto-reply | Already in our samples — verify before submit |
@@ -328,8 +354,8 @@ A2P 10DLC compliance is **not the same as** TCPA compliance.
 
 | Cohort | How they got there | Channel |
 |---|---|---|
-| **Warm — opted in via /s/{token} checkbox** | Filled the form, checked the consent box | **Twilio A2P (the registered campaign)** |
-| **Cold — auction-discovered, not yet responded** | Castle's sweep matched their name | **Mac bridge / iMessage from Nathan's phone** (current flow). Don't scale this 10x. |
+| **Warm — opted in via fundlocators.com home form** | Filled "Get Your Money Today" form, checked the SMS consent box | **Twilio A2P (the registered campaign)** |
+| **Cold — auction-discovered, not yet responded** | Castle's sweep matched their name from public records | **Mac bridge / iMessage from Nathan's phone** (current flow). Don't scale this 10x. The `/s/{token}` claim modal on refundlocators.com is a follow-up tool for this cohort — it's not an opt-in surface and doesn't have a consent checkbox. Don't pretend otherwise. |
 
 If you commingle (send cold leads through the registered Twilio
 campaign), you're at TCPA risk on every text. **Strongly recommend
@@ -344,13 +370,14 @@ This is operational guidance, not legal advice. I'm not your lawyer.
 
 Before clicking "Submit Campaign", verify all of these:
 
-- [ ] §1 — Consent checkbox shipped on `/s/{token}` claim modal, unchecked by default, required
-- [ ] §1 — Screenshot taken of the form with checkbox visible
-- [ ] §2 — Privacy policy HELP/STOP number updated to `+1 513-998-5440`
+- [x] §1 — Opt-in form already exists on fundlocators.com homepage with all required clauses (verified 2026-04-30)
+- [ ] §2 — HELP/STOP number patched on fundlocators.com (privacy policy AND form checkbox label) from `513-951-3014` to `513-951-8855`
+- [ ] §1 — Screenshot taken of fundlocators.com home form with consent checkbox visible AFTER §2 patch lands
 - [ ] §3 — Terms SMS clause added (optional but recommended)
-- [ ] §4 — Brand registration submitted and approved
-- [ ] EIN, authorized rep details, mobile number all in hand
-- [ ] §7 — TCPA caveat understood; have a plan for cold-vs-warm channel split
+- [x] §4 — Brand registration submitted (in TCR review as of 2026-04-30, ~$4.50 charged)
+- [ ] §4 — Brand approval received from TCR (1-3 day wait)
+- [ ] EIN, authorized rep details, mobile number all in hand (✅ captured during Twilio upgrade KYC)
+- [ ] §7 — TCPA caveat understood; cold-vs-warm channel split confirmed
 
 Once submitted, monitor Twilio Console daily until the campaign moves
 from "Submitted" → "In Review" → "Approved". Any rejection comes back
