@@ -11685,28 +11685,40 @@ function DocketTab({ dealId }) {
                         </div>
                       </div>
                     )}
-                    {(e.document_url || e.document_ocr_id) && (
-                      <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
-                        {e.document_ocr_id && (
-                          <button
-                            onClick={async () => {
-                              const { data: doc } = await sb.from('documents').select('path').eq('id', e.document_ocr_id).single();
-                              if (!doc?.path) { alert('PDF not found in storage.'); return; }
-                              const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
-                              if (error || !data?.signedUrl) { alert("Couldn't open PDF: " + (error?.message || 'unknown')); return; }
-                              window.open(data.signedUrl, '_blank');
-                            }}
-                            style={{ fontSize: 11, color: "#6ee7b7", background: "#064e3b22", border: "1px solid #065f46", borderRadius: 5, padding: "3px 10px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
-                            📎 Open attached PDF
-                          </button>
-                        )}
-                        {e.document_url && (
-                          <a href={e.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#93c5fd", textDecoration: "none", fontWeight: 600 }}>
-                            📄 View on court site →
-                          </a>
-                        )}
-                      </div>
-                    )}
+                    {/* PDF row — always rendered per Nathan's 2026-04-30 spec
+                        ("every docket update needs a PDF link, no-PDF gets
+                        an obvious slashed indicator"). Three sources, in
+                        priority order: stored OCR doc → upstream court URL
+                        → muted "no PDF available" badge. */}
+                    <div style={{ marginTop: 8, display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
+                      {e.document_ocr_id ? (
+                        <button
+                          onClick={async () => {
+                            const { data: doc } = await sb.from('documents').select('path').eq('id', e.document_ocr_id).single();
+                            if (!doc?.path) { alert('PDF not found in storage.'); return; }
+                            const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(doc.path, 300);
+                            if (error || !data?.signedUrl) { alert("Couldn't open PDF: " + (error?.message || 'unknown')); return; }
+                            window.open(data.signedUrl, '_blank');
+                          }}
+                          style={{ fontSize: 11, color: "#6ee7b7", background: "#064e3b22", border: "1px solid #065f46", borderRadius: 5, padding: "3px 10px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                          📎 Open attached PDF
+                        </button>
+                      ) : e.document_url ? (
+                        <a href={e.document_url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: "#93c5fd", textDecoration: "none", fontWeight: 600 }}>
+                          📄 View on court site →
+                        </a>
+                      ) : (
+                        <span title="No PDF attached to this docket update — Castle / Ohio Intel didn't capture one"
+                          style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: "#57534e", background: "#0c0a0922", border: "1px solid #292524", borderRadius: 5, padding: "3px 10px", fontWeight: 600, position: "relative" }}>
+                          <span style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 16, height: 16 }}>
+                            📄
+                            <span style={{ position: "absolute", inset: -1, border: "2px solid #ef4444", borderRadius: "50%", pointerEvents: "none" }} />
+                            <span style={{ position: "absolute", top: "50%", left: "10%", right: "10%", height: 2, background: "#ef4444", transform: "rotate(-45deg)", transformOrigin: "center", pointerEvents: "none" }} />
+                          </span>
+                          No PDF for this update
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {isUnack && (
                     <button

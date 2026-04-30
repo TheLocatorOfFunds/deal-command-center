@@ -1072,13 +1072,13 @@ function ClientDocketCard({ dealId, access, isPreview }) {
     // Pull live events first (non-backfill). Backfill gets loaded separately
     // so a 53-event historical import doesn't flood the top of the feed.
     const { data: live } = await sb.from('docket_events')
-      .select('id, event_type, event_date, description, court_system, detected_at, is_backfill')
+      .select('id, event_type, event_date, description, court_system, detected_at, is_backfill, document_url')
       .eq('deal_id', dealId)
       .eq('is_backfill', false)
       .order('event_date', { ascending: false })
       .limit(20);
     const { data: history } = await sb.from('docket_events')
-      .select('id, event_type, event_date, description, court_system, detected_at, is_backfill')
+      .select('id, event_type, event_date, description, court_system, detected_at, is_backfill, document_url')
       .eq('deal_id', dealId)
       .eq('is_backfill', true)
       .order('event_date', { ascending: false })
@@ -1165,6 +1165,28 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                       {e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}
                       {e.court_system && <> · {e.court_system}</>}
                     </div>
+                    {/* PDF link — every docket update should carry its
+                        filing. Source-of-truth is document_url (court
+                        portal). When upstream didn't capture one we show a
+                        muted slashed indicator so the absence is obvious. */}
+                    <div style={{ marginTop: 8 }}>
+                      {e.document_url ? (
+                        <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gold)', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid var(--gold)', borderRadius: 6, background: 'transparent' }}>
+                          📄 View the filing →
+                        </a>
+                      ) : (
+                        <span title="The court portal didn't expose a PDF for this entry"
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', fontWeight: 500, padding: '4px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-card-alt)', position: 'relative' }}>
+                          <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
+                            📄
+                            <span style={{ position: 'absolute', inset: -1, border: '2px solid #c0392b', borderRadius: '50%', pointerEvents: 'none' }} />
+                            <span style={{ position: 'absolute', top: '50%', left: '10%', right: '10%', height: 2, background: '#c0392b', transform: 'rotate(-45deg)', transformOrigin: 'center', pointerEvents: 'none' }} />
+                          </span>
+                          No filing PDF available
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -1203,8 +1225,18 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                           <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, lineHeight: 1.45 }}>
                             {e.description}
                           </div>
-                          <div style={{ fontSize: 10, color: 'var(--text-subtle)', marginTop: 4, fontVariantNumeric: 'tabular-nums' }}>
-                            {e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                          <div style={{ fontSize: 10, color: 'var(--text-subtle)', marginTop: 4, fontVariantNumeric: 'tabular-nums', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span>{e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+                            {e.document_url ? (
+                              <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                                style={{ color: 'var(--gold)', textDecoration: 'none', fontWeight: 600 }}>
+                                · 📄 View filing →
+                              </a>
+                            ) : (
+                              <span title="No PDF for this entry" style={{ color: 'var(--text-subtle)', fontStyle: 'italic' }}>
+                                · no PDF
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>

@@ -132,14 +132,23 @@ Deno.serve(async (req) => {
       // Pull all docket events for this case. Could window by discovered_at
       // for efficiency, but volume is low enough that a full pull each time
       // is fine (and keeps the upsert idempotent + crash-safe).
+      //
+      // SELECT * so we capture whatever PDF-link column Ohio Intel exposes
+      // (document_url, pdf_url, document_path, etc.) — Nathan's 2026-04-30
+      // requirement: every NEW docket event must carry its PDF. The
+      // attach-docket-pdf trigger fires on docket_events INSERT when
+      // document_url is non-null, so just passing it through is enough to
+      // get fetch + storage + OCR happening downstream.
       const { data: events, error: evErr } = await intel
         .from("docket_event")
-        .select("id, event_date, event_type, description, raw_text, discovered_at")
+        .select("*")
         .eq("case_id", intelCaseId);
       if (evErr) throw new Error(`docket_event read: ${evErr.message}`);
 
       let added = 0;
       for (const e of events || []) {
+        // Find the PDF link under any of the common upstream column names.
+        const docUrl = e.document_url || e.pdf_url || e.document_path || e.doc_url || null;
         const row = {
           deal_id: sub.deal_id,
           external_id: e.id,                        // ohio-intel UUID; never collides with Castle's string ids
@@ -149,6 +158,7 @@ Deno.serve(async (req) => {
           event_type: e.event_type,
           event_date: e.event_date,
           description: e.description || e.raw_text || null,
+          document_url: docUrl,                     // triggers attach-docket-pdf when non-null
           raw: { ohio_intel_event: e },
           source: "ohio_intel",
           detected_at: e.discovered_at || new Date().toISOString(),
