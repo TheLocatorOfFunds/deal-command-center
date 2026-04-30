@@ -7109,13 +7109,48 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
 function OutreachDraftPanelForDeal({ dealId, deal }) {
   const { item } = useOutreachQueueForDeal(dealId);
   if (!item) return null;
+  // Per Nathan 2026-04-30: Day 0 Intro language is wrong for deals we
+  // already have a contract on — Kemper Ansel (status=filed, attorney
+  // assigned) should NOT see "Hi Kemper, this is Nathan with FundLocators".
+  // Suppress the panel for any deal past lead phase. Also auto-cancel the
+  // stale row so it doesn't keep nagging from the Today AutomationsQueue.
+  // Day 1+ follow-ups also stop firing once we have a contract (drips are
+  // for chasing leads, not contracted clients — case events drive comms
+  // after signing).
+  if (!isLeadStatus(deal)) {
+    if (item.status === 'queued' || item.status === 'pending' || item.status === 'generating') {
+      sb.from('outreach_queue').update({ status: 'cancelled', skipped_reason: 'deal_past_lead_phase' }).eq('id', item.id);
+    }
+    return null;
+  }
   return <OutreachDraftPanel item={item} deal={deal} onSent={() => {}} onSkipped={() => {}} />;
 }
 
 // ─── Today-view Automations section — compact list, click → deal Comms ────────
 function AutomationsQueue({ onSelectDeal }) {
-  const { items, deals } = useOutreachQueue();
+  const { items: rawItems, deals } = useOutreachQueue();
   const firedRef = React.useRef(new Set());
+  const cancelledRef = React.useRef(new Set());
+
+  // Per Nathan 2026-04-30: drafts for deals past lead phase shouldn't show
+  // (e.g. Kemper Ansel is FILED — Day 0 Intro language is wrong for him).
+  // Filter the visible list AND auto-cancel the underlying queue rows so
+  // they don't keep coming back on Today / Outreach for anyone.
+  const items = React.useMemo(() => {
+    return (rawItems || []).filter(item => {
+      const d = deals[item.deal_id];
+      if (!d) return true;        // unknown deal — keep, don't cancel
+      if (isLeadStatus(d)) return true;
+      // Past lead phase → cancel once + hide
+      if (!cancelledRef.current.has(item.id)) {
+        cancelledRef.current.add(item.id);
+        sb.from('outreach_queue')
+          .update({ status: 'cancelled', skipped_reason: 'deal_past_lead_phase' })
+          .eq('id', item.id);
+      }
+      return false;
+    });
+  }, [rawItems, deals]);
 
   // Auto-fire generation for any 'queued' items the moment they appear in Today view
   React.useEffect(() => {
