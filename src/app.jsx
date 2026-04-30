@@ -14727,6 +14727,12 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [ownerUrl, setOwnerUrl] = useState(null);
   const [mintingContactId, setMintingContactId] = useState(null);
   const [contactRelDraft, setContactRelDraft] = useState('child');
+  // phone_intel: per-phone-number capability cache. Keyed by E.164 string.
+  // Populated on mount from phone_intel table for every phone in the
+  // current contacts list. Mac Mini bridge writes back asynchronously
+  // when probes complete; we listen via realtime.
+  const [phoneIntel, setPhoneIntel] = useState({}); // { '+15135551234': { imessage_capable, line_type, status, ... } }
+  const [probingPhones, setProbingPhones] = useState({}); // { '+15135551234': true } during request
   // Inline relationship-edit state for an already-minted URL. When the user
   // changes the dropdown next to "· child", we update personalized_links
   // AND contact_deals in one shot so the public rendered page + the
@@ -14862,6 +14868,42 @@ function OutboundMessages({ dealId, vendors, deal }) {
     extraContacts.forEach(add);
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
+
+  // ── Phone intel: load capability per phone + realtime subscribe ──────────
+  const loadPhoneIntel = async () => {
+    const phones = Array.from(new Set(
+      contacts.map(c => normalizePhone(c.phone)).filter(Boolean)
+    ));
+    if (phones.length === 0) return;
+    const { data } = await sb.from('phone_intel')
+      .select('*').in('phone_e164', phones);
+    const map = {};
+    (data || []).forEach(r => { map[r.phone_e164] = r; });
+    setPhoneIntel(map);
+  };
+  useEffect(() => {
+    loadPhoneIntel();
+    const ch = sb.channel('phone-intel-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'phone_intel' }, loadPhoneIntel)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId, contacts.length]);
+
+  // Queue (or re-queue) a probe of a number. Bridge polls phone_intel
+  // WHERE status='queued' and runs the AppleScript Messages probe.
+  const probePhone = async (rawPhone) => {
+    const e164 = normalizePhone(rawPhone);
+    if (!e164) return;
+    setProbingPhones(p => ({ ...p, [e164]: true }));
+    try {
+      const { error } = await sb.rpc('queue_phone_probe', { p_phone_e164: e164 });
+      if (error) { alert('Could not queue probe: ' + error.message); return; }
+      await loadPhoneIntel();
+    } finally {
+      setProbingPhones(p => { const x = { ...p }; delete x[e164]; return x; });
+    }
+  };
 
   // ── Load messages + calls + notes for this deal ──────────────────────────
   const load = async () => {
@@ -15409,11 +15451,24 @@ function OutboundMessages({ dealId, vendors, deal }) {
           const active = activeContact?.phone === c.phone;
           const count  = msgCount(c);
           const color  = participantColor(c.name);
+          const intel  = phoneIntel[normalizePhone(c.phone)];
+          // Dot color reflects probe result: blue=iMessage, green=SMS,
+          // gray-with-slash=landline/voip/unreachable, amber=probing,
+          // translucent=unprobed. Tooltip on hover explains.
+          const dot = (() => {
+            if (!intel) return { bg: '#44403c', title: 'Not yet probed for iMessage. Click the phone tab and use the Probe button below.' };
+            if (intel.status === 'queued' || intel.status === 'probing') return { bg: '#fbbf24', title: `Probe ${intel.status}…` };
+            if (intel.imessage_capable === true) return { bg: '#3b82f6', title: 'iMessage (blue) — outbound will route via iPhone bridge' };
+            if (intel.imessage_capable === false) return { bg: '#10b981', title: 'SMS only (green) — outbound will route via Twilio' };
+            if (['landline','voip','unreachable'].includes(intel.line_type)) return { bg: '#78716c', title: `${intel.line_type} — texting won't reach this number` };
+            return { bg: '#44403c', title: 'Probe result unknown' };
+          })();
           return (
             <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? `2px solid ${color}` : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 {c.deceased && <span title="Deceased — outreach disabled" style={{ fontSize: 11, flexShrink: 0 }}>🕊️</span>}
+                <span title={dot.title} style={{ width: 7, height: 7, borderRadius: '50%', background: dot.bg, flexShrink: 0, boxShadow: dot.bg === '#fbbf24' ? '0 0 6px rgba(251,191,36,0.6)' : 'none' }} />
                 <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textDecoration: c.deceased ? 'line-through' : 'none' }}>
                   {c.name.split(' ')[0]}
                 </span>
@@ -16009,6 +16064,42 @@ function OutboundMessages({ dealId, vendors, deal }) {
               style={{ background: '#78350f', color: '#fafaf9', border: 0, padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: mintingContactId === cid ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: mintingContactId === cid ? 0.6 : 1 }}>
               {mintingContactId === cid ? 'Generating…' : '🔗 Generate URL'}
             </button>
+          </div>
+        );
+      })()}
+
+      {/* Phone-intel status row — appears above composer when an active
+          contact has a phone. Shows iMessage-capable / SMS / unreachable
+          + a Probe button to (re-)run the Mac Mini bridge probe. Result
+          determines whether outbound routes via iPhone bridge or Twilio. */}
+      {activeContact?.phone && !activeContact?._everyone && (() => {
+        const e164 = normalizePhone(activeContact.phone);
+        const intel = phoneIntel[e164];
+        const probing = probingPhones[e164] || intel?.status === 'queued' || intel?.status === 'probing';
+        let label, color, route;
+        if (probing) {
+          label = 'Probing iMessage capability…'; color = '#fbbf24'; route = 'Mac Mini bridge is running the probe — refresh in ~30s.';
+        } else if (!intel) {
+          label = 'Not yet probed'; color = '#78716c'; route = 'Click Probe to ask the Mac Mini bridge whether this number is iMessage-capable.';
+        } else if (intel.imessage_capable === true) {
+          label = '🔵 iMessage capable'; color = '#3b82f6'; route = 'Outbound routes via iPhone bridge (513-516-2306 — currently DOWN per memory; falls back to Twilio until restored).';
+        } else if (intel.imessage_capable === false) {
+          label = '🟢 SMS only'; color = '#10b981'; route = 'Outbound routes via Twilio (513-951-8855).';
+        } else if (['landline','voip','unreachable'].includes(intel.line_type)) {
+          label = `📞 ${intel.line_type}`; color = '#78716c'; route = "This number can't receive texts. Send paths should refuse.";
+        } else {
+          label = 'Result unclear'; color = '#a8a29e'; route = intel.probe_error || 'Probe completed but capability unknown. Re-probe to retry.';
+        }
+        return (
+          <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: '0.04em' }}>{label}</span>
+            <span style={{ fontSize: 10, color: '#78716c', flex: 1, minWidth: 200 }}>{route}</span>
+            <button onClick={() => probePhone(activeContact.phone)} disabled={probing}
+              title="Open Messages.app on the Mac Mini bridge, address this number, read whether the bubble turns blue (iMessage) or green (SMS). Result cached for next time."
+              style={{ background: probing ? '#1c1917' : '#78350f', color: probing ? '#78716c' : '#fbbf24', border: '1px solid #92400e', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: probing ? 'wait' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+              {probing ? '…probing' : (intel ? 'Re-probe' : 'Probe')}
+            </button>
+            {intel?.probed_at && <span style={{ fontSize: 9, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>last: {new Date(intel.probed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
           </div>
         );
       })()}
