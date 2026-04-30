@@ -2194,7 +2194,10 @@ function EodReportModal({ me, activeThread, onClose, onPosted }) {
   const [workedOn, setWorkedOn] = useState('');
   const [blocked, setBlocked] = useState('');
   const [nextUp, setNextUp] = useState('');
+  const [brainDump, setBrainDump] = useState('');
   const [saving, setSaving] = useState(false);
+  const [polishing, setPolishing] = useState(false);
+  const [polishedAt, setPolishedAt] = useState(null);
   const [err, setErr] = useState(null);
   const [existing, setExisting] = useState(null);
   const today = new Date().toISOString().slice(0, 10);
@@ -2213,6 +2216,37 @@ function EodReportModal({ me, activeThread, onClose, onPosted }) {
       }
     })();
   }, [me?.id]);
+
+  const polish = async () => {
+    if (polishing) return;
+    if (!workedOn.trim() && !blocked.trim() && !nextUp.trim() && !brainDump.trim()) {
+      setErr('Add a draft or brain dump first — Lauren needs something to work with.');
+      return;
+    }
+    setPolishing(true); setErr(null);
+    try {
+      const { data, error } = await sb.functions.invoke('lauren-eod-polish', {
+        body: {
+          worked_on: workedOn,
+          blocked,
+          next_up: nextUp,
+          brain_dump: brainDump,
+          user_name: me?.name || me?.display_name || null,
+        },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      setWorkedOn(data?.worked_on || '');
+      setBlocked(data?.blocked || '');
+      setNextUp(data?.next_up || '');
+      setBrainDump('');  // brain dump's been folded in — clear it
+      setPolishedAt(Date.now());
+    } catch (e) {
+      setErr('Lauren had trouble polishing this — ' + (e?.message || String(e)));
+    } finally {
+      setPolishing(false);
+    }
+  };
 
   const submit = async () => {
     if (saving) return;
@@ -2281,6 +2315,27 @@ function EodReportModal({ me, activeThread, onClose, onPosted }) {
               placeholder="The 2-3 things you'll tackle first thing tomorrow."
               style={{ ...inputStyle, fontFamily: 'inherit', resize: 'vertical' }} />
           </Field>
+          {/* Brain dump — give Lauren raw context to expand + summarize the
+              three fields above. Cleared after polish folds it in. */}
+          <div style={{ borderTop: '1px dashed #44403c', paddingTop: 12 }}>
+            <Field label="✨ Brain dump for Lauren (optional)">
+              <textarea value={brainDump} onChange={e => setBrainDump(e.target.value)} rows={3}
+                placeholder="Type whatever you want — full sentences, half-thoughts, names, anything. Click Polish and Lauren will rewrite the three fields above in clean form. Nothing posts until you hit Submit."
+                style={{ ...inputStyle, fontFamily: 'inherit', resize: 'vertical' }} />
+            </Field>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+              <button onClick={polish} disabled={polishing}
+                style={{ ...btnGhost, fontSize: 12, padding: '6px 12px', opacity: polishing ? 0.5 : 1, color: '#fbbf24', borderColor: '#78350f' }}>
+                {polishing ? 'Polishing…' : '✨ Polish with Lauren'}
+              </button>
+              {polishedAt && !polishing && (
+                <span style={{ fontSize: 10, color: '#4ade80' }}>Polished — review the fields above before submitting.</span>
+              )}
+              {!polishedAt && !polishing && (
+                <span style={{ fontSize: 10, color: '#78716c' }}>Lauren rewrites the 3 fields above. You can edit after.</span>
+              )}
+            </div>
+          </div>
           {err && <div style={{ padding: 8, background: '#7f1d1d', color: '#fecaca', borderRadius: 6, fontSize: 12 }}>{err}</div>}
         </div>
         <div style={{ padding: '12px 18px', borderTop: '1px solid #1c1917', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
