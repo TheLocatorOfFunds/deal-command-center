@@ -252,6 +252,30 @@ convention above closes the loop: live state for "what's happening
 now," archives for "what's been figured out before," `memory/` for
 "what survives across many sessions."
 
+### Stop hook safety net (`.claude/hooks/touch-working-on.sh`)
+A Stop hook fires after every Claude turn and updates a
+`**Last updated (auto):**` timestamp in your section of
+`WORKING_ON.md` — automatically, even if Claude itself forgets to
+update its content. The hook:
+- Maps your OS user (`$USER`) → DCC name (`Justin`/`Nathan`/`Erik`)
+- Updates only the timestamp line in your section (never touches others')
+- Auto-commits the heartbeat if the file's last commit is > 5 min old
+  (avoids commit spam while still surfacing state to other sessions
+  on their next `git pull`)
+- Never pushes — Claude pushes as part of normal commit flow
+- Always exits 0 (best-effort; never blocks a session)
+
+This closes the failure modes where Claude forgets to update on its
+own — context compaction dropping the rule, auto-mode skipping
+"non-essential" reads, subagents not following the convention,
+focus drift over long sessions, and mid-session crashes. The
+timestamp moves regardless. Other sessions can see "active 2 min
+ago" vs "stale 6 hours, probably crashed."
+
+If the hook ever causes problems, disable it by removing the `Stop`
+block from `.claude/settings.json` — the convention still works
+without it, just less robustly.
+
 ### RLS convention (hard rule — applies to both sessions)
 Always use the helper functions — never inline role checks:
 ```sql
