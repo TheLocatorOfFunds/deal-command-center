@@ -200,10 +200,13 @@ Post a note and wait for the other session to coordinate.
 
 ### Session start ritual
 ```bash
-git pull                                    # always — Nathan may have pushed
-cat WORKING_ON.md                           # see what the other session is doing
+git pull                                    # always — Nathan / Erik may have pushed
+cat WORKING_ON.md                           # see what each session is currently doing
+ls session_archives/                        # skim recent archives for relevant context
+cat session_archives/index.md               # one-line summaries of past sessions
 ```
-Then update `WORKING_ON.md` with what you're about to work on.
+Then update **your own section** of `WORKING_ON.md` with what you're about
+to work on. Per-user sections (Justin / Nathan / Erik) — edit only your own.
 
 ### Branch strategy
 - Work on a short-lived branch: `git checkout -b justin/your-feature-name`
@@ -218,10 +221,36 @@ Then update `WORKING_ON.md` with what you're about to work on.
 4. Apply via Supabase SQL editor (not `supabase db push` — no local DB)
 5. Commit the `.sql` file in the same commit as the feature that needs it
 
+### Live state — update WORKING_ON.md as you work
+Don't wait for session end. As you make decisions or shift focus,
+update YOUR section of `WORKING_ON.md` and push (small commits are
+fine). Other sessions running concurrently `git pull` to refresh — so
+the more recent your section is, the less likely they are to step on
+your work. Conflict-free as long as everyone edits only their own
+section. **Never edit another user's section.**
+
 ### Session end ritual
-1. Commit everything (including any migration files)
-2. Update `WORKING_ON.md` — clear your entry or note what's left
-3. Push branch (or merge to `main` if it's stable and tested)
+1. Commit everything (including any migration files).
+2. Update **your own section** of `WORKING_ON.md` — mark idle if you
+   wrapped, note "crashed at <step>, resume from <file>" if you didn't.
+3. **If the session was substantive** (architectural decisions made,
+   non-obvious gotchas hit, or work future sessions need to know about):
+   write a `session_archives/YYYY-MM-DD-<short-slug>.md` entry using
+   the template at `session_archives/_TEMPLATE.md`, and add a one-line
+   summary to `session_archives/index.md`. Skip for trivial sessions
+   (typo fixes, small bug PRs — those are sufficiently captured in the
+   PR + git log).
+4. Push branch (or merge to `main` if it's stable and tested).
+
+### Why this matters
+Multiple Claude Code sessions run in parallel — Justin, Nathan, Erik,
+each sometimes with a couple of worktrees going. Without live state in
+`WORKING_ON.md` and durable learnings in `session_archives/`, every
+session re-discovers the same architectural quirks (iframe forms,
+Twilio JWT flag, Postgres function overload ambiguity, etc.). The
+convention above closes the loop: live state for "what's happening
+now," archives for "what's been figured out before," `memory/` for
+"what survives across many sessions."
 
 ### RLS convention (hard rule — applies to both sessions)
 Always use the helper functions — never inline role checks:
