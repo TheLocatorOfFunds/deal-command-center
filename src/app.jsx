@@ -12081,11 +12081,46 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
     }
   };
 
+  // Border color now follows the pill: red when last_status is failed,
+  // amber when last_status is success but the scraper is flapping (failures
+  // in 24h), green when clean. Fixes Nathan's confusion of "red border with
+  // green SUCCESS pill" — those used to disagree.
   const statusColor = (h) => {
     if (h.last_status === 'running') return "#3b82f6";
-    if (h.failures_24h > 2) return "#ef4444";
-    if (h.last_status === 'failed') return "#f59e0b";
+    if (h.last_status === 'failed') return "#ef4444";
+    if (h.failures_24h > 2) return "#f59e0b";  // up but flapping
     return "#10b981";
+  };
+
+  // Drill-in state for the Scraper Health tab — only one expanded at once.
+  // Keyed by county (matches what's shown in the v_scraper_health view).
+  const [expandedCounty, setExpandedCounty] = useState(null);
+  const [drillData, setDrillData] = useState({});  // county → { agent, runs }
+  const [expandedRun, setExpandedRun] = useState(null);  // run_id whose errors are expanded
+
+  // On expand: pull last 20 runs by county → take their agent_id → fetch
+  // the catalog row. (View is keyed by county, agent_id lives in
+  // scrape_runs; in some cases — e.g. county='hamilton,franklin',
+  // agent_id='main' — they don't match. Look up via the runs.)
+  const loadCountyDrill = async (county) => {
+    const { data: runs } = await sb.from('scrape_runs')
+      .select('*').eq('county', county)
+      .order('started_at', { ascending: false }).limit(20);
+    const agentId = (runs || []).find(r => r.agent_id)?.agent_id || null;
+    let agent = null;
+    if (agentId) {
+      const { data } = await sb.from('scraper_agents').select('*').eq('agent_id', agentId).maybeSingle();
+      agent = data;
+    }
+    setDrillData(prev => ({ ...prev, [county]: { agent, runs: runs || [] } }));
+  };
+
+  const fmtRunDuration = (started, completed) => {
+    if (!started || !completed) return '—';
+    const sec = Math.round((new Date(completed).getTime() - new Date(started).getTime()) / 1000);
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    return `${m}m ${sec % 60}s`;
   };
 
   const timeAgo = (iso) => {
@@ -12205,21 +12240,137 @@ function DocketOverviewModal({ onClose, onJumpToDeal }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {health.map(h => {
               const color = statusColor(h);
+              const isOpen = expandedCounty === h.county;
+              const drill = drillData[h.county];
               return (
-                <div key={h.county} style={{ padding: "12px 14px", background: "#0c0a09", border: "1px solid #292524", borderLeft: `3px solid ${color}`, borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-                  <div style={{ flex: 1, minWidth: 180 }}>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9" }}>{h.county}</div>
-                    <div style={{ fontSize: 11, color: "#78716c", marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap" }}>
-                      <span>Last run: {timeAgo(h.last_run_started)}</span>
-                      <span>Last success: {timeAgo(h.last_success_at)}</span>
-                      <span>Events 24h: <b style={{ color: "#fafaf9" }}>{h.events_24h || 0}</b></span>
-                      <span>Events 7d: <b style={{ color: "#fafaf9" }}>{h.events_7d || 0}</b></span>
-                      {h.failures_24h > 0 && <span style={{ color: "#ef4444", fontWeight: 700 }}>{h.failures_24h} failures in 24h</span>}
+                <div key={h.county} style={{ background: "#0c0a09", border: "1px solid #292524", borderLeft: `3px solid ${color}`, borderRadius: 6 }}>
+                  {/* Header row — click to expand */}
+                  <div onClick={() => {
+                    if (isOpen) { setExpandedCounty(null); return; }
+                    setExpandedCounty(h.county);
+                    if (!drill) loadCountyDrill(h.county);
+                  }} style={{ padding: "12px 14px", display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, cursor: "pointer" }}>
+                    <div style={{ flex: 1, minWidth: 180 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 10, color: "#57534e" }}>{isOpen ? "▾" : "▸"}</span>
+                        {h.county}
+                      </div>
+                      <div style={{ fontSize: 11, color: "#78716c", marginTop: 4, display: "flex", gap: 14, flexWrap: "wrap" }}>
+                        <span>Last run: {timeAgo(h.last_run_started)}</span>
+                        <span>Last success: {timeAgo(h.last_success_at)}</span>
+                        <span>Events 24h: <b style={{ color: "#fafaf9" }}>{h.events_24h || 0}</b></span>
+                        <span>Events 7d: <b style={{ color: "#fafaf9" }}>{h.events_7d || 0}</b></span>
+                        {h.failures_24h > 0 && <span style={{ color: "#ef4444", fontWeight: 700 }}>{h.failures_24h} failures in 24h</span>}
+                      </div>
                     </div>
+                    <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 4, background: color + "22", color, letterSpacing: "0.06em", textTransform: "uppercase" }}>
+                      {h.last_status}
+                    </span>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 700, padding: "4px 10px", borderRadius: 4, background: color + "22", color, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-                    {h.last_status}
-                  </span>
+
+                  {/* Expanded "glass box" drill-in panel */}
+                  {isOpen && (
+                    <div style={{ padding: "0 14px 14px", borderTop: "1px solid #1c1917" }}>
+                      {!drill ? (
+                        <div style={{ fontSize: 11, color: "#78716c", padding: "12px 0", fontStyle: "italic" }}>Loading agent details + run history…</div>
+                      ) : (
+                        <>
+                          {/* Agent catalog — what is this scraper, what does it do */}
+                          {drill.agent ? (
+                            <div style={{ paddingTop: 14 }}>
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 8 }}>What this scraper is</div>
+                              <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 6, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 6, fontSize: 12 }}>
+                                  <div style={{ color: "#78716c" }}>Display name</div><div style={{ color: "#fafaf9", fontWeight: 600 }}>{drill.agent.display_name || drill.agent.agent_id}</div>
+                                  <div style={{ color: "#78716c" }}>Engine</div><div style={{ color: "#fbbf24", fontWeight: 600, fontFamily: "'DM Mono', monospace", fontSize: 11 }}>{drill.agent.engine || '—'}</div>
+                                  <div style={{ color: "#78716c" }}>Cadence</div><div style={{ color: "#a8a29e", fontFamily: "'DM Mono', monospace", fontSize: 11 }}>every {drill.agent.cadence_minutes || '?'} min</div>
+                                  {drill.agent.source_url && (<><div style={{ color: "#78716c" }}>Source</div><div><a href={drill.agent.source_url} target="_blank" rel="noopener noreferrer" style={{ color: "#93c5fd", fontSize: 11, fontFamily: "'DM Mono', monospace" }}>{drill.agent.source_url}</a></div></>)}
+                                </div>
+                                {drill.agent.description && <div style={{ fontSize: 12, color: "#d6d3d1", lineHeight: 1.55, marginTop: 4, paddingTop: 8, borderTop: "1px solid #292524" }}>{drill.agent.description}</div>}
+                                {drill.agent.capabilities?.length > 0 && (
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                                    {drill.agent.capabilities.map(cap => <span key={cap} style={{ fontSize: 10, padding: "2px 8px", borderRadius: 3, background: "#0c0a09", color: "#a8a29e", border: "1px solid #44403c", fontFamily: "'DM Mono', monospace" }}>{cap}</span>)}
+                                  </div>
+                                )}
+                                {drill.agent.requires?.length > 0 && (
+                                  <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>
+                                    <b style={{ color: "#a8a29e" }}>Requires:</b> {drill.agent.requires.join(' · ')}
+                                  </div>
+                                )}
+                              </div>
+
+                              {(drill.agent.success_criteria || drill.agent.failure_criteria) && (
+                                <>
+                                  <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>What success and failed mean here</div>
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                    {drill.agent.success_criteria && (
+                                      <div style={{ background: "#064e3b22", border: "1px solid #065f46", borderRadius: 6, padding: 10 }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: "#6ee7b7", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>✓ Success</div>
+                                        <div style={{ fontSize: 11, color: "#d1fae5", lineHeight: 1.5 }}>{drill.agent.success_criteria}</div>
+                                      </div>
+                                    )}
+                                    {drill.agent.failure_criteria && (
+                                      <div style={{ background: "#7f1d1d22", border: "1px solid #b91c1c", borderRadius: 6, padding: 10 }}>
+                                        <div style={{ fontSize: 10, fontWeight: 700, color: "#fca5a5", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>✗ Failed</div>
+                                        <div style={{ fontSize: 11, color: "#fee2e2", lineHeight: 1.5 }}>{drill.agent.failure_criteria}</div>
+                                      </div>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                          ) : (
+                            <div style={{ fontSize: 11, color: "#fbbf24", padding: "12px 10px", background: "#78350f22", border: "1px dashed #92400e", borderRadius: 6, marginTop: 14 }}>
+                              No catalog entry for this scraper yet. Whoever owns this agent should UPSERT into <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>scraper_agents</code> with engine / capabilities / criteria so this drill-in fills in.
+                            </div>
+                          )}
+
+                          {/* Run history — last 20 runs with expandable error JSON */}
+                          <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginTop: 14, marginBottom: 8 }}>Recent runs ({drill.runs.length})</div>
+                          {drill.runs.length === 0 ? (
+                            <div style={{ fontSize: 11, color: "#78716c", fontStyle: "italic", padding: 8 }}>No runs recorded for this agent yet.</div>
+                          ) : (
+                            <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 11, fontFamily: "'DM Mono', monospace" }}>
+                              {drill.runs.map(r => {
+                                const isFail = r.status === 'failed';
+                                const errsExpanded = expandedRun === r.id;
+                                const hasErrs = Array.isArray(r.errors) && r.errors.length > 0;
+                                return (
+                                  <div key={r.id} style={{ background: "#1c1917", border: `1px solid ${isFail ? '#7f1d1d' : '#292524'}`, borderRadius: 4, padding: "6px 10px" }}>
+                                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                                      <span style={{ color: isFail ? "#fca5a5" : "#6ee7b7", fontWeight: 700, minWidth: 50, fontSize: 9 }}>{(r.status || '').toUpperCase()}</span>
+                                      <span style={{ color: "#a8a29e", flex: 1, minWidth: 140 }}>{new Date(r.started_at).toLocaleString()}</span>
+                                      <span style={{ color: "#78716c" }}>⏱ {fmtRunDuration(r.started_at, r.completed_at)}</span>
+                                      <span style={{ color: "#78716c" }}>deals: <b style={{ color: "#fafaf9" }}>{r.deals_checked ?? 0}</b></span>
+                                      <span style={{ color: "#78716c" }}>found: <b style={{ color: "#fafaf9" }}>{r.events_found ?? 0}</b></span>
+                                      <span style={{ color: r.events_new > 0 ? "#6ee7b7" : "#78716c" }}>new: <b>{r.events_new ?? 0}</b></span>
+                                      {hasErrs && (
+                                        <button onClick={() => setExpandedRun(errsExpanded ? null : r.id)}
+                                          style={{ background: "transparent", border: "1px solid #92400e", color: "#fbbf24", borderRadius: 3, padding: "1px 8px", fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                                          {errsExpanded ? '▾ hide' : `▸ ${r.errors.length} err${r.errors.length === 1 ? '' : 's'}`}
+                                        </button>
+                                      )}
+                                    </div>
+                                    {hasErrs && errsExpanded && (
+                                      <div style={{ marginTop: 6, padding: 8, background: "#0c0a09", border: "1px solid #292524", borderRadius: 3, maxHeight: 280, overflowY: "auto" }}>
+                                        {r.errors.map((err, i) => (
+                                          <div key={i} style={{ fontSize: 10, color: "#fca5a5", padding: "4px 0", borderBottom: i < r.errors.length - 1 ? "1px solid #1c1917" : "none", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                            <div style={{ color: "#fbbf24", fontWeight: 700, marginBottom: 2 }}>{err.deal_id || err.case || `Error #${i + 1}`}{err.county ? ` · ${err.county}` : ''}</div>
+                                            <div>{err.error || JSON.stringify(err)}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                    {r.notes && <div style={{ marginTop: 4, fontSize: 10, color: "#78716c", fontStyle: "italic" }}>{r.notes}</div>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
