@@ -524,30 +524,43 @@ function DealCommandCenter({ session, profile }) {
   // threads the user isn't in. Powers the green "📹 Join Eric" pills in
   // the header so Nathan can drop in to whoever's currently in a call
   // without having to dig through chat history for the link.
+  //
+  // Done as two queries instead of a profiles() join because team_messages.
+  // sender_id FKs to auth.users (not public.profiles), and PostgREST can
+  // only follow declared FKs — the join silently returns 0 rows otherwise.
   const loadActiveCalls = async () => {
     const uid = session?.user?.id;
     if (!uid) return;
     const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    const { data } = await sb.from('team_messages')
-      .select('id, sender_id, body, created_at, profiles(name, display_name)')
+    const { data: msgs, error: msgErr } = await sb.from('team_messages')
+      .select('id, sender_id, body, created_at')
       .gte('created_at', cutoff)
       .like('body', '%started a video call%')
       .order('created_at', { ascending: false })
       .limit(40);
+    if (msgErr) { console.error('[loadActiveCalls] msgs query failed', msgErr); return; }
+    // Dedupe by sender, latest per user, skip own.
     const byUser = new Map();
-    (data || []).forEach(m => {
-      if (m.sender_id === uid) return;          // skip my own calls
-      if (byUser.has(m.sender_id)) return;       // already have a more recent one
+    (msgs || []).forEach(m => {
+      if (m.sender_id === uid) return;
+      if (byUser.has(m.sender_id)) return;
       const urlMatch = (m.body || '').match(/https:\/\/meet\.jit\.si\/[\w\-]+/);
       if (!urlMatch) return;
       byUser.set(m.sender_id, {
         user_id: m.sender_id,
-        name: m.profiles?.display_name || m.profiles?.name || 'Someone',
         url: urlMatch[0],
         started_at: m.created_at,
       });
     });
-    setActiveCalls(Array.from(byUser.values()));
+    if (byUser.size === 0) { setActiveCalls([]); return; }
+    // Look up names for the senders.
+    const ids = Array.from(byUser.keys());
+    const { data: profs } = await sb.from('profiles').select('id, name, display_name').in('id', ids);
+    (profs || []).forEach(p => {
+      const entry = byUser.get(p.id);
+      if (entry) entry.name = p.display_name || p.name || 'Someone';
+    });
+    setActiveCalls(Array.from(byUser.values()).map(c => ({ ...c, name: c.name || 'Someone' })));
   };
 
   const loadLaurenFlaggedCount = async () => {
