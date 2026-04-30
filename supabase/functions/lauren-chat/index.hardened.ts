@@ -179,7 +179,43 @@ async function searchKnowledge(query: string) {
   return { found: true, count: data.length, entries: data };
 }
 
-// ─── Layer 1: Input firewall ────────────────────────────────────────
+// ─── Layer 1a: Rate limit (per-visitor + per-IP, hourly bucket) ─────
+// Calls the lauren_rate_limit_bump RPC defined in
+// migration 20260430230000_lauren_rate_limit.sql.
+// Tunable here without redeploying SQL.
+
+const VISITOR_HOURLY_LIMIT = 30;
+const IP_HOURLY_LIMIT = 60;
+
+async function checkRateLimit(db: any, visitorId: string | null, ip: string | null): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    if (visitorId) {
+      const { data: vCount } = await db.rpc("lauren_rate_limit_bump", {
+        p_scope: "visitor",
+        p_key: visitorId,
+      });
+      if (typeof vCount === "number" && vCount > VISITOR_HOURLY_LIMIT) {
+        return { ok: false, reason: `visitor_hourly_limit (${vCount}/${VISITOR_HOURLY_LIMIT})` };
+      }
+    }
+    if (ip) {
+      const { data: ipCount } = await db.rpc("lauren_rate_limit_bump", {
+        p_scope: "ip",
+        p_key: ip,
+      });
+      if (typeof ipCount === "number" && ipCount > IP_HOURLY_LIMIT) {
+        return { ok: false, reason: `ip_hourly_limit (${ipCount}/${IP_HOURLY_LIMIT})` };
+      }
+    }
+  } catch (_) {
+    // Fail-open if the RPC errors. Better to serve the user than to
+    // misfire a refusal because the table isn't migrated yet.
+    return { ok: true };
+  }
+  return { ok: true };
+}
+
+// ─── Layer 1b: Input firewall ────────────────────────────────────────
 // Cheap regex + length checks. Anything that matches gets a canned
 // refusal and never reaches Anthropic — saves cost AND removes the
 // surface entirely.
@@ -297,7 +333,22 @@ Deno.serve(async (req) => {
     return Response.json({ error: String(e) }, { status: 400, headers: CORS });
   }
 
-  // Layer 1: input firewall.
+  const db = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+  );
+
+  // Layer 1a: rate limit (per-visitor + per-IP, hourly bucket).
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || null;
+  const rate = await checkRateLimit(db, visitorId, ip);
+  if (!rate.ok) {
+    return Response.json(
+      { reply: REFUSAL_REPLY, session_id: sessionId, deal_id: null, blocked: rate.reason },
+      { status: 429, headers: { ...CORS, "Content-Type": "application/json" } }
+    );
+  }
+
+  // Layer 1b: input firewall (length cap + injection-pattern detection).
   const screen = screenInput(messages);
   if (!screen.ok) {
     return Response.json(
@@ -305,11 +356,6 @@ Deno.serve(async (req) => {
       { headers: { ...CORS, "Content-Type": "application/json" } }
     );
   }
-
-  const db = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
-  );
 
   // Compose system: base SYSTEM + (optional) per-session
   // personalization_context. The context is treated as a
