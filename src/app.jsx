@@ -364,6 +364,9 @@ function DealCommandCenter({ session, profile }) {
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  // [{user_id, name, url, started_at}] — derived from recent team_messages
+  // posts of the form "📹 X started a video call: https://meet.jit.si/..."
+  const [activeCalls, setActiveCalls] = useState([]);
   const [pendingWalkthroughs, setPendingWalkthroughs] = useState([]);
   const [showWalkthroughs, setShowWalkthroughs] = useState(false);
   const [pendingOffersCount, setPendingOffersCount] = useState(0);
@@ -515,6 +518,38 @@ function DealCommandCenter({ session, profile }) {
     setUnreadChatCount(data || 0);
   };
 
+  // Active video calls. Derived from "📹 X started a video call: <url>"
+  // posts in team_messages within the last 30 min — dedupe by sender,
+  // keep most recent per teammate. RLS naturally hides messages from
+  // threads the user isn't in. Powers the green "📹 Join Eric" pills in
+  // the header so Nathan can drop in to whoever's currently in a call
+  // without having to dig through chat history for the link.
+  const loadActiveCalls = async () => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { data } = await sb.from('team_messages')
+      .select('id, sender_id, body, created_at, profiles(name, display_name)')
+      .gte('created_at', cutoff)
+      .like('body', '%started a video call%')
+      .order('created_at', { ascending: false })
+      .limit(40);
+    const byUser = new Map();
+    (data || []).forEach(m => {
+      if (m.sender_id === uid) return;          // skip my own calls
+      if (byUser.has(m.sender_id)) return;       // already have a more recent one
+      const urlMatch = (m.body || '').match(/https:\/\/meet\.jit\.si\/[\w\-]+/);
+      if (!urlMatch) return;
+      byUser.set(m.sender_id, {
+        user_id: m.sender_id,
+        name: m.profiles?.display_name || m.profiles?.name || 'Someone',
+        url: urlMatch[0],
+        started_at: m.created_at,
+      });
+    });
+    setActiveCalls(Array.from(byUser.values()));
+  };
+
   const loadLaurenFlaggedCount = async () => {
     try {
       const { data } = await sb.rpc('lauren_flagged_count');
@@ -563,7 +598,13 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadActiveCalls(); }, []);
+  // Sweep stale "active calls" every 60s so the pill disappears once the
+  // 30-min window passes without needing a new realtime event to fire.
+  useEffect(() => {
+    const t = setInterval(loadActiveCalls, 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   // Presence heartbeat — every 60s while DCC is open in this tab, ping
   // touch_user_presence() so other team members see "active now". Skipped
@@ -587,7 +628,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, loadPendingWalkthroughs)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers' }, loadPendingOffersCount)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, loadUnreadChatCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, () => { loadUnreadChatCount(); loadActiveCalls(); })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
@@ -762,6 +803,28 @@ function DealCommandCenter({ session, profile }) {
               )}
             </button>
           )}
+          {/* Active video call pills — one per teammate currently in a Jitsi
+              call (within the last 30 min). Click → join that room in a new
+              tab. Auto-disappear when the 30-min window lapses. */}
+          {isTeam && activeCalls.map(call => {
+            const minsAgo = Math.max(0, Math.round((Date.now() - new Date(call.started_at).getTime()) / 60_000));
+            return (
+              <button key={call.user_id}
+                onClick={() => window.open(call.url, '_blank', 'noopener,noreferrer')}
+                title={`${call.name} started a video call ${minsAgo} min ago — click to join`}
+                style={{
+                  background: '#15803d', color: '#fff', border: '1px solid #16a34a',
+                  borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 700,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  boxShadow: '0 0 0 1px rgba(22,163,74,0.3)',
+                }}>
+                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#fff', animation: 'pulse 1.5s infinite', boxShadow: '0 0 6px rgba(255,255,255,0.7)' }} />
+                📹 Join {call.name}
+                <span style={{ color: '#bbf7d0', fontSize: 9, fontWeight: 500 }}>{minsAgo}m</span>
+              </button>
+            );
+          })}
           {/* Owner-only: Lauren badge with flagged-count. The Team modal +
               Lauren Control Center moved into Account Settings → Owner Tools
               per Nathan's audit, but the flagged-count needs an at-a-glance
