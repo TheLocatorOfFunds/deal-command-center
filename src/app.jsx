@@ -1844,7 +1844,7 @@ function TeamView({ teamMembers, isOwner }) {
                     await sb.from('team_messages').insert({
                       thread_id: activeThread.id,
                       sender_id: me.id,
-                      sender_role: me.role,
+                      sender_kind: me.role === 'va' ? 'va' : 'admin',
                       body: `📹 ${me.name || 'Someone'} started a video call: ${url}`,
                     });
                   }}
@@ -2275,7 +2275,7 @@ function EodReportModal({ me, activeThread, onClose, onPosted }) {
         await sb.from('team_messages').insert({
           thread_id: activeThread.id,
           sender_id: me.id,
-          sender_role: me.role,
+          sender_kind: me.role === 'va' ? 'va' : 'admin',
           body: summary,
         });
       }
