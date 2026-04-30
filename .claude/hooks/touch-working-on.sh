@@ -97,7 +97,7 @@ except Exception:
     pass
 PYEOF
 
-# 4. Debounce-commit: only auto-commit if the file's last commit is > 5 min old.
+# 4. Debounce-commit: only auto-commit if the file's last commit is > 2 min old.
 #    This keeps the auto-heartbeat visible to other sessions without flooding
 #    git history. The push happens through normal Claude commit flow, not here.
 LAST_COMMIT_TS=$(cd "$REPO_ROOT" && git log -1 --format=%ct -- WORKING_ON.md 2>/dev/null)
@@ -105,8 +105,8 @@ LAST_COMMIT_TS=${LAST_COMMIT_TS:-0}
 NOW=$(date +%s)
 ELAPSED=$((NOW - LAST_COMMIT_TS))
 
-# Only commit if the file is actually different from HEAD AND it's been > 5 min
-if [ "$ELAPSED" -gt 300 ]; then
+# Only commit if the file is actually different from HEAD AND it's been > 2 min
+if [ "$ELAPSED" -gt 120 ]; then
   cd "$REPO_ROOT" || exit 0
   if ! git diff --quiet WORKING_ON.md 2>/dev/null; then
     git add WORKING_ON.md 2>/dev/null

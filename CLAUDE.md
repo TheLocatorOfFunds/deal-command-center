@@ -259,7 +259,7 @@ A Stop hook fires after every Claude turn and updates a
 update its content. The hook:
 - Maps your OS user (`$USER`) → DCC name (`Justin`/`Nathan`/`Erik`)
 - Updates only the timestamp line in your section (never touches others')
-- Auto-commits the heartbeat if the file's last commit is > 5 min old
+- Auto-commits the heartbeat if the file's last commit is > 2 min old
   (avoids commit spam while still surfacing state to other sessions
   on their next `git pull`)
 - Never pushes — Claude pushes as part of normal commit flow
