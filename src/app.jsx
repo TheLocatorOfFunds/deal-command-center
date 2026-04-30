@@ -1031,6 +1031,10 @@ function DealCommandCenter({ session, profile }) {
 function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
+  // 'all' = show everything, 'A'|'B'|'C' = only that tier, 'untiered' =
+  // deals with no lead_tier set yet (the long tail of older imports).
+  const [tierFilter, setTierFilter] = useState("all");
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
 
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
@@ -1064,6 +1068,10 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     const q = searchQ.toLowerCase();
     if (q && !(d.name || "").toLowerCase().includes(q) && !(d.address || "").toLowerCase().includes(q)) return false;
     if (statusFilter !== "all" && d.status !== statusFilter) return false;
+    if (tierFilter !== "all") {
+      const t = (d.lead_tier || '').toUpperCase();
+      if (tierFilter === "untiered" ? ['A','B','C'].includes(t) : t !== tierFilter) return false;
+    }
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
@@ -1216,6 +1224,16 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
+          {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
+          <select value={tierFilter} onChange={e => setTierFilter(e.target.value)}
+            title="Filter by lead tier (A/B/C)"
+            style={{ ...selectStyle, minWidth: 110, ...(tierFilter !== 'all' ? { borderColor: '#d97706', color: '#fbbf24' } : {}) }}>
+            <option value="all">All Tiers</option>
+            <option value="A">Tier A only</option>
+            <option value="B">Tier B only</option>
+            <option value="C">Tier C only</option>
+            <option value="untiered">Untiered</option>
+          </select>
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
             <option value="all">All Statuses</option>
             <optgroup label="Flip Statuses">
@@ -1430,6 +1448,29 @@ function StalenessTag({ lastContactedAt }) {
   if (days > 7)  return <span style={{ fontSize: 9, color: '#f59e0b' }}>· {days}d since contact</span>;
   if (days > 0)  return <span style={{ fontSize: 9, color: '#78716c' }}>· {days}d ago</span>;
   return <span style={{ fontSize: 9, color: '#78716c' }}>· today</span>;
+}
+
+// Tier letter badge — small colored pill next to the deal name on cards.
+// Per Eric 2026-04-30: he wanted to scan kanban and instantly see which
+// leads were A/B/C without opening each. Colors match the global tier
+// language (A=green/alive-high-equity, B=red/deceased-or-estate, C=gray).
+function TierBadge({ tier, size = 11 }) {
+  const t = (tier || '').toUpperCase();
+  if (!['A', 'B', 'C'].includes(t)) return null;
+  const palette = {
+    A: { bg: '#064e3b', fg: '#6ee7b7', border: '#10b981' },
+    B: { bg: '#7f1d1d', fg: '#fca5a5', border: '#dc2626' },
+    C: { bg: '#1c1917', fg: '#a8a29e', border: '#44403c' },
+  }[t];
+  return (
+    <span title={`Tier ${t}`} style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      minWidth: size + 6, height: size + 4, padding: '0 5px', marginLeft: 6,
+      borderRadius: 3, fontSize: size - 2, fontWeight: 800,
+      background: palette.bg, color: palette.fg, border: `1px solid ${palette.border}`,
+      letterSpacing: 0.5, fontFamily: "'DM Mono', monospace", flexShrink: 0,
+    }}>{t}</span>
+  );
 }
 
 // Compares name vs. "Lastname - Street" split to show "Estate of Kemper Ansel"
@@ -7379,7 +7420,7 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center' }}>{deal.name}<TierBadge tier={deal.lead_tier} /></div>
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
@@ -7554,7 +7595,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center' }}>{deal.name}<TierBadge tier={deal.lead_tier} /></div>
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
@@ -14309,6 +14350,37 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [ownerUrl, setOwnerUrl] = useState(null);
   const [mintingContactId, setMintingContactId] = useState(null);
   const [contactRelDraft, setContactRelDraft] = useState('child');
+  // Inline relationship-edit state for an already-minted URL. When the user
+  // changes the dropdown next to "· child", we update personalized_links
+  // AND contact_deals in one shot so the public rendered page + the
+  // contact's stored relationship stay in sync.
+  const [updatingRelFor, setUpdatingRelFor] = useState(null);
+  const [relSavedFor, setRelSavedFor] = useState(null);
+  const updateContactUrlRelationship = async (contactId, token, newRelationship) => {
+    setUpdatingRelFor(contactId);
+    try {
+      // Update personalized_links — the public /s/{token} page reads this
+      // live each render, so changing it is enough; no regenerate needed.
+      const { error: linkErr } = await sb
+        .from('personalized_links')
+        .update({ relationship: newRelationship })
+        .eq('token', token);
+      if (linkErr) { alert('Could not update URL relationship: ' + linkErr.message); return; }
+      // Also keep contact_deals.relationship in sync so future reads / new
+      // mints don't drift back to the old value. Best-effort — if there's
+      // no contact_deals row yet (rare), the personalized_links update is
+      // still the source of truth for what the visitor sees.
+      await sb.from('contact_deals')
+        .update({ relationship: newRelationship })
+        .eq('contact_id', contactId)
+        .eq('deal_id', dealId);
+      await loadContactUrls();
+      setRelSavedFor(contactId);
+      setTimeout(() => setRelSavedFor(null), 2000);
+    } finally {
+      setUpdatingRelFor(null);
+    }
+  };
   const [contactUrlCopied, setContactUrlCopied] = useState(null);
   const threadRef = useRef(null);
 
@@ -15515,10 +15587,28 @@ function OutboundMessages({ dealId, vendors, deal }) {
         if (existing) {
           const url = `https://refundlocators.com/s/${existing.token}`;
           return (
-            <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.06em', textTransform: 'uppercase' }}>🔗 {fname}'s URL</span>
               <code style={{ fontSize: 11, color: '#fafaf9', fontFamily: "'DM Mono', monospace", background: 'transparent' }}>/s/{existing.token}</code>
-              <span style={{ fontSize: 10, color: '#78716c' }}>· {existing.relationship}</span>
+              {/* Inline relationship picker — Eric reported he set the wrong
+                  relation at mint time and couldn't change it. Updating
+                  personalized_links.relationship live re-flows the public
+                  page copy + iMessage preview without minting a new URL. */}
+              <span style={{ fontSize: 10, color: '#78716c' }}>·</span>
+              <select
+                value={existing.relationship || 'other'}
+                onChange={e => updateContactUrlRelationship(cid, existing.token, e.target.value)}
+                disabled={updatingRelFor === cid}
+                title="Change this person's relationship — updates the public page copy"
+                style={{ background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c', borderRadius: 5, padding: '2px 6px', fontSize: 10, fontFamily: 'inherit', cursor: updatingRelFor === cid ? 'wait' : 'pointer' }}>
+                <option value="spouse">spouse</option>
+                <option value="child">child</option>
+                <option value="parent">parent</option>
+                <option value="sibling">sibling</option>
+                <option value="other">other</option>
+              </select>
+              {updatingRelFor === cid && <span style={{ fontSize: 10, color: '#fbbf24' }}>updating…</span>}
+              {relSavedFor === cid && <span style={{ fontSize: 10, color: '#10b981' }}>✓ saved · public page now reflects new relationship</span>}
               <button onClick={async () => {
                 try { await navigator.clipboard.writeText(url); setContactUrlCopied(cid); setTimeout(() => setContactUrlCopied(null), 2000); } catch {}
               }} style={{ background: 'transparent', border: 'none', color: contactUrlCopied === cid ? '#10b981' : '#a8a29e', cursor: 'pointer', fontSize: 11, padding: '2px 6px' }}>
