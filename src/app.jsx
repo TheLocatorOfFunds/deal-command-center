@@ -1,4 +1,14 @@
-const { useState, useEffect, useCallback, useRef, useMemo } = React;
+const { useState, useEffect, useCallback, useRef, useMemo, createContext, useContext } = React;
+
+// Recording context — exposes startRecording from any deep child up to the
+// App-level modal/pill. Per Eric's feedback 2026-04-30: when the modal
+// lived inside DealRecordings (which sits in the deal Files tab), any
+// navigation that unmounted that branch killed the in-progress recording.
+// Hoisting the modal up to App, with a context handle for the trigger,
+// means recording survives tab/deal/section changes — and the modal can
+// minimize to a floating pill so the user can still use DCC during capture.
+const RecordingContext = createContext(null);
+const useRecording = () => useContext(RecordingContext);
 
 // Owners can manage other users' access levels and reach Lauren Control
 // Center / Team Management surfaces. Hardcoded by email so promotion /
@@ -365,6 +375,34 @@ function DealCommandCenter({ session, profile }) {
   const [showAccount, setShowAccount] = useState(false);
   const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
 
+  // App-level recording state — survives any deal/tab/section unmount.
+  // null when not recording. {dealId, dealName} while modal/pill is up.
+  const [recordingDeal, setRecordingDeal] = useState(null);
+  const [recordingMinimized, setRecordingMinimized] = useState(false);
+  const recordingValue = useMemo(() => ({
+    isRecording: !!recordingDeal,
+    recordingDeal,
+    minimized: recordingMinimized,
+    start: ({ dealId, dealName }) => { setRecordingDeal({ dealId, dealName }); setRecordingMinimized(false); },
+    minimize: () => setRecordingMinimized(true),
+    expand: () => setRecordingMinimized(false),
+    close: () => { setRecordingDeal(null); setRecordingMinimized(false); },
+  }), [recordingDeal, recordingMinimized]);
+
+  // Warn before navigating away if a recording is in progress (Eric lost
+  // a recording when both tabs got refreshed mid-capture). beforeunload
+  // gives him a "Are you sure?" prompt instead of silent destruction.
+  useEffect(() => {
+    if (!recordingDeal) return;
+    const handler = (e) => {
+      e.preventDefault();
+      e.returnValue = 'A recording is in progress. Leaving will lose it.';
+      return e.returnValue;
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [recordingDeal]);
+
   const userName = profile.name;
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
   const isTeam = isAdmin || profile.role === 'va';
@@ -602,6 +640,7 @@ function DealCommandCenter({ session, profile }) {
   if (!loaded) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading deals...</div></Shell>;
 
   return (
+    <RecordingContext.Provider value={recordingValue}>
     <Shell>
       {/* Header */}
       <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
@@ -880,7 +919,35 @@ function DealCommandCenter({ session, profile }) {
           </div>
         </Modal>
       )}
+      {/* App-level recording: lives outside DealList/DealDetail so it
+          survives any tab/deal/section unmount. Renders the full modal
+          when not minimized, and a floating pill when minimized so the
+          user can navigate DCC freely while the recording continues. */}
+      {/* RecordingModal stays mounted as long as a recording exists — even
+          when minimized — so MediaRecorder + streams + Web Speech API stay
+          alive. Visibility is toggled via display:none in the modal's outer
+          div, NOT by unmounting. The pill renders alongside as the only
+          visible chrome when minimized. */}
+      {recordingDeal && (
+        <RecordingModal
+          dealId={recordingDeal.dealId}
+          dealName={recordingDeal.dealName}
+          userId={session.user.id}
+          userName={userName}
+          visible={!recordingMinimized}
+          onMinimize={() => setRecordingMinimized(true)}
+          onClose={() => setRecordingDeal(null)}
+          onSaved={() => setRecordingDeal(null)}
+        />
+      )}
+      {recordingDeal && recordingMinimized && (
+        <RecordingPill
+          dealName={recordingDeal.dealName}
+          onExpand={() => setRecordingMinimized(false)}
+        />
+      )}
     </Shell>
+    </RecordingContext.Provider>
   );
 }
 
@@ -13062,9 +13129,12 @@ function DealLaurenHistory({ dealId, deal, userId }) {
 function DealRecordings({ deal, userId, userName }) {
   const [recordings, setRecordings] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showRecorder, setShowRecorder] = useState(false);
   const [signedUrls, setSignedUrls] = useState({});  // recording_id → signed url
   const [openId, setOpenId] = useState(null);
+  // Recording lifts to App-level via context — survives any unmount below
+  // it (tab change, deal change, navigation away). Refresh of this list
+  // happens via the realtime sub on screen_recordings.
+  const recording = useRecording();
 
   const load = async () => {
     const { data } = await sb.from('screen_recordings')
@@ -13119,9 +13189,20 @@ function DealRecordings({ deal, userId, userName }) {
     <div style={{ marginTop: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>📹 Recordings on this deal</div>
-        <button onClick={() => setShowRecorder(true)}
+        <button
+          onClick={() => {
+            if (recording.isRecording && recording.recordingDeal?.dealId !== deal.id) {
+              alert(`A recording is already in progress on "${recording.recordingDeal.dealName}". Stop it first.`);
+              return;
+            }
+            if (recording.isRecording) {
+              recording.expand();
+              return;
+            }
+            recording.start({ dealId: deal.id, dealName: deal.name });
+          }}
           style={{ ...btnGhost, fontSize: 12, padding: '6px 12px', color: '#fca5a5', borderColor: '#7f1d1d' }}>
-          🔴 Record
+          {recording.isRecording && recording.recordingDeal?.dealId === deal.id ? '🔴 Recording…' : '🔴 Record'}
         </button>
       </div>
       {loading ? (
@@ -13200,17 +13281,51 @@ function DealRecordings({ deal, userId, userName }) {
           })}
         </div>
       )}
-      {showRecorder && (
-        <RecordingModal
-          dealId={deal.id}
-          dealName={deal.name}
-          userId={userId}
-          userName={userName}
-          onClose={() => setShowRecorder(false)}
-          onSaved={() => { setShowRecorder(false); load(); }}
-        />
-      )}
+      {/* RecordingModal is rendered at App level — see useRecording context.
+          DealRecordings just lists existing recordings + dispatches the
+          start action via context. */}
     </div>
+  );
+}
+
+// Floating pill shown when the recording modal is minimized. Sits in the
+// bottom-right corner; click to expand the modal back. Live timer is
+// driven by the modal still being mounted at App level (it re-renders
+// itself on its own setInterval), so we read the elapsed straight from
+// the same context ref. For simplicity we just show a "Recording" label —
+// the modal owns the precise timer.
+function RecordingPill({ dealName, onExpand }) {
+  return (
+    <button
+      onClick={onExpand}
+      style={{
+        position: 'fixed',
+        bottom: 18,
+        right: 18,
+        zIndex: 1100,
+        background: '#0c0a09',
+        border: '2px solid #dc2626',
+        borderRadius: 999,
+        padding: '8px 14px 8px 12px',
+        color: '#fafaf9',
+        cursor: 'pointer',
+        fontFamily: 'inherit',
+        fontSize: 12,
+        fontWeight: 600,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        boxShadow: '0 4px 14px rgba(220,38,38,0.35)',
+      }}
+      title="Click to expand the recording window"
+    >
+      <span style={{
+        width: 10, height: 10, borderRadius: '50%', background: '#ef4444',
+        animation: 'pulse 1.5s infinite', boxShadow: '0 0 8px rgba(239,68,68,0.7)',
+      }} />
+      <span>Recording on {dealName}</span>
+      <span style={{ marginLeft: 4, color: '#a8a29e', fontSize: 10 }}>↗ expand</span>
+    </button>
   );
 }
 
@@ -13222,7 +13337,7 @@ function DealRecordings({ deal, userId, userName }) {
 // added to the video track, fed to MediaRecorder. Web Speech runs in
 // parallel listening to the default mic — Chrome allows multiple
 // consumers of the same mic input.
-function RecordingModal({ dealId, dealName, userId, userName, onClose, onSaved }) {
+function RecordingModal({ dealId, dealName, userId, userName, onClose, onSaved, onMinimize, visible = true }) {
   const [phase, setPhase] = useState('idle');  // idle | recording | stopping | titling | uploading | done | error
   const [errMsg, setErrMsg] = useState(null);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -13429,7 +13544,7 @@ function RecordingModal({ dealId, dealName, userId, userName, onClose, onSaved }
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => phase === 'idle' && e.target === e.currentTarget && onClose()}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: visible ? 'flex' : 'none', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => phase === 'idle' && e.target === e.currentTarget && onClose()}>
       <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, maxWidth: 520, width: '95vw', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
         <div style={{ padding: '14px 18px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
@@ -13502,6 +13617,13 @@ function RecordingModal({ dealId, dealName, userId, userName, onClose, onSaved }
           {phase === 'recording' && (
             <>
               <button onClick={cancelDuringRecording} style={{ ...btnGhost, fontSize: 12, color: '#78716c' }}>Cancel</button>
+              {/* Minimize lets the user navigate DCC during capture without
+                  stopping the recording. Critical for Eric's flow — he was
+                  opening a 2nd tab before this existed. */}
+              {onMinimize && (
+                <button onClick={onMinimize} title="Hide window — keep recording in the background"
+                  style={{ ...btnGhost, fontSize: 12, color: '#a8a29e' }}>− Minimize</button>
+              )}
               <button onClick={stop} style={{ ...btnPrimary, background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c' }}>⏹ Stop & save</button>
             </>
           )}
