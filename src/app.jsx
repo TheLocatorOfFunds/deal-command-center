@@ -367,6 +367,10 @@ function DealCommandCenter({ session, profile }) {
   // [{user_id, name, url, started_at}] — derived from recent team_messages
   // posts of the form "📹 X started a video call: https://meet.jit.si/..."
   const [activeCalls, setActiveCalls] = useState([]);
+  // System alerts (in-app monitoring) — count of unacked rows in the
+  // system_alerts table. Owner-only badge in the header.
+  const [systemAlertCount, setSystemAlertCount] = useState(0);
+  const [showSystemAlerts, setShowSystemAlerts] = useState(false);
   // Toast queue for new team-chat messages — top-right popups that the
   // user must Reply to or Dismiss (no auto-timeout). Per Nathan: "I just
   // want to make it so that they don't have to click a bunch of buttons
@@ -515,6 +519,16 @@ function DealCommandCenter({ session, profile }) {
   const loadDocketCount = async () => {
     const { data } = await sb.rpc('docket_unacknowledged_count');
     setUnackDocketCount(data || 0);
+  };
+
+  // Unacked system alerts — the in-DCC monitoring queue. Drives the ⚠
+  // header badge so silent EF/cron failures surface immediately.
+  const loadSystemAlertCount = async () => {
+    if (!isOwner) return;
+    const { count } = await sb.from('system_alerts')
+      .select('*', { count: 'exact', head: true })
+      .is('acknowledged_at', null);
+    setSystemAlertCount(count || 0);
   };
 
   // Total unread team-chat messages across all threads I'm in (DMs + #Ops
@@ -666,7 +680,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadActiveCalls(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadActiveCalls(); loadSystemAlertCount(); }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -702,6 +716,7 @@ function DealCommandCenter({ session, profile }) {
         if (payload.eventType === 'INSERT' && payload.new) handleNewMessageToast(payload.new);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, loadSystemAlertCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -897,6 +912,16 @@ function DealCommandCenter({ session, profile }) {
               </button>
             );
           })}
+          {/* Owner-only: in-DCC monitoring badge. Renders only when there
+              are unacked alerts. Click → modal showing every system_alerts
+              row with severity / source / message / context + Acknowledge. */}
+          {isOwner && systemAlertCount > 0 && (
+            <button onClick={() => setShowSystemAlerts(true)}
+              title={`${systemAlertCount} unacknowledged system alert${systemAlertCount === 1 ? '' : 's'} — EF errors, cron failures, etc.`}
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#7f1d1d', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
+              ⚠ <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{systemAlertCount > 99 ? '99+' : systemAlertCount}</span>
+            </button>
+          )}
           {/* Owner-only: Lauren badge with flagged-count. The Team modal +
               Lauren Control Center moved into Account Settings → Owner Tools
               per Nathan's audit, but the flagged-count needs an at-a-glance
@@ -953,6 +978,7 @@ function DealCommandCenter({ session, profile }) {
       {showContacts && <ContactsModal onClose={() => setShowContacts(false)} isAdmin={isAdmin} userId={session.user.id} deals={deals} onJumpToDeal={(id) => { setActiveDealId(id); setShowContacts(false); }} />}
       {showImport && <ImportLeadsModal onClose={() => setShowImport(false)} userId={session.user.id} onDone={() => loadDeals()} />}
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
+      {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
@@ -12189,6 +12215,114 @@ function LaurenControlCenter({ onClose, onJumpToDeal }) {
 // ─── Docket Overview Modal (cross-deal) ──────────────────────────
 // Shows unacknowledged events across ALL deals + a scraper-health panel
 // so admin can spot broken counties at a glance.
+// In-DCC monitoring viewer. Lists every unacknowledged system_alerts row
+// (most recent first), shows severity / source / message / context, lets
+// owner ack individually or in bulk. Realtime sub keeps it live.
+function SystemAlertsModal({ onClose }) {
+  const [alerts, setAlerts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showAcked, setShowAcked] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+
+  const load = async () => {
+    let q = sb.from('system_alerts').select('*').order('last_seen_at', { ascending: false }).limit(200);
+    if (!showAcked) q = q.is('acknowledged_at', null);
+    const { data } = await q;
+    setAlerts(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+    const ch = sb.channel('system-alerts-modal')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [showAcked]);
+
+  const ack = async (id) => {
+    setBusyId(id);
+    await sb.rpc('acknowledge_system_alert', { p_alert_id: id });
+    await load();
+    setBusyId(null);
+  };
+
+  const ackAll = async () => {
+    if (!window.confirm(`Acknowledge all ${alerts.filter(a => !a.acknowledged_at).length} unacknowledged alerts?`)) return;
+    await sb.rpc('acknowledge_all_system_alerts');
+    await load();
+  };
+
+  const sevColor = (s) => ({
+    info: '#93c5fd', warning: '#fbbf24', error: '#fca5a5', critical: '#fff'
+  }[s] || '#a8a29e');
+  const sevBg = (s) => ({
+    info: '#1e3a8a', warning: '#78350f', error: '#7f1d1d', critical: '#dc2626'
+  }[s] || '#1c1917');
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => e.target === e.currentTarget && onClose()}>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, maxWidth: 800, width: '95vw', maxHeight: '85vh', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>⚠ System Alerts</div>
+            <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+              EF errors · cron failures · trigger exceptions — the in-DCC monitoring queue
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#78716c', cursor: 'pointer' }}>
+              <input type="checkbox" checked={showAcked} onChange={e => setShowAcked(e.target.checked)} />
+              Show acknowledged
+            </label>
+            {alerts.some(a => !a.acknowledged_at) && (
+              <button onClick={ackAll} style={{ ...btnGhost, fontSize: 11 }}>✓ Ack ALL</button>
+            )}
+            <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Close</button>
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 18px' }}>
+          {loading && <div style={{ fontSize: 12, color: '#78716c' }}>Loading…</div>}
+          {!loading && alerts.length === 0 && (
+            <div style={{ padding: 32, textAlign: 'center', color: '#78716c', fontStyle: 'italic', border: '1px dashed #292524', borderRadius: 8 }}>
+              {showAcked ? 'No alerts on record.' : 'All clear — no unacknowledged system alerts. ✨'}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {alerts.map(a => {
+              const acked = !!a.acknowledged_at;
+              return (
+                <div key={a.id} style={{ background: '#1c1917', border: `1px solid ${acked ? '#292524' : sevBg(a.severity)}`, borderLeft: `3px solid ${sevColor(a.severity)}`, borderRadius: 6, padding: '10px 14px', opacity: acked ? 0.6 : 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 9, fontWeight: 800, padding: '2px 8px', borderRadius: 3, background: sevBg(a.severity), color: sevColor(a.severity), letterSpacing: '0.08em', textTransform: 'uppercase' }}>{a.severity}</span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" }}>{a.source}</span>
+                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{new Date(a.last_seen_at).toLocaleString()}</span>
+                    {a.occurrences > 1 && <span style={{ fontSize: 10, color: '#fbbf24', fontWeight: 700 }}>×{a.occurrences}</span>}
+                    {!acked && (
+                      <button onClick={() => ack(a.id)} disabled={busyId === a.id} style={{ ...btnGhost, fontSize: 10, padding: '2px 8px', marginLeft: 'auto' }}>
+                        {busyId === a.id ? '…' : '✓ Ack'}
+                      </button>
+                    )}
+                    {acked && <span style={{ fontSize: 10, color: '#10b981', marginLeft: 'auto' }}>acked {new Date(a.acknowledged_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#d6d3d1', marginTop: 6, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{a.message}</div>
+                  {a.context && Object.keys(a.context).length > 0 && (
+                    <details style={{ marginTop: 6 }}>
+                      <summary style={{ fontSize: 10, color: '#78716c', cursor: 'pointer', fontFamily: "'DM Mono', monospace" }}>context</summary>
+                      <pre style={{ fontSize: 10, color: '#a8a29e', marginTop: 4, padding: 8, background: '#0c0a09', borderRadius: 4, border: '1px solid #292524', overflow: 'auto', maxHeight: 200, fontFamily: "'DM Mono', monospace" }}>{JSON.stringify(a.context, null, 2)}</pre>
+                    </details>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DocketOverviewModal({ onClose, onJumpToDeal }) {
   const [tab, setTab] = useState("events");
   const [events, setEvents] = useState([]);

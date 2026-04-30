@@ -190,7 +190,31 @@ Deno.serve(async (req) => {
         last_synced_at: new Date().toISOString(),
       }).eq("deal_id", sub.deal_id);
       console.error("[intel-sync] sub error", sub.deal_id, message);
+      // Surface in DCC alerts. Aggregated by error message so a flood
+      // of "ohio_case lookup failed" collapses to one badge entry.
+      try {
+        await dcc.rpc("report_system_alert", {
+          p_source: "intel-sync",
+          p_message: `Sub failed: ${message}`,
+          p_severity: "warning",
+          p_context: { deal_id: sub.deal_id, case_number: sub.case_number, county: sub.county, error: message },
+          p_fingerprint: `intel-sync:${message.slice(0, 80)}`,
+        });
+      } catch (_) {}
     }
+  }
+
+  // If the run had any errors at all, also drop a roll-up alert
+  if (stats.errors > 0) {
+    try {
+      await dcc.rpc("report_system_alert", {
+        p_source: "intel-sync",
+        p_message: `Run completed with ${stats.errors} sub error(s)`,
+        p_severity: stats.errors >= 5 ? "error" : "warning",
+        p_context: stats,
+        p_fingerprint: `intel-sync:run-errors`,
+      });
+    } catch (_) {}
   }
 
   return json({ ok: true, stats });

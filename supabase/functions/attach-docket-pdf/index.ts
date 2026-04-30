@@ -87,8 +87,19 @@ Deno.serve(async (req) => {
     }
 
     if (!pdfBytes) {
-      // Log and move on. Nathan's existing "View court document →" link still
-      // works; he can also manually upload the PDF on the Files tab.
+      // Log to system_alerts so the silent-failure pattern that hung this
+      // EF for weeks doesn't repeat. Aggregated by event_type so a flood
+      // of "Franklin imageLinkProcessor returns HTML" failures collapses
+      // to one row with a high occurrence count.
+      try {
+        await db.rpc('report_system_alert', {
+          p_source: 'attach-docket-pdf',
+          p_message: `PDF fetch failed for ${event.county || 'unknown county'}: ${fetchError}`,
+          p_severity: 'warning',  // not critical — UI shows "session-required" hint already
+          p_context: { docket_event_id, deal_id: event.deal_id, event_type: event.event_type, document_url: event.document_url, fetchError },
+          p_fingerprint: `attach-docket-pdf:fetch_failed:${event.county}:${(fetchError || '').slice(0, 60)}`,
+        });
+      } catch (_) { /* never fail the request because logging failed */ }
       return new Response(JSON.stringify({ skipped: true, reason: 'fetch_failed', error: fetchError }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
     }
 
@@ -136,6 +147,21 @@ Deno.serve(async (req) => {
       size: pdfBytes.byteLength,
     }), { headers: { ...CORS, 'Content-Type': 'application/json' } });
   } catch (e) {
-    return new Response(JSON.stringify({ error: (e as Error).message }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
+    const errMsg = (e as Error).message;
+    // Top-level catch: real bug. Log as error severity so it shows red
+    // in DCC's alert badge.
+    try {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+      const dbErr = createClient(supabaseUrl, serviceKey);
+      await dbErr.rpc('report_system_alert', {
+        p_source: 'attach-docket-pdf',
+        p_message: `Unhandled error: ${errMsg}`,
+        p_severity: 'error',
+        p_context: { error: errMsg },
+        p_fingerprint: `attach-docket-pdf:error:${errMsg.slice(0, 80)}`,
+      });
+    } catch (_) {}
+    return new Response(JSON.stringify({ error: errMsg }), { status: 500, headers: { ...CORS, 'Content-Type': 'application/json' } });
   }
 });
