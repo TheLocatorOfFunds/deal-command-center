@@ -107,24 +107,37 @@ console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
-// ─── SMS service UUID discovery ───────────────────────────────────────────────
+// ─── Service UUID discovery ───────────────────────────────────────────────────
 // On macOS 26+ the Messages AppleScript dictionary no longer exposes account names
-// or service types by index. We discover the SMS relay service UUID by querying
-// chat.db (which stores account_id on every chat row) and cache it for the
-// lifetime of this process. If no SMS chats exist yet, the UUID stays null and
-// SMS sends will fall back to graceful failure with a clear error.
-let SMS_SERVICE_UUID = null;
+// or service types by index. We discover service UUIDs by querying chat.db
+// (which stores account_id on every chat row) and cache them for the lifetime
+// of this process.
+let SMS_SERVICE_UUID      = null;
+let IMESSAGE_SERVICE_IDS  = []; // may be 2: one per Apple ID + one per phone number
+
 {
   const db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
   try {
-    const row = db.prepare(
+    // SMS relay UUID
+    const smsRow = db.prepare(
       "SELECT account_id FROM chat WHERE service_name = 'SMS' AND account_id IS NOT NULL LIMIT 1"
     ).get();
-    if (row) {
-      SMS_SERVICE_UUID = row.account_id;
-      console.log(`    SMS UUID : ${SMS_SERVICE_UUID}`);
+    if (smsRow) {
+      SMS_SERVICE_UUID = smsRow.account_id;
+      console.log(`    SMS UUID     : ${SMS_SERVICE_UUID}`);
     } else {
-      console.log('    SMS UUID : none yet (no SMS history in chat.db)');
+      console.log('    SMS UUID     : none yet (no SMS history in chat.db)');
+    }
+
+    // iMessage service IDs (can be multiple — one per registered identity)
+    const imsgRows = db.prepare(
+      "SELECT DISTINCT account_id FROM chat WHERE service_name = 'iMessage' AND account_id IS NOT NULL"
+    ).all();
+    IMESSAGE_SERVICE_IDS = imsgRows.map(r => r.account_id);
+    if (IMESSAGE_SERVICE_IDS.length > 0) {
+      console.log(`    iMessage IDs : ${IMESSAGE_SERVICE_IDS.join(', ')}`);
+    } else {
+      console.log('    iMessage IDs : none yet (no iMessage history in chat.db)');
     }
   } finally {
     db.close();
@@ -237,70 +250,65 @@ function runAppleScript(scriptPath, timeoutMs = 30000) {
 
 /**
  * Send a text message via Messages.app.
- * Tries iMessage first; if the number is not on iMessage (error -1728 / error 22),
- * falls back to SMS relay via the iPhone's Text Message Forwarding.
- * Returns 'imessage' or 'sms' indicating which service was used.
+ *
+ * On macOS 26+ Tahoe, `service type` and named service access are broken
+ * (-1728 / -10002). We bypass those entirely by using the service UUIDs
+ * discovered from chat.db at startup.
+ *
+ * Strategy:
+ *   1. Try each known iMessage service ID. If ANY succeeds → 'imessage'.
+ *   2. If all iMessage attempts fail with a "not an iMessage user" error
+ *      (-1728 or error 22), the number is an Android/SMS user.
+ *      Throw a structured error so the caller can route via Twilio.
+ *
+ * SMS relay via iPhone Text Message Forwarding is intentionally NOT attempted
+ * here — it is broken on macOS 26 Tahoe (error 4 on every attempt). Android
+ * numbers should be routed via Twilio at the Supabase / DCC layer instead.
+ *
+ * Returns 'imessage' on success.
  */
 function sendViaMessages(toPhone, body) {
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
-  // ── Attempt 1: iMessage ──────────────────────────────────────────────────────
-  const iMsgScript = `/tmp/dcc_send_${Date.now()}.applescript`;
-  fs.writeFileSync(iMsgScript, [
-    'tell application "Messages"',
-    `  set targetPhone to "${toPhone}"`,
-    '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
-    `  send "${escaped}" to targetBuddy`,
-    'end tell',
-  ].join('\n'));
-
-  try {
-    runAppleScript(iMsgScript);
-    return 'imessage';
-  } catch (err) {
-    // -1728 = "Can't get service type of participant" = number not on iMessage.
-    // Also catch the string "22" (apple_error 22 = not an iMessage user).
-    const notIMessage = err.message.includes('-1728') || err.message.includes('error 22');
-    if (!notIMessage) throw err; // real error — propagate up
-  }
-
-  // ── Attempt 2: SMS relay via iPhone Text Message Forwarding ──────────────────
-  // On macOS 26+ the AppleScript dictionary no longer lets us access accounts by
-  // name ("SMS") or by service type — both return -10002 / -1728.  The only
-  // working pattern is `participant phone of service id "UUID"` where the UUID
-  // is the SMS relay account identifier, discovered at startup from chat.db.
-  console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay`);
-
-  if (!SMS_SERVICE_UUID) {
+  // ── iMessage via discovered service UUIDs ────────────────────────────────────
+  if (IMESSAGE_SERVICE_IDS.length === 0) {
     throw new Error(
-      'SMS relay service UUID unknown — no SMS history in chat.db yet. ' +
-      'Once any SMS conversation appears in Messages.app the bridge will auto-learn the UUID.'
+      'No iMessage service IDs found in chat.db. ' +
+      'Make sure Messages.app is signed in and has at least one iMessage conversation.'
     );
   }
 
-  const smsScript = `/tmp/dcc_send_sms_${Date.now()}.applescript`;
-  fs.writeFileSync(smsScript, [
-    'tell application "Messages"',
-    `  set smsSvc to service id "${SMS_SERVICE_UUID}"`,
-    `  set p to participant "${toPhone}" of smsSvc`,
-    `  send "${escaped}" to p`,
-    'end tell',
-  ].join('\n'));
+  let lastErr = null;
+  for (const svcId of IMESSAGE_SERVICE_IDS) {
+    const iMsgScript = `/tmp/dcc_send_${Date.now()}.applescript`;
+    fs.writeFileSync(iMsgScript, [
+      'tell application "Messages"',
+      `  set imsvc to service id "${svcId}"`,
+      `  set p to participant "${toPhone}" of imsvc`,
+      `  send "${escaped}" to p`,
+      'end tell',
+    ].join('\n'));
 
-  try {
-    runAppleScript(smsScript);
-    return 'sms';
-  } catch (e) {
-    // error 4 = kIMMessageErrorCodeSMSForwardingNotAvailable
-    // This means Nathan's iPhone is not currently reachable for SMS relay.
-    if (e.message.includes('error 4') || e.message.includes('(-4)')) {
-      throw new Error(
-        `SMS relay unavailable (error 4): Nathan's iPhone must be on the same WiFi as the Mac Mini ` +
-        `with Text Message Forwarding enabled (iPhone Settings → Messages → Text Message Forwarding).`
-      );
+    try {
+      runAppleScript(iMsgScript);
+      return 'imessage'; // ✅ sent
+    } catch (err) {
+      // -1728 = participant not on this iMessage service
+      // error 22 = not an iMessage user at all
+      const notOnThisService = err.message.includes('-1728') || err.message.includes('error 22');
+      if (notOnThisService) {
+        lastErr = err;
+        continue; // try next service ID
+      }
+      throw err; // unexpected error — propagate
     }
-    throw e;
   }
+
+  // All iMessage services rejected this number → not an iMessage user
+  throw Object.assign(
+    new Error(`not_imessage: ${toPhone} is not on iMessage — route via Twilio for SMS delivery`),
+    { code: 'NOT_IMESSAGE' }
+  );
 }
 
 /** Download a remote URL to a temp file; returns the local path. */
@@ -328,40 +336,38 @@ function downloadMediaToTmp(url) {
   });
 }
 
-/** Send a local file (image/video) via Messages.app — iMessage first, SMS relay fallback. */
+/** Send a local file (image/video) via Messages.app — iMessage only on Tahoe. */
 function sendFileViaMessages(toPhone, localPath) {
   const safePath = localPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
-  const iMsgScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
-  fs.writeFileSync(iMsgScript, [
-    'tell application "Messages"',
-    `  set targetPhone to "${toPhone}"`,
-    '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
-    `  send POSIX file "${safePath}" to targetBuddy`,
-    'end tell',
-  ].join('\n'));
-
-  try {
-    runAppleScript(iMsgScript, 60000);
-    return 'imessage';
-  } catch (err) {
-    const notIMessage = err.message.includes('-1728') || err.message.includes('error 22');
-    if (!notIMessage) throw err;
+  if (IMESSAGE_SERVICE_IDS.length === 0) {
+    throw new Error('No iMessage service IDs found in chat.db.');
   }
 
-  console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay for file`);
-  if (!SMS_SERVICE_UUID) throw new Error('SMS relay UUID unknown — no SMS history in chat.db');
-  const smsScript = `/tmp/dcc_send_file_sms_${Date.now()}.applescript`;
-  fs.writeFileSync(smsScript, [
-    'tell application "Messages"',
-    `  set smsSvc to service id "${SMS_SERVICE_UUID}"`,
-    `  set p to participant "${toPhone}" of smsSvc`,
-    `  send POSIX file "${safePath}" to p`,
-    'end tell',
-  ].join('\n'));
+  for (const svcId of IMESSAGE_SERVICE_IDS) {
+    const iMsgScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
+    fs.writeFileSync(iMsgScript, [
+      'tell application "Messages"',
+      `  set imsvc to service id "${svcId}"`,
+      `  set p to participant "${toPhone}" of imsvc`,
+      `  send POSIX file "${safePath}" to p`,
+      'end tell',
+    ].join('\n'));
 
-  runAppleScript(smsScript, 60000);
-  return 'sms';
+    try {
+      runAppleScript(iMsgScript, 60000);
+      return 'imessage';
+    } catch (err) {
+      const notOnThisService = err.message.includes('-1728') || err.message.includes('error 22');
+      if (notOnThisService) continue;
+      throw err;
+    }
+  }
+
+  throw Object.assign(
+    new Error(`not_imessage: ${toPhone} is not on iMessage — route via Twilio for SMS delivery`),
+    { code: 'NOT_IMESSAGE' }
+  );
 }
 
 /**
@@ -465,7 +471,13 @@ async function processPendingOutbound() {
       // No chat.db row yet (iMessage may still be in flight) → handed_off state
       await sb.from('messages_outbound').update({ status: 'handed_off_to_mac' }).eq('id', msg.id);
     } catch (err) {
-      if (err.message.includes('ETIMEDOUT')) {
+      if (err.code === 'NOT_IMESSAGE') {
+        // Number is not on iMessage — needs Twilio routing, not a bridge failure.
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: 'not_imessage: Android number — send via Twilio' })
+          .eq('id', msg.id);
+        console.log(`📵 NOT iMessage  ${msg.to_number}  → needs Twilio`);
+      } else if (err.message.includes('ETIMEDOUT')) {
         consecutiveOscriptTimeouts++;
         console.error(`⏱ TIMEOUT ${consecutiveOscriptTimeouts}/3  ${msg.to_number}`);
         if (consecutiveOscriptTimeouts >= 3) {
@@ -479,11 +491,11 @@ async function processPendingOutbound() {
         }
       } else {
         consecutiveOscriptTimeouts = 0;
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: err.message })
+          .eq('id', msg.id);
+        console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
       }
-      await sb.from('messages_outbound')
-        .update({ status: 'failed', error_message: err.message })
-        .eq('id', msg.id);
-      console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
     } finally {
       sendingInFlight.delete(msg.id);
       // Clean up temp media file
