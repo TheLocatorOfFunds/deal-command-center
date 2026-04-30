@@ -353,6 +353,7 @@ function DealCommandCenter({ session, profile }) {
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [pendingWalkthroughs, setPendingWalkthroughs] = useState([]);
   const [showWalkthroughs, setShowWalkthroughs] = useState(false);
   const [pendingOffersCount, setPendingOffersCount] = useState(0);
@@ -467,6 +468,15 @@ function DealCommandCenter({ session, profile }) {
     setUnackDocketCount(data || 0);
   };
 
+  // Total unread team-chat messages across all threads I'm in (DMs + #Ops
+  // + Lauren channels). Drives the badge on the 💬 Chat header button.
+  const loadUnreadChatCount = async () => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const { data } = await sb.rpc('team_unread_count', { p_user_id: uid });
+    setUnreadChatCount(data || 0);
+  };
+
   const loadLaurenFlaggedCount = async () => {
     try {
       const { data } = await sb.rpc('lauren_flagged_count');
@@ -515,7 +525,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); }, []);
 
   // Presence heartbeat — every 60s while DCC is open in this tab, ping
   // touch_user_presence() so other team members see "active now". Skipped
@@ -539,6 +549,8 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, loadPendingWalkthroughs)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers' }, loadPendingOffersCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, loadUnreadChatCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -699,7 +711,18 @@ function DealCommandCenter({ session, profile }) {
           )}
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
-          {isTeam && <button onClick={() => { setActiveDealId(null); setView("team"); }} title="Team chat with Justin + Lauren" style={{ ...btnGhost, fontSize: 11 }}>💬 Chat</button>}
+          {isTeam && (
+            <button onClick={() => { setActiveDealId(null); setView("team"); }}
+              title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} in team chat` : 'Team chat with Justin + Lauren'}
+              style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
+              💬 Chat
+              {unreadChatCount > 0 && (
+                <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>
+                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
+                </span>
+              )}
+            </button>
+          )}
           {/* Owner-only: Lauren badge with flagged-count. The Team modal +
               Lauren Control Center moved into Account Settings → Owner Tools
               per Nathan's audit, but the flagged-count needs an at-a-glance
