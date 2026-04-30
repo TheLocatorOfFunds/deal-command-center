@@ -2532,7 +2532,19 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                 value={body}
                 onChange={onBodyChange}
                 onKeyDown={onKeyDown}
-                placeholder={`Message #${activeThread.title}…   (⌘+Enter to send · drag files anywhere · @lauren to summon)`}
+                onPaste={async (e) => {
+                  // Cmd+Shift+4 → Cmd+V drops the screenshot as an attachment.
+                  // Drag-and-drop already works via onDrop on the wrapper.
+                  const items = Array.from(e.clipboardData?.items || []);
+                  const imgItems = items.filter(it => it.type?.startsWith('image/'));
+                  if (imgItems.length === 0) return;
+                  e.preventDefault();
+                  const files = imgItems.map(it => it.getAsFile()).filter(Boolean);
+                  if (!files.length) return;
+                  const uploaded = await uploadAttachments(files);
+                  setPendingAttachments(prev => [...prev, ...uploaded]);
+                }}
+                placeholder={`Message #${activeThread.title}…   (⌘+Enter to send · drag or paste images · @lauren to summon)`}
                 rows={2}
                 style={{
                   width: '100%',
@@ -7245,6 +7257,78 @@ function AutomationsQueue({ onSelectDeal }) {
   );
 }
 
+// EOD reports from teammates for today. Per Nathan: he wants quick
+// triage of what Eric / Inaam worked on without scrolling team chat.
+// Reads eod_reports filtered to today, joins to profiles for names.
+// Renders nothing if no reports submitted today (clean by default).
+function EodReportsToday() {
+  const [reports, setReports] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const load = async () => {
+    const { data } = await sb.from('eod_reports')
+      .select('id, user_id, worked_on, blocked, next_up, created_at')
+      .eq('report_date', today)
+      .order('created_at', { ascending: false });
+    if (!data?.length) { setReports([]); setLoading(false); return; }
+    const ids = data.map(r => r.user_id);
+    const { data: profs } = await sb.from('profiles').select('id, name, display_name').in('id', ids);
+    const profById = Object.fromEntries((profs || []).map(p => [p.id, p]));
+    setReports(data.map(r => ({
+      ...r,
+      author: profById[r.user_id]?.display_name || profById[r.user_id]?.name || 'Someone',
+    })));
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+    const ch = sb.channel('eod-today')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'eod_reports', filter: `report_date=eq.${today}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, []);
+
+  if (loading || reports.length === 0) return null;
+
+  return (
+    <div style={{ marginBottom: 22, background: '#1c1209', border: '1px solid #78350f', borderRadius: 10, padding: '12px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.12em', textTransform: 'uppercase' }}>📋 Today's EOD reports ({reports.length})</div>
+        <span style={{ fontSize: 10, color: '#78716c' }}>{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 10 }}>
+        {reports.map(r => (
+          <div key={r.id} style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9', marginBottom: 4 }}>{r.author}</div>
+            <div style={{ fontSize: 9, color: '#78716c', marginBottom: 8, fontFamily: "'DM Mono', monospace" }}>submitted {new Date(r.created_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
+            {r.worked_on && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: '#6ee7b7', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 2 }}>Worked on</div>
+                <div style={{ fontSize: 11, color: '#d6d3d1', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{r.worked_on}</div>
+              </div>
+            )}
+            {r.blocked && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: '#fca5a5', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 2 }}>Blocked</div>
+                <div style={{ fontSize: 11, color: '#d6d3d1', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{r.blocked}</div>
+              </div>
+            )}
+            {r.next_up && (
+              <div>
+                <div style={{ fontSize: 9, fontWeight: 700, color: '#93c5fd', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 2 }}>Next up</div>
+                <div style={{ fontSize: 11, color: '#d6d3d1', lineHeight: 1.45, whiteSpace: 'pre-wrap' }}>{r.next_up}</div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Today View ────────────────────────────────────────────────────────────────
 function TodayView({ deals, onSelect, isAdmin, setView }) {
   const now = new Date();
@@ -7333,6 +7417,11 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
       {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
       <AutomationsQueue onSelectDeal={onSelect} />
+
+      {/* Today's end-of-day reports from teammates — quick triage so
+          Nathan doesn't have to scroll team chat to find Eric / Inaam's
+          standups. Hides itself when nobody has submitted today. */}
+      {isAdmin && <EodReportsToday />}
 
       {/* Priority queue */}
       {!hasAny && (
