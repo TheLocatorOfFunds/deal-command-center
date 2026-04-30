@@ -18,7 +18,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type, apikey",
+  // x-client-info is sent by supabase-js — without it the browser rejects
+  // the POST after preflight with a generic "Failed to send a request" err.
+  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-client-info",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const json = (body: unknown, status = 200) =>
