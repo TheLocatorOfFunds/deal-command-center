@@ -27,14 +27,31 @@ REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
 WORKING_ON="$REPO_ROOT/WORKING_ON.md"
 [ ! -f "$WORKING_ON" ] && exit 0
 
-# 2. Map OS user → DCC display name (case-insensitive prefix match)
-USER_LC=$(echo "${USER:-unknown}" | tr '[:upper:]' '[:lower:]')
-case "$USER_LC" in
-  justinjohnson|justin*)   DCC_NAME="Justin" ;;
-  nathan*|natejohnson*)    DCC_NAME="Nathan" ;;
-  erik*)                   DCC_NAME="Erik" ;;
-  *)                        exit 0 ;;  # unknown user — skip rather than guess
+# 2. Identify which DCC user is running this session.
+#    Primary signal: git config user.email — already set on each user's Mac
+#    so commits are attributed correctly. Way more reliable than $USER
+#    (which varies by Mac home-directory naming) or any hardcoded mapping.
+#    Fallback: $USER prefix match — kept as a safety net in case git email
+#    isn't configured.
+GIT_EMAIL=$(cd "$REPO_ROOT" && git config user.email 2>/dev/null | tr '[:upper:]' '[:lower:]')
+
+DCC_NAME=""
+case "$GIT_EMAIL" in
+  justin@fundlocators.com|justin@refundlocators.com|justinjohnson*)  DCC_NAME="Justin" ;;
+  nathan@fundlocators.com|nathan@refundlocators.com|nathanjohnson*|nate*) DCC_NAME="Nathan" ;;
+  admin3@fundlocators.com|erik@*)                                   DCC_NAME="Erik" ;;
 esac
+
+# Fallback to OS username if git email didn't resolve
+if [ -z "$DCC_NAME" ]; then
+  USER_LC=$(echo "${USER:-unknown}" | tr '[:upper:]' '[:lower:]')
+  case "$USER_LC" in
+    justinjohnson|justin*)   DCC_NAME="Justin" ;;
+    nathan*|natejohnson*)    DCC_NAME="Nathan" ;;
+    erik*|admin3*)           DCC_NAME="Erik" ;;
+    *)                        exit 0 ;;  # unknown — skip rather than guess
+  esac
+fi
 
 TIMESTAMP=$(date -u +"%Y-%m-%d %H:%M UTC")
 
