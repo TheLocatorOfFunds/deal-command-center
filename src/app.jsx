@@ -1595,6 +1595,43 @@ function TierBadge({ tier, size = 11 }) {
   );
 }
 
+// Cluster of at-a-glance pills next to the deal name on every card.
+// Per Nathan 2026-04-30: scanning the kanban should immediately show
+// tier + auction phase + cleaned-by-Eric + surplus-locked-by-CoS,
+// without opening the deal. Verified disambiguated into two distinct
+// signals: ✓ CLEAN (lead data cleaned, meta.verified=true) and 💰 SOS
+// (Surplus On Sale — confirmation_of_sale_date present, dollar amount
+// locked rather than estimated). Mutually exclusive PRE/POST keys off
+// confirmation date → is_30dts/isPostAuction → future saleDate.
+function DealStatusBadges({ deal }) {
+  const m = deal?.meta || {};
+  const tier = (deal?.lead_tier || '').toUpperCase();
+  const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
+  const isPostAuction = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
+  const isPreAuction = !isPostAuction && (!!deal?.is_30dts || (m.saleDate && new Date(m.saleDate) > new Date()));
+  const verified = !!m.verified;
+
+  const Pill = ({ label, title, bg, fg, border, mono = false }) => (
+    <span title={title} style={{
+      display: 'inline-flex', alignItems: 'center', height: 16, padding: '0 6px', marginLeft: 5,
+      borderRadius: 3, fontSize: 9, fontWeight: 800,
+      background: bg, color: fg, border: `1px solid ${border}`,
+      letterSpacing: 0.5, fontFamily: mono ? "'DM Mono', monospace" : 'inherit', flexShrink: 0,
+      whiteSpace: 'nowrap',
+    }}>{label}</span>
+  );
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap' }}>
+      <TierBadge tier={tier} />
+      {isPostAuction && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
+      {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
+      {verified && <Pill label="✓ CLEAN" title="Verified — Eric has cleaned this lead's data" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
+      {cosDate && <Pill label="💰 SOS" title={`Surplus On Sale — confirmation of sale ${cosDate}; surplus dollar amount is locked, not estimated`} bg="#78350f" fg="#fbbf24" border="#d97706" />}
+    </span>
+  );
+}
+
 // Compares name vs. "Lastname - Street" split to show "Estate of Kemper Ansel"
 // for deceased leads where the handoff wants heir-focused framing.
 function DealCardName({ deal }) {
@@ -7550,7 +7587,7 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center' }}>{deal.name}<TierBadge tier={deal.lead_tier} /></div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}>{deal.name}<DealStatusBadges deal={deal} /></div>
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
@@ -7725,7 +7762,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center' }}>{deal.name}<TierBadge tier={deal.lead_tier} /></div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}>{deal.name}<DealStatusBadges deal={deal} /></div>
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
