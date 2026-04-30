@@ -7968,6 +7968,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
       {tab === "files" && (
         <div>
           <Documents items={documents} dealId={deal.id} deal={deal} userId={userId} logAct={logAct} reload={loadAll} />
+          <DealRecordings deal={deal} userId={userId} userName={userName} />
           <div style={{ marginTop: 24 }}>
             <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>📝 Notes on this deal</div>
             <Notes items={notes} dealId={deal.id} userId={userId} userName={userName} reload={loadAll} />
@@ -12965,6 +12966,470 @@ function DealLaurenHistory({ dealId, deal, userId }) {
 
       <div style={{ marginTop: 18, padding: 12, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
         Conversations linked to this deal via the personalized URL token, or from the same browser visitor within the last 30 days. Read-only — Lauren on the website is Justin's lane. Coming next: keyword alerts in the DCC inbox + "Ask Lauren about this deal" button.
+      </div>
+    </div>
+  );
+}
+
+// ─── Per-deal screen recordings (Loom replacement) ───────────────────
+//
+// Per Nathan 2026-04-29: Inaam was making Looms for every case he
+// processed. This brings that workflow into DCC — record screen + mic
+// in the browser, transcribe live via the free Web Speech API, summarize
+// with Claude. Stored in screen_recordings + the existing private bucket.
+function DealRecordings({ deal, userId, userName }) {
+  const [recordings, setRecordings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showRecorder, setShowRecorder] = useState(false);
+  const [signedUrls, setSignedUrls] = useState({});  // recording_id → signed url
+  const [openId, setOpenId] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('screen_recordings')
+      .select('id, title, started_at, ended_at, duration_seconds, size_bytes, storage_path, transcript, ai_summary, ai_summary_status, user_id, profiles(name, display_name)')
+      .eq('deal_id', deal.id)
+      .order('started_at', { ascending: false });
+    setRecordings(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    load();
+    const ch = sb.channel(`screen_recs:${deal.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'screen_recordings', filter: `deal_id=eq.${deal.id}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [deal.id]);
+
+  const ensureSignedUrl = async (rec) => {
+    if (signedUrls[rec.id]) return signedUrls[rec.id];
+    if (!rec.storage_path) return null;
+    const { data } = await sb.storage.from('screen-recordings').createSignedUrl(rec.storage_path, 3600);
+    if (data?.signedUrl) {
+      setSignedUrls(p => ({ ...p, [rec.id]: data.signedUrl }));
+      return data.signedUrl;
+    }
+    return null;
+  };
+
+  const remove = async (rec) => {
+    if (!window.confirm(`Delete "${rec.title || 'this recording'}"? Removes the video file too. Cannot be undone.`)) return;
+    if (rec.storage_path) {
+      await sb.storage.from('screen-recordings').remove([rec.storage_path]);
+    }
+    await sb.from('screen_recordings').delete().eq('id', rec.id);
+    await load();
+  };
+
+  const fmtDuration = (sec) => {
+    if (!sec) return '—';
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+  const fmtSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  return (
+    <div style={{ marginTop: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>📹 Recordings on this deal</div>
+        <button onClick={() => setShowRecorder(true)}
+          style={{ ...btnGhost, fontSize: 12, padding: '6px 12px', color: '#fca5a5', borderColor: '#7f1d1d' }}>
+          🔴 Record
+        </button>
+      </div>
+      {loading ? (
+        <div style={{ fontSize: 12, color: '#78716c' }}>Loading…</div>
+      ) : recordings.length === 0 ? (
+        <div style={{ fontSize: 12, color: '#78716c', padding: '12px 14px', background: '#1c1917', borderRadius: 8, border: '1px dashed #44403c' }}>
+          No recordings yet. Click <b style={{ color: '#fca5a5' }}>🔴 Record</b> above to capture screen + voice. Lauren auto-summarizes when you save.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {recordings.map(rec => {
+            const isOpen = openId === rec.id;
+            const author = rec.profiles?.display_name || rec.profiles?.name || 'someone';
+            return (
+              <div key={rec.id} style={{ background: '#1c1917', border: '1px solid #292524', borderRadius: 8, padding: '10px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <button onClick={async () => {
+                    if (!isOpen) await ensureSignedUrl(rec);
+                    setOpenId(isOpen ? null : rec.id);
+                  }} style={{ ...btnGhost, fontSize: 11, padding: '4px 10px' }}>
+                    {isOpen ? '▾ Close' : '▸ Play'}
+                  </button>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {rec.title || '(untitled recording)'}
+                    </div>
+                    <div style={{ fontSize: 10, color: '#78716c', marginTop: 2 }}>
+                      {author} · {new Date(rec.started_at).toLocaleString()} · {fmtDuration(rec.duration_seconds)} · {fmtSize(rec.size_bytes)}
+                    </div>
+                  </div>
+                  {rec.user_id === userId && (
+                    <button onClick={() => remove(rec)} title="Delete recording"
+                      style={{ background: 'transparent', border: 'none', color: '#57534e', cursor: 'pointer', fontSize: 14, padding: '2px 6px' }}
+                      onMouseOver={e => e.currentTarget.style.color = '#ef4444'}
+                      onMouseOut={e => e.currentTarget.style.color = '#57534e'}>
+                      🗑
+                    </button>
+                  )}
+                </div>
+                {rec.ai_summary && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#d6d3d1', whiteSpace: 'pre-wrap', borderLeft: '2px solid #d97706', paddingLeft: 10 }}>
+                    <div style={{ fontSize: 9, fontWeight: 700, color: '#d97706', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>✨ Lauren's summary</div>
+                    {rec.ai_summary}
+                  </div>
+                )}
+                {rec.ai_summary_status === 'running' && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#fbbf24' }}>✨ Lauren is summarizing…</div>
+                )}
+                {rec.ai_summary_status === 'pending' && !rec.ai_summary && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#78716c' }}>Waiting for summary…</div>
+                )}
+                {rec.ai_summary_status === 'failed' && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: '#ef4444' }}>
+                    Summary failed.
+                    <button onClick={async () => {
+                      await sb.functions.invoke('lauren-recording-summary', { body: { recording_id: rec.id } });
+                      await load();
+                    }} style={{ ...btnGhost, fontSize: 10, padding: '2px 8px', marginLeft: 8 }}>Retry</button>
+                  </div>
+                )}
+                {isOpen && signedUrls[rec.id] && (
+                  <div style={{ marginTop: 10 }}>
+                    <video src={signedUrls[rec.id]} controls style={{ width: '100%', maxHeight: 480, background: '#000', borderRadius: 6 }} />
+                    {rec.transcript && (
+                      <details style={{ marginTop: 10 }}>
+                        <summary style={{ fontSize: 11, color: '#78716c', cursor: 'pointer' }}>📝 Show full transcript</summary>
+                        <div style={{ marginTop: 8, fontSize: 11, color: '#a8a29e', whiteSpace: 'pre-wrap', maxHeight: 240, overflowY: 'auto', padding: 10, background: '#0c0a09', borderRadius: 6, border: '1px solid #292524' }}>
+                          {rec.transcript}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {showRecorder && (
+        <RecordingModal
+          dealId={deal.id}
+          dealName={deal.name}
+          userId={userId}
+          userName={userName}
+          onClose={() => setShowRecorder(false)}
+          onSaved={() => { setShowRecorder(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// The actual capture experience. Three concurrent things happen on Start:
+//   1. getDisplayMedia → screen video + (optional) system audio
+//   2. getUserMedia    → mic audio
+//   3. SpeechRecognition (Web Speech API) → live transcript of mic audio
+// Audio tracks (mic + system) are mixed via Web Audio API into one track,
+// added to the video track, fed to MediaRecorder. Web Speech runs in
+// parallel listening to the default mic — Chrome allows multiple
+// consumers of the same mic input.
+function RecordingModal({ dealId, dealName, userId, userName, onClose, onSaved }) {
+  const [phase, setPhase] = useState('idle');  // idle | recording | stopping | titling | uploading | done | error
+  const [errMsg, setErrMsg] = useState(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
+  const [title, setTitle] = useState('');
+  const [transcriptLen, setTranscriptLen] = useState(0);
+  const [recordedBlob, setRecordedBlob] = useState(null);
+  const [recordedDuration, setRecordedDuration] = useState(0);
+
+  const recorderRef = useRef(null);
+  const screenStreamRef = useRef(null);
+  const micStreamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const speechRef = useRef(null);
+  const transcriptRef = useRef('');
+  const chunksRef = useRef([]);
+  const startTimeRef = useRef(null);
+  const tickRef = useRef(null);
+
+  const sttSupported = typeof window !== 'undefined' &&
+    !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+
+  const cleanup = () => {
+    try { if (tickRef.current) clearInterval(tickRef.current); } catch {}
+    try { speechRef.current?.stop(); } catch {}
+    try { screenStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    try { micStreamRef.current?.getTracks().forEach(t => t.stop()); } catch {}
+    try { audioCtxRef.current?.close(); } catch {}
+    recorderRef.current = null;
+    screenStreamRef.current = null;
+    micStreamRef.current = null;
+    audioCtxRef.current = null;
+    speechRef.current = null;
+    tickRef.current = null;
+  };
+
+  useEffect(() => () => cleanup(), []);
+
+  const start = async () => {
+    setErrMsg(null);
+    transcriptRef.current = '';
+    chunksRef.current = [];
+    setTranscriptLen(0);
+
+    let screenStream, micStream;
+    try {
+      screenStream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 15 },
+        audio: true,  // system audio if user shares it
+      });
+    } catch (e) {
+      setErrMsg('Screen share was cancelled or denied.');
+      return;
+    }
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e) {
+      // Mic denied is OK — recording continues without mic.
+      micStream = null;
+    }
+
+    screenStreamRef.current = screenStream;
+    micStreamRef.current = micStream;
+
+    // Build combined stream: screen video + mixed audio (mic + system).
+    const combined = new MediaStream();
+    screenStream.getVideoTracks().forEach(t => combined.addTrack(t));
+
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    audioCtxRef.current = ctx;
+    const dest = ctx.createMediaStreamDestination();
+    let hasAudio = false;
+    if (micStream && micStream.getAudioTracks().length > 0) {
+      ctx.createMediaStreamSource(micStream).connect(dest);
+      hasAudio = true;
+    }
+    if (screenStream.getAudioTracks().length > 0) {
+      ctx.createMediaStreamSource(screenStream).connect(dest);
+      hasAudio = true;
+    }
+    if (hasAudio) {
+      dest.stream.getAudioTracks().forEach(t => combined.addTrack(t));
+    }
+
+    // If user stops sharing via the browser's native "Stop sharing" UI,
+    // wrap up gracefully.
+    screenStream.getVideoTracks()[0].onended = () => {
+      if (recorderRef.current && recorderRef.current.state === 'recording') {
+        stop();
+      }
+    };
+
+    // MediaRecorder.
+    let mimeType = 'video/webm;codecs=vp8,opus';
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = 'video/webm';
+      if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = '';
+    }
+    const recorder = new MediaRecorder(combined, mimeType ? { mimeType } : undefined);
+    recorderRef.current = recorder;
+    recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunksRef.current.push(e.data); };
+    recorder.onstop = () => {
+      const blob = new Blob(chunksRef.current, { type: mimeType || 'video/webm' });
+      setRecordedBlob(blob);
+      const dur = Math.round((Date.now() - startTimeRef.current) / 1000);
+      setRecordedDuration(dur);
+      // Default title — user can edit
+      setTitle(`${dealName} — ${new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`);
+      setPhase('titling');
+    };
+    recorder.start(1000);
+
+    startTimeRef.current = Date.now();
+    tickRef.current = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startTimeRef.current) / 1000));
+    }, 500);
+
+    // Web Speech API — concurrent transcription.
+    if (sttSupported && micStream) {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const sr = new SR();
+      sr.continuous = true;
+      sr.interimResults = false;
+      sr.lang = 'en-US';
+      sr.onresult = (e) => {
+        for (let i = e.resultIndex; i < e.results.length; i++) {
+          if (e.results[i].isFinal) {
+            transcriptRef.current += e.results[i][0].transcript + ' ';
+            setTranscriptLen(transcriptRef.current.length);
+          }
+        }
+      };
+      sr.onend = () => {
+        // Chrome auto-stops on long silence; restart while still recording.
+        if (recorderRef.current && recorderRef.current.state === 'recording') {
+          try { sr.start(); } catch {}
+        }
+      };
+      sr.onerror = (e) => {
+        // 'no-speech', 'audio-capture' etc. are non-fatal — let onend retry.
+      };
+      try { sr.start(); speechRef.current = sr; } catch {}
+    }
+
+    setElapsedSec(0);
+    setPhase('recording');
+  };
+
+  const stop = () => {
+    setPhase('stopping');
+    try { speechRef.current?.stop(); } catch {}
+    try { recorderRef.current?.stop(); } catch {}
+    try { if (tickRef.current) clearInterval(tickRef.current); } catch {}
+    // recorder.onstop will move us to 'titling'.
+  };
+
+  const save = async () => {
+    if (!recordedBlob) return;
+    if (!title.trim()) { setErrMsg('Title is required.'); return; }
+    setPhase('uploading'); setErrMsg(null);
+    try {
+      const recordingId = (window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const path = `${userId}/${recordingId}.webm`;
+      const { error: upErr } = await sb.storage.from('screen-recordings')
+        .upload(path, recordedBlob, { contentType: 'video/webm', upsert: false });
+      if (upErr) throw upErr;
+
+      const { error: insErr } = await sb.from('screen_recordings').insert({
+        id: recordingId,
+        user_id: userId,
+        deal_id: dealId,
+        title: title.trim(),
+        transcript: transcriptRef.current.trim() || null,
+        storage_path: path,
+        duration_seconds: recordedDuration,
+        size_bytes: recordedBlob.size,
+        started_at: new Date(startTimeRef.current).toISOString(),
+        ended_at: new Date().toISOString(),
+        ai_summary_status: transcriptRef.current.trim() ? 'pending' : 'done',
+      });
+      if (insErr) throw insErr;
+
+      // Fire-and-forget summary. Realtime sub on the parent will refresh
+      // the UI when ai_summary lands.
+      if (transcriptRef.current.trim()) {
+        sb.functions.invoke('lauren-recording-summary', {
+          body: { recording_id: recordingId },
+        });
+      }
+
+      cleanup();
+      setPhase('done');
+      onSaved && onSaved();
+    } catch (e) {
+      setErrMsg(e?.message || String(e));
+      setPhase('titling');
+    }
+  };
+
+  const cancelDuringRecording = () => {
+    cleanup();
+    onClose();
+  };
+
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={e => phase === 'idle' && e.target === e.currentTarget && onClose()}>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, maxWidth: 520, width: '95vw', display: 'flex', flexDirection: 'column' }} onClick={e => e.stopPropagation()}>
+        <div style={{ padding: '14px 18px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>📹 Record on {dealName}</div>
+            <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+              Screen + microphone · auto-summarized by Lauren
+            </div>
+          </div>
+          {phase === 'idle' && <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>}
+        </div>
+
+        <div style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {phase === 'idle' && (
+            <>
+              <div style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.6 }}>
+                Click <b style={{ color: '#fca5a5' }}>Start recording</b> below. Your browser will ask which window or screen to share, and to use your microphone. Talk through what you're doing — Lauren listens and summarizes when you save.
+              </div>
+              {!sttSupported && (
+                <div style={{ fontSize: 11, color: '#fbbf24', padding: 8, background: '#1c1209', borderRadius: 6 }}>
+                  Voice transcription needs Chrome or Edge. You can still record video — just no AI summary at the end.
+                </div>
+              )}
+              <div style={{ fontSize: 10, color: '#78716c' }}>
+                Privacy note: Chrome's transcription routes audio through Google's servers (free; that's how the Web Speech API works). No different from Loom in that regard.
+              </div>
+            </>
+          )}
+
+          {(phase === 'recording' || phase === 'stopping') && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '10px 0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ width: 12, height: 12, borderRadius: '50%', background: '#ef4444', animation: phase === 'recording' ? 'pulse 1.5s infinite' : 'none' }} />
+                <div style={{ fontSize: 24, fontFamily: 'DM Mono, monospace', color: '#fafaf9' }}>{fmtTime(elapsedSec)}</div>
+              </div>
+              <div style={{ fontSize: 11, color: '#78716c' }}>
+                {sttSupported ? `Transcribing… ${transcriptLen} chars captured` : 'Recording (no transcription — non-Chrome browser)'}
+              </div>
+              {phase === 'stopping' && <div style={{ fontSize: 11, color: '#fbbf24' }}>Wrapping up…</div>}
+            </div>
+          )}
+
+          {phase === 'titling' && (
+            <>
+              <div style={{ fontSize: 12, color: '#a8a29e' }}>
+                Recorded {fmtTime(recordedDuration)} · {(recordedBlob?.size / 1024 / 1024).toFixed(1)} MB
+                {transcriptRef.current.trim() && ` · ${transcriptRef.current.trim().split(/\s+/).length} words transcribed`}
+              </div>
+              <Field label="Title">
+                <input value={title} onChange={e => setTitle(e.target.value)}
+                  placeholder="What's this recording about?"
+                  style={inputStyle} autoFocus
+                  onKeyDown={e => { if (e.key === 'Enter') save(); }} />
+              </Field>
+            </>
+          )}
+
+          {phase === 'uploading' && (
+            <div style={{ padding: '20px 0', textAlign: 'center', color: '#fbbf24', fontSize: 13 }}>
+              Uploading… don't close this window.
+            </div>
+          )}
+
+          {errMsg && <div style={{ padding: 8, background: '#7f1d1d', color: '#fecaca', borderRadius: 6, fontSize: 12 }}>{errMsg}</div>}
+        </div>
+
+        <div style={{ padding: '12px 18px', borderTop: '1px solid #1c1917', display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          {phase === 'idle' && (
+            <button onClick={start} style={{ ...btnPrimary, background: '#dc2626', color: '#fff' }}>🔴 Start recording</button>
+          )}
+          {phase === 'recording' && (
+            <>
+              <button onClick={cancelDuringRecording} style={{ ...btnGhost, fontSize: 12, color: '#78716c' }}>Cancel</button>
+              <button onClick={stop} style={{ ...btnPrimary, background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c' }}>⏹ Stop & save</button>
+            </>
+          )}
+          {phase === 'titling' && (
+            <>
+              <button onClick={() => { cleanup(); onClose(); }} style={{ ...btnGhost, fontSize: 12, color: '#78716c' }}>Discard</button>
+              <button onClick={save} disabled={!title.trim()} style={{ ...btnPrimary, opacity: !title.trim() ? 0.5 : 1 }}>Save recording</button>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
