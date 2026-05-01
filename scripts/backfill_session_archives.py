@@ -352,6 +352,8 @@ def main():
     p.add_argument("--run", action="store_true", help="Actually call Claude API and write drafts (default is dry-run)")
     p.add_argument("--limit", type=int, help="Process at most N JSONLs (for testing)")
     p.add_argument("--repo-root", default=None, help="Override repo root detection")
+    p.add_argument("--only", default=None, help="Process only JSONLs whose filename contains this substring (use for retrying a single failed session)")
+    p.add_argument("--max-input-chars", type=int, default=MAX_TOKENS_INPUT * APPROX_CHARS_PER_TOKEN, help=f"Truncation cap on the transcript before sending to Claude (default {MAX_TOKENS_INPUT * APPROX_CHARS_PER_TOKEN}). Lower (e.g. 300000) if a session returns HTTP 400 — Sonnet 4.5's context window is ~200K tokens.")
     args = p.parse_args()
 
     if args.repo_root:
@@ -365,6 +367,12 @@ def main():
     if not sessions:
         print(f"No JSONL session files found under {PROJECTS_DIR}")
         return 0
+
+    if args.only:
+        sessions = [s for s in sessions if args.only in s.name]
+        if not sessions:
+            print(f"No JSONL session files match --only={args.only!r}")
+            return 0
 
     if args.limit:
         sessions = sessions[: args.limit]
@@ -394,8 +402,7 @@ def main():
             print(f"  → skip (transcript only {len(transcript)} chars after extraction)")
             skipped.append((path, "too short"))
             continue
-        max_chars = MAX_TOKENS_INPUT * APPROX_CHARS_PER_TOKEN
-        transcript = truncate_transcript(transcript, max_chars)
+        transcript = truncate_transcript(transcript, args.max_input_chars)
         print(f"  date={sf.date_slug} user_msgs={sf.user_msg_count} asst_msgs={sf.assistant_msg_count} chars={len(transcript)}")
         try:
             resp = call_claude(transcript, sf.date_slug)
