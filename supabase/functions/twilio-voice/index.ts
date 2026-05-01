@@ -88,7 +88,10 @@ Deno.serve(async (req: Request) => {
   const projectRef = supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] || '';
   const statusUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-status`;
 
-  // TwiML: record the call, dial Nathan, hang up on no-answer after RING_SECONDS
+  // TwiML: ring the DCC browser client first (simultaneous with iPhone).
+  // The browser answers via Twilio.Device; if neither answers in RING_SECONDS
+  // Twilio hangs up and the status callback marks it missed + fires auto-SMS.
+  const callerName = encodeURIComponent(from);
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
@@ -99,7 +102,16 @@ Deno.serve(async (req: Request) => {
     recordingStatusCallback="${statusUrl}"
     recordingStatusCallbackMethod="POST"
     callerId="${to}"
-  >${NATHAN_IPHONE}</Dial>
+  >
+    <Client>
+      <Identity>dcc-browser</Identity>
+      <Parameter name="from" value="${from}"/>
+      <Parameter name="callerName" value="${callerName}"/>
+      <Parameter name="dealId" value="${dealId || ''}"/>
+      <Parameter name="contactId" value="${contactId || ''}"/>
+    </Client>
+    <Number>${NATHAN_IPHONE}</Number>
+  </Dial>
 </Response>`;
 
   return new Response(twiml, {

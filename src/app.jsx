@@ -15055,6 +15055,15 @@ function OutboundMessages({ dealId, vendors, deal }) {
     }
   };
   const [contactUrlCopied, setContactUrlCopied] = useState(null);
+  // ── Voice call state ──────────────────────────────────────────────────────
+  const [callStatus, setCallStatus]     = useState(null); // null|'connecting'|'ringing'|'in-progress'|'ended'
+  const [callContact, setCallContact]   = useState(null); // { name, phone }
+  const [callDuration, setCallDuration] = useState(0);
+  const [incomingCall, setIncomingCall] = useState(null); // { call, from, callerName, dealId }
+  const [callMuted, setCallMuted]       = useState(false);
+  const twilioDeviceRef = React.useRef(null);
+  const activeCallRef   = React.useRef(null);
+  const callTimerRef    = React.useRef(null);
   const threadRef = useRef(null);
 
   const startEditNote = (note) => {
@@ -15311,6 +15320,121 @@ function OutboundMessages({ dealId, vendors, deal }) {
       setMintingContactId(null);
     }
   };
+
+  // ── Twilio Voice device ───────────────────────────────────────────────────
+  const initTwilioDevice = React.useCallback(async () => {
+    if (twilioDeviceRef.current) return twilioDeviceRef.current;
+    try {
+      const { data, error } = await sb.functions.invoke('twilio-token');
+      if (error || !data?.token) throw new Error(error?.message || 'No token');
+      const device = new window.Twilio.Device(data.token, {
+        codecPreferences: ['opus', 'pcmu'],
+        enableRingingState: true,
+        allowIncomingWhileBusy: false,
+      });
+      device.on('incoming', (call) => {
+        const params = call.customParameters;
+        setIncomingCall({
+          call,
+          from:       call.parameters.From || params?.get('from') || 'Unknown',
+          callerName: params?.get('callerName') || null,
+          dealId:     params?.get('dealId')     || null,
+        });
+      });
+      device.on('error', (err) => {
+        console.error('Twilio Device error:', err);
+        setCallStatus(null);
+      });
+      await device.register();
+      twilioDeviceRef.current = device;
+      return device;
+    } catch (err) {
+      console.error('Failed to init Twilio device:', err);
+      return null;
+    }
+  }, []);
+
+  const startCallTimer = React.useCallback(() => {
+    setCallDuration(0);
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+  }, []);
+
+  const stopCallTimer = React.useCallback(() => {
+    if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
+    setCallDuration(0);
+  }, []);
+
+  const startCall = React.useCallback(async (contact) => {
+    if (callStatus) return;
+    setCallStatus('connecting');
+    setCallContact(contact);
+    setCallMuted(false);
+    try {
+      const device = await initTwilioDevice();
+      if (!device) throw new Error('Could not initialize calling device');
+      const call = await device.connect({
+        params: { To: contact.phone, CallerId: '+15135162306' },
+      });
+      activeCallRef.current = call;
+      call.on('ringing',    () => setCallStatus('ringing'));
+      call.on('accept',     () => { setCallStatus('in-progress'); startCallTimer(); });
+      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); });
+      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+    } catch (err) {
+      console.error('startCall error:', err);
+      setCallStatus(null);
+      setCallContact(null);
+    }
+  }, [callStatus, initTwilioDevice, startCallTimer, stopCallTimer]);
+
+  const hangupCall = React.useCallback(() => {
+    if (activeCallRef.current) { activeCallRef.current.disconnect(); activeCallRef.current = null; }
+    stopCallTimer();
+    setCallStatus(null);
+    setCallContact(null);
+    setCallMuted(false);
+  }, [stopCallTimer]);
+
+  const toggleMute = React.useCallback(() => {
+    if (!activeCallRef.current) return;
+    const muted = !callMuted;
+    activeCallRef.current.mute(muted);
+    setCallMuted(muted);
+  }, [callMuted]);
+
+  const answerIncoming = React.useCallback(() => {
+    if (!incomingCall) return;
+    incomingCall.call.accept();
+    setCallStatus('in-progress');
+    setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
+    activeCallRef.current = incomingCall.call;
+    startCallTimer();
+    incomingCall.call.on('disconnect', () => {
+      setCallStatus('ended');
+      stopCallTimer();
+      setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
+    });
+    setIncomingCall(null);
+  }, [incomingCall, startCallTimer, stopCallTimer]);
+
+  const rejectIncoming = React.useCallback(() => {
+    if (!incomingCall) return;
+    incomingCall.call.reject();
+    setIncomingCall(null);
+  }, [incomingCall]);
+
+  // Register device on mount so inbound calls ring immediately
+  React.useEffect(() => {
+    initTwilioDevice();
+    return () => {
+      if (twilioDeviceRef.current) { twilioDeviceRef.current.destroy(); twilioDeviceRef.current = null; }
+      stopCallTimer();
+    };
+  }, []);
+
+  const fmtDuration = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   // ── Load unmatched inbound for this deal ─────────────────────────────────
   const loadUnmatched = async () => {
@@ -15697,6 +15821,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
 
   return (
+    <>
     <div className="comms-container" style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
 
       {/* Unmatched-contact banner */}
@@ -16007,6 +16132,21 @@ function OutboundMessages({ dealId, vendors, deal }) {
               }
             </div>
           </div>
+          {activeContact && !activeContact._everyone && activeContact.phone && (
+            <button
+              onClick={() => startCall(activeContact)}
+              disabled={!!callStatus}
+              title={`Call ${activeContact.name}`}
+              style={{
+                background: callStatus ? '#292524' : '#16a34a',
+                border: 'none', color: '#fff', borderRadius: '50%',
+                width: 32, height: 32, fontSize: 15, cursor: callStatus ? 'default' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0, opacity: callStatus ? 0.4 : 1,
+              }}>
+              📞
+            </button>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <div className="thread-header-from" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
               <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
@@ -16509,6 +16649,65 @@ function OutboundMessages({ dealId, vendors, deal }) {
         </div>
       )}
     </div>
+
+      {/* ── Incoming call overlay ──────────────────────────────────────────── */}
+      {incomingCall && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: '#1c1917', border: '2px solid #16a34a', borderRadius: 16,
+          padding: '20px 24px', minWidth: 280, boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+          display: 'flex', flexDirection: 'column', gap: 14,
+        }}>
+          <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>📞 Incoming call</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: '#fafaf9' }}>
+            {incomingCall.callerName || incomingCall.from}
+          </div>
+          <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{incomingCall.from}</div>
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={answerIncoming} style={{
+              flex: 1, background: '#16a34a', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '10px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+            }}>Answer</button>
+            <button onClick={rejectIncoming} style={{
+              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '10px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+            }}>Decline</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Active call overlay ────────────────────────────────────────────── */}
+      {callStatus && callContact && (
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: '#1c1917', border: `2px solid ${callStatus === 'in-progress' ? '#16a34a' : callStatus === 'ended' ? '#ef4444' : '#d97706'}`,
+          borderRadius: 16, padding: '20px 24px', minWidth: 280,
+          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+          display: 'flex', flexDirection: 'column', gap: 10,
+        }}>
+          <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            {callStatus === 'connecting' ? '⏳ Connecting…' : callStatus === 'ringing' ? '🔔 Ringing…' : callStatus === 'in-progress' ? '📞 On call' : '📵 Call ended'}
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#fafaf9' }}>{callContact.name}</div>
+          <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{callContact.phone}</div>
+          {callStatus === 'in-progress' && (
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a', fontFamily: "'DM Mono', monospace" }}>{fmtDuration(callDuration)}</div>
+          )}
+          {callStatus !== 'ended' && (
+            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+              <button onClick={toggleMute} style={{
+                flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
+              <button onClick={hangupCall} style={{
+                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>End</button>
+            </div>
+          )}
+        </div>
+      )}
+    </>
   );
 }
 
