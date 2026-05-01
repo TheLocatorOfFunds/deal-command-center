@@ -1049,7 +1049,7 @@ function DealCommandCenter({ session, profile }) {
       {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -1244,7 +1244,7 @@ function ChatToastStack({ toasts, onReply, onDismiss, onDismissAll }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, chatJumpThreadId, onChatJumpConsumed }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
@@ -1369,6 +1369,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {groupBtn("outreach", "🎯 Outreach", ["outreach", "leads", "forecast"], 0)}
           {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
           {viewBtn("tasks", "✓ Tasks", 0)}
+          {(isAdmin || userRole === 'va') && viewBtn("time", "⏱ Time", 0)}
           {isAdmin && groupBtn("reports", "📊 Insights", ["reports", "analytics", "traffic"], 0)}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
@@ -1466,7 +1467,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -1490,6 +1491,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} />
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "time" ? (
+            <TimeTrackingView userId={userId} isAdmin={isAdmin} />
           ) : view === "team" ? (
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
           ) : layoutMode === "kanban" ? (
@@ -20816,6 +20819,438 @@ function LaurenDCC() {
           onClick: send, disabled: busy || !threadId,
           style: { minWidth: 38, height: 38, background: (busy || !threadId) ? '#44403c' : '#d97706', color: (busy || !threadId) ? '#78716c' : '#1c0a00', border: 'none', borderRadius: 8, cursor: (busy || !threadId) ? 'not-allowed' : 'pointer', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }
         }, '↑')
+      )
+    )
+  );
+}
+
+// ===========================================================================
+// TIME TRACKING — Clock in/out for VAs (Erik, Anam) + admin payroll
+// ===========================================================================
+//
+// Pay-period model (mirrors the SQL `pay_period_for_date` function):
+//   Period A: 11–25 of month X       → pay 1st of month X+1
+//   Period B: 26 of month X – 10 of X+1 → pay 15 of month X+1
+//
+function computePayPeriod(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  const day = dt.getDate();
+  const yr = dt.getFullYear();
+  const mo = dt.getMonth();
+  if (day >= 11 && day <= 25) {
+    return {
+      periodStart: new Date(yr, mo, 11),
+      periodEnd: new Date(yr, mo, 25),
+      payDate: new Date(yr, mo + 1, 1),
+      label: `${dt.toLocaleString('en-US', { month: 'short' })} 11–25`,
+    };
+  }
+  if (day >= 26) {
+    return {
+      periodStart: new Date(yr, mo, 26),
+      periodEnd: new Date(yr, mo + 1, 10),
+      payDate: new Date(yr, mo + 1, 15),
+      label: `${dt.toLocaleString('en-US', { month: 'short' })} 26 – ${new Date(yr, mo + 1, 10).toLocaleString('en-US', { month: 'short' })} 10`,
+    };
+  }
+  return {
+    periodStart: new Date(yr, mo - 1, 26),
+    periodEnd: new Date(yr, mo, 10),
+    payDate: new Date(yr, mo, 15),
+    label: `${new Date(yr, mo - 1, 26).toLocaleString('en-US', { month: 'short' })} 26 – ${dt.toLocaleString('en-US', { month: 'short' })} 10`,
+  };
+}
+
+function fmtDuration(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function fmtHours(ms) { return (ms / 3600000).toFixed(2); }
+
+function fmtMoney(n) {
+  if (n == null || isNaN(n)) return '—';
+  return '$' + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function dateKey(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  return dt.toISOString().slice(0, 10);
+}
+
+function TimeTrackingView({ userId, isAdmin }) {
+  const [openEntry, setOpenEntry] = React.useState(null);
+  const [myEntries, setMyEntries] = React.useState([]);
+  const [now, setNow] = React.useState(Date.now());
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState(false);
+  const [notes, setNotes] = React.useState('');
+
+  const [vaProfiles, setVaProfiles] = React.useState([]);
+  const [teamEntries, setTeamEntries] = React.useState([]);
+  const [rates, setRates] = React.useState({});
+  const [payments, setPayments] = React.useState([]);
+
+  const period = computePayPeriod(new Date());
+  const periodStartIso = period.periodStart.toISOString();
+  const periodEndIso = new Date(period.periodEnd.getFullYear(), period.periodEnd.getMonth(), period.periodEnd.getDate(), 23, 59, 59, 999).toISOString();
+
+  React.useEffect(() => {
+    if (!openEntry) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [openEntry]);
+
+  const loadMine = React.useCallback(async () => {
+    const { data: open } = await sb.from('time_entries')
+      .select('*').eq('user_id', userId).is('end_at', null).maybeSingle();
+    setOpenEntry(open || null);
+    const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: entries } = await sb.from('time_entries')
+      .select('*').eq('user_id', userId).gte('start_at', since)
+      .order('start_at', { ascending: false }).limit(200);
+    setMyEntries(entries || []);
+    setLoading(false);
+  }, [userId]);
+
+  const loadAdmin = React.useCallback(async () => {
+    if (!isAdmin) return;
+    const [{ data: profs }, { data: rateRows }, { data: tes }, { data: pmts }] = await Promise.all([
+      sb.from('profiles').select('id, name, role').eq('role', 'va'),
+      sb.from('hourly_rates').select('*').order('effective_from', { ascending: false }),
+      sb.from('time_entries').select('*')
+        .gte('start_at', periodStartIso).lte('start_at', periodEndIso)
+        .not('end_at', 'is', null),
+      sb.from('payments').select('*')
+        .gte('period_end', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+        .order('period_start', { ascending: false }),
+    ]);
+    setVaProfiles(profs || []);
+    const r = {};
+    const periodEndDate = period.periodEnd.toISOString().slice(0, 10);
+    (rateRows || []).forEach(row => {
+      if (row.effective_from > periodEndDate) return;
+      if (row.effective_to && row.effective_to < periodEndDate) return;
+      if (!r[row.user_id] || r[row.user_id].effective_from < row.effective_from) {
+        r[row.user_id] = { rate: row.rate, effective_from: row.effective_from, id: row.id };
+      }
+    });
+    setRates(r);
+    setTeamEntries(tes || []);
+    setPayments(pmts || []);
+  }, [isAdmin, periodStartIso, periodEndIso]);
+
+  React.useEffect(() => { loadMine(); }, [loadMine]);
+  React.useEffect(() => { loadAdmin(); }, [loadAdmin]);
+
+  React.useEffect(() => {
+    const ch = sb.channel('time-entries-' + userId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entries' }, () => {
+        loadMine();
+        loadAdmin();
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [loadMine, loadAdmin, userId]);
+
+  const clockIn = async () => {
+    if (busy || openEntry) return;
+    setBusy(true);
+    const { error } = await sb.from('time_entries').insert({
+      user_id: userId,
+      start_at: new Date().toISOString(),
+      notes: notes || null,
+    });
+    setBusy(false);
+    if (error) { alert('Clock-in failed: ' + error.message); return; }
+    setNotes('');
+    loadMine();
+  };
+
+  const clockOut = async () => {
+    if (busy || !openEntry) return;
+    setBusy(true);
+    const updates = { end_at: new Date().toISOString() };
+    if (notes && notes.trim()) {
+      updates.notes = openEntry.notes ? openEntry.notes + ' / ' + notes.trim() : notes.trim();
+    }
+    const { error } = await sb.from('time_entries').update(updates).eq('id', openEntry.id);
+    setBusy(false);
+    if (error) { alert('Clock-out failed: ' + error.message); return; }
+    setNotes('');
+    loadMine();
+  };
+
+  const deleteEntry = async (id) => {
+    if (!confirm('Delete this entry?')) return;
+    await sb.from('time_entries').delete().eq('id', id);
+    loadMine();
+  };
+
+  const myPeriodMs = myEntries.reduce((sum, e) => {
+    if (!e.end_at) return sum;
+    const s = new Date(e.start_at);
+    if (s < period.periodStart || s > period.periodEnd) return sum;
+    return sum + (new Date(e.end_at) - s);
+  }, 0);
+  const myTodayMs = myEntries.reduce((sum, e) => {
+    if (!e.end_at) return sum;
+    const s = new Date(e.start_at);
+    if (dateKey(s) !== dateKey(new Date())) return sum;
+    return sum + (new Date(e.end_at) - s);
+  }, 0);
+  const liveMs = openEntry ? (now - new Date(openEntry.start_at).getTime()) : 0;
+
+  const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
+
+  return React.createElement('div', null,
+    React.createElement('div', { style: { ...card, marginBottom: 16, borderTop: '2px solid ' + (openEntry ? '#10b981' : '#44403c') } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 } },
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, openEntry ? '⏱ Clocked in' : '⏱ Time tracking'),
+          openEntry
+            ? React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 6 } }, fmtDuration(liveMs))
+            : React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginTop: 4 } }, 'Click below to start a shift'),
+          openEntry && React.createElement('div', { style: { fontSize: 11, color: '#78716c', marginTop: 4 } }, 'Started ' + new Date(openEntry.start_at).toLocaleTimeString())
+        ),
+        React.createElement('button', {
+          onClick: openEntry ? clockOut : clockIn,
+          disabled: busy,
+          style: {
+            background: openEntry ? '#dc2626' : '#10b981',
+            color: '#fafaf9', border: 'none', borderRadius: 8,
+            padding: '14px 28px', fontSize: 15, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.5 : 1, minWidth: 140,
+          }
+        }, busy ? '...' : (openEntry ? '⏸ Clock Out' : '▶ Clock In'))
+      ),
+      React.createElement('input', {
+        type: 'text',
+        value: notes,
+        onChange: e => setNotes(e.target.value),
+        placeholder: openEntry ? 'Add notes for this shift (optional)' : 'What are you working on? (optional)',
+        style: { width: '100%', marginTop: 12, padding: '8px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }
+      })
+    ),
+    React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 } },
+      React.createElement('div', { style: card },
+        React.createElement('div', { style: { fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, 'Today'),
+        React.createElement('div', { style: { fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 } }, fmtHours(myTodayMs + (openEntry && dateKey(new Date(openEntry.start_at)) === dateKey(new Date()) ? liveMs : 0)) + 'h'),
+        React.createElement('div', { style: { fontSize: 11, color: '#a8a29e', marginTop: 2 } }, new Date().toLocaleDateString())
+      ),
+      React.createElement('div', { style: card },
+        React.createElement('div', { style: { fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, 'Current pay period'),
+        React.createElement('div', { style: { fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 } }, fmtHours(myPeriodMs + (openEntry ? liveMs : 0)) + 'h'),
+        React.createElement('div', { style: { fontSize: 11, color: '#a8a29e', marginTop: 2 } }, period.label + ' · pay date ' + period.payDate.toLocaleDateString())
+      )
+    ),
+    React.createElement('div', { style: { ...card, marginBottom: 16 } },
+      React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 10 } }, 'Recent entries'),
+      loading
+        ? React.createElement('div', { style: { padding: 12, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'Loading…')
+        : myEntries.length === 0
+          ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No entries yet. Click "Clock In" to start.')
+          : React.createElement('div', null,
+              myEntries.slice(0, 30).map(e => {
+                const start = new Date(e.start_at);
+                const end = e.end_at ? new Date(e.end_at) : null;
+                const ms = end ? (end - start) : 0;
+                return React.createElement('div', {
+                  key: e.id,
+                  style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #292524', fontSize: 13, gap: 12, flexWrap: 'wrap' }
+                },
+                  React.createElement('div', { style: { flex: 1, minWidth: 200 } },
+                    React.createElement('div', { style: { color: '#fafaf9' } }, start.toLocaleDateString() + ' · ' + start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + (end ? ' → ' + end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ' → (open)')),
+                    e.notes && React.createElement('div', { style: { color: '#a8a29e', fontSize: 11, marginTop: 2 } }, e.notes)
+                  ),
+                  React.createElement('div', { style: { color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700, minWidth: 80, textAlign: 'right' } }, end ? fmtHours(ms) + 'h' : '— open —'),
+                  end && React.createElement('button', {
+                    onClick: () => deleteEntry(e.id),
+                    style: { background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 11 },
+                    title: 'Delete entry'
+                  }, '✕')
+                );
+              })
+            )
+    ),
+    isAdmin && React.createElement(AdminPayrollSection, {
+      vaProfiles, teamEntries, rates, payments, period,
+      onReload: loadAdmin,
+    })
+  );
+}
+
+function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period, onReload }) {
+  const [editingRateFor, setEditingRateFor] = React.useState(null);
+  const [newRate, setNewRate] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
+
+  const hoursByUser = {};
+  teamEntries.forEach(e => {
+    if (!e.end_at) return;
+    const ms = new Date(e.end_at) - new Date(e.start_at);
+    hoursByUser[e.user_id] = (hoursByUser[e.user_id] || 0) + ms;
+  });
+
+  const periodStartStr = period.periodStart.toISOString().slice(0, 10);
+  const periodEndStr = period.periodEnd.toISOString().slice(0, 10);
+  const paidThisPeriod = {};
+  payments.forEach(p => {
+    if (p.period_start === periodStartStr && p.period_end === periodEndStr) {
+      paidThisPeriod[p.user_id] = p;
+    }
+  });
+
+  const markPaid = async (userId, ms, rate) => {
+    if (busy) return;
+    const hours = ms / 3600000;
+    const amount = +(hours * rate).toFixed(2);
+    if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(amount)} as paid for this period?`)) return;
+    setBusy(true);
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('payments').insert({
+      user_id: userId,
+      period_start: periodStartStr,
+      period_end: periodEndStr,
+      hours_worked: hours.toFixed(2),
+      rate_used: rate,
+      amount_paid: amount,
+      paid_by: user?.id,
+    });
+    setBusy(false);
+    if (error) { alert('Mark-paid failed: ' + error.message); return; }
+    onReload();
+  };
+
+  const unmarkPaid = async (paymentId) => {
+    if (!confirm('Undo this payment record?')) return;
+    setBusy(true);
+    await sb.from('payments').delete().eq('id', paymentId);
+    setBusy(false);
+    onReload();
+  };
+
+  const saveRate = async (userId) => {
+    const r = parseFloat(newRate);
+    if (!r || r <= 0) { alert('Enter a valid hourly rate.'); return; }
+    setBusy(true);
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = rates[userId];
+    if (existing) {
+      await sb.from('hourly_rates').update({ effective_to: today }).eq('id', existing.id);
+    }
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('hourly_rates').insert({
+      user_id: userId,
+      rate: r,
+      effective_from: today,
+      created_by: user?.id,
+    });
+    setBusy(false);
+    if (error) { alert('Save-rate failed: ' + error.message); return; }
+    setEditingRateFor(null);
+    setNewRate('');
+    onReload();
+  };
+
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const lastMonth = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().slice(0, 7);
+  const paidThisMonth = payments.filter(p => p.paid_at && p.paid_at.slice(0, 7) === thisMonth).reduce((s, p) => s + Number(p.amount_paid || 0), 0);
+  const paidLastMonth = payments.filter(p => p.paid_at && p.paid_at.slice(0, 7) === lastMonth).reduce((s, p) => s + Number(p.amount_paid || 0), 0);
+
+  return React.createElement('div', null,
+    React.createElement('div', { style: { ...card, marginBottom: 16, borderTop: '2px solid #d97706' } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 } },
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, '💵 Team Payroll'),
+          React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginTop: 4 } }, 'Period: ' + period.label + ' · pay date ' + period.payDate.toLocaleDateString())
+        ),
+        React.createElement('div', { style: { display: 'flex', gap: 16 } },
+          React.createElement('div', { style: { textAlign: 'right' } },
+            React.createElement('div', { style: { fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 } }, 'Paid this month'),
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, fmtMoney(paidThisMonth))
+          ),
+          React.createElement('div', { style: { textAlign: 'right' } },
+            React.createElement('div', { style: { fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 } }, 'Last month'),
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#a8a29e', fontFamily: "'DM Mono', monospace" } }, fmtMoney(paidLastMonth))
+          )
+        )
+      ),
+      vaProfiles.length === 0
+        ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No VAs found. Add Erik / Anam via the Team modal.')
+        : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+            React.createElement('thead', null,
+              React.createElement('tr', { style: { textAlign: 'left', color: '#78716c', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' } },
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524' } }, 'Name'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Hours'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Rate'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Total'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Status')
+              )
+            ),
+            React.createElement('tbody', null,
+              vaProfiles.map(p => {
+                const ms = hoursByUser[p.id] || 0;
+                const hours = ms / 3600000;
+                const rate = rates[p.id]?.rate;
+                const total = (rate && hours) ? hours * rate : 0;
+                const paid = paidThisPeriod[p.id];
+                const editing = editingRateFor === p.id;
+                return React.createElement('tr', { key: p.id, style: { borderBottom: '1px solid #292524' } },
+                  React.createElement('td', { style: { padding: '10px 4px', color: '#fafaf9' } }, p.name || '(unnamed)'),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, hours.toFixed(2) + 'h'),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
+                    editing
+                      ? React.createElement('div', { style: { display: 'flex', gap: 4, justifyContent: 'flex-end' } },
+                          React.createElement('input', { type: 'number', step: '0.25', value: newRate, onChange: e => setNewRate(e.target.value), placeholder: '15.00', style: { width: 70, padding: '4px 6px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#fafaf9', fontSize: 12 } }),
+                          React.createElement('button', { onClick: () => saveRate(p.id), disabled: busy, style: { padding: '4px 8px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✓'),
+                          React.createElement('button', { onClick: () => { setEditingRateFor(null); setNewRate(''); }, style: { padding: '4px 8px', background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✕')
+                        )
+                      : React.createElement('span', { onClick: () => { setEditingRateFor(p.id); setNewRate(rate || ''); }, style: { color: rate ? '#fafaf9' : '#fb923c', cursor: 'pointer', textDecoration: 'underline dotted', fontFamily: "'DM Mono', monospace" } }, rate ? fmtMoney(rate) + '/hr' : 'set rate')
+                  ),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700 } }, total > 0 ? fmtMoney(total) : '—'),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
+                    paid
+                      ? React.createElement('div', { style: { display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' } },
+                          React.createElement('span', { style: { color: '#10b981', fontSize: 11, fontWeight: 700 } }, '✓ Paid ' + new Date(paid.paid_at).toLocaleDateString()),
+                          React.createElement('button', { onClick: () => unmarkPaid(paid.id), style: { background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 10 }, title: 'Undo' }, '↶')
+                        )
+                      : React.createElement('button', { onClick: () => markPaid(p.id, ms, rate), disabled: !rate || ms === 0 || busy, style: { padding: '5px 12px', background: (!rate || ms === 0) ? '#44403c' : '#d97706', color: '#fafaf9', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: (!rate || ms === 0) ? 'not-allowed' : 'pointer', opacity: (!rate || ms === 0) ? 0.5 : 1 } }, 'Mark Paid')
+                  )
+                );
+              })
+            )
+          )
+    ),
+    payments.length > 0 && React.createElement('div', { style: card },
+      React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 10 } }, 'Recent payments (90 days)'),
+      React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
+        React.createElement('thead', null,
+          React.createElement('tr', { style: { textAlign: 'left', color: '#78716c', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' } },
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524' } }, 'Person'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524' } }, 'Period'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Hours'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Amount'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524' } }, 'Paid')
+          )
+        ),
+        React.createElement('tbody', null,
+          payments.map(p => {
+            const va = vaProfiles.find(v => v.id === p.user_id);
+            return React.createElement('tr', { key: p.id, style: { borderBottom: '1px solid #292524' } },
+              React.createElement('td', { style: { padding: '6px 4px', color: '#fafaf9' } }, va?.name || '—'),
+              React.createElement('td', { style: { padding: '6px 4px', color: '#a8a29e' } }, p.period_start + ' → ' + p.period_end),
+              React.createElement('td', { style: { padding: '6px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, Number(p.hours_worked).toFixed(2) + 'h'),
+              React.createElement('td', { style: { padding: '6px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700 } }, fmtMoney(p.amount_paid)),
+              React.createElement('td', { style: { padding: '6px 4px', color: '#a8a29e' } }, new Date(p.paid_at).toLocaleDateString())
+            );
+          })
+        )
       )
     )
   );
