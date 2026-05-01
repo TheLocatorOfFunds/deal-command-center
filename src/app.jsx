@@ -364,6 +364,9 @@ function DealCommandCenter({ session, profile }) {
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  // Welcome-back unread banner. Hides after dismiss until a NEW message
+  // arrives (count rises above the dismissal floor). Click → opens chat.
+  const [chatBannerDismissedAt, setChatBannerDismissedAt] = useState(0);
   // [{user_id, name, url, started_at}] — derived from recent team_messages
   // posts of the form "📹 X started a video call: https://meet.jit.si/..."
   const [activeCalls, setActiveCalls] = useState([]);
@@ -884,7 +887,12 @@ function DealCommandCenter({ session, profile }) {
               style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
               💬 Chat
               {unreadChatCount > 0 && (
-                <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>
+                <span style={{
+                  background: '#dc2626', color: '#fff', borderRadius: 8,
+                  padding: '0 6px', fontSize: 9, fontWeight: 700,
+                  minWidth: 14, textAlign: 'center',
+                  animation: 'chatBadgePulse 1.6s ease-in-out infinite',
+                }}>
                   {unreadChatCount > 99 ? '99+' : unreadChatCount}
                 </span>
               )}
@@ -965,6 +973,47 @@ function DealCommandCenter({ session, profile }) {
           <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
         </div>
       </div>
+
+      {/* Welcome-back unread chat banner. Persistent indicator that
+          messages are waiting — visible from EVERY view, not just the
+          chat tab. Click → opens chat. Dismisses on click or via the ×
+          button; reappears on the next new message (when unreadChatCount
+          climbs above the dismissal floor). Per Nathan 2026-05-01 — VAs
+          weren't noticing the small header badge when returning to DCC. */}
+      {isTeam && unreadChatCount > 0 && unreadChatCount > chatBannerDismissedAt && (
+        <div
+          onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+            background: 'linear-gradient(90deg, rgba(220,38,38,0.18), rgba(220,38,38,0.08))',
+            border: '1px solid #b91c1c', borderRadius: 8,
+            padding: '10px 14px', marginBottom: 16, cursor: 'pointer',
+            animation: 'unreadBannerSlide 0.22s ease-out',
+          }}
+          title="Click to open chat"
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 28, height: 28, borderRadius: '50%', background: '#dc2626', color: '#fff',
+              fontSize: 13, fontWeight: 800, flexShrink: 0,
+              animation: 'chatBadgePulse 1.6s ease-in-out infinite',
+            }}>💬</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#fecaca' }}>
+              You have {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'}
+            </span>
+            <span style={{ fontSize: 12, color: '#fca5a5' }}>— click to open</span>
+          </div>
+          <button
+            onClick={(e) => { e.stopPropagation(); setChatBannerDismissedAt(unreadChatCount); }}
+            title="Dismiss (will reappear when a new message arrives)"
+            style={{
+              background: 'transparent', border: 'none', color: '#fca5a5',
+              cursor: 'pointer', fontSize: 18, padding: '0 4px', lineHeight: 1, flexShrink: 0,
+            }}
+          >×</button>
+        </div>
+      )}
 
       {showWalkthroughs && <WalkthroughRequestsModal onClose={() => setShowWalkthroughs(false)} userId={session.user.id} onJumpToDeal={(id) => { setActiveDealId(id); setShowWalkthroughs(false); }} />}
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
@@ -10993,7 +11042,6 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               <Field label="Verified Surplus (court-confirmed)"><input type="number" value={m.verifiedSurplus ?? ""} onChange={e => updateMeta({ verifiedSurplus: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Judgment Debt"><input type="number" value={m.judgmentAmount ?? ""} onChange={e => updateMeta({ judgmentAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Total Debt"><input type="number" value={m.totalDebt ?? ""} onChange={e => updateMeta({ totalDebt: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Estimated Loan Balance"><input type="number" value={m.estimatedLoanBalance ?? ""} onChange={e => updateMeta({ estimatedLoanBalance: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Mortgage Balance 1"><input type="number" value={m.mortgageBalance1 ?? ""} onChange={e => updateMeta({ mortgageBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Lien Balance 1"><input type="number" value={m.lienBalance1 ?? ""} onChange={e => updateMeta({ lienBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
             </div>
@@ -18896,7 +18944,6 @@ function mapGhlRowToDcc(row, headers) {
         verifiedSurplus: num(get('Verified Surplus')),
         judgmentAmount,
         totalDebt,
-        estimatedLoanBalance: num(get('Estimated Loan Balance')),
         confirmationOfSaleDate: parseAuctionDate(get('Confirmation of Sale Date')),
         foreclosureFileDate: parseAuctionDate(get('Foreclosure File Date')),
         redemptionDeadline: parseAuctionDate(get('Redemption Deadline')),
