@@ -89,44 +89,55 @@ and Erik's sessions can see what each Claude is doing in real time.
 
 ## Nathan's session
 
-**Status:** Active as of 2026-04-29 evening. CSV importer cycle finished
-(B-leads CSV in DB, 30 deals). Cleaning up data fields + UX polish. New
-Claude Code session prep.
+**Status:** Active — 2026-05-01 (afternoon) — audit + bulk-mint shipped; chat-notification fix on PR.
+**Branch:** `nathan/chat-notif-banner-2026-05-01` (PR open, awaiting Nathan's merge)
+**Working on:** Audited all 110 active deals (75 GHL imports + 35 other recent). Bulk-minted 72 homeowner personalized_links rows for the GHL imports that lacked one. Briefed Eric in his DCC DM thread (`b106d313-…`) on the vision (Ohio Intel → DCC → automations on new lead) + per-lead requirements + his punchlist. Then per Nathan's prompt: removed redundant Estimated Loan Balance field + added persistent unread-chat banner (Eric was missing DMs).
 
-**Just finished (chronological)**:
-- Per-contact personalized URLs (`/s/charlottemorrow-katherine` etc.) with relationship-aware copy on the rendered page (refundlocators-next), OG image, and iMessage preview
-- Sale Date / Sale Price / Judgment Debt fields in Case Details (deal Overview) — admin-gated
-- 30-Days-to-Sale (`is_30dts`) + 🔥 badge
-- Deceased flag (`contacts.deceased` + UI toggle in contact editor) + 🕊️ pill on Comms tabs (with strikethrough)
-- Account Settings: phone made optional, owner-only (Nathan + Justin) Team Access section to promote VAs to Admin in one click
-- 📥 Import modal — CSV importer with three-way decision per row (Create / Merge audit / Skip), auto-dedup by case#/address/phone, handles GHL rich-export header signature, batched executes with progress + per-row error log
-- Date timezone bug fixed (`parseAuctionDate` is now manual regex, no `Date()` for date-only strings)
-- Family contact insert bug fixed (was spreading `relationship` into the `contacts` insert; column doesn't exist there)
-- Insert order refactored: contact → deal → contact_deals + cleanup-on-fail at every step (no more orphans)
-- Merge mode: re-uploading the CSV audits existing deals, fills any null fields, adds missing family contacts + GHL notes
-- Acknowledge ALL docket events RPC + UI (the modal button now bulk-clears 1811 events in one statement)
-- Tier-based name color on deal headers (A=green, B=red+🕊️, C=neutral)
-- Comprehensive Case Details card form fields — every CSV column has a corresponding editable input on the deal Overview, organized into Lead Classification / Case Identity / Financial / Sale & Timeline / Liens / Attorney & Fees / Links / Source
+**Audit findings (75 GHL imports)**:
+- 70 of 75 had no personalized URL minted (93%) — biggest blocker, now fixed for 72
+- 17 untiered (bulk-queue gate skips them) — Eric's lane to set A/B/C
+- 14 have `meta.homeownerPhone` but no synced textable contact row
+- 36 missing sale_price; 65 missing surplus estimate; 12 missing sale_date
+- 75 of 75 missing mailing_address — system-wide gap
+- 285 contacts still labeled `other` (Eric labeling); only 1 GHL import has fully unlabeled contacts (his work is showing)
 
-**Active gaps Eric is hand-cleaning**:
-- Sale dates on the first 22 imported deals are off by one day (TZ bug from older importer build). Eric is correcting them manually OR Nathan can clear `meta.saleDate` for `source='ghl-import'` and re-merge to backfill.
-- Family contact relationships are all `'other'` from import — Eric's labeling them as `child`, `spouse`, etc.
-- 0 family contacts on the 30 imports (the bug-era version dropped them silently). Re-uploading the same CSV in Merge mode will add them.
+**Just shipped (data, not code)**:
+- 72 homeowner `personalized_links` rows minted via DCC tab JS injection. URL nickname = `firstname+lastname`. All 72 sync'd back to `deals.refundlocators_token` via the existing trigger. PL row count went from ~37 → 109. Source field `dcc-bulk-mint-2026-05-01` for traceability.
+- Skipped: 285 "other"-relationship contacts (need Eric to label first → second bulk-mint round) + 42 "homeowner"-labeled contacts (duplicates of deal-level URL).
+- Eric briefing sent (team_messages row `91222175-…`) covering the vision, the per-lead checklist, the priority punchlist, and the going-forward QA flow. Edited later to swap "slug" → "URL nickname" + follow-up note.
 
-**Up next**:
-- C-leads CSV import (queued — ready when Eric is)
-- Cloudflare audit completion (Pages project + Maps key restriction)
-- Obsidian vault v0 bootstrap
-- Phone-type detection (parked, not yet built)
+**Just shipped (code, on PR `nathan/chat-notif-banner-2026-05-01`)**:
+- Persistent unread-chat banner: full-width red banner under the header on every view when `unreadChatCount > 0` and not dismissed. Click → opens chat. × dismisses. Reappears on next new message. Eric was missing DMs because the existing top-right toast only fires while DCC is foregrounded with chat closed, and the small header badge was easy to miss on return.
+- Header 💬 Chat badge now pulses (`chatBadgePulse` keyframe) when unread > 0.
+- Removed the Estimated Loan Balance field from Case Details (form + CSV importer). Judgment Debt + Total Debt cover the math; nothing downstream reads `meta.estimatedLoanBalance`.
+- Cache buster `app.js?v=20260430m` → `20260501a`.
 
-**Touching**: `src/app.jsx`, `supabase/migrations/`, `docs/IMPORTING_LEADS_FROM_GHL.md`, `TRANSFER_TO_NEW_CLAUDE_CODE.md`
+**Just landed (apr 30 batch — git log 634c2ce → f16ce1a, all on main)**:
+chat black-screen fix (isOwner threading) · Lauren EOD-polish (`lauren-eod-polish` EF) · per-deal screen recordings + Lauren auto-summary (`lauren-recording-summary` EF, `screen_recordings` table) · chat unread badge + per-thread badges + Mark-all-read · top-right team-message toasts · PDFs on every docket-event UI + root-cause `attach-docket-pdf` (vault secret never set; EF refactored to drop check) · glass-box scraper health drill-in + 88+ `realsheriff_*` agents seeded · DealStatusBadges cluster on every card · `phone_intel` + `queue_phone_probe` RPC + Comms-tab UI · App-level RecordingContext + minimizable pill · active-call header pills (from chat 📹 markers, last 30 min) · editable per-contact URL relationship + Tier filter on kanban · team-chat paste + `tg_auto_queue_phone_probe` (124 backfilled) + EodReportsToday widget on Today · removed 88+-pill CASTLE SCRAPER ALERTS wall from Attention · honest probe states (queued/probing/stuck) + Reset + drag-and-drop + paste screenshots in Comms composer · in-DCC monitoring: `system_alerts` + `report_system_alert()` + pg_cron sweeper + ⚠ owner-only header badge + modal viewer (wired into `attach-docket-pdf` + `intel-sync`).
 
-**Migrations applied 2026-04-29**:
-- `20260428090000_contacts_deceased.sql`
-- `20260428100000_profiles_phone_nullable.sql`
-- `20260429120000_acknowledge_all_docket_events.sql`
+Cache-buster `app.js?v=20260501a` after this PR merges.
 
-**Last updated:** 2026-04-29 evening.
+**Uncommitted (in repo per previous-session note)**: `.github/workflows/weekly-db-backup.yml` + `docs/BACKUP_SETUP.md`. Weekly `pg_dump` → Cloudflare R2. Workflow committed but inert until Nathan populates 6 GitHub secrets — ask if he finished the SETUP doc.
+
+**Cross-session blocked**:
+- Justin lane (`JUSTIN_PHONE_INTEL_PROBE_SPEC.md`) — Mac bridge needs AppleScript probe + `send-sms` routing on `phone_intel.imessage_capable`. Until shipped, every probe sits `status='queued'`. UI is honest about it.
+- Ohio Intel + Castle — scrapers must upload PDFs DURING scrape session (county portals are session-protected; `attach-docket-pdf` can't fetch-later). Per `project_docket_pdf_requirement.md` memory.
+
+**Other state**:
+- PITR parked ($115/mo); R2 backup ($5/mo) is the chosen path. PITR available at Supabase dashboard → Database → Backups → PITR if Nathan reverses.
+- Eric hand-cleaning first-22 GHL imports (off-by-one TZ pre-5c762d7) + labeling family-contact relationships. Don't stack new imports on top.
+- Cloudflare audit + Obsidian vault v0 — still pending.
+
+**Touching**: `personalized_links` (72 INSERT), `deals.refundlocators_token` (72 sync via trigger), `team_messages` (1 INSERT in Eric's DM thread).
+
+**Open for follow-up** (after Eric's QA pass):
+- Round 2 bulk-mint for family-contact URLs once Eric labels relationships (285 contacts pending)
+- Tier the 17 untiered GHL imports (Eric's call)
+- Address the 14 "phone-in-meta-but-no-contact-row" deals
+- Backfill sale_price on 36 deals
+- Decide mailing_address strategy (skip-trace vs. soften copy)
+
+**Last updated:** 2026-05-01 (after audit + bulk-mint + Eric briefing).
 
 ---
 

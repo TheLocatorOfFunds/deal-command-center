@@ -28,6 +28,9 @@
   ::-webkit-scrollbar-thumb { background: #44403c; border-radius: 3px; }
   @keyframes dotPulse { 0%,80%,100%{transform:scale(.7);opacity:.4} 40%{transform:scale(1);opacity:1} }
   @keyframes laurenPulse { 0%,100%{box-shadow:0 4px 20px rgba(217,119,6,.55), 0 0 0 0 rgba(217,119,6,.5)} 50%{box-shadow:0 4px 32px rgba(217,119,6,1), 0 0 0 8px rgba(217,119,6,.0)} }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
+  @keyframes chatBadgePulse { 0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(220,38,38,.7)} 50%{transform:scale(1.08);box-shadow:0 0 0 6px rgba(220,38,38,0)} }
+  @keyframes unreadBannerSlide { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
   /* Team Chat: hover-reveal actions on each message row (react / edit / delete) */
   .team-msg-row:hover .team-msg-actions { opacity: 1 !important; }
@@ -232,6 +235,6 @@
 <body>
 <div id="root"></div>
 
-<script src="app.js?v=20260430m" defer></script>
+<script src="app.js?v=20260501a" defer></script>
 </body>
 </html>
