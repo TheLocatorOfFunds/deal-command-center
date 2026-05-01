@@ -501,7 +501,7 @@ function DealCommandCenter({ session, profile }) {
           try {
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
               const n = new Notification(`💬 ${senderName}`, { body: preview, tag: 'dcc-team-chat' });
-              n.onclick = () => { window.focus(); setView('team'); n.close(); };
+              n.onclick = () => { window.focus(); setView('team'); markAllChatRead(); n.close(); };
             }
           } catch {/* notification blocked */}
         } else {
@@ -541,6 +541,23 @@ function DealCommandCenter({ session, profile }) {
     if (!uid) return;
     const { data } = await sb.rpc('team_unread_count', { p_user_id: uid });
     setUnreadChatCount(data || 0);
+  };
+
+  // Mark every team thread as read. Called when the user engages with ANY
+  // chat-notification surface (banner click, header 💬 button, toast Reply,
+  // OS notification click) — per Nathan 2026-05-01 the user-action of
+  // "I saw the notification" should clear all in-app indicators globally,
+  // not leave one surface still flashing while another's been dismissed.
+  // Realtime sub on team_message_reads picks this up and refreshes the
+  // header badge + per-thread badges automatically. No-op if no session.
+  const markAllChatRead = async () => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const { data: threads } = await sb.from('team_threads').select('id').is('archived_at', null);
+    if (!threads || threads.length === 0) return;
+    const now = new Date().toISOString();
+    const rows = threads.map(t => ({ thread_id: t.id, user_id: uid, last_read_at: now }));
+    await sb.from('team_message_reads').upsert(rows, { onConflict: 'thread_id,user_id' });
   };
 
   // Push a chat toast for a newly-arrived team_messages row. Skip own
@@ -583,6 +600,8 @@ function DealCommandCenter({ session, profile }) {
     setView('team');
     setChatJumpThreadId(toast.thread_id);
     dismissChatToast(toast.id);
+    setChatBannerDismissedAt(unreadChatCount);
+    markAllChatRead();
   };
   // Once the user enters the chat view, clear toasts — per-thread badges
   // + sidebar do the work from there, no need to nag.
@@ -882,7 +901,7 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
           {isTeam && (
-            <button onClick={() => { setActiveDealId(null); setView("team"); }}
+            <button onClick={() => { setActiveDealId(null); setView("team"); if (unreadChatCount > 0) markAllChatRead(); }}
               title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} in team chat` : 'Team chat with Justin + Lauren'}
               style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
               💬 Chat
@@ -982,7 +1001,7 @@ function DealCommandCenter({ session, profile }) {
           weren't noticing the small header badge when returning to DCC. */}
       {isTeam && unreadChatCount > 0 && unreadChatCount > chatBannerDismissedAt && (
         <div
-          onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); }}
+          onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); markAllChatRead(); }}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
             background: 'linear-gradient(90deg, rgba(220,38,38,0.18), rgba(220,38,38,0.08))',
