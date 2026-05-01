@@ -203,21 +203,31 @@ serve(async (req) => {
     payload.defendant_primary?.trim() ||
     `${normalizedCounty} · ${normalizedCase}`;
 
+  // DCC's deal-detail UI (SurplusOverview in src/app.jsx) reads meta keys
+  // in camelCase: estimatedSurplus, judgmentAmount, saleDate, salePrice,
+  // courtCase, courtAppraisalValue, minimumBidAmount. Write the meta
+  // payload with those keys directly so the Case Details panel renders
+  // populated on first load — without DCC needing to dual-key fallback.
+  //
+  // Provenance fields (sourced_*, intel_case_id) stay snake_case — they're
+  // metadata Nathan doesn't see in the UI, only used for idempotency
+  // tracking + activity-feed attribution.
   const meta: Record<string, unknown> = {
     sourced_from: 'ohio-intel',
     sourced_at: new Date().toISOString(),
     sourced_by: payload.sourced_by ?? null,
     intel_case_id: payload.intel_case_id,
+    // ── UI-facing fields (camelCase to match SurplusOverview) ──
     county: normalizedCounty,
-    case_number: normalizedCase,
+    courtCase: normalizedCase,
     grade: payload.grade ?? null,
-    foreclosure_type: payload.foreclosure_type ?? null,
-    appraised_value: payload.appraised_value ?? null,
-    opening_bid: payload.opening_bid ?? null,
-    judgment_amount: payload.judgment_amount ?? null,
-    estimated_surplus: payload.surplus_estimate ?? null,
-    sale_at: payload.sale_at ?? null,
-    sale_date: payload.sale_date ?? null,
+    foreclosureType: payload.foreclosure_type ?? null,
+    courtAppraisalValue: payload.appraised_value ?? null,
+    minimumBidAmount: payload.opening_bid ?? null,
+    judgmentAmount: payload.judgment_amount ?? null,
+    estimatedSurplus: payload.surplus_estimate ?? null,
+    saleDate: payload.sale_date ?? payload.sale_at?.split('T')?.[0] ?? null,
+    saleAt: payload.sale_at ?? null,
   };
 
   const { error: dealErr } = await db.from('deals').insert({
