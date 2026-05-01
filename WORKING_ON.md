@@ -91,9 +91,9 @@ and Erik's sessions can see what each Claude is doing in real time.
 
 ## Nathan's session
 
-**Status:** Active — 2026-05-01 (afternoon) — audit + bulk-mint shipped; chat-notification fix on PR.
-**Branch:** `nathan/chat-notif-banner-2026-05-01` (PR open, awaiting Nathan's merge)
-**Working on:** Audited all 110 active deals (75 GHL imports + 35 other recent). Bulk-minted 72 homeowner personalized_links rows for the GHL imports that lacked one. Briefed Eric in his DCC DM thread (`b106d313-…`) on the vision (Ohio Intel → DCC → automations on new lead) + per-lead requirements + his punchlist. Then per Nathan's prompt: removed redundant Estimated Loan Balance field + added persistent unread-chat banner (Eric was missing DMs).
+**Status:** Active — 2026-05-01 (afternoon) — three PRs merged today + surplus pipeline scaffolding live.
+**Branch:** main (no in-flight branch)
+**Working on:** (1) Audited all 110 active deals (75 GHL imports + 35 other recent), bulk-minted 72 homeowner personalized URLs, briefed Eric in his DCC DM thread. (2) Fixed Eric-misses-DMs gap with persistent banner + animated badge + clear-all-on-engage (PRs #35, #37). (3) Made the 2026-05-01 architecture call on surplus pipeline (extends DCC, doesn't get its own Supabase) + scaffolded `surplus_docket_events` table + `surplus-pdfs` bucket (PR #38 merged, migration applied). Removed redundant Estimated Loan Balance field along the way.
 
 **Audit findings (75 GHL imports)**:
 - 70 of 75 had no personalized URL minted (93%) — biggest blocker, now fixed for 72
@@ -108,16 +108,18 @@ and Erik's sessions can see what each Claude is doing in real time.
 - Skipped: 285 "other"-relationship contacts (need Eric to label first → second bulk-mint round) + 42 "homeowner"-labeled contacts (duplicates of deal-level URL).
 - Eric briefing sent (team_messages row `91222175-…`) covering the vision, the per-lead checklist, the priority punchlist, and the going-forward QA flow. Edited later to swap "slug" → "URL nickname" + follow-up note.
 
-**Just shipped (code, on PR `nathan/chat-notif-banner-2026-05-01`)**:
-- Persistent unread-chat banner: full-width red banner under the header on every view when `unreadChatCount > 0` and not dismissed. Click → opens chat. × dismisses. Reappears on next new message. Eric was missing DMs because the existing top-right toast only fires while DCC is foregrounded with chat closed, and the small header badge was easy to miss on return.
-- Header 💬 Chat badge now pulses (`chatBadgePulse` keyframe) when unread > 0.
-- Removed the Estimated Loan Balance field from Case Details (form + CSV importer). Judgment Debt + Total Debt cover the math; nothing downstream reads `meta.estimatedLoanBalance`.
-- Cache buster `app.js?v=20260430m` → `20260501a`.
+**Just shipped (code, all merged to main today)**:
+- **PR #35** — Persistent unread-chat banner: full-width red banner under the header on every view when `unreadChatCount > 0` and not dismissed. Click → opens chat. × dismisses (local). Reappears on next new message. Header 💬 Chat badge now pulses (`chatBadgePulse` keyframe) when unread > 0. Also removed the Estimated Loan Balance field (Judgment + Total Debt cover the math).
+- **PR #37** — Unified notification clearing: `markAllChatRead()` at App level upserts `last_read_at = now` across all team threads. Wired into all 4 chat-notification entry points (banner click, header chat button, toast Reply, OS notification). Engage one surface → all surfaces clear.
+- **PR #38** — Surplus pipeline scaffolding: new `public.surplus_docket_events` table + `surplus-pdfs` storage bucket. Per the architecture call: Castle / Ohio Intel surplus pipeline extends DCC's Supabase (separate bucket + table), no new project. PDFs land at `surplus-pdfs/<castle_case_id>/<filename>` via Castle's service-role uploads during scrape session. RLS admin-only. Migration `20260501100000_surplus_docket_events.sql`.
+- Cache buster `app.js?v=20260430m` → `20260501a` → `20260501b`.
 
 **Just landed (apr 30 batch — git log 634c2ce → f16ce1a, all on main)**:
 chat black-screen fix (isOwner threading) · Lauren EOD-polish (`lauren-eod-polish` EF) · per-deal screen recordings + Lauren auto-summary (`lauren-recording-summary` EF, `screen_recordings` table) · chat unread badge + per-thread badges + Mark-all-read · top-right team-message toasts · PDFs on every docket-event UI + root-cause `attach-docket-pdf` (vault secret never set; EF refactored to drop check) · glass-box scraper health drill-in + 88+ `realsheriff_*` agents seeded · DealStatusBadges cluster on every card · `phone_intel` + `queue_phone_probe` RPC + Comms-tab UI · App-level RecordingContext + minimizable pill · active-call header pills (from chat 📹 markers, last 30 min) · editable per-contact URL relationship + Tier filter on kanban · team-chat paste + `tg_auto_queue_phone_probe` (124 backfilled) + EodReportsToday widget on Today · removed 88+-pill CASTLE SCRAPER ALERTS wall from Attention · honest probe states (queued/probing/stuck) + Reset + drag-and-drop + paste screenshots in Comms composer · in-DCC monitoring: `system_alerts` + `report_system_alert()` + pg_cron sweeper + ⚠ owner-only header badge + modal viewer (wired into `attach-docket-pdf` + `intel-sync`).
 
-Cache-buster `app.js?v=20260501a` after this PR merges.
+Cache-buster live: `app.js?v=20260501b`.
+
+**Credential leak (action item for Nathan)**: the `supabase projects api-keys` CLI command printed the legacy `service_role` JWT into my transcript. Recommend rotating it in Project Settings → API → JWT-based API keys (legacy) → Disable. Coordinate with Castle first — their `config/.env` uses the legacy JWT today; move them to the new `sb_secret_*` key before disabling the legacy JWT or Castle's writes will fail.
 
 **Uncommitted (in repo per previous-session note)**: `.github/workflows/weekly-db-backup.yml` + `docs/BACKUP_SETUP.md`. Weekly `pg_dump` → Cloudflare R2. Workflow committed but inert until Nathan populates 6 GitHub secrets — ask if he finished the SETUP doc.
 
@@ -130,7 +132,7 @@ Cache-buster `app.js?v=20260501a` after this PR merges.
 - Eric hand-cleaning first-22 GHL imports (off-by-one TZ pre-5c762d7) + labeling family-contact relationships. Don't stack new imports on top.
 - Cloudflare audit + Obsidian vault v0 — still pending.
 
-**Touching**: `personalized_links` (72 INSERT), `deals.refundlocators_token` (72 sync via trigger), `team_messages` (1 INSERT in Eric's DM thread).
+**Touching**: `personalized_links` (72 INSERT), `deals.refundlocators_token` (72 sync via trigger), `team_messages` (2 INSERT in Eric's DM thread — briefing + notification-permission walkthrough), `src/app.jsx` + `index.html` (banner + animations + clear-all wiring), `supabase/migrations/20260501100000_surplus_docket_events.sql` (new table + bucket).
 
 **Open for follow-up** (after Eric's QA pass):
 - Round 2 bulk-mint for family-contact URLs once Eric labels relationships (285 contacts pending)
