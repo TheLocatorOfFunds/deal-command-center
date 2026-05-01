@@ -58,7 +58,7 @@ from typing import Iterable
 # ---- Constants ----
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 PROJECT_PREFIX = "-Users-"
-PROJECT_SUFFIX_FILTER = "deal-command-center"
+PROJECT_SUFFIX_FILTER = "command-center"  # case-insensitive substring match — covers both "deal-command-center" and Mac Mini's "DealCommand-Center"
 DRAFTS_DIR_NAME = Path("session_archives") / "_drafts"
 MIN_JSONL_BYTES = 5_000  # skip trivially short sessions
 MIN_CONVERSATION_CHARS = 2_000  # skip after-extraction shorts
@@ -145,7 +145,7 @@ def find_session_files() -> list[Path]:
             continue
         if not project_dir.name.startswith(PROJECT_PREFIX):
             continue
-        if PROJECT_SUFFIX_FILTER not in project_dir.name:
+        if PROJECT_SUFFIX_FILTER not in project_dir.name.lower():
             continue
         # Top-level JSONLs only — skip subagents/, tool-results/, etc.
         for jsonl in project_dir.glob("*.jsonl"):
