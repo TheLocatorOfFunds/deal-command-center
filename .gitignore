@@ -33,3 +33,4 @@ node_modules/
 
 # Supabase CLI cache (machine-local, never commit)
 supabase/.temp/
+pitch.source.html

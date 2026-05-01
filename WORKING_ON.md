@@ -87,6 +87,8 @@ and Erik's sessions can see what each Claude is doing in real time.
 
 ---
 
+**Last updated (auto):** 2026-05-01 15:31 UTC
+
 ## Nathan's session
 
 **Status:** Active — 2026-05-01 (afternoon) — audit + bulk-mint shipped; chat-notification fix on PR.
