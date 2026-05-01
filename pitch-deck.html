@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b1f3a">
+<title>The Story — RefundLocators</title>
+<link rel="icon" type="image/svg+xml" href="icon-portal.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,700;9..144,900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #0b1f3a;
+    --navy-mid: #17355e;
+    --navy-deep: #061327;
+    --gold: #c9a24a;
+    --gold-light: #d8b560;
+    --gold-soft: #ede5cf;
+    --cream: #fbf8f1;
+    --cream-dark: #f4ecdc;
+    --text: #1a1a1a;
+    --text-muted: #6b6b6b;
+    --text-subtle: #9a9a9a;
+    --border: #e5dfd0;
+    --border-strong: #c9bea3;
+    --green: #2d7a4f;
+    --amber: #a5731c;
+    --red: #a83232;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--navy-deep);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .serif { font-family: 'Fraunces', Georgia, serif; letter-spacing: -0.015em; }
+  .mono  { font-family: 'JetBrains Mono', Menlo, Consolas, monospace; }
+
+  .deck { position: relative; width: 100vw; height: 100vh; overflow: hidden; }
+
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 7vh 7vw;
+    opacity: 0; pointer-events: none;
+    transition: opacity .4s ease, transform .5s cubic-bezier(.5,0,.2,1);
+    transform: translateY(2vh);
+    overflow: hidden;
+  }
+  .slide.active { opacity: 1; pointer-events: auto; transform: translateY(0); }
+
+  .slide-content { width: 100%; max-width: 1200px; position: relative; z-index: 2; }
+
+  .slide.light { background: var(--cream); color: var(--navy); }
+  .slide.dark  { background: linear-gradient(135deg, var(--navy) 0%, var(--navy-deep) 100%); color: var(--cream); }
+  .slide.black { background: #000; color: var(--cream); }
+
+  .slide.dark::before {
+    content: ''; position: absolute;
+    top: -30vh; right: -25vw; width: 70vw; height: 70vw;
+    background: radial-gradient(circle, rgba(201, 162, 74, 0.10) 0%, transparent 60%);
+    pointer-events: none;
+  }
+  .slide.dark::after {
+    content: ''; position: absolute;
+    bottom: -25vh; left: -20vw; width: 50vw; height: 50vw;
+    background: radial-gradient(circle, rgba(201, 162, 74, 0.06) 0%, transparent 60%);
+    pointer-events: none;
+  }
+
+  .brand-mark {
+    position: absolute; top: 4vh; left: 5vw;
+    display: flex; align-items: center; gap: 10px;
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 18px;
+    letter-spacing: -0.01em; z-index: 10;
+  }
+  .slide.light .brand-mark { color: var(--navy); }
+  .slide.dark .brand-mark, .slide.black .brand-mark { color: var(--cream); }
+  .brand-dot {
+    width: 9px; height: 9px; background: var(--gold); border-radius: 50%;
+    box-shadow: 0 0 12px rgba(201, 162, 74, 0.5);
+  }
+
+  .slide-num {
+    position: absolute; top: 4vh; right: 5vw;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+    letter-spacing: 0.18em; font-weight: 500; z-index: 10;
+  }
+  .slide.light .slide-num { color: var(--text-subtle); }
+  .slide.dark .slide-num, .slide.black .slide-num { color: rgba(255, 252, 245, 0.5); }
+
+  .eyebrow {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.2em;
+    text-transform: uppercase; color: var(--gold); margin-bottom: 24px;
+  }
+
+  h1.hero {
+    font-family: 'Fraunces', serif; font-weight: 500;
+    font-size: clamp(48px, 8vw, 110px); line-height: 1.02;
+    letter-spacing: -0.025em; margin-bottom: 24px;
+  }
+  h2.hero {
+    font-family: 'Fraunces', serif; font-weight: 500;
+    font-size: clamp(40px, 6.5vw, 86px); line-height: 1.05;
+    letter-spacing: -0.02em; margin-bottom: 20px;
+  }
+  .lede {
+    font-size: clamp(17px, 1.6vw, 22px);
+    font-weight: 400; line-height: 1.5; max-width: 900px; opacity: 0.85;
+  }
+  .lede strong { font-weight: 600; opacity: 1; color: var(--gold); }
+  .slide.light .lede { color: var(--text-muted); }
+  .slide.light .lede strong { color: var(--amber); }
+
+  .nav-controls {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 8px; z-index: 100;
+    background: rgba(11, 31, 58, 0.92);
+    border: 1px solid rgba(201, 162, 74, 0.25);
+    border-radius: 999px; padding: 8px 14px;
+    backdrop-filter: blur(8px);
+  }
+  .nav-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: rgba(255, 252, 245, 0.25);
+    border: none; cursor: pointer; padding: 0;
+    transition: all 0.2s;
+  }
+  .nav-dot:hover { background: rgba(255, 252, 245, 0.5); }
+  .nav-dot.active { background: var(--gold); width: 24px; border-radius: 4px; }
+  .nav-arrow {
+    background: transparent; border: none; color: var(--cream);
+    cursor: pointer; width: 22px; height: 22px; font-size: 14px;
+    opacity: 0.6; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: opacity 0.2s;
+  }
+  .nav-arrow:hover { opacity: 1; }
+
+  /* Slide 1 — chaos */
+  .chaos-bg { position: absolute; inset: 0; overflow: hidden; pointer-events: none; opacity: 0.6; z-index: 1; }
+  .chaos-tag {
+    position: absolute;
+    font-size: 13px; font-weight: 500; color: var(--text-muted);
+    background: var(--cream); border: 1px solid var(--border-strong);
+    border-radius: 6px; padding: 6px 12px;
+    box-shadow: 0 2px 8px rgba(11,31,58,0.06);
+    white-space: nowrap;
+  }
+
+  /* Slide 2 — tools */
+  .tool-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 28px; max-width: 900px; margin: 36px auto 0; }
+  .tool-card {
+    background: rgba(255, 252, 245, 0.04);
+    border: 1px solid rgba(201, 162, 74, 0.25);
+    border-radius: 16px; padding: 32px 24px;
+    text-align: center; backdrop-filter: blur(4px);
+  }
+  .tool-card.primary {
+    background: rgba(201, 162, 74, 0.08);
+    border-color: rgba(201, 162, 74, 0.5);
+  }
+  .tool-card .tool-name {
+    font-family: 'Fraunces', serif; font-weight: 500; font-size: 26px;
+    margin-bottom: 8px; color: var(--cream);
+  }
+  .tool-card.primary .tool-name { color: var(--gold-light); }
+  .tool-card .tool-desc {
+    font-size: 11px; color: rgba(255,252,245,0.55);
+    letter-spacing: 0.1em; text-transform: uppercase;
+  }
+
+  /* Slide 3 — spaghetti */
+  .spaghetti { width: 100%; max-width: 800px; margin: 30px auto 0; display: block; height: auto; }
+
+  /* Slide 4 — cursor */
+  .cursor-line {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(20px, 2.2vw, 32px);
+    color: var(--gold-light); margin-top: 32px;
+  }
+  .cursor-line .prompt { color: rgba(201, 162, 74, 0.55); margin-right: 10px; }
+  .cursor-blink {
+    display: inline-block; width: 12px; height: 1.1em;
+    background: var(--gold); margin-left: 6px; vertical-align: text-bottom;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 0%, 50% { opacity: 1; } 50.01%, 100% { opacity: 0; } }
+
+  /* Slide 5 — trio */
+  .trio { display: flex; gap: 36px; justify-content: center; margin-top: 44px; flex-wrap: wrap; }
+  .trio-node { display: flex; flex-direction: column; align-items: center; gap: 14px; min-width: 160px; }
+  .trio-circle {
+    width: 120px; height: 120px; border-radius: 50%;
+    background: var(--cream-dark); border: 2px solid var(--gold);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--navy); font-family: 'Fraunces', serif; font-size: 44px; font-weight: 500;
+  }
+  .trio-circle.ai {
+    background: var(--navy); color: var(--gold);
+    box-shadow: 0 0 32px rgba(201, 162, 74, 0.25);
+  }
+  .trio-label { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; color: var(--navy); text-align: center; }
+  .trio-sub   { font-size: 11px; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; }
+
+  /* Slide 6 — hub */
+  .hub-wrap { position: relative; width: 100%; max-width: 760px; height: 460px; margin: 30px auto 0; }
+  .hub-core {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: 200px; height: 200px;
+    background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
+    color: var(--navy); border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    box-shadow: 0 0 48px rgba(201, 162, 74, 0.35); z-index: 2;
+  }
+  .hub-core-label { font-size: 11px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; opacity: 0.7; margin-bottom: 4px; }
+  .hub-core-name  { font-family: 'Fraunces', serif; font-size: 28px; font-weight: 500; letter-spacing: -0.01em; }
+  .hub-node {
+    position: absolute;
+    background: rgba(255, 252, 245, 0.08);
+    border: 1px solid rgba(201, 162, 74, 0.4);
+    border-radius: 12px; padding: 16px 20px;
+    color: var(--cream); text-align: center; min-width: 160px;
+    backdrop-filter: blur(6px);
+  }
+  .hub-node-name { font-family: 'Fraunces', serif; font-size: 20px; font-weight: 500; letter-spacing: -0.01em; }
+  .hub-node-desc { font-size: 11px; opacity: 0.65; letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; }
+  .hub-node.tl { top: 0; left: 0; }
+  .hub-node.tr { top: 0; right: 0; }
+  .hub-node.bl { bottom: 0; left: 0; }
+  .hub-node.br { bottom: 0; right: 0; }
+  .hub-svg { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+
+  /* Slide 7 — pipeline */
+  .pipeline { display: flex; align-items: center; gap: 18px; flex-wrap: nowrap; margin: 50px auto 0; max-width: 1100px; }
+  .pipe-stage {
+    flex: 1; background: var(--cream-dark);
+    border: 1px solid var(--gold);
+    border-radius: 14px; padding: 22px 18px;
+    text-align: center;
+  }
+  .pipe-stage-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 10px; }
+  .pipe-stage-name  { font-family: 'Fraunces', serif; font-size: 22px; font-weight: 500; color: var(--navy); letter-spacing: -0.01em; }
+  .pipe-arrow { color: var(--gold); font-size: 24px; }
+  .buckets { display: flex; gap: 14px; justify-content: center; margin-top: 18px; }
+  .bucket {
+    width: 56px; height: 56px; background: var(--cream);
+    border: 2px solid; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Fraunces', serif; font-weight: 700; font-size: 26px;
+  }
+  .bucket.a { border-color: var(--green); color: var(--green); }
+  .bucket.b { border-color: var(--gold); color: var(--amber); }
+  .bucket.c { border-color: var(--text-subtle); color: var(--text-muted); }
+
+  /* Slide 8 — channels */
+  .channels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 22px; margin: 44px auto 0; max-width: 1000px; }
+  .channel-card {
+    background: rgba(255,252,245,0.06);
+    border: 1px solid rgba(201,162,74,0.3);
+    border-radius: 14px; padding: 28px 18px; text-align: center;
+    backdrop-filter: blur(4px);
+  }
+  .channel-icon { font-size: 36px; margin-bottom: 14px; color: var(--gold); display: block; line-height: 1; }
+  .channel-name { font-family: 'Fraunces', serif; font-size: 20px; font-weight: 500; color: var(--cream); margin-bottom: 4px; }
+  .channel-desc { font-size: 10px; opacity: 0.6; letter-spacing: 0.1em; text-transform: uppercase; }
+
+  /* Slide 9 — case stack */
+  .case-stack { display: flex; flex-direction: column; gap: 12px; margin: 36px auto 0; max-width: 760px; }
+  .case-row {
+    background: var(--cream-dark);
+    border: 1px solid var(--border-strong);
+    border-left: 4px solid var(--gold);
+    border-radius: 10px; padding: 14px 22px;
+    display: flex; align-items: center; gap: 18px;
+    text-align: left;
+  }
+  .case-row.live { border-left-color: var(--green); }
+  .case-icon { font-size: 22px; flex-shrink: 0; }
+  .case-text {
+    font-family: 'Fraunces', serif; font-size: 18px; font-weight: 500;
+    color: var(--navy); letter-spacing: -0.01em;
+  }
+  .case-meta {
+    font-size: 10px; color: var(--text-muted); margin-left: auto;
+    letter-spacing: 0.12em; text-transform: uppercase; flex-shrink: 0;
+  }
+
+  /* Slide 10 — arc */
+  .arc-track { position: relative; margin: 60px auto 0; max-width: 1100px; }
+  .arc-line {
+    height: 4px;
+    background: linear-gradient(90deg, var(--gold) 0%, var(--gold-light) 100%);
+    border-radius: 2px;
+    box-shadow: 0 0 24px rgba(201, 162, 74, 0.35);
+    margin: 0 30px;
+  }
+  .arc-stops { display: flex; justify-content: space-between; transform: translateY(-12px); }
+  .arc-stop { display: flex; flex-direction: column; align-items: center; gap: 14px; flex: 1; text-align: center; }
+  .arc-dot {
+    width: 22px; height: 22px; background: var(--gold);
+    border-radius: 50%; border: 4px solid var(--navy-deep);
+    box-shadow: 0 0 16px rgba(201, 162, 74, 0.5);
+  }
+  .arc-label {
+    font-family: 'Fraunces', serif; font-size: 15px; font-weight: 500;
+    color: var(--cream); letter-spacing: -0.01em; line-height: 1.3;
+    max-width: 130px;
+  }
+  .closing { margin-top: 70px; text-align: center; }
+  .closing-text {
+    font-family: 'Fraunces', serif; font-style: italic;
+    font-size: clamp(20px, 2.4vw, 30px);
+    color: var(--gold-light); line-height: 1.4; letter-spacing: -0.01em;
+  }
+
+  .nav-hint {
+    position: fixed; bottom: 6px; right: 14px;
+    font-family: 'JetBrains Mono', monospace; font-size: 10px;
+    color: rgba(255,252,245,0.3); letter-spacing: 0.1em; z-index: 50;
+  }
+
+  @media print {
+    body, html { overflow: visible; height: auto; background: #000; }
+    .slide {
+      position: relative; page-break-after: always; page-break-inside: avoid;
+      opacity: 1 !important; pointer-events: auto !important;
+      transform: none !important; width: 100vw; height: 100vh; inset: auto;
+    }
+    .nav-controls, .nav-hint { display: none; }
+  }
+
+  @media (max-width: 720px) {
+    .tool-grid { grid-template-columns: 1fr; }
+    .pipeline { flex-direction: column; }
+    .pipe-arrow { transform: rotate(90deg); }
+    .channels { grid-template-columns: repeat(2, 1fr); }
+    .arc-label { font-size: 11px; max-width: 70px; }
+    .hub-node { min-width: 110px; padding: 10px 12px; }
+    .hub-node-name { font-size: 14px; }
+    .hub-core { width: 140px; height: 140px; }
+    .hub-core-name { font-size: 20px; }
+    .case-text { font-size: 14px; }
+    .case-meta { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="deck" id="deck">
+
+    <!-- 1 — Cold open -->
+    <section class="slide light active" data-slide="1">
+      <div class="chaos-bg" id="chaosBg"></div>
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">01 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">The Story</div>
+        <h1 class="hero serif">We were a real estate agency.</h1>
+        <p class="lede" style="margin: 0 auto;">Trying to make ten tools talk to each other. Trying to keep deals from slipping through the cracks.</p>
+      </div>
+    </section>
+
+    <!-- 2 — The stack -->
+    <section class="slide dark" data-slide="2">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">02 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">Our "system"</div>
+        <h2 class="hero serif">Built on top of GoHighLevel.</h2>
+        <p class="lede" style="margin: 0 auto;">A white-labeled, hyper-customized HighLevel build &mdash; patched together with Google Drive and Slack.</p>
+        <div class="tool-grid">
+          <div class="tool-card primary">
+            <div class="tool-name">GoHighLevel</div>
+            <div class="tool-desc">CRM &middot; Automations &middot; Calls</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">Google Drive</div>
+            <div class="tool-desc">Documents &middot; Folders</div>
+          </div>
+          <div class="tool-card">
+            <div class="tool-name">Slack</div>
+            <div class="tool-desc">Team comms</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3 — The wall -->
+    <section class="slide light" data-slide="3">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">03 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">The breaking point</div>
+        <h2 class="hero serif">Then we hit the wall.</h2>
+        <svg class="spaghetti" viewBox="0 0 800 240" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+              <path d="M0,0 L8,4 L0,8 z" fill="#c9a24a" />
+            </marker>
+          </defs>
+          <g font-family="Inter, sans-serif" font-size="11" font-weight="600" fill="#0b1f3a">
+            <rect x="40"  y="20"  width="130" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="105" y="42" text-anchor="middle">New lead trigger</text>
+            <rect x="220" y="60"  width="130" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="285" y="82" text-anchor="middle">Tag assignment</text>
+            <rect x="430" y="20"  width="130" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="495" y="42" text-anchor="middle">If/else branch</text>
+            <rect x="620" y="80"  width="140" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="690" y="102" text-anchor="middle">Workflow trigger</text>
+            <rect x="60"  y="140" width="130" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="125" y="162" text-anchor="middle">Send SMS</text>
+            <rect x="270" y="170" width="130" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="335" y="192" text-anchor="middle">Wait 1 day</text>
+            <rect x="460" y="140" width="130" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="525" y="162" text-anchor="middle">Update field</text>
+            <rect x="630" y="180" width="140" height="34" rx="6" fill="#fbf8f1" stroke="#c9bea3"/><text x="700" y="202" text-anchor="middle">Webhook out</text>
+          </g>
+          <g fill="none" stroke="#c9a24a" stroke-width="1.6" opacity="0.85" marker-end="url(#arrow)">
+            <path d="M170,37 C 240,40 200,80 220,77"/>
+            <path d="M350,77 C 410,77 400,37 430,37"/>
+            <path d="M560,37 C 600,37 600,90 620,97"/>
+            <path d="M105,54 C 120,90 100,140 125,140"/>
+            <path d="M285,94 C 285,140 310,170 335,170"/>
+            <path d="M495,54 C 470,100 480,140 525,140"/>
+            <path d="M690,114 C 720,140 700,180 700,180"/>
+            <path d="M190,157 C 240,170 250,180 270,187"/>
+            <path d="M400,187 C 430,160 440,150 460,157"/>
+            <path d="M590,157 C 610,170 620,180 630,197"/>
+            <path d="M125,174 C 80,200 50,80 60,40" stroke-dasharray="3,3"/>
+            <path d="M495,174 C 380,210 250,220 190,180" stroke-dasharray="3,3"/>
+          </g>
+        </svg>
+        <p class="lede" style="margin: 24px auto 0;">We tried to build chat agents inside HighLevel. We wired automation on top of automation just to fire <strong>simple logic</strong>. The platform we paid for became the bottleneck.</p>
+      </div>
+    </section>
+
+    <!-- 4 — Decision -->
+    <section class="slide black" data-slide="4">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">04 / 10</div>
+      <div class="slide-content" style="text-align: left; max-width: 1000px;">
+        <div class="eyebrow">The decision</div>
+        <h1 class="hero serif" style="color: var(--cream);">We stopped buying software.</h1>
+        <h1 class="hero serif" style="color: var(--gold-light);">We started building it.</h1>
+        <div class="cursor-line mono">
+          <span class="prompt">$</span>npm&nbsp;run&nbsp;build<span class="cursor-blink"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5 — Team -->
+    <section class="slide light" data-slide="5">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">05 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">The build</div>
+        <h2 class="hero serif">Two operators. One AI dev partner.</h2>
+        <p class="lede" style="margin: 0 auto;">Production code shipped daily &mdash; Claude as our pair programmer, the database as our nervous system.</p>
+        <div class="trio">
+          <div class="trio-node">
+            <div class="trio-circle">N</div>
+            <div class="trio-label">Operator</div>
+            <div class="trio-sub">Product &middot; Ops</div>
+          </div>
+          <div class="trio-node">
+            <div class="trio-circle">J</div>
+            <div class="trio-label">Operator</div>
+            <div class="trio-sub">Infra &middot; Comms</div>
+          </div>
+          <div class="trio-node">
+            <div class="trio-circle ai">&#10022;</div>
+            <div class="trio-label">Claude Code</div>
+            <div class="trio-sub">AI dev partner</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6 — Platform -->
+    <section class="slide dark" data-slide="6">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">06 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">What we built</div>
+        <h2 class="hero serif">One platform. Four front doors.</h2>
+        <div class="hub-wrap">
+          <svg class="hub-svg" viewBox="0 0 760 460" preserveAspectRatio="none">
+            <g stroke="#c9a24a" stroke-width="1.5" stroke-dasharray="4,4" opacity="0.5" fill="none">
+              <line x1="160" y1="60"  x2="380" y2="230"/>
+              <line x1="600" y1="60"  x2="380" y2="230"/>
+              <line x1="160" y1="400" x2="380" y2="230"/>
+              <line x1="600" y1="400" x2="380" y2="230"/>
+            </g>
+          </svg>
+          <div class="hub-core">
+            <div class="hub-core-label">Single source</div>
+            <div class="hub-core-name">One DB</div>
+          </div>
+          <div class="hub-node tl"><div class="hub-node-name">Internal</div><div class="hub-node-desc">Team console</div></div>
+          <div class="hub-node tr"><div class="hub-node-name">Homeowner</div><div class="hub-node-desc">Case portal</div></div>
+          <div class="hub-node bl"><div class="hub-node-name">Attorney</div><div class="hub-node-desc">Counsel portal</div></div>
+          <div class="hub-node br"><div class="hub-node-name">Partner</div><div class="hub-node-desc">Investor / JV</div></div>
+        </div>
+        <p class="lede" style="margin: 30px auto 0;">Same database. Different doors. Row-level security decides who sees what.</p>
+      </div>
+    </section>
+
+    <!-- 7 — Leads in -->
+    <section class="slide light" data-slide="7">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">07 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">Lead in</div>
+        <h2 class="hero serif">Leads find us.</h2>
+        <p class="lede" style="margin: 0 auto;">Scrapers run 24/7. Every lead enriched, tiered, and re-tiered as new signals land.</p>
+        <div class="pipeline">
+          <div class="pipe-stage">
+            <div class="pipe-stage-label">Source</div>
+            <div class="pipe-stage-name">Scraper fleet</div>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-stage">
+            <div class="pipe-stage-label">Enrich</div>
+            <div class="pipe-stage-name">AI research</div>
+          </div>
+          <div class="pipe-arrow">&rarr;</div>
+          <div class="pipe-stage">
+            <div class="pipe-stage-label">Sort</div>
+            <div class="pipe-stage-name">Tiered queue</div>
+            <div class="buckets">
+              <div class="bucket a">A</div>
+              <div class="bucket b">B</div>
+              <div class="bucket c">C</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8 — Outreach -->
+    <section class="slide dark" data-slide="8">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">08 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">Outreach</div>
+        <h2 class="hero serif">The system reaches out.</h2>
+        <p class="lede" style="margin: 0 auto;">AI drafts the text. Places the call. Sends the email. Routes the contract.<br/><strong>Human approves. System executes.</strong></p>
+        <div class="channels">
+          <div class="channel-card">
+            <span class="channel-icon">&#9993;</span>
+            <div class="channel-name">SMS</div>
+            <div class="channel-desc">Drafted &middot; Reviewed &middot; Sent</div>
+          </div>
+          <div class="channel-card">
+            <span class="channel-icon">&#9990;</span>
+            <div class="channel-name">Calls</div>
+            <div class="channel-desc">Routed &middot; Recorded</div>
+          </div>
+          <div class="channel-card">
+            <span class="channel-icon">&#9993;</span>
+            <div class="channel-name">Email</div>
+            <div class="channel-desc">Threaded &middot; Logged</div>
+          </div>
+          <div class="channel-card">
+            <span class="channel-icon">&#9998;</span>
+            <div class="channel-name">DocuSign</div>
+            <div class="channel-desc">Sent &middot; Signed &middot; Filed</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 — Case mgmt -->
+    <section class="slide light" data-slide="9">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">09 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">Case management</div>
+        <h2 class="hero serif">The case runs itself.</h2>
+        <p class="lede" style="margin: 0 auto;">Court dockets watched live. Documents OCR'd and filed. Attorneys looped in through their own portal.</p>
+        <div class="case-stack">
+          <div class="case-row live">
+            <span class="case-icon">&#9878;</span>
+            <span class="case-text">New docket event detected &mdash; hearing scheduled</span>
+            <span class="case-meta">live</span>
+          </div>
+          <div class="case-row">
+            <span class="case-icon">&#128196;</span>
+            <span class="case-text">PDF read by AI &middot; fields extracted &middot; filed to deal</span>
+            <span class="case-meta">auto</span>
+          </div>
+          <div class="case-row">
+            <span class="case-icon">&#10003;</span>
+            <span class="case-text">Task auto-created: review filing before deadline</span>
+            <span class="case-meta">auto</span>
+          </div>
+          <div class="case-row live">
+            <span class="case-icon">&#128172;</span>
+            <span class="case-text">Attorney + homeowner notified in their portals</span>
+            <span class="case-meta">live</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 — End to end -->
+    <section class="slide dark" data-slide="10">
+      <div class="brand-mark"><span class="brand-dot"></span> RefundLocators</div>
+      <div class="slide-num">10 / 10</div>
+      <div class="slide-content" style="text-align: center;">
+        <div class="eyebrow">End to end</div>
+        <h2 class="hero serif" style="font-size: clamp(34px, 5vw, 68px);">From a lead our scrapers found<br/>to the judge cashing the check.</h2>
+        <div class="arc-track">
+          <div class="arc-line"></div>
+          <div class="arc-stops">
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Scraped</div></div>
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Researched</div></div>
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Outreach</div></div>
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Signed</div></div>
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Court</div></div>
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Disbursed</div></div>
+            <div class="arc-stop"><div class="arc-dot"></div><div class="arc-label">Cashed</div></div>
+          </div>
+        </div>
+        <div class="closing">
+          <div class="closing-text">One system. Two people running it.</div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="nav-controls" id="navControls">
+    <button class="nav-arrow" id="prevBtn" aria-label="Previous">&#9664;</button>
+    <button class="nav-dot active" data-go="1" aria-label="Slide 1"></button>
+    <button class="nav-dot" data-go="2" aria-label="Slide 2"></button>
+    <button class="nav-dot" data-go="3" aria-label="Slide 3"></button>
+    <button class="nav-dot" data-go="4" aria-label="Slide 4"></button>
+    <button class="nav-dot" data-go="5" aria-label="Slide 5"></button>
+    <button class="nav-dot" data-go="6" aria-label="Slide 6"></button>
+    <button class="nav-dot" data-go="7" aria-label="Slide 7"></button>
+    <button class="nav-dot" data-go="8" aria-label="Slide 8"></button>
+    <button class="nav-dot" data-go="9" aria-label="Slide 9"></button>
+    <button class="nav-dot" data-go="10" aria-label="Slide 10"></button>
+    <button class="nav-arrow" id="nextBtn" aria-label="Next">&#9654;</button>
+  </div>
+  <div class="nav-hint">&larr; &rarr; to navigate &middot; P to print</div>
+
+<script>
+(function () {
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var dots   = Array.prototype.slice.call(document.querySelectorAll('.nav-dot'));
+  var idx = 0;
+
+  function go(n) {
+    idx = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach(function (s, i) { s.classList.toggle('active', i === idx); });
+    dots.forEach(function (d, i)   { d.classList.toggle('active', i === idx); });
+  }
+
+  document.getElementById('prevBtn').addEventListener('click', function () { go(idx - 1); });
+  document.getElementById('nextBtn').addEventListener('click', function () { go(idx + 1); });
+  dots.forEach(function (d) {
+    d.addEventListener('click', function () { go(parseInt(d.dataset.go, 10) - 1); });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(idx + 1); }
+    else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); go(idx - 1); }
+    else if (e.key === 'Home') { go(0); }
+    else if (e.key === 'End')  { go(slides.length - 1); }
+    else if (e.key === 'p' || e.key === 'P') { window.print(); }
+  });
+
+  slides.forEach(function (s) {
+    s.addEventListener('click', function (e) {
+      if (e.target.closest('button, a')) return;
+      go(idx + 1);
+    });
+  });
+
+  // Slide 1 chaos tags
+  var chaos = document.getElementById('chaosBg');
+  if (chaos) {
+    var tags = ['follow up tomorrow', 'lead from FB ad', 'sign contract', 'court hearing 4/12', 'where is that PDF?', 'call homeowner back', 'attorney sent invoice', 'check Slack', 'who has the file?', 'reply to email', 'update spreadsheet', 'docs in Drive', 'missed call', 'overdue task', 'inspection report', 'wire instructions', 'unread DM', 'lost the thread'];
+    tags.forEach(function (t) {
+      var el = document.createElement('div');
+      el.className = 'chaos-tag';
+      el.textContent = t;
+      el.style.top = (6 + Math.random() * 84) + '%';
+      el.style.left = (4 + Math.random() * 86) + '%';
+      el.style.transform = 'rotate(' + (Math.random() * 24 - 12).toFixed(1) + 'deg)';
+      chaos.appendChild(el);
+    });
+  }
+})();
+</script>
+</body>
+</html>
