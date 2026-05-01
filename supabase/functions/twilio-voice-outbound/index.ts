@@ -11,9 +11,10 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const NATHAN_NUMBER  = '+15135162306';
-const PROJECT_REF    = 'rcfaashkfpurkvtmsmeb';
-const STATUS_CB_URL  = `https://${PROJECT_REF}.supabase.co/functions/v1/twilio-voice-status`;
+const BUSINESS_NUMBER = '+15139985440'; // Cincinnati Twilio number (FundLocators Main)
+const NATHAN_IPHONE   = '+15135162306'; // Nathan's personal iPhone (for inbound forwarding only)
+const PROJECT_REF     = 'rcfaashkfpurkvtmsmeb';
+const STATUS_CB_URL   = `https://${PROJECT_REF}.supabase.co/functions/v1/twilio-voice-status`;
 
 const normalizePhone = (p: string): string => {
   const digits = (p || '').replace(/\D/g, '');
@@ -31,7 +32,7 @@ Deno.serve(async (req: Request) => {
   const form      = await req.formData();
   const to        = normalizePhone(form.get('To')?.toString() || '');
   const callSid   = form.get('CallSid')?.toString() || '';
-  const callerId  = form.get('CallerId')?.toString() || NATHAN_NUMBER;
+  const callerId  = form.get('CallerId')?.toString() || BUSINESS_NUMBER;
 
   if (!to) {
     return new Response(
@@ -77,7 +78,7 @@ Deno.serve(async (req: Request) => {
       contact_id:      contactId,
       thread_key:      threadKey,
       direction:       'outbound',
-      from_number:     NATHAN_NUMBER,
+      from_number:     BUSINESS_NUMBER,
       to_number:       to,
       status:          'ringing',
       twilio_call_sid: callSid,
@@ -90,7 +91,7 @@ Deno.serve(async (req: Request) => {
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
-    callerId="${NATHAN_NUMBER}"
+    callerId="${BUSINESS_NUMBER}"
     action="${STATUS_CB_URL}"
     method="POST"
     timeout="30"
