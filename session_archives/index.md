@@ -10,6 +10,7 @@ Format: `YYYY-MM-DD` · *Owner* · `branch / PR` · short summary.
 
 | Date | Owner | Branch / PRs | Summary |
 |---|---|---|---|
+| **2026-05-02** | Nathan (Castle) | `lauren-hardening-tasks-1-5` / PR #31 | Audited deployed `lauren-chat` v26 (was not in git): 4 brain/tentacle violations — `create_lead`, `textNathan`, `search_dcc`, `search_ghl`. PR #31 implements all 7 of Justin's hardening tasks + rate limit + lauren-internal Bearer-JWT auth fix + email event router replacing the SMS path. Nothing auto-deploys; activation on Justin. → [archive](./2026-05-02-lauren-hardening-pr-31.md) |
 | **2026-05-01** | Justin | PR #32 | Texting stack post-Quo-port: Tahoe broke Mac→iPhone SMS relay, Spectrum SIM deactivated by port — Option B (add iOS device w/ prepaid SIM for Android SMS) is the path. Session-archives backfill stood up + ran on 13 historical sessions. → [archive](./2026-05-01-texting-stack-quo-port-session-archive-backfill-95913140.md) |
 | **2026-04-30** | Justin | docs/* / PRs #21,#23-#28 | A2P 10DLC + Quo + iMessage architecture decided. Mac bridge stays primary SMS (blue bubbles, no opt-out). Twilio Brand parked. Quo voice-only. GHL/HighLevel transfer dropped. → [archive](./2026-04-30-a2p-quo-imessage-architecture.md) |
 | **2026-04-29** | Justin | — | FB group posting workflow for flip-2533. Pre-post protocol: in-group duplicate search + /about rule check; pause for human judgment when group rules are ambiguous. → [archive](./2026-04-29-fb-group-post-workflow-for-flip-2533-5e1c55b9.md) |

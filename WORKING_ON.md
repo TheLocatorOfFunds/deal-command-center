@@ -89,7 +89,32 @@ and Erik's sessions can see what each Claude is doing in real time.
 
 ## Nathan's session
 
-**Status:** Active — 2026-05-01 (afternoon) — three PRs merged today + surplus pipeline scaffolding live.
+**Status:** Active — 2026-05-02 — opened PR #31 (Lauren hardening) waiting on Justin; prior 2026-05-01 work (3 PRs + surplus pipeline scaffolding) summarised below.
+
+### 2026-05-02 — Lauren hardening (PR #31, on Justin to activate)
+
+Audited the deployed `lauren-chat` Edge Function (was not in git, pulled v26 source via Management API). Found four brain/tentacle violations: `create_lead` writes to `deals` from a public no-auth function, `textNathan` sends Twilio SMS with attacker-controlled body, `search_dcc` and `search_ghl` read across all claimants with no per-session scope.
+
+Implemented all 7 of Justin's prompt-injection-hardening tasks plus rate-limit + lauren-internal auth fix. **Nothing auto-deploys** — every change is either a new file, an additive Edge Function, or an `index.hardened.ts` sitting next to the deployed `index.ts`. PR #31 has the full activation list (2 Vault secrets, 3 migrations, 4 deploys).
+
+Files added in PR #31:
+- `scripts/lauren-refusal-tests/{prompts.json,run.ts,README.md}` — 53-test Deno suite for weekly CI
+- `supabase/functions/lauren-chat/{index.ts,index.hardened.ts,README.md}` — baseline + proposed hardened
+- `supabase/functions/lauren-internal/{index.ts,index.hardened.ts,README.md}` — baseline + Bearer-JWT-gated version
+- `supabase/functions/lauren-event-router/` — DB-trigger-driven email path to nathan@fundlocators.com (replaces SMS)
+- `supabase/functions/lauren-daily-review/` — 13:00-UTC cron, AI-reviews yesterday's chats, emails digest
+- 3 migrations: event router (220000), rate limit table+RPC (230000), daily review cron (230001)
+
+Branch `lauren-hardening-tasks-1-5` pushed; commits `d4ba48f` + `a7f07ae`. PR https://github.com/TheLocatorOfFunds/deal-command-center/pull/31
+
+**Cross-session dependency:** Justin owns `lauren_*` per the domain ownership table. Activation is on his lane.
+
+**Credential note:** Nathan revoked the Supabase PAT that leaked into chat during the audit (`sbp_99ad9e0c…`).
+
+### 2026-05-01 (prior session, left intact for context)
+
+**Branch:** main (no in-flight branch)
+**Working on:** (1) Audited all 110 active deals (75 GHL imports + 35 other recent), bulk-minted 72 homeowner personalized URLs, briefed Eric in his DCC DM thread. (2) Fixed Eric-misses-DMs gap with persistent banner + animated badge + clear-all-on-engage (PRs #35, #37). (3) Made the 2026-05-01 architecture call on surplus pipeline (extends DCC, doesn't get its own Supabase) + scaffolded `surplus_docket_events` table + `surplus-pdfs` bucket (PR #38 merged, migration applied). Removed redundant Estimated Loan Balance field along the way.
 **Branch:** main (no in-flight branch)
 **Working on:** (1) Audited all 110 active deals (75 GHL imports + 35 other recent), bulk-minted 72 homeowner personalized URLs, briefed Eric in his DCC DM thread. (2) Fixed Eric-misses-DMs gap with persistent banner + animated badge + clear-all-on-engage (PRs #35, #37). (3) Made the 2026-05-01 architecture call on surplus pipeline (extends DCC, doesn't get its own Supabase) + scaffolded `surplus_docket_events` table + `surplus-pdfs` bucket (PR #38 merged, migration applied). Removed redundant Estimated Loan Balance field along the way.
 
