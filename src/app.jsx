@@ -4257,19 +4257,16 @@ function AdvancedFiltersModal({ value, onApply, onClose }) {
   const ALL_STATUSES = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
   const SOURCES = ['ghl-import', 'castle', 'dcc-manual', 'lead-intake', 'manual'];
 
-  // Tags are free-form — load every distinct tag in use across deals so
-  // the user can multi-select without typing. Refreshes when the modal
-  // opens. Sorted by frequency (most-used first), then alphabetical.
+  // Tags are free-form — load every tag from the persistent
+  // tag_library so removing a tag from every deal doesn't drop it
+  // from the autocomplete list. Per Eric 2026-05-04. Sorted alpha.
   const [tagOptions, setTagOptions] = useState([]);
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const { data } = await sb.from('deals').select('tags');
+      const { data } = await sb.from('tag_library').select('name').order('name');
       if (cancelled) return;
-      const counts = {};
-      (data || []).forEach(d => (d.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
-      const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
-      setTagOptions(sorted);
+      setTagOptions((data || []).map(r => r.name));
     })();
     return () => { cancelled = true; };
   }, []);
@@ -8873,17 +8870,27 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
 function DealTagsBar({ deal, canEdit, onSave }) {
   const [adding, setAdding] = useState(false);
   const [input, setInput] = useState('');
-  const [popularTags, setPopularTags] = useState([]);
+  const [libraryTags, setLibraryTags] = useState([]);
   const tags = deal.tags || [];
 
-  const loadPopular = async () => {
-    const { data } = await sb.from('deals').select('tags');
-    const counts = {};
-    (data || []).forEach(d => (d.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
-    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([t]) => t);
-    setPopularTags(sorted);
+  // Load the persistent tag_library on add-mode open. Per Eric
+  // 2026-05-04: tags should survive even when no deal currently has
+  // them, and typing should suggest from the full vocabulary, not just
+  // tags currently in use somewhere. Realtime sub keeps it fresh in
+  // case another VA adds a new tag while this user is mid-typing.
+  const loadLibrary = async () => {
+    const { data } = await sb.from('tag_library').select('name').order('name');
+    setLibraryTags((data || []).map(r => r.name));
   };
-  useEffect(() => { if (adding) loadPopular(); }, [adding]);
+  useEffect(() => { if (adding) loadLibrary(); }, [adding]);
+  useEffect(() => {
+    if (!adding) return;
+    const ch = sb.channel('tag-library-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tag_library' }, loadLibrary)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [adding, deal.id]);
 
   const normalize = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '-');
 
@@ -8911,6 +8918,18 @@ function DealTagsBar({ deal, canEdit, onSave }) {
     if (e.key === 'Enter') { e.preventDefault(); commitInput(); }
     else if (e.key === 'Escape') { setAdding(false); setInput(''); }
   };
+
+  // Filter library suggestions by what the user has typed so far.
+  // Empty input → first 12 alphabetically. Non-empty → every match
+  // (substring, case-insensitive), capped at 30 so the row stays sane.
+  // Excludes tags already on this deal.
+  const inputNorm = normalize(input);
+  const suggestions = (() => {
+    const candidates = libraryTags.filter(t => !tags.includes(t));
+    if (!inputNorm) return candidates.slice(0, 12);
+    return candidates.filter(t => t.toLowerCase().includes(inputNorm)).slice(0, 30);
+  })();
+  const exactMatch = inputNorm && libraryTags.includes(inputNorm);
 
   return (
     <div style={{
@@ -8959,17 +8978,27 @@ function DealTagsBar({ deal, canEdit, onSave }) {
           />
           <button onClick={commitInput} style={{ ...btnPrimary, fontSize: 10, padding: '3px 10px' }}>Add</button>
           <button onClick={() => { setAdding(false); setInput(''); }} style={{ ...btnGhost, fontSize: 10, padding: '3px 8px' }}>Cancel</button>
-          {popularTags.length > 0 && (
-            <div style={{ width: '100%', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
-              <span style={{ fontSize: 9, color: '#57534e', marginRight: 4 }}>quick add:</span>
-              {popularTags.filter(t => !tags.includes(t)).map(t => (
-                <button key={t} onClick={() => addTag(t)}
-                  style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', padding: '2px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                  + {t}
-                </button>
-              ))}
-            </div>
-          )}
+          <div style={{ width: '100%', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            {suggestions.length > 0 && (
+              <>
+                <span style={{ fontSize: 9, color: '#57534e', marginRight: 4 }}>
+                  {inputNorm ? `matches in library (${suggestions.length}):` : 'from library:'}
+                </span>
+                {suggestions.map(t => (
+                  <button key={t} onClick={() => addTag(t)}
+                    title={`Add "${t}" to this deal`}
+                    style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', padding: '2px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    + {t}
+                  </button>
+                ))}
+              </>
+            )}
+            {inputNorm && !exactMatch && suggestions.length === 0 && (
+              <span style={{ fontSize: 9, color: '#a5731c', fontStyle: 'italic' }}>
+                no library match — Enter creates "{inputNorm}" as a new tag
+              </span>
+            )}
+          </div>
         </>
       )}
     </div>
