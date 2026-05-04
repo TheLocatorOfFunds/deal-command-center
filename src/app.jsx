@@ -462,30 +462,41 @@ function DealCommandCenter({ session, profile }) {
       Notification.requestPermission().catch(() => {});
     }
 
-    // Web Audio API beep — short two-tone chirp, ~120ms total. No asset needed.
+    // Web Audio "ding" — A5 fundamental + E6 harmonic, ~600ms decay.
+    // Per Nathan 2026-05-04 the prior 120ms two-tone chirp was too quiet
+    // and clipped too fast to register as a notification. This one rings
+    // out longer (bell-like decay) at ~80% higher peak gain so it cuts
+    // through whatever else the user has going on. Still gated by the
+    // browser's autoplay policy — first ding requires a prior user
+    // gesture in the tab.
     const playChirp = () => {
       try {
         const Ctx = window.AudioContext || window.webkitAudioContext;
         if (!Ctx) return;
         const ctx = new Ctx();
         const now = ctx.currentTime;
-        const o1 = ctx.createOscillator();
-        const g1 = ctx.createGain();
-        o1.type = 'sine'; o1.frequency.value = 880;
-        g1.gain.setValueAtTime(0.0001, now);
-        g1.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
-        g1.gain.exponentialRampToValueAtTime(0.0001, now + 0.10);
-        o1.connect(g1).connect(ctx.destination);
-        o1.start(now); o1.stop(now + 0.11);
+        const dur = 0.6;
+        // Fundamental — A5
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.exponentialRampToValueAtTime(0.32, now + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+        o.connect(g).connect(ctx.destination);
+        o.start(now); o.stop(now + dur + 0.05);
+        // Brightness harmonic — E6 (3:2 ratio gives a bell-like character)
         const o2 = ctx.createOscillator();
         const g2 = ctx.createGain();
-        o2.type = 'sine'; o2.frequency.value = 1175;
-        g2.gain.setValueAtTime(0.0001, now + 0.06);
-        g2.gain.exponentialRampToValueAtTime(0.16, now + 0.07);
-        g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+        o2.type = 'sine';
+        o2.frequency.value = 1320;
+        g2.gain.setValueAtTime(0.0001, now);
+        g2.gain.exponentialRampToValueAtTime(0.12, now + 0.005);
+        g2.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.55);
         o2.connect(g2).connect(ctx.destination);
-        o2.start(now + 0.06); o2.stop(now + 0.19);
-        setTimeout(() => ctx.close(), 300);
+        o2.start(now); o2.stop(now + dur * 0.55 + 0.05);
+        setTimeout(() => ctx.close(), (dur + 0.1) * 1000);
       } catch {/* audio blocked or unsupported */}
     };
 
@@ -557,6 +568,16 @@ function DealCommandCenter({ session, profile }) {
     const { data } = await sb.rpc('team_unread_count', { p_user_id: uid });
     setUnreadChatCount(data || 0);
   };
+
+  // Browser-tab title prefix shows unread count when DCC is in a
+  // background tab — Gmail / Slack pattern. Per Nathan 2026-05-04: the
+  // user wants a visible "(N)" on the tab so they can glance at their
+  // tab strip from any other app and see if something landed in DCC.
+  useEffect(() => {
+    const base = 'Deal Command Center · RefundLocators';
+    document.title = unreadChatCount > 0 ? `(${unreadChatCount}) ${base}` : base;
+    return () => { document.title = base; };
+  }, [unreadChatCount]);
 
   // Mark every team thread the user PARTICIPATES IN as read. Called when
   // they engage with the banner or click "Mark all as read" in the
