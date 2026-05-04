@@ -16,8 +16,6 @@
 //
 // Deploy with default verify_jwt=true (only authenticated DCC users call this).
 
-import { createClient } from 'jsr:@supabase/supabase-js@2';
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -43,23 +41,31 @@ Deno.serve(async (req: Request) => {
   // Derive a per-user Twilio client identity from the logged-in user's email.
   // e.g. justin@fundlocators.com → "dcc-justin"
   // This must match the identities listed in DCC_CLIENT_IDENTITIES in twilio-voice.
+  //
+  // We decode the email directly from the Supabase JWT payload (base64url JSON).
+  // Supabase's gateway already verified the JWT signature before invoking this
+  // function (verify_jwt=true), so we can trust the payload without re-verifying.
+  // This avoids an extra auth.getUser() round-trip and any SUPABASE_ANON_KEY
+  // dependency that could silently fail and fall back to 'dcc-browser'.
   let identity = 'dcc-browser'; // fallback
   try {
     const authHeader = req.headers.get('Authorization') || '';
-    if (authHeader) {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-      const anonKey     = Deno.env.get('SUPABASE_ANON_KEY')!;
-      const userDb = createClient(supabaseUrl, anonKey, {
-        global: { headers: { Authorization: authHeader } },
-        auth: { persistSession: false },
-      });
-      const { data: { user } } = await userDb.auth.getUser();
-      if (user?.email) {
-        const prefix = user.email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
-        identity = `dcc-${prefix}`;
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (token) {
+      const parts = token.split('.');
+      if (parts.length === 3) {
+        const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const payload = JSON.parse(atob(padded));
+        const email: string | undefined = payload.email ?? payload.user_metadata?.email;
+        if (email) {
+          const prefix = email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
+          identity = `dcc-${prefix}`;
+        }
       }
     }
   } catch (_) { /* fall back to dcc-browser */ }
+
+  console.log('[twilio-token] issuing identity:', identity);
 
   const now = Math.floor(Date.now() / 1000);
 
