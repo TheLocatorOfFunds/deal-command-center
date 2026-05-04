@@ -35,3 +35,15 @@ enabled = false
 [functions.lauren-team-respond]
 # Fired by the pg trigger on team_messages INSERT (no auth header).
 verify_jwt = false
+
+[functions.twilio-voice-outbound]
+# Called by Twilio as a TwiML App webhook — no Supabase JWT.
+verify_jwt = false
+
+[functions.twilio-voice-status]
+# Called by Twilio as a status/recording callback webhook — no Supabase JWT.
+verify_jwt = false
+
+[functions.twilio-voice]
+# Called by Twilio for inbound call routing — no Supabase JWT.
+verify_jwt = false
