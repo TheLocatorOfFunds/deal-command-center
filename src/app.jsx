@@ -329,7 +329,34 @@ function _notifyEnsureAudioCtx() {
   }
   return _notifyAudioCtx;
 }
-function playNotifyChirp() {
+// Helper: schedule a list of tones in one batch.
+// Each tone = { freq, type, start (sec from now), dur, peak (gain 0..1) }.
+function _notifyPlayTones(ctx, tones) {
+  const baseTime = ctx.currentTime;
+  for (const t of tones) {
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = t.type || 'sine';
+      o.frequency.value = t.freq;
+      const startAt = baseTime + (t.start || 0);
+      g.gain.setValueAtTime(0.0001, startAt);
+      g.gain.exponentialRampToValueAtTime(t.peak, startAt + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, startAt + t.dur);
+      o.connect(g).connect(ctx.destination);
+      o.start(startAt); o.stop(startAt + t.dur + 0.05);
+    } catch (e) {
+      console.warn('[notifications] tone playback failed', e);
+    }
+  }
+}
+
+// Three distinct profiles so users can identify what just landed by ear:
+//   'chat' — gentle bell (A5 + E6 harmonic, ~600ms decay) — friendly, soft
+//   'sms'  — descending two-note pluck (A5 → F5, ~250ms, triangle wave) — punchy, brief
+//   'call' — old-phone "ring-ring" double dyad (C5+F5 twice, ~500ms) — urgent
+// Default = 'chat' for backward compatibility.
+function playNotifyChirp(type = 'chat') {
   const ctx = _notifyEnsureAudioCtx();
   if (!ctx) return;
   if (ctx.state === 'suspended') {
@@ -339,31 +366,24 @@ function playNotifyChirp() {
     console.warn('[notifications] AudioContext not running (state=' + ctx.state + ') — chirp suppressed; awaiting user gesture in tab');
     return;
   }
-  try {
-    const now = ctx.currentTime;
-    const dur = 0.6;
-    // Fundamental — A5
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = 'sine';
-    o.frequency.value = 880;
-    g.gain.setValueAtTime(0.0001, now);
-    g.gain.exponentialRampToValueAtTime(0.32, now + 0.005);
-    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-    o.connect(g).connect(ctx.destination);
-    o.start(now); o.stop(now + dur + 0.05);
-    // Brightness harmonic — E6 (3:2 ratio gives a bell-like character)
-    const o2 = ctx.createOscillator();
-    const g2 = ctx.createGain();
-    o2.type = 'sine';
-    o2.frequency.value = 1320;
-    g2.gain.setValueAtTime(0.0001, now);
-    g2.gain.exponentialRampToValueAtTime(0.12, now + 0.005);
-    g2.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.55);
-    o2.connect(g2).connect(ctx.destination);
-    o2.start(now); o2.stop(now + dur * 0.55 + 0.05);
-  } catch (e) {
-    console.warn('[notifications] chirp playback failed', e);
+  if (type === 'sms') {
+    _notifyPlayTones(ctx, [
+      { freq: 880, type: 'triangle', start: 0,    dur: 0.10, peak: 0.30 },
+      { freq: 698, type: 'triangle', start: 0.13, dur: 0.12, peak: 0.32 },
+    ]);
+  } else if (type === 'call') {
+    _notifyPlayTones(ctx, [
+      { freq: 523, type: 'sine', start: 0,    dur: 0.18, peak: 0.36 },
+      { freq: 698, type: 'sine', start: 0,    dur: 0.18, peak: 0.28 },
+      { freq: 523, type: 'sine', start: 0.30, dur: 0.18, peak: 0.36 },
+      { freq: 698, type: 'sine', start: 0.30, dur: 0.18, peak: 0.28 },
+    ]);
+  } else {
+    // 'chat' — bell-like ding (A5 fundamental + E6 harmonic, 600ms decay)
+    _notifyPlayTones(ctx, [
+      { freq: 880,  type: 'sine', start: 0, dur: 0.60, peak: 0.32 },
+      { freq: 1320, type: 'sine', start: 0, dur: 0.33, peak: 0.12 },
+    ]);
   }
 }
 
@@ -579,7 +599,7 @@ function DealCommandCenter({ session, profile }) {
           } catch (e) { console.warn('[notifications] browser Notification failed', e); }
         } else {
           // Tab focused but maybe not on Team view — chirp.
-          playNotifyChirp();
+          playNotifyChirp('chat');
         }
       })
       .subscribe();
@@ -611,7 +631,7 @@ function DealCommandCenter({ session, profile }) {
             }
           } catch (e) { console.warn('[notifications] inbound-SMS Notification failed', e); }
         } else {
-          playNotifyChirp();
+          playNotifyChirp('sms');
         }
       })
       .subscribe();
