@@ -31,6 +31,7 @@
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.55} }
   @keyframes chatBadgePulse { 0%,100%{transform:scale(1);box-shadow:0 0 0 0 rgba(220,38,38,.7)} 50%{transform:scale(1.08);box-shadow:0 0 0 6px rgba(220,38,38,0)} }
   @keyframes unreadBannerSlide { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  @keyframes notesDrawerSlide { from { transform: translateX(100%); } to { transform: translateX(0); } }
 
   /* Team Chat: hover-reveal actions on each message row (react / edit / delete) */
   .team-msg-row:hover .team-msg-actions { opacity: 1 !important; }
@@ -235,6 +236,6 @@
 <body>
 <div id="root"></div>
 
-<script src="app.js?v=20260504g" defer></script>
+<script src="app.js?v=20260504h" defer></script>
 </body>
 </html>
