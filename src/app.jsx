@@ -367,6 +367,12 @@ function DealCommandCenter({ session, profile }) {
   // Welcome-back unread banner. Hides after dismiss until a NEW message
   // arrives (count rises above the dismissal floor). Click → opens chat.
   const [chatBannerDismissedAt, setChatBannerDismissedAt] = useState(0);
+  // Chat-notification popover anchored under the header 💬 Chat button.
+  // Shows the actual unread messages (sender + preview + timestamp +
+  // thread label) so you can preview before opening. Per Nathan 2026-05-04,
+  // GHL-style: click "Mark all as read" to clear, or click a single message
+  // to jump to that thread.
+  const [showChatPopover, setShowChatPopover] = useState(false);
   // [{user_id, name, url, started_at}] — derived from recent team_messages
   // posts of the form "📹 X started a video call: https://meet.jit.si/..."
   const [activeCalls, setActiveCalls] = useState([]);
@@ -501,7 +507,16 @@ function DealCommandCenter({ session, profile }) {
           try {
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
               const n = new Notification(`💬 ${senderName}`, { body: preview, tag: 'dcc-team-chat' });
-              n.onclick = () => { window.focus(); setView('team'); markAllChatRead(); n.close(); };
+              n.onclick = () => {
+                // Per-message engagement: jump to the specific thread, mark
+                // that thread (not all) as read. Per Nathan 2026-05-04, only
+                // the banner + popover "Mark all as read" should clear-all.
+                window.focus();
+                setActiveDealId(null);
+                setView('team');
+                setChatJumpThreadId(msg.thread_id);
+                n.close();
+              };
             }
           } catch {/* notification blocked */}
         } else {
@@ -596,12 +611,15 @@ function DealCommandCenter({ session, profile }) {
   };
   const dismissChatToast = (id) => setChatToasts(prev => prev.filter(t => t.id !== id));
   const replyToChatToast = (toast) => {
+    // Per-message engagement: jump to the toast's thread, dismiss the
+    // toast. TeamView marks that thread as read on open. Don't markAll
+    // here — per-message clicks should only clear THAT thread per Nathan
+    // 2026-05-04. The banner + popover's "Mark all as read" remain the
+    // only aggregate-clear paths.
     setActiveDealId(null);
     setView('team');
     setChatJumpThreadId(toast.thread_id);
     dismissChatToast(toast.id);
-    setChatBannerDismissedAt(unreadChatCount);
-    markAllChatRead();
   };
   // Once the user enters the chat view, clear toasts — per-thread badges
   // + sidebar do the work from there, no need to nag.
@@ -901,8 +919,18 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
           {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
           {isTeam && (
-            <button onClick={() => { setActiveDealId(null); setView("team"); if (unreadChatCount > 0) markAllChatRead(); }}
-              title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} in team chat` : 'Team chat with Justin + Lauren'}
+            <button onClick={() => {
+              // Click behavior splits on unread state:
+              // - unread > 0 → open the notification popover (preview-then-act)
+              // - unread = 0 → navigate straight to chat (nothing to preview)
+              if (unreadChatCount > 0) {
+                setShowChatPopover(prev => !prev);
+              } else {
+                setActiveDealId(null);
+                setView("team");
+              }
+            }}
+              title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} — click to preview` : 'Team chat with Justin + Lauren'}
               style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
               💬 Chat
               {unreadChatCount > 0 && (
@@ -1183,6 +1211,28 @@ function DealCommandCenter({ session, profile }) {
           onDismissAll={() => setChatToasts([])}
         />
       )}
+      {showChatPopover && (
+        <ChatNotificationPopover
+          currentUserId={session.user.id}
+          onClose={() => setShowChatPopover(false)}
+          onJumpToThread={(threadId) => {
+            // Per-message click: jump to that thread, dismiss banner +
+            // popover. TeamView will mark THAT thread as read on open;
+            // other unread threads stay unread (per Nathan's GHL-style
+            // ask 2026-05-04 — only "Mark all as read" clears all).
+            setActiveDealId(null);
+            setView('team');
+            if (threadId) setChatJumpThreadId(threadId);
+            setShowChatPopover(false);
+            setChatBannerDismissedAt(unreadChatCount);
+          }}
+          onMarkAllRead={() => {
+            markAllChatRead();
+            setShowChatPopover(false);
+            setChatBannerDismissedAt(unreadChatCount);
+          }}
+        />
+      )}
     </Shell>
     </RecordingContext.Provider>
   );
@@ -1239,6 +1289,222 @@ function ChatToastStack({ toasts, onReply, onDismiss, onDismissAll }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ─── Chat Notification Popover ─────────────────────────────────────
+// Anchored under the header 💬 Chat button when there's unread + the
+// user clicks the button. Per Nathan 2026-05-04, modeled after GHL's
+// notification-center pattern: shows the actual unread messages with
+// sender name + preview + relative timestamp + thread label, plus a
+// "Mark all as read" link at the top and a "View all in chat →" link
+// at the bottom. Click any single message → jump to that thread (and
+// only that thread gets marked read by TeamView on open). Outside
+// click closes.
+function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMarkAllRead }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const popRef = useRef(null);
+
+  // Build the list: unread messages from threads I'm in, sender != me,
+  // newer than my last_read_at for that thread. Cap at 20 most recent.
+  const load = async () => {
+    if (!currentUserId) { setItems([]); setLoading(false); return; }
+    setLoading(true);
+    try {
+      // 1. Threads I participate in (RLS scopes this to me already, but
+      //    being explicit avoids surprises).
+      const { data: parts } = await sb.from('team_thread_participants')
+        .select('thread_id').eq('user_id', currentUserId);
+      const threadIds = (parts || []).map(p => p.thread_id);
+      if (!threadIds.length) { setItems([]); return; }
+
+      // 2. My last_read_at per thread.
+      const { data: reads } = await sb.from('team_message_reads')
+        .select('thread_id, last_read_at')
+        .eq('user_id', currentUserId).in('thread_id', threadIds);
+      const lastReadByThread = {};
+      (reads || []).forEach(r => { lastReadByThread[r.thread_id] = r.last_read_at; });
+
+      // 3. Pull recent messages across my threads. Use the earliest
+      //    last-read as a hard cutoff so we don't fetch ancient history.
+      //    Fallback to last 30d if no reads yet.
+      const readsTs = Object.values(lastReadByThread).filter(Boolean).map(d => new Date(d).getTime());
+      const cutoffMs = readsTs.length ? Math.min(...readsTs) : (Date.now() - 30 * 86400 * 1000);
+      const cutoffISO = new Date(cutoffMs).toISOString();
+
+      const { data: msgs } = await sb.from('team_messages')
+        .select('id, thread_id, sender_id, sender_kind, body, created_at')
+        .in('thread_id', threadIds)
+        .gt('created_at', cutoffISO)
+        .neq('sender_id', currentUserId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      // 4. Filter to actually unread (created after my per-thread last_read).
+      const unread = (msgs || []).filter(m => {
+        const lr = lastReadByThread[m.thread_id];
+        return !lr || new Date(m.created_at) > new Date(lr);
+      }).slice(0, 20);
+
+      if (!unread.length) { setItems([]); return; }
+
+      // 5. Hydrate sender names + thread labels.
+      const senderIds = [...new Set(unread.map(m => m.sender_id).filter(Boolean))];
+      const usedThreadIds = [...new Set(unread.map(m => m.thread_id))];
+      const [profilesRes, threadsRes, partsHydrate] = await Promise.all([
+        senderIds.length ? sb.from('profiles').select('id, name, display_name').in('id', senderIds) : Promise.resolve({ data: [] }),
+        sb.from('team_threads').select('id, title, thread_type').in('id', usedThreadIds),
+        // For DM titling, fetch other participants — title is canonical
+        // but DMs have less helpful auto-titles like "nathan <-> admin3".
+        sb.from('team_thread_participants').select('thread_id, user_id').in('thread_id', usedThreadIds),
+      ]);
+      const senderById = {};
+      (profilesRes.data || []).forEach(p => { senderById[p.id] = p; });
+      const threadById = {};
+      (threadsRes.data || []).forEach(t => { threadById[t.id] = t; });
+
+      const labelFor = (m) => {
+        const t = threadById[m.thread_id];
+        if (!t) return 'thread';
+        if (t.thread_type === 'lauren_dm') return '🤖 Lauren';
+        if (t.thread_type === 'dm') return 'DM';
+        if (t.thread_type === 'channel') return `#${t.title || 'channel'}`;
+        return t.title || 'thread';
+      };
+
+      setItems(unread.map(m => {
+        const senderProfile = senderById[m.sender_id];
+        const senderName = m.sender_kind === 'lauren'
+          ? 'Lauren'
+          : (senderProfile?.display_name || senderProfile?.name || 'Someone');
+        return {
+          id: m.id,
+          thread_id: m.thread_id,
+          sender_name: senderName,
+          thread_label: labelFor(m),
+          body: m.body || '',
+          created_at: m.created_at,
+        };
+      }));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // Refresh on new messages while popover is open
+    const ch = sb.channel('chat-popover-refresh')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_messages' }, () => load())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [currentUserId]);
+
+  // Outside-click closes. Defer attaching the listener to next tick so
+  // the click that OPENED the popover doesn't immediately close it.
+  useEffect(() => {
+    const onMouseDown = (e) => {
+      if (popRef.current && !popRef.current.contains(e.target)) onClose();
+    };
+    const t = setTimeout(() => document.addEventListener('mousedown', onMouseDown), 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', onMouseDown); };
+  }, [onClose]);
+
+  // Relative-time formatter for the right column. Goes to absolute date
+  // once older than ~6 days so the list still reads cleanly.
+  const relTime = (iso) => {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60_000) return 'just now';
+    if (ms < 3600_000) return Math.floor(ms / 60_000) + 'm ago';
+    if (ms < 86400_000) return Math.floor(ms / 3600_000) + 'h ago';
+    if (ms < 6 * 86400_000) return Math.floor(ms / 86400_000) + 'd ago';
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <div ref={popRef} style={{
+      position: 'fixed', top: 70, right: 18, zIndex: 1250,
+      width: 380, maxWidth: 'calc(100vw - 36px)', maxHeight: 540,
+      display: 'flex', flexDirection: 'column',
+      background: '#1c1917', border: '1px solid #44403c', borderRadius: 10,
+      boxShadow: '0 14px 36px rgba(0,0,0,0.65)',
+      animation: 'unreadBannerSlide 0.18s ease-out',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', borderBottom: '1px solid #292524', flexShrink: 0 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: '#fafaf9', letterSpacing: '0.04em' }}>💬 Chat notifications</span>
+        {items.length > 0 && (
+          <button onClick={onMarkAllRead}
+            title="Mark every thread as read — clears the unread badges everywhere"
+            style={{ background: 'transparent', border: 'none', color: '#fbbf24', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0, fontFamily: 'inherit', textDecoration: 'underline' }}>
+            Mark all as read
+          </button>
+        )}
+      </div>
+
+      {/* Scrollable list */}
+      <div style={{ overflowY: 'auto', flex: 1 }}>
+        {loading && (
+          <div style={{ padding: 24, textAlign: 'center', color: '#78716c', fontSize: 12 }}>
+            Loading…
+          </div>
+        )}
+        {!loading && items.length === 0 && (
+          <div style={{ padding: 24, textAlign: 'center', color: '#78716c', fontSize: 12 }}>
+            No unread messages.
+          </div>
+        )}
+        {!loading && items.map(it => (
+          <button
+            key={it.id}
+            onClick={() => onJumpToThread(it.thread_id)}
+            title="Open this thread"
+            style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              background: 'transparent', border: 'none',
+              borderBottom: '1px solid #292524',
+              padding: '12px 14px', cursor: 'pointer',
+              color: '#fafaf9', fontFamily: 'inherit',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#292524'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: '#fbbf24' }}>{it.sender_name}</span>
+              <span style={{ fontSize: 10, color: '#78716c', flexShrink: 0 }}>{relTime(it.created_at)}</span>
+            </div>
+            <div style={{ fontSize: 10, color: '#a8a29e', marginBottom: 5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {it.thread_label}
+            </div>
+            <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>
+              {it.body}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Footer */}
+      <button
+        onClick={() => onJumpToThread(null)}
+        title="Open the team chat view (without marking anything read)"
+        style={{
+          flexShrink: 0,
+          display: 'block', width: '100%', textAlign: 'center',
+          background: '#0c0a09', borderTop: '1px solid #292524', border: 'none',
+          color: '#fbbf24', fontSize: 11, fontWeight: 700,
+          padding: '11px 14px', cursor: 'pointer', fontFamily: 'inherit',
+          letterSpacing: '0.04em',
+          borderBottomLeftRadius: 10, borderBottomRightRadius: 10,
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = '#1c1917'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = '#0c0a09'; }}
+      >
+        View all in chat →
+      </button>
     </div>
   );
 }
