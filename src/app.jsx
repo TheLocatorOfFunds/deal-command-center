@@ -8274,6 +8274,80 @@ function EodReportsToday() {
 }
 
 // ─── Today View ────────────────────────────────────────────────────────────────
+// ─── Conversion Funnel ─────────────────────────────────────────────
+// Per Nathan 2026-05-04 — at-a-glance view of where deals are stuck
+// in the pipeline. Five cells: Prep → Ready → Texted (7d) →
+// Responded (7d) → Signed (7d). Each click navigates to the most
+// relevant view for that stage. Refreshes every 60s.
+function ConversionFunnel({ deals, setView }) {
+  const [counts, setCounts] = useState({ prep: 0, ready: 0, texted: 0, responded: 0, signed: 0 });
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400 * 1000).toISOString();
+      const isLead = (d) => isLeadStatus(d);
+      const isOpen = (d) => !['closed', 'dead', 'recovered'].includes(d.status);
+      const prep = deals.filter(d => isLead(d) && !d.prepped_at && isOpen(d)).length;
+      const ready = deals.filter(d => isLead(d) && d.prepped_at && isOpen(d)).length;
+      const signed = deals.filter(d => d.status === 'signed' && d.updated_at && d.updated_at > sevenDaysAgo).length;
+      const [textedRes, respondedRes] = await Promise.all([
+        sb.from('outreach_queue').select('id', { count: 'exact', head: true })
+          .eq('status', 'sent').eq('cadence_day', 0).gt('sent_at', sevenDaysAgo),
+        sb.from('messages_outbound').select('id', { count: 'exact', head: true })
+          .eq('direction', 'inbound').gt('created_at', sevenDaysAgo),
+      ]);
+      if (cancelled) return;
+      setCounts({
+        prep, ready, signed,
+        texted: textedRes.count || 0,
+        responded: respondedRes.count || 0,
+      });
+    };
+    load();
+    const iv = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [deals]);
+
+  const Cell = ({ icon, label, count, onClick, color }) => (
+    <button onClick={onClick}
+      title={`${label} — click to open the relevant view`}
+      style={{
+        flex: 1, minWidth: 0,
+        background: '#1c1917', border: '1px solid ' + color,
+        borderRadius: 8, padding: '10px 8px',
+        cursor: 'pointer', fontFamily: 'inherit',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+      }}>
+      <div style={{ fontSize: 14 }}>{icon}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1.2 }}>{count}</div>
+      <div style={{ fontSize: 9, fontWeight: 700, color: '#a8a29e', letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{label}</div>
+    </button>
+  );
+  const Arrow = () => (
+    <span style={{ alignSelf: 'center', color: '#44403c', fontSize: 18, padding: '0 2px' }}>→</span>
+  );
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+        Pipeline funnel
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+        <Cell icon="📥" label="Prep" count={counts.prep} onClick={() => setView && setView('today')} color="#3b82f6" />
+        <Arrow />
+        <Cell icon="✅" label="Ready" count={counts.ready} onClick={() => setView && setView('pipeline')} color="#06b6d4" />
+        <Arrow />
+        <Cell icon="💬" label="Texted · 7d" count={counts.texted} onClick={() => setView && setView('outreach')} color="#d97706" />
+        <Arrow />
+        <Cell icon="📞" label="Responded · 7d" count={counts.responded} onClick={() => setView && setView('outreach')} color="#10b981" />
+        <Arrow />
+        <Cell icon="✍" label="Signed · 7d" count={counts.signed} onClick={() => setView && setView('active')} color="#f59e0b" />
+      </div>
+    </div>
+  );
+}
+
 function TodayView({ deals, onSelect, isAdmin, setView }) {
   const now = new Date();
   const year = now.getFullYear();
@@ -8378,6 +8452,43 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       alert('Could not mark prepped: ' + error.message);
       return;
     }
+
+    // Auto-queue Day-0 outreach for tier-A/B deals — closes the prep →
+    // outreach loop per Nathan 2026-05-04. Mirrors BulkOutreachButton's
+    // gating: tier A/B, has phone, status not closed/dead/recovered, no
+    // existing active outreach_queue row, phone not on a DND contact.
+    // Anything that fails the check just doesn't queue — Mark Prepped
+    // still succeeded, the deal just stays in "ready" state for manual
+    // queueing via the Pipeline Queue Outreach button.
+    try {
+      const deal = deals.find(d => d.id === dealId);
+      if (!deal) return;
+      const tier = deal.lead_tier;
+      if (tier !== 'A' && tier !== 'B') return;
+      if (['closed', 'dead', 'recovered'].includes(deal.status)) return;
+      const phone = deal.meta?.homeownerPhone || deal.meta?.phone;
+      if (!phone) return;
+      const { data: dnc } = await sb.from('contacts')
+        .select('id').eq('phone', phone).eq('do_not_text', true).limit(1).maybeSingle();
+      if (dnc) return;
+      const { data: existing } = await sb.from('outreach_queue')
+        .select('id').eq('deal_id', dealId)
+        .not('status', 'in', '(skipped,cancelled,failed,sent)')
+        .limit(1).maybeSingle();
+      if (existing) return;
+      await sb.from('outreach_queue').insert({
+        deal_id: dealId,
+        contact_phone: phone,
+        cadence_day: 0,
+        status: 'queued',
+        scheduled_for: new Date().toISOString(),
+      });
+    } catch (e) {
+      // Auto-queue is best-effort — don't break Mark Prepped if the
+      // queue insert errors. Nathan can still hit Bulk Queue manually.
+      console.error('[markPrepped auto-queue]', e);
+    }
+
     // Clear the optimistic flag after a few seconds — by then realtime
     // sub has fired loadDeals() and the deal's prepped_at is non-null,
     // so it naturally drops out of prepQueueAll on its own.
@@ -8414,6 +8525,9 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
         {isAdmin && <PortfolioStat onClick={() => setView && setView("analytics")} label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />}
         <PortfolioStat onClick={() => setView && setView("active")}  label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
       </div>
+
+      {/* Conversion funnel — Prep → Ready → Texted → Responded → Signed */}
+      <ConversionFunnel deals={deals} setView={setView} />
 
       {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
       <AutomationsQueue onSelectDeal={onSelect} />
