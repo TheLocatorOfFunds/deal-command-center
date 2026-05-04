@@ -786,6 +786,30 @@ function DealCommandCenter({ session, profile }) {
     return () => { sb.removeChannel(ch); };
   }, []);
 
+  // Self-heal the unread chat count against stale state. Realtime
+  // subscriptions occasionally silently drop events (Supabase reconnect
+  // gaps, network blips, browser putting the tab to sleep), which left
+  // the header showing "💬 Chat 2" while the DB was actually at 0 (per
+  // Nathan 2026-05-04 screenshot). Three safety nets:
+  //   1. Refresh on tab visibility change → user comes back to the tab
+  //   2. Refresh on window focus → user clicks back into the browser
+  //   3. Poll every 60 s as ultimate fallback
+  // RPC is cheap; over-refreshing is fine.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const refresh = () => { loadUnreadChatCount(); };
+    const onVisibility = () => { if (!document.hidden) refresh(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', refresh);
+    const iv = setInterval(refresh, 60_000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', refresh);
+      clearInterval(iv);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id]);
+
   const activeDeal = deals.find(d => d.id === activeDealId);
 
   // Sync activeDealId → hash (tab portion managed by DealDetail)
