@@ -8116,7 +8116,35 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
     return last && daysSince(last) > 5;
   });
 
-  const hasAny = urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
+  // Per Nathan 2026-05-04 — Prep Queue: leads that landed in DCC but
+  // haven't been prepped yet (phone confirmed, contacts labeled, tier
+  // set, surplus est verified, personalized URL minted). prepped_at
+  // is NULL until Eric clicks "Mark prepped" on the row.
+  const prepQueue = deals
+    .filter(d => isLeadStatus(d) && !d.prepped_at && !["closed", "dead", "recovered"].includes(d.status))
+    .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  // What this deal is missing relative to "ready for outreach". Eric
+  // sees this as a dim line under each prep-queue row.
+  const prepMissing = (d) => {
+    const m = d.meta || {};
+    const missing = [];
+    if (!(m.homeownerPhone || m.phone)) missing.push('phone');
+    if (!d.lead_tier) missing.push('tier');
+    if (!d.refundlocators_token) missing.push('URL');
+    if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
+    if (!m.county) missing.push('county');
+    if (!m.courtCase) missing.push('case #');
+    return missing;
+  };
+
+  const markPrepped = async (dealId) => {
+    const { error } = await sb.from('deals').update({ prepped_at: new Date().toISOString() }).eq('id', dealId);
+    if (error) alert('Could not mark prepped: ' + error.message);
+    // Realtime sub on deals refreshes the Today view automatically
+  };
+
+  const hasAny = prepQueue.length + urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
 
   const Row = ({ deal, right, tone }) => {
     const m = deal.meta || {};
@@ -8157,6 +8185,58 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       {!hasAny && (
         <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
           Nothing urgent. Go make some money.
+        </div>
+      )}
+
+      {/* Prep queue — new leads that haven't been worked yet. Each row
+          shows what's missing (phone / tier / URL / etc.) so Eric can
+          see at a glance what each deal needs. "✓ Mark prepped" pulls
+          it out of the queue when he's done. */}
+      {prepQueue.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <SectionLabel icon="📥" label={`Prep Queue · new leads to work (${prepQueue.length})`} />
+          {prepQueue.map(d => {
+            const m = d.meta || {};
+            const missing = prepMissing(d);
+            const src = m.source || (d.id.startsWith('flip-') ? 'manual' : 'unknown');
+            return (
+              <div key={d.id} style={{
+                display: "flex", alignItems: "center", gap: 12,
+                padding: "10px 14px",
+                background: "#1c1917", border: "1px solid #292524",
+                borderRadius: 8, marginBottom: 6,
+              }}>
+                <span style={{ fontSize: 14 }}>📥</span>
+                <div onClick={() => onSelect(d.id)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {d.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#78716c", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {d.address || "—"}{m.county ? ` · ${m.county}` : ""}{src ? ` · src: ${src}` : ""}
+                  </div>
+                  {missing.length > 0 && (
+                    <div style={{ fontSize: 10, color: "#a5731c", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      ⚠ missing: {missing.join(", ")}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); markPrepped(d.id); }}
+                  title="Mark prepped — pulls this lead out of the queue. Use only when phone is confirmed, contacts are labeled, tier is set, and the URL is minted."
+                  style={{
+                    background: missing.length === 0 ? '#065f46' : 'transparent',
+                    color: missing.length === 0 ? '#6ee7b7' : '#a8a29e',
+                    border: '1px solid ' + (missing.length === 0 ? '#10b981' : '#44403c'),
+                    borderRadius: 5, padding: '5px 11px',
+                    fontSize: 10, fontWeight: 700, letterSpacing: '0.04em',
+                    cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  ✓ Mark prepped
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
