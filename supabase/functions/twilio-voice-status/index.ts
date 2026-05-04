@@ -1,18 +1,22 @@
 // Twilio Voice status + recording callback.
 //
-// This function receives three distinct event types from Twilio, all POSTed
-// to the same URL. We differentiate by which params are present:
+// This function receives events from Twilio, all POSTed to the same URL.
+// We differentiate by which params are present — checked in priority order:
 //
-//   1. RecordingUrl present → recording is ready; store proxy URL in call_logs.
+//   1. DialCallStatus present → <Dial> action callback; fires when ALL dialed
+//      legs complete (timeout, answer, cancel). CallSid = parent call SID.
+//      When record="record-from-ringing-dual", Twilio may include RecordingUrl
+//      in this SAME POST — so we handle recording here too, then return the
+//      appropriate TwiML (voicemail prompt for missed inbound calls).
+//      MUST be checked before the standalone recording case.
 //
-//   2. DialCallStatus present → <Dial> action callback; fires when the dialed
-//      leg completes for non-browser calls. CallSid = parent call SID.
-//      (For browser SDK calls this often does NOT fire — see case 3.)
+//   2. RecordingUrl present (standalone) → recording is ready from the <Record>
+//      voicemail verb (fires asynchronously after the voicemail is saved).
+//      Store proxy URL in call_logs. This is the voicemail recording itself.
 //
 //   3. CallStatus + ParentCallSid present → <Number> statusCallback; fires for
 //      every status change on the child (outgoing) call leg. CallSid = child
 //      SID, ParentCallSid = parent SID (what's stored in call_logs).
-//      For browser SDK calls, this is the ONLY reliable completion signal.
 //      We update only on CallStatus=completed|busy|no-answer|failed|canceled.
 //
 // Deploy with verify_jwt=false (Twilio webhooks carry no Supabase JWT).
@@ -55,45 +59,46 @@ Deno.serve(async (req: Request) => {
   const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const db = createClient(supabaseUrl, serviceKey);
 
-  // ── Case 1: Recording ready ──────────────────────────────────────────────
-  if (recordingUrl) {
-    const proxyUrl = `${supabaseUrl}/functions/v1/twilio-recording?sid=${recordingSid}`;
-    await db.from('call_logs')
-      .update({
-        recording_url:      proxyUrl,
-        recording_sid:      recordingSid,
-        recording_duration: Number(recordingDuration) || null,
-      })
-      .eq('twilio_call_sid', callSid);
-    return TWIML_OK;
-  }
-
-  // ── Case 2: <Dial> action callback (browser SDK calls may skip this) ─────
+  // ── Case 1: <Dial> action callback ──────────────────────────────────────
+  // MUST come before the standalone recording check. When using
+  // record="record-from-ringing-dual", Twilio bundles RecordingUrl into this
+  // same POST. If we checked RecordingUrl first we'd return early and never
+  // update the call status.
   if (dialStatus) {
     const statusMap: Record<string, string> = {
-      answered:  'completed',
-      completed: 'completed',
+      answered:    'completed',
+      completed:   'completed',
       'no-answer': 'no-answer',
-      busy:      'busy',
-      failed:    'failed',
-      canceled:  'canceled',
+      busy:        'busy',
+      failed:      'failed',
+      canceled:    'canceled',
     };
     const finalStatus = statusMap[dialStatus] || 'completed';
     const isMissed = ['no-answer', 'busy', 'canceled'].includes(finalStatus);
 
-    const { data: row } = await db.from('call_logs')
-      .update({
-        status:           isMissed ? 'missed' : finalStatus,
-        duration_seconds: Number(dialDuration) || 0,
-        ended_at:         new Date().toISOString(),
-      })
+    // Update call status
+    const updatePayload: Record<string, unknown> = {
+      status:           isMissed ? 'missed' : finalStatus,
+      duration_seconds: Number(dialDuration) || 0,
+      ended_at:         new Date().toISOString(),
+    };
+    // If Twilio bundled the ring recording in this same callback, capture it now.
+    if (recordingUrl && recordingSid) {
+      updatePayload.recording_url      = `${supabaseUrl}/functions/v1/twilio-recording?sid=${recordingSid}`;
+      updatePayload.recording_sid      = recordingSid;
+      updatePayload.recording_duration = Number(recordingDuration) || null;
+    }
+
+    const { data: row, error: updateErr } = await db.from('call_logs')
+      .update(updatePayload)
       .eq('twilio_call_sid', callSid)
       .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent, direction')
       .single();
+    if (updateErr) console.error('call_logs status UPDATE error:', JSON.stringify(updateErr), { callSid, dialStatus, finalStatus });
 
     await maybeSendMissedCallSms(db, row, isMissed);
 
-    // Missed inbound call → play voicemail greeting so caller can leave a message.
+    // Missed inbound call → return voicemail TwiML so caller can leave a message.
     if (isMissed && row?.direction === 'inbound') {
       return new Response(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -104,6 +109,22 @@ Deno.serve(async (req: Request) => {
 </Response>`, { status: 200, headers: { 'Content-Type': 'text/xml' } });
     }
 
+    return TWIML_OK;
+  }
+
+  // ── Case 2: Standalone recording ready (voicemail <Record> callback) ─────
+  // Fires asynchronously when the voicemail recording is saved. This is
+  // separate from the ring recording — it's the caller's actual message.
+  if (recordingUrl) {
+    const proxyUrl = `${supabaseUrl}/functions/v1/twilio-recording?sid=${recordingSid}`;
+    const { error: recErr } = await db.from('call_logs')
+      .update({
+        recording_url:      proxyUrl,
+        recording_sid:      recordingSid,
+        recording_duration: Number(recordingDuration) || null,
+      })
+      .eq('twilio_call_sid', callSid);
+    if (recErr) console.error('call_logs recording UPDATE error:', JSON.stringify(recErr), { callSid, recordingSid });
     return TWIML_OK;
   }
 

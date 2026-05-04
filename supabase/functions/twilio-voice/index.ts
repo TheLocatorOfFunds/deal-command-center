@@ -14,7 +14,6 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const NATHAN_IPHONE = '+14794595671'; // Nathan's personal iPhone
 const RING_SECONDS = 30;
 
 // All DCC browser client identities — one per team member.
@@ -127,7 +126,11 @@ Deno.serve(async (req: Request) => {
       <Parameter name="contactId" value="${safeContactId}"/>
     </Client>`).join('\n');
 
-  // TwiML: ring ALL DCC browser clients + Nathan's iPhone simultaneously.
+  // TwiML: ring ALL DCC browser clients simultaneously.
+  // Nathan's iPhone is intentionally NOT included here — if his iPhone voicemail
+  // were in the <Dial>, it would "answer" the call at ~15s and fire cancel on
+  // all browsers, cutting ring time short and preventing the voicemail prompt.
+  // After 30s of no answer, the <Dial> action fires and plays our voicemail greeting.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
@@ -140,7 +143,6 @@ Deno.serve(async (req: Request) => {
     callerId="${to}"
   >
 ${clientElements}
-    <Number>${NATHAN_IPHONE}</Number>
   </Dial>
 </Response>`;
 
