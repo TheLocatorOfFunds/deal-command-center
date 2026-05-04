@@ -1103,6 +1103,21 @@ function DealCommandCenter({ session, profile }) {
         </div>
         <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
+          {/* Twilio device registration status dot */}
+          {isTeam && (() => {
+            const dotColor = twilioStatus === 'registered' ? '#10b981' : twilioStatus === 'error' ? '#ef4444' : '#f59e0b';
+            const dotLabel = twilioStatus === 'registered' ? 'Phone ready — browser will ring on inbound calls' : twilioStatus === 'error' ? 'Phone error — browser will NOT ring. Try refreshing.' : 'Phone connecting…';
+            return (
+              <span title={dotLabel} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: dotColor, cursor: 'default' }}>
+                <span style={{
+                  width: 8, height: 8, borderRadius: '50%', background: dotColor, display: 'inline-block',
+                  boxShadow: twilioStatus === 'registered' ? `0 0 0 2px #0c0a09, 0 0 6px ${dotColor}` : 'none',
+                  animation: twilioStatus === 'initializing' ? 'chatBadgePulse 1.6s ease-in-out infinite' : 'none',
+                }} />
+                {twilioStatus === 'registered' ? 'Phone' : twilioStatus === 'error' ? 'Phone ✕' : 'Phone…'}
+              </span>
+            );
+          })()}
           <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
           {/* Search — icon-only, ⌘K shortcut shown on hover */}
           <button onClick={() => setShowSearch(true)} title="Search (⌘K)" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>🔍</button>
@@ -16477,6 +16492,8 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [callDuration, setCallDuration] = useState(0);
   const [incomingCall, setIncomingCall] = useState(null); // { call, from, callerName, dealId }
   const [callMuted, setCallMuted]       = useState(false);
+  // 'initializing' | 'registered' | 'error' — shown as a dot in the header
+  const [twilioStatus, setTwilioStatus] = useState('initializing');
   const twilioDeviceRef = React.useRef(null);
   const activeCallRef   = React.useRef(null);
   const callTimerRef    = React.useRef(null);
@@ -16746,11 +16763,14 @@ function OutboundMessages({ dealId, vendors, deal }) {
     try {
       const { data, error } = await sb.functions.invoke('twilio-token');
       if (error || !data?.token) throw new Error(error?.message || 'No token');
+      console.log('[twilio-device] token received, identity:', data.identity);
       const device = new window.Twilio.Device(data.token, {
         codecPreferences: ['opus', 'pcmu'],
         enableRingingState: true,
         allowIncomingWhileBusy: false,
       });
+      device.on('registered',   () => { console.log('[twilio-device] registered ✓'); setTwilioStatus('registered'); });
+      device.on('unregistered', () => { console.log('[twilio-device] unregistered'); setTwilioStatus('initializing'); });
       device.on('incoming', (call) => {
         // customParameters is a Map<string,string> in SDK v2. Use a safe
         // accessor that also handles plain-object fallback and URL-decodes values.
@@ -16784,6 +16804,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
       });
       device.on('error', (err) => {
         console.error('Twilio Device error:', err);
+        setTwilioStatus('error');
         setCallStatus(null);
       });
       await device.register();
@@ -16791,6 +16812,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
       return device;
     } catch (err) {
       console.error('Failed to init Twilio device:', err);
+      setTwilioStatus('error');
       return null;
     }
   }, []);
