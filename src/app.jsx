@@ -4010,6 +4010,256 @@ function BulkOutreachButton({ candidates }) {
   );
 }
 
+// ─── Advanced Filters ──────────────────────────────────────────────
+// Per Nathan 2026-05-04 — GHL-style multi-field filter modal so the
+// pipeline / deal lists can be sliced by any combo of common fields.
+// Empty controls = no filter on that field. AND across all fields.
+//
+// v1 covers ~18 fields. Extensions tracked in PR description:
+//   - Operator picker per field (contains/equals/before/after/between)
+//   - Saved filter presets ("My A-tier surplus")
+//   - JOIN filters (e.g. "has docket event of type 'motion-distribution'")
+//   - OR / nested logic
+//   - Apply across other deal-list views, not just SalesPipeline
+
+const ADVANCED_FILTERS_DEFAULT = {
+  // Multi-select
+  status: [],
+  type: [],
+  source: [],
+  // Text contains (case-insensitive)
+  county: '',
+  case_number: '',
+  address: '',
+  homeowner_name: '',
+  attorney: '',
+  // Number ranges (min / max)
+  surplus_estimate: { min: '', max: '' },
+  sale_price: { min: '', max: '' },
+  judgment_amount: { min: '', max: '' },
+  total_debt: { min: '', max: '' },
+  // Date ranges (from / to in YYYY-MM-DD)
+  sale_date: { from: '', to: '' },
+  confirmation_of_sale_date: { from: '', to: '' },
+  redemption_deadline: { from: '', to: '' },
+  // Boolean (any | yes | no)
+  is_30dts: 'any',
+  has_phone: 'any',
+  has_url: 'any',
+  has_attorney: 'any',
+  deceased: 'any',
+};
+
+function countActiveAdvancedFilters(f) {
+  if (!f) return 0;
+  let n = 0;
+  if (f.status?.length) n++;
+  if (f.type?.length) n++;
+  if (f.source?.length) n++;
+  if ((f.county || '').trim()) n++;
+  if ((f.case_number || '').trim()) n++;
+  if ((f.address || '').trim()) n++;
+  if ((f.homeowner_name || '').trim()) n++;
+  if ((f.attorney || '').trim()) n++;
+  if (f.surplus_estimate?.min !== '' || f.surplus_estimate?.max !== '') n++;
+  if (f.sale_price?.min !== '' || f.sale_price?.max !== '') n++;
+  if (f.judgment_amount?.min !== '' || f.judgment_amount?.max !== '') n++;
+  if (f.total_debt?.min !== '' || f.total_debt?.max !== '') n++;
+  if (f.sale_date?.from || f.sale_date?.to) n++;
+  if (f.confirmation_of_sale_date?.from || f.confirmation_of_sale_date?.to) n++;
+  if (f.redemption_deadline?.from || f.redemption_deadline?.to) n++;
+  if (f.is_30dts && f.is_30dts !== 'any') n++;
+  if (f.has_phone && f.has_phone !== 'any') n++;
+  if (f.has_url && f.has_url !== 'any') n++;
+  if (f.has_attorney && f.has_attorney !== 'any') n++;
+  if (f.deceased && f.deceased !== 'any') n++;
+  return n;
+}
+
+function applyAdvancedFilters(d, f) {
+  if (!f || countActiveAdvancedFilters(f) === 0) return true;
+  const m = d.meta || {};
+
+  // Multi-select
+  if (f.status?.length && !f.status.includes(d.status)) return false;
+  if (f.type?.length && !f.type.includes(d.type)) return false;
+  if (f.source?.length && !f.source.includes(m.source || '')) return false;
+
+  // Text contains
+  const matchText = (val, q) => !q || (val == null ? '' : String(val)).toLowerCase().includes(String(q).toLowerCase());
+  if (!matchText(m.county, f.county)) return false;
+  if (!matchText(m.courtCase || m.caseNumber || m.case_number, f.case_number)) return false;
+  if (!matchText(d.address, f.address)) return false;
+  if (!matchText(d.name, f.homeowner_name)) return false;
+  if (!matchText(m.attorney, f.attorney)) return false;
+
+  // Number ranges
+  const inNumRange = (v, r) => {
+    if (!r || (r.min === '' && r.max === '')) return true;
+    const n = Number(v);
+    if (Number.isNaN(n)) return false; // missing number rejected when range is set
+    if (r.min !== '' && n < Number(r.min)) return false;
+    if (r.max !== '' && n > Number(r.max)) return false;
+    return true;
+  };
+  if (!inNumRange(m.estimatedSurplus ?? m.estimated_surplus, f.surplus_estimate)) return false;
+  if (!inNumRange(m.salePrice ?? m.sale_price, f.sale_price)) return false;
+  if (!inNumRange(m.judgmentAmount ?? m.judgment_amount, f.judgment_amount)) return false;
+  if (!inNumRange(m.totalDebt ?? m.total_debt, f.total_debt)) return false;
+
+  // Date ranges (YYYY-MM-DD lexical compare works because format is sortable)
+  const inDateRange = (v, r) => {
+    if (!r || (!r.from && !r.to)) return true;
+    if (!v) return false;
+    const s = String(v).slice(0, 10);
+    if (r.from && s < r.from) return false;
+    if (r.to && s > r.to) return false;
+    return true;
+  };
+  if (!inDateRange(m.saleDate || m.sale_date, f.sale_date)) return false;
+  if (!inDateRange(m.confirmationOfSaleDate || m.confirmation_of_sale_date, f.confirmation_of_sale_date)) return false;
+  if (!inDateRange(m.redemptionDeadline || m.redemption_deadline, f.redemption_deadline)) return false;
+
+  // Booleans (any | yes | no)
+  const matchBool = (v, want) => {
+    if (!want || want === 'any') return true;
+    return want === 'yes' ? !!v : !v;
+  };
+  if (!matchBool(d.is_30dts, f.is_30dts)) return false;
+  if (!matchBool(m.homeownerPhone || m.phone, f.has_phone)) return false;
+  if (!matchBool(d.refundlocators_token, f.has_url)) return false;
+  if (!matchBool(m.attorney, f.has_attorney)) return false;
+  if (!matchBool(d.death_signal || m.deceased, f.deceased)) return false;
+
+  return true;
+}
+
+function AdvancedFiltersModal({ value, onApply, onClose }) {
+  // Local draft so user can build up the filter set then commit on Apply.
+  const [draft, setDraft] = useState(value || ADVANCED_FILTERS_DEFAULT);
+
+  const set = (patch) => setDraft(d => ({ ...d, ...patch }));
+  const setRange = (key, sub, val) => setDraft(d => ({ ...d, [key]: { ...d[key], [sub]: val } }));
+  const reset = () => setDraft(ADVANCED_FILTERS_DEFAULT);
+
+  const Section = ({ label, children }) => (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#a5731c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #292524' }}>{label}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{children}</div>
+    </div>
+  );
+
+  const Field = ({ label, children, span1 }) => (
+    <div style={{ gridColumn: span1 ? 'span 1' : 'span 1' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      {children}
+    </div>
+  );
+
+  const NumRange = ({ k }) => (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input type="number" placeholder="min" value={draft[k]?.min ?? ''} onChange={e => setRange(k, 'min', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+      <input type="number" placeholder="max" value={draft[k]?.max ?? ''} onChange={e => setRange(k, 'max', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+    </div>
+  );
+  const DateRange = ({ k }) => (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input type="date" value={draft[k]?.from || ''} onChange={e => setRange(k, 'from', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+      <input type="date" value={draft[k]?.to || ''} onChange={e => setRange(k, 'to', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+    </div>
+  );
+  const TextInput = ({ k, placeholder }) => (
+    <input type="text" value={draft[k] || ''} onChange={e => set({ [k]: e.target.value })} placeholder={placeholder} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '100%' }} />
+  );
+  const TriBool = ({ k }) => (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {['any', 'yes', 'no'].map(opt => (
+        <button key={opt} onClick={() => set({ [k]: opt })}
+          style={{
+            flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 4,
+            border: '1px solid ' + (draft[k] === opt ? '#d97706' : '#292524'),
+            background: draft[k] === opt ? '#78350f' : 'transparent',
+            color: draft[k] === opt ? '#fbbf24' : '#78716c',
+            cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
+          }}>{opt}</button>
+      ))}
+    </div>
+  );
+  const MultiSelect = ({ k, options }) => {
+    const arr = draft[k] || [];
+    const toggle = (opt) => {
+      const next = arr.includes(opt) ? arr.filter(x => x !== opt) : [...arr, opt];
+      set({ [k]: next });
+    };
+    return (
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {options.map(opt => {
+          const on = arr.includes(opt);
+          return (
+            <button key={opt} onClick={() => toggle(opt)}
+              style={{
+                fontSize: 10, padding: '4px 9px', borderRadius: 4,
+                border: '1px solid ' + (on ? '#d97706' : '#292524'),
+                background: on ? '#78350f' : 'transparent',
+                color: on ? '#fbbf24' : '#78716c',
+                cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
+              }}>{opt}</button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const ALL_STATUSES = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
+  const SOURCES = ['ghl-import', 'castle', 'dcc-manual', 'lead-intake', 'manual'];
+
+  const activeCount = countActiveAdvancedFilters(draft);
+
+  return (
+    <Modal onClose={onClose} title="🎚 Advanced filters" wide>
+      <Section label="Classification">
+        <Field label="Status (any of)"><MultiSelect k="status" options={ALL_STATUSES} /></Field>
+        <Field label="Deal type (any of)"><MultiSelect k="type" options={['flip','surplus','wholesale','rental','other']} /></Field>
+        <Field label="Source (any of)"><MultiSelect k="source" options={SOURCES} /></Field>
+        <Field label="30 days to sale"><TriBool k="is_30dts" /></Field>
+      </Section>
+      <Section label="Identity">
+        <Field label="Homeowner name (contains)"><TextInput k="homeowner_name" placeholder="e.g. Phillips" /></Field>
+        <Field label="Property address (contains)"><TextInput k="address" placeholder="e.g. Main St" /></Field>
+        <Field label="County (contains)"><TextInput k="county" placeholder="e.g. Hamilton" /></Field>
+        <Field label="Case number (contains)"><TextInput k="case_number" placeholder="e.g. A2304" /></Field>
+        <Field label="Attorney (contains)"><TextInput k="attorney" placeholder="e.g. Kainiz" /></Field>
+        <Field label="Has assigned attorney"><TriBool k="has_attorney" /></Field>
+      </Section>
+      <Section label="Money (range)">
+        <Field label="Estimated surplus $"><NumRange k="surplus_estimate" /></Field>
+        <Field label="Sale price $"><NumRange k="sale_price" /></Field>
+        <Field label="Judgment amount $"><NumRange k="judgment_amount" /></Field>
+        <Field label="Total debt $"><NumRange k="total_debt" /></Field>
+      </Section>
+      <Section label="Dates (range)">
+        <Field label="Sale date"><DateRange k="sale_date" /></Field>
+        <Field label="Confirmation of sale"><DateRange k="confirmation_of_sale_date" /></Field>
+        <Field label="Redemption deadline"><DateRange k="redemption_deadline" /></Field>
+      </Section>
+      <Section label="Outreach readiness">
+        <Field label="Has phone"><TriBool k="has_phone" /></Field>
+        <Field label="Has personalized URL"><TriBool k="has_url" /></Field>
+        <Field label="Homeowner deceased"><TriBool k="deceased" /></Field>
+      </Section>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #292524', paddingTop: 14, marginTop: 4, position: 'sticky', bottom: -24, background: '#1c1917', paddingBottom: 4 }}>
+        <button onClick={reset} style={{ ...btnGhost, fontSize: 11 }}>↺ Reset all</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#78716c' }}>{activeCount} active filter{activeCount === 1 ? '' : 's'}</span>
+          <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+          <button onClick={() => { onApply(draft); onClose(); }} style={{ ...btnPrimary, fontSize: 11 }}>Apply</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   const [track, setTrack] = useState('surplus'); // 'surplus' | '30dts'
   const [tierFilter, setTierFilter] = useState({ A: true, B: true, C: true, other: true });
@@ -4018,6 +4268,9 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   const [dragId, setDragId] = useState(null);
   const [dragOverStage, setDragOverStage] = useState(null);
   const [textingDeal, setTextingDeal] = useState(null);
+  const [advancedFilters, setAdvancedFilters] = useState(ADVANCED_FILTERS_DEFAULT);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const advancedFilterCount = countActiveAdvancedFilters(advancedFilters);
 
   const stageField = track === 'surplus' ? 'sales_stage' : 'sales_stage_30dts';
   const stages = track === 'surplus' ? SURPLUS_STAGES : DTS_STAGES;
@@ -4043,6 +4296,7 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
       const hay = [d.name, d.address, d.meta?.county, d.meta?.courtCase, d.id].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
+    if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
   });
 
@@ -4170,9 +4424,35 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
             {counties.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / address / case #" style={{ ...inputStyle, fontSize: 11, padding: '4px 10px', maxWidth: 260, background: '#0c0a09' }} />
+          <button
+            onClick={() => setShowAdvancedFilters(true)}
+            title={advancedFilterCount > 0 ? `${advancedFilterCount} advanced filter${advancedFilterCount === 1 ? '' : 's'} active — click to edit` : 'Filter by status, money, dates, attorney, phone presence, and more'}
+            style={{
+              fontSize: 11, padding: '4px 10px', borderRadius: 5,
+              border: '1px solid ' + (advancedFilterCount > 0 ? '#d97706' : '#44403c'),
+              background: advancedFilterCount > 0 ? '#78350f' : 'transparent',
+              color: advancedFilterCount > 0 ? '#fbbf24' : '#a8a29e',
+              fontWeight: 700, letterSpacing: '0.04em', cursor: 'pointer', fontFamily: 'inherit',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}>
+            🎚 Filters{advancedFilterCount > 0 ? <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{advancedFilterCount}</span> : null}
+          </button>
+          {advancedFilterCount > 0 && (
+            <button onClick={() => setAdvancedFilters(ADVANCED_FILTERS_DEFAULT)}
+              title="Clear all advanced filters"
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', color: '#78716c' }}>↺</button>
+          )}
           <BulkOutreachButton candidates={filtered} />
         </div>
       </div>
+
+      {showAdvancedFilters && (
+        <AdvancedFiltersModal
+          value={advancedFilters}
+          onApply={setAdvancedFilters}
+          onClose={() => setShowAdvancedFilters(false)}
+        />
+      )}
 
       {/* Unassigned warning */}
       {unassigned.length > 0 && (
