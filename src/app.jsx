@@ -640,9 +640,10 @@ function DealCommandCenter({ session, profile }) {
   }, []);
 
   const startRingtone = React.useCallback(() => {
+    // Stop any previous ring cycle timer (but do NOT close the AudioContext —
+    // closing it means the next call needs a fresh user gesture to re-unlock it)
     if (ringAudioRef.current) {
       clearTimeout(ringAudioRef.current._ringTimer);
-      try { ringAudioRef.current.close(); } catch (_) {}
       ringAudioRef.current = null;
     }
     if (ringTitleRef.current) {
@@ -650,13 +651,27 @@ function DealCommandCenter({ session, profile }) {
       document.title = ringTitleRef.current.origTitle;
       ringTitleRef.current = null;
     }
-    try {
-      const ctx = sharedAudioCtx.current || new (window.AudioContext || window.webkitAudioContext)();
-      if (!sharedAudioCtx.current) sharedAudioCtx.current = ctx;
-      ringAudioRef.current = ctx;
-      const play = () => {
-        if (ringAudioRef.current !== ctx) return;
-        ctx.resume().catch(() => {});
+    // Flash tab title
+    const origTitle = document.title;
+    let flash = false;
+    ringTitleRef.current = {
+      interval:  setInterval(() => { document.title = (flash = !flash) ? '📞 INCOMING CALL' : origTitle; }, 700),
+      origTitle,
+    };
+    // Web Audio: US telephone ring (440 Hz + 480 Hz, 2s on / 4s off).
+    // We NEVER close sharedAudioCtx — once unlocked by a user gesture it stays
+    // running. We await resume() before starting oscillators so they actually play.
+    const ringing = { active: true, _ringTimer: null };
+    ringAudioRef.current = ringing;
+    const playOnce = async () => {
+      if (!ringing.active) return;
+      try {
+        if (!sharedAudioCtx.current || sharedAudioCtx.current.state === 'closed') {
+          sharedAudioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        const ctx = sharedAudioCtx.current;
+        await ctx.resume(); // wait for the context to actually start
+        if (!ringing.active || ctx.state !== 'running') return;
         [440, 480].forEach(freq => {
           const osc  = ctx.createOscillator();
           const gain = ctx.createGain();
@@ -667,24 +682,20 @@ function DealCommandCenter({ session, profile }) {
           osc.start(ctx.currentTime);
           osc.stop(ctx.currentTime + 2);
         });
-        ctx._ringTimer = setTimeout(play, 6000);
-      };
-      play();
-    } catch (_) {}
-    const origTitle = document.title;
-    let flash = false;
-    ringTitleRef.current = {
-      interval:  setInterval(() => { document.title = (flash = !flash) ? '📞 INCOMING CALL' : origTitle; }, 700),
-      origTitle,
+        ringing._ringTimer = setTimeout(playOnce, 6000);
+      } catch (_) {}
     };
+    playOnce();
   }, []);
 
   const stopRingtone = React.useCallback(() => {
+    // Mark the ring cycle as inactive (suppresses any pending playOnce call)
     if (ringAudioRef.current) {
+      ringAudioRef.current.active = false;
       clearTimeout(ringAudioRef.current._ringTimer);
-      try { ringAudioRef.current.close(); } catch (_) {}
       ringAudioRef.current = null;
     }
+    // DO NOT close sharedAudioCtx — keep it warm for the next call
     if (ringTitleRef.current) {
       clearInterval(ringTitleRef.current.interval);
       document.title = ringTitleRef.current.origTitle;
@@ -780,8 +791,10 @@ function DealCommandCenter({ session, profile }) {
         sharedAudioCtx.current.resume().catch(() => {});
       }
     };
-    document.addEventListener('click',      unlock, { once: true });
-    document.addEventListener('touchstart', unlock, { once: true });
+    // Listen on every interaction (not once) so the context stays resumed
+    // if the browser suspends it after a period of inactivity.
+    document.addEventListener('click',      unlock);
+    document.addEventListener('touchstart', unlock);
     return () => {
       document.removeEventListener('click',      unlock);
       document.removeEventListener('touchstart', unlock);
