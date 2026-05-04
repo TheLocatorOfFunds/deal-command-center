@@ -6417,7 +6417,7 @@ function EditLeadModal({ row, onClose, onSaved }) {
 // Cross-deal "messages_outbound where direction='inbound' and not yet
 // seen by the team." Oldest unread first. Click to jump to the deal's
 // Comms tab. Closes Castle's gap-analysis Tier 1 #2.
-function ReplyInbox({ onSelect, limit = 30 }) {
+function ReplyInbox({ onSelect, limit = 100 }) {
   const [rows, setRows] = useState(null);
   const alive = useAliveRef();
 
