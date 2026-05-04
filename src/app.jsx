@@ -558,20 +558,24 @@ function DealCommandCenter({ session, profile }) {
     setUnreadChatCount(data || 0);
   };
 
-  // Mark every team thread as read. Called when the user engages with ANY
-  // chat-notification surface (banner click, header 💬 button, toast Reply,
-  // OS notification click) — per Nathan 2026-05-01 the user-action of
-  // "I saw the notification" should clear all in-app indicators globally,
-  // not leave one surface still flashing while another's been dismissed.
-  // Realtime sub on team_message_reads picks this up and refreshes the
-  // header badge + per-thread badges automatically. No-op if no session.
+  // Mark every team thread the user PARTICIPATES IN as read. Called when
+  // they engage with the banner or click "Mark all as read" in the
+  // popover. Per-message engagements (toast Reply, OS notification, single
+  // popover row) only mark that one thread — see PR comments 2026-05-04.
+  //
+  // Filters by team_thread_participants so we don't create stray reads
+  // for other users' threads (the previous version iterated all non-
+  // archived threads, which inflated team_message_reads + masked the
+  // team_unread_count overcount bug). Realtime sub picks this up and
+  // refreshes header badge + per-thread badges automatically.
   const markAllChatRead = async () => {
     const uid = session?.user?.id;
     if (!uid) return;
-    const { data: threads } = await sb.from('team_threads').select('id').is('archived_at', null);
-    if (!threads || threads.length === 0) return;
+    const { data: parts } = await sb.from('team_thread_participants')
+      .select('thread_id').eq('user_id', uid);
+    if (!parts || parts.length === 0) return;
     const now = new Date().toISOString();
-    const rows = threads.map(t => ({ thread_id: t.id, user_id: uid, last_read_at: now }));
+    const rows = parts.map(p => ({ thread_id: p.thread_id, user_id: uid, last_read_at: now }));
     await sb.from('team_message_reads').upsert(rows, { onConflict: 'thread_id,user_id' });
   };
 
@@ -1334,17 +1338,22 @@ function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMar
       const cutoffMs = readsTs.length ? Math.min(...readsTs) : (Date.now() - 30 * 86400 * 1000);
       const cutoffISO = new Date(cutoffMs).toISOString();
 
+      // Don't filter sender_id at the query level — supabase-js .neq()
+      // excludes NULL rows, but Lauren messages have sender_id = NULL
+      // (their sender_kind = 'lauren'). Match the team_unread_per_thread
+      // RPC's "is distinct from" semantics by filtering client-side instead.
       const { data: msgs } = await sb.from('team_messages')
         .select('id, thread_id, sender_id, sender_kind, body, created_at')
         .in('thread_id', threadIds)
         .gt('created_at', cutoffISO)
-        .neq('sender_id', currentUserId)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(80);
 
-      // 4. Filter to actually unread (created after my per-thread last_read).
+      // 4. Filter: not from me (treat NULL sender_id as "not me" — Lauren),
+      //    and created after my per-thread last_read.
       const unread = (msgs || []).filter(m => {
+        if (m.sender_id === currentUserId) return false;
         const lr = lastReadByThread[m.thread_id];
         return !lr || new Date(m.created_at) > new Date(lr);
       }).slice(0, 20);
@@ -1370,6 +1379,7 @@ function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMar
         const t = threadById[m.thread_id];
         if (!t) return 'thread';
         if (t.thread_type === 'lauren_dm') return '🤖 Lauren';
+        if (t.thread_type === 'lauren_room') return '🤖 ' + (t.title || 'Lauren room');
         if (t.thread_type === 'dm') return 'DM';
         if (t.thread_type === 'channel') return `#${t.title || 'channel'}`;
         return t.title || 'thread';
