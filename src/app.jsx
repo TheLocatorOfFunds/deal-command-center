@@ -4341,8 +4341,16 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   // Filter candidate deals for this track. A deal in the 30DTS track is
   // ANY deal with is_30dts=true regardless of sales_stage_30dts — so newly-
   // flagged ones land in "new" automatically via the seeding migration.
+  //
+  // Per Eric 2026-05-04 — flip deals don't belong on the SURPLUS pipeline
+  // (they have their own acquisition lifecycle: lead → under-contract →
+  // rehab → listing → closed, not the surplus stages). They were
+  // sneaking onto the kanban because they had sales_stage set, and
+  // since flips don't have a tier UI, they perpetually counted as
+  // "unscored" (e.g. sf-jennings-moa9iqzt + flip-mnys0fz1kh5r).
   const candidates = deals.filter(d => {
     if (['closed', 'dead', 'recovered'].includes(d.status)) return false;
+    if (d.type === 'flip') return false;
     if (track === '30dts') return d.is_30dts === true;
     // Surplus track excludes 30DTS deals to avoid duplication
     return d.is_30dts !== true && d.sales_stage != null;
