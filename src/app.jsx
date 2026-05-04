@@ -387,6 +387,67 @@ function playNotifyChirp(type = 'chat') {
   }
 }
 
+// ─── Favicon badge ───────────────────────────────────────────────────
+// Renders the DCC favicon to a canvas at 64×64 and overlays a red circle
+// with the count in the top-right (Gmail/Slack-style). Called whenever
+// the aggregate unread count changes.
+const _faviconBaseSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#0b1f3a"/>
+  <circle cx="256" cy="162" r="30" fill="#c9a24a"/>
+  <text x="256" y="350" font-family="Georgia, 'Times New Roman', serif" font-size="130" font-weight="700" fill="#c9a24a" text-anchor="middle" letter-spacing="-4">DCC</text>
+</svg>`;
+let _faviconImg = null;
+function _loadFaviconBase() {
+  if (_faviconImg) return Promise.resolve(_faviconImg);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => { _faviconImg = img; resolve(img); };
+    img.onerror = () => reject(new Error('favicon base load failed'));
+    img.src = 'data:image/svg+xml;base64,' + btoa(_faviconBaseSvg);
+  });
+}
+async function updateFaviconBadge(count) {
+  if (typeof document === 'undefined') return;
+  try {
+    const img = await _loadFaviconBase();
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, size, size);
+    if (count > 0) {
+      // Red badge — top-right corner
+      const cx = size - 16, cy = 16, r = 16;
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.fill();
+      // Subtle white outline for legibility on any tab background
+      ctx.strokeStyle = '#fafaf9';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Count text
+      ctx.fillStyle = '#fafaf9';
+      const text = count > 99 ? '99+' : String(count);
+      ctx.font = 'bold ' + (text.length >= 3 ? 16 : 20) + 'px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, cx, cy + 1);
+    }
+    const url = canvas.toDataURL('image/png');
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.type = 'image/png';
+    link.href = url;
+  } catch (e) {
+    console.warn('[favicon-badge] update failed', e);
+  }
+}
+
 // ─── Root: session gate ──────────────────────────────────────────────
 function Root() {
   const [session, setSession]       = useState(null);
@@ -453,6 +514,7 @@ function DealCommandCenter({ session, profile }) {
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [unreadSmsCount, setUnreadSmsCount] = useState(0);
   // Welcome-back unread banner. Hides after dismiss until a NEW message
   // arrives (count rises above the dismissal floor). Click → opens chat.
   const [chatBannerDismissedAt, setChatBannerDismissedAt] = useState(0);
@@ -669,15 +731,27 @@ function DealCommandCenter({ session, profile }) {
     setUnreadChatCount(data || 0);
   };
 
-  // Browser-tab title prefix shows unread count when DCC is in a
-  // background tab — Gmail / Slack pattern. Per Nathan 2026-05-04: the
-  // user wants a visible "(N)" on the tab so they can glance at their
-  // tab strip from any other app and see if something landed in DCC.
+  // Inbound-SMS unread count — counts messages_outbound where direction='inbound'
+  // and read_by_team_at IS NULL. Surfaces in the tab title + favicon badge so
+  // an SMS reply lighting up Outreach is visible from a background tab.
+  const loadUnreadSmsCount = async () => {
+    const { count } = await sb.from('messages_outbound')
+      .select('id', { count: 'exact', head: true })
+      .eq('direction', 'inbound')
+      .is('read_by_team_at', null);
+    setUnreadSmsCount(count || 0);
+  };
+
+  // Aggregate of every realtime-driven unread surface. Drives the tab
+  // title prefix (visible in the tab strip from any app) and the favicon
+  // badge (red circle + count over the DCC icon, Gmail/Slack-style).
+  const totalUnread = unreadChatCount + unreadSmsCount;
   useEffect(() => {
     const base = 'Deal Command Center · RefundLocators';
-    document.title = unreadChatCount > 0 ? `(${unreadChatCount}) ${base}` : base;
+    document.title = totalUnread > 0 ? `(${totalUnread}) ${base}` : base;
+    updateFaviconBadge(totalUnread);
     return () => { document.title = base; };
-  }, [unreadChatCount]);
+  }, [totalUnread]);
 
   // Mark every team thread the user PARTICIPATES IN as read. Called when
   // they engage with the banner or click "Mark all as read" in the
@@ -845,7 +919,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadActiveCalls(); loadSystemAlertCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -882,6 +956,7 @@ function DealCommandCenter({ session, profile }) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, loadSystemAlertCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadUnreadSmsCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
