@@ -15,7 +15,12 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const NATHAN_IPHONE = '+14794595671'; // Nathan's personal iPhone
-const RING_SECONDS = 18;
+const RING_SECONDS = 30;
+
+// All DCC browser client identities — one per team member.
+// Must match the identity returned by twilio-token for each user.
+// Twilio delivers the inbound call to ALL of these simultaneously.
+const DCC_CLIENT_IDENTITIES = ['dcc-justin', 'dcc-nathan'];
 
 const normalizePhone = (p: string): string => {
   const digits = (p || '').replace(/\D/g, '');
@@ -61,12 +66,20 @@ Deno.serve(async (req: Request) => {
   }
 
   if (!dealId) {
-    // Fallback: homeowner phone lookup via RPC
+    // Fallback: homeowner phone lookup via RPC.
+    // find_deal_by_phone returns an array of rows [{id: "deal-id"}] when defined
+    // as RETURNS TABLE, or a plain string when RETURNS text. Handle both shapes.
     try {
       const { data } = await db.rpc('find_deal_by_phone', { phone_e164: from, phone_bare: from.replace('+', '') });
       if (data) {
-        dealId = data;
-        threadKey = `${dealId}:phone:${from}`;
+        if (typeof data === 'string') {
+          dealId = data;
+        } else if (Array.isArray(data) && data.length > 0) {
+          dealId = data[0]?.id ?? null;
+        } else if (typeof data === 'object' && data !== null) {
+          dealId = (data as any).id ?? null;
+        }
+        if (dealId) threadKey = `${dealId}:phone:${from}`;
       }
     } catch (_) {}
   }
@@ -98,8 +111,23 @@ Deno.serve(async (req: Request) => {
   const projectRef = supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] || '';
   const statusUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-status`;
 
-  // TwiML: ring the DCC browser client + Nathan's iPhone simultaneously.
-  // callerName is the raw E.164 number (no encoding — phone numbers are XML-safe).
+  // Build <Client> entries for every DCC team member browser.
+  // All registered browsers with these identities ring simultaneously.
+  const safeFrom    = from;  // E.164 — XML-safe
+  const safeDealId  = (dealId || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safeDealName = (dealName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const safeContactId = (contactId || '').replace(/&/g, '&amp;');
+
+  const clientElements = DCC_CLIENT_IDENTITIES.map(identity => `    <Client>
+      <Identity>${identity}</Identity>
+      <Parameter name="from" value="${safeFrom}"/>
+      <Parameter name="callerName" value="${safeFrom}"/>
+      <Parameter name="dealId" value="${safeDealId}"/>
+      <Parameter name="dealName" value="${safeDealName}"/>
+      <Parameter name="contactId" value="${safeContactId}"/>
+    </Client>`).join('\n');
+
+  // TwiML: ring ALL DCC browser clients + Nathan's iPhone simultaneously.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
@@ -111,14 +139,7 @@ Deno.serve(async (req: Request) => {
     recordingStatusCallbackMethod="POST"
     callerId="${to}"
   >
-    <Client>
-      <Identity>dcc-browser</Identity>
-      <Parameter name="from" value="${from}"/>
-      <Parameter name="callerName" value="${from}"/>
-      <Parameter name="dealId" value="${dealId || ''}"/>
-      <Parameter name="dealName" value="${(dealName || '').replace(/"/g, '&quot;')}"/>
-      <Parameter name="contactId" value="${contactId || ''}"/>
-    </Client>
+${clientElements}
     <Number>${NATHAN_IPHONE}</Number>
   </Dial>
 </Response>`;

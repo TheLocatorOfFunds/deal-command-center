@@ -3,6 +3,11 @@
 // The DCC browser calls this to get a short-lived JWT, then hands it to
 // Twilio.Device so the browser can make and receive calls directly.
 //
+// Each user gets a UNIQUE Twilio client identity derived from their email
+// prefix (e.g. justin@fundlocators.com → "dcc-justin"). This ensures every
+// team member's browser registers under its own identity, so the TwiML can
+// dial all identities simultaneously and every browser rings on inbound calls.
+//
 // Required env vars (set in Supabase project secrets):
 //   TWILIO_ACCOUNT_SID   — AC...
 //   TWILIO_API_KEY       — SK... (API Key SID, NOT the account SID)
@@ -10,6 +15,8 @@
 //   TWILIO_TWIML_APP_SID — AP... (the TwiML App whose Voice URL handles outbound)
 //
 // Deploy with default verify_jwt=true (only authenticated DCC users call this).
+
+import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -33,8 +40,28 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  const now      = Math.floor(Date.now() / 1000);
-  const identity = 'dcc-browser';
+  // Derive a per-user Twilio client identity from the logged-in user's email.
+  // e.g. justin@fundlocators.com → "dcc-justin"
+  // This must match the identities listed in DCC_CLIENT_IDENTITIES in twilio-voice.
+  let identity = 'dcc-browser'; // fallback
+  try {
+    const authHeader = req.headers.get('Authorization') || '';
+    if (authHeader) {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+      const anonKey     = Deno.env.get('SUPABASE_ANON_KEY')!;
+      const userDb = createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: authHeader } },
+        auth: { persistSession: false },
+      });
+      const { data: { user } } = await userDb.auth.getUser();
+      if (user?.email) {
+        const prefix = user.email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        identity = `dcc-${prefix}`;
+      }
+    }
+  } catch (_) { /* fall back to dcc-browser */ }
+
+  const now = Math.floor(Date.now() / 1000);
 
   const header = { alg: 'HS256', typ: 'JWT', cty: 'twilio-fpa;v=1' };
   const payload = {
