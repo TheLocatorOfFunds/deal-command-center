@@ -8224,9 +8224,25 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   // haven't been prepped yet (phone confirmed, contacts labeled, tier
   // set, surplus est verified, personalized URL minted). prepped_at
   // is NULL until Eric clicks "Mark prepped" on the row.
-  const prepQueue = deals
+  // Optimistic-removal set. When the user clicks "Mark prepped" on a
+  // row, we drop it from the visible queue immediately rather than
+  // waiting for the realtime sub on `deals` to fire loadDeals — that
+  // round-trip can be ~500ms-2s and Nathan flagged the lag (2026-05-04).
+  // After 5s we clear the local set; by then realtime has caught up
+  // and the deal naturally falls out via prepped_at being non-null.
+  const [recentlyPrepped, setRecentlyPrepped] = useState(new Set());
+  const [prepQueueExpanded, setPrepQueueExpanded] = useState(false);
+  const PREP_QUEUE_COLLAPSED_LIMIT = 3;
+
+  const prepQueueAll = deals
     .filter(d => isLeadStatus(d) && !d.prepped_at && !["closed", "dead", "recovered"].includes(d.status))
+    .filter(d => !recentlyPrepped.has(d.id))
     .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  // What's shown depends on the collapse state. Default = first 3.
+  const prepQueueVisible = prepQueueExpanded
+    ? prepQueueAll
+    : prepQueueAll.slice(0, PREP_QUEUE_COLLAPSED_LIMIT);
 
   // What this deal is missing relative to "ready for outreach". Eric
   // sees this as a dim line under each prep-queue row.
@@ -8243,12 +8259,24 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   };
 
   const markPrepped = async (dealId) => {
+    // Optimistic: pull it out of the visible queue immediately.
+    setRecentlyPrepped(prev => { const n = new Set(prev); n.add(dealId); return n; });
     const { error } = await sb.from('deals').update({ prepped_at: new Date().toISOString() }).eq('id', dealId);
-    if (error) alert('Could not mark prepped: ' + error.message);
-    // Realtime sub on deals refreshes the Today view automatically
+    if (error) {
+      // Roll back the optimistic removal if the write failed.
+      setRecentlyPrepped(prev => { const n = new Set(prev); n.delete(dealId); return n; });
+      alert('Could not mark prepped: ' + error.message);
+      return;
+    }
+    // Clear the optimistic flag after a few seconds — by then realtime
+    // sub has fired loadDeals() and the deal's prepped_at is non-null,
+    // so it naturally drops out of prepQueueAll on its own.
+    setTimeout(() => {
+      setRecentlyPrepped(prev => { const n = new Set(prev); n.delete(dealId); return n; });
+    }, 5000);
   };
 
-  const hasAny = prepQueue.length + urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
+  const hasAny = prepQueueAll.length + urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
 
   const Row = ({ deal, right, tone }) => {
     const m = deal.meta || {};
@@ -8295,11 +8323,12 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       {/* Prep queue — new leads that haven't been worked yet. Each row
           shows what's missing (phone / tier / URL / etc.) so Eric can
           see at a glance what each deal needs. "✓ Mark prepped" pulls
-          it out of the queue when he's done. */}
-      {prepQueue.length > 0 && (
+          it out of the queue when he's done. Collapsed by default to
+          first 3 rows so it doesn't drown the rest of the page. */}
+      {prepQueueAll.length > 0 && (
         <div style={{ marginBottom: 22 }}>
-          <SectionLabel icon="📥" label={`Prep Queue · new leads to work (${prepQueue.length})`} />
-          {prepQueue.map(d => {
+          <SectionLabel icon="📥" label={`Prep Queue · new leads to work (${prepQueueAll.length})`} />
+          {prepQueueVisible.map(d => {
             const m = d.meta || {};
             const missing = prepMissing(d);
             const src = m.source || (d.id.startsWith('flip-') ? 'manual' : 'unknown');
@@ -8341,6 +8370,24 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
               </div>
             );
           })}
+          {/* Show more / show less toggle. Only renders when there are
+              more leads in the queue than the collapsed-view limit. */}
+          {prepQueueAll.length > PREP_QUEUE_COLLAPSED_LIMIT && (
+            <button
+              onClick={() => setPrepQueueExpanded(prev => !prev)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'center',
+                background: 'transparent', border: '1px dashed #44403c',
+                color: '#a8a29e', borderRadius: 6,
+                padding: '8px 12px', fontSize: 11, fontWeight: 700,
+                letterSpacing: '0.04em', cursor: 'pointer',
+                fontFamily: 'inherit', marginTop: 2,
+              }}>
+              {prepQueueExpanded
+                ? `▲ Show less (collapse to top ${PREP_QUEUE_COLLAPSED_LIMIT})`
+                : `▼ Show all ${prepQueueAll.length} (currently showing ${PREP_QUEUE_COLLAPSED_LIMIT})`}
+            </button>
+          )}
         </div>
       )}
 
