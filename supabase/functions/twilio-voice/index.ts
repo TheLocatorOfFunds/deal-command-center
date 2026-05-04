@@ -16,10 +16,11 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const RING_SECONDS = 30;
 
-// All DCC browser client identities — one per team member.
-// Must match the identity returned by twilio-token for each user.
-// Twilio delivers the inbound call to ALL of these simultaneously.
-const DCC_CLIENT_IDENTITIES = ['dcc-justin', 'dcc-nathan'];
+// Single shared identity for all DCC browsers.
+// Twilio rings EVERY registered Twilio.Device with this identity simultaneously,
+// so all team member browsers ring without any per-user configuration.
+// This matches the identity issued by twilio-token.
+const DCC_CLIENT_IDENTITIES = ['dcc-fundlocators'];
 
 const normalizePhone = (p: string): string => {
   const digits = (p || '').replace(/\D/g, '');

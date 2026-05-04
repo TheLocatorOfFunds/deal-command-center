@@ -3,10 +3,12 @@
 // The DCC browser calls this to get a short-lived JWT, then hands it to
 // Twilio.Device so the browser can make and receive calls directly.
 //
-// Each user gets a UNIQUE Twilio client identity derived from their email
-// prefix (e.g. justin@fundlocators.com → "dcc-justin"). This ensures every
-// team member's browser registers under its own identity, so the TwiML can
-// dial all identities simultaneously and every browser rings on inbound calls.
+// ALL DCC browsers register under the SAME identity ('dcc-fundlocators').
+// Twilio delivers inbound calls to every registered Device with that identity
+// simultaneously — so Justin, Nathan, and any future team member all ring
+// without any per-user wiring. This is documented Twilio behavior:
+//   "If multiple Twilio.Device instances register under the same identity,
+//    Twilio sends the incoming call to all registered devices simultaneously."
 //
 // Required env vars (set in Supabase project secrets):
 //   TWILIO_ACCOUNT_SID   — AC...
@@ -20,6 +22,10 @@ const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+// Single shared identity for all DCC browsers.
+// Twilio rings ALL registered devices with this identity on inbound calls.
+const DCC_IDENTITY = 'dcc-fundlocators';
 
 Deno.serve(async (req: Request) => {
   if (req.method === 'OPTIONS') {
@@ -38,36 +44,7 @@ Deno.serve(async (req: Request) => {
     );
   }
 
-  // Derive a per-user Twilio client identity from the logged-in user's email.
-  // e.g. justin@fundlocators.com → "dcc-justin"
-  // This must match the identities listed in DCC_CLIENT_IDENTITIES in twilio-voice.
-  //
-  // We decode the email directly from the Supabase JWT payload (base64url JSON).
-  // Supabase's gateway already verified the JWT signature before invoking this
-  // function (verify_jwt=true), so we can trust the payload without re-verifying.
-  // This avoids an extra auth.getUser() round-trip and any SUPABASE_ANON_KEY
-  // dependency that could silently fail and fall back to 'dcc-browser'.
-  let identity = 'dcc-browser'; // fallback
-  try {
-    const authHeader = req.headers.get('Authorization') || '';
-    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (token) {
-      const parts = token.split('.');
-      if (parts.length === 3) {
-        // base64url → base64: swap chars, then re-add stripped '=' padding
-        const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-        const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-        const payload = JSON.parse(atob(padded));
-        const email: string | undefined = payload.email ?? payload.user_metadata?.email;
-        if (email) {
-          const prefix = email.split('@')[0].toLowerCase().replace(/[^a-z0-9-]/g, '-');
-          identity = `dcc-${prefix}`;
-        }
-      }
-    }
-  } catch (_) { /* fall back to dcc-browser */ }
-
-  console.log('[twilio-token] issuing identity:', identity);
+  console.log('[twilio-token] issuing identity:', DCC_IDENTITY);
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -79,7 +56,7 @@ Deno.serve(async (req: Request) => {
     nbf:    now,
     exp:    now + 3600, // 1-hour token
     grants: {
-      identity,
+      identity: DCC_IDENTITY,
       voice: {
         incoming: { allow: true },
         outgoing: { application_sid: TWIML_APP_SID },
@@ -112,7 +89,7 @@ Deno.serve(async (req: Request) => {
   const token = `${signingInput}.${sig}`;
 
   return new Response(
-    JSON.stringify({ token, identity }),
+    JSON.stringify({ token, identity: DCC_IDENTITY }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
   );
 });
