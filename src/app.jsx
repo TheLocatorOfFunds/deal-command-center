@@ -4027,6 +4027,7 @@ const ADVANCED_FILTERS_DEFAULT = {
   status: [],
   type: [],
   source: [],
+  tags: [],  // free-form labels, populated dynamically from existing deals
   // Text contains (case-insensitive)
   county: '',
   case_number: '',
@@ -4056,6 +4057,7 @@ function countActiveAdvancedFilters(f) {
   if (f.status?.length) n++;
   if (f.type?.length) n++;
   if (f.source?.length) n++;
+  if (f.tags?.length) n++;
   if ((f.county || '').trim()) n++;
   if ((f.case_number || '').trim()) n++;
   if ((f.address || '').trim()) n++;
@@ -4084,6 +4086,10 @@ function applyAdvancedFilters(d, f) {
   if (f.status?.length && !f.status.includes(d.status)) return false;
   if (f.type?.length && !f.type.includes(d.type)) return false;
   if (f.source?.length && !f.source.includes(m.source || '')) return false;
+  if (f.tags?.length) {
+    const dealTags = d.tags || [];
+    if (!f.tags.some(t => dealTags.includes(t))) return false; // ANY-of semantics
+  }
 
   // Text contains
   const matchText = (val, q) => !q || (val == null ? '' : String(val)).toLowerCase().includes(String(q).toLowerCase());
@@ -4213,6 +4219,23 @@ function AdvancedFiltersModal({ value, onApply, onClose }) {
   const ALL_STATUSES = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
   const SOURCES = ['ghl-import', 'castle', 'dcc-manual', 'lead-intake', 'manual'];
 
+  // Tags are free-form — load every distinct tag in use across deals so
+  // the user can multi-select without typing. Refreshes when the modal
+  // opens. Sorted by frequency (most-used first), then alphabetical.
+  const [tagOptions, setTagOptions] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('deals').select('tags');
+      if (cancelled) return;
+      const counts = {};
+      (data || []).forEach(d => (d.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
+      const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t]) => t);
+      setTagOptions(sorted);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const activeCount = countActiveAdvancedFilters(draft);
 
   return (
@@ -4222,6 +4245,12 @@ function AdvancedFiltersModal({ value, onApply, onClose }) {
         <Field label="Deal type (any of)"><MultiSelect k="type" options={['flip','surplus','wholesale','rental','other']} /></Field>
         <Field label="Source (any of)"><MultiSelect k="source" options={SOURCES} /></Field>
         <Field label="30 days to sale"><TriBool k="is_30dts" /></Field>
+        {tagOptions.length > 0 && (
+          <div style={{ gridColumn: 'span 2' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>Tags (any of)</div>
+            <MultiSelect k="tags" options={tagOptions} />
+          </div>
+        )}
       </Section>
       <Section label="Identity">
         <Field label="Homeowner name (contains)"><TextInput k="homeowner_name" placeholder="e.g. Phillips" /></Field>
@@ -8795,6 +8824,121 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
 }
 
 // ─── Deal Detail ─────────────────────────────────────────────────────
+// ─── Deal Tags Bar ─────────────────────────────────────────────────
+// Per Eric (relayed via Nathan, 2026-05-04): tag deals with free-form
+// labels for filtering + flagging unusual cases. Removable like GHL's.
+//
+// Renders as a row of gold chips above the deal-detail tabs. Each chip
+// has × to remove. "+ Add tag" opens an inline input — type then Enter
+// (comma-separates for multi-add). When adding, we surface the top-12
+// most-used tags as quick-add buttons so VAs converge on a vocabulary
+// instead of every deal getting a unique misspelling.
+function DealTagsBar({ deal, canEdit, onSave }) {
+  const [adding, setAdding] = useState(false);
+  const [input, setInput] = useState('');
+  const [popularTags, setPopularTags] = useState([]);
+  const tags = deal.tags || [];
+
+  const loadPopular = async () => {
+    const { data } = await sb.from('deals').select('tags');
+    const counts = {};
+    (data || []).forEach(d => (d.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([t]) => t);
+    setPopularTags(sorted);
+  };
+  useEffect(() => { if (adding) loadPopular(); }, [adding]);
+
+  const normalize = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '-');
+
+  const addTag = (raw) => {
+    const t = normalize(raw);
+    if (!t) return;
+    if (tags.includes(t)) return;
+    onSave({ tags: [...tags, t] });
+  };
+  const removeTag = (t) => onSave({ tags: tags.filter(x => x !== t) });
+
+  const commitInput = () => {
+    const parts = (input || '').split(',').map(p => p.trim()).filter(Boolean);
+    let next = [...tags];
+    parts.forEach(p => {
+      const norm = normalize(p);
+      if (norm && !next.includes(norm)) next.push(norm);
+    });
+    if (next.length !== tags.length) onSave({ tags: next });
+    setInput('');
+    setAdding(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitInput(); }
+    else if (e.key === 'Escape') { setAdding(false); setInput(''); }
+  };
+
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+      marginBottom: 14, padding: '8px 12px',
+      background: '#1c1917', border: '1px solid #292524', borderRadius: 8,
+    }}>
+      <span style={{ fontSize: 9, fontWeight: 800, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginRight: 4 }}>🏷 Tags</span>
+      {tags.map(t => (
+        <span key={t} style={{
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+          background: '#78350f', color: '#fbbf24',
+          padding: '3px 8px', borderRadius: 4,
+          fontSize: 11, fontWeight: 700,
+        }}>
+          {t}
+          {canEdit && (
+            <button onClick={() => removeTag(t)} title="Remove tag"
+              style={{ background: 'transparent', border: 'none', color: '#fbbf24', cursor: 'pointer', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1, opacity: 0.7 }}
+              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+              onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
+            >×</button>
+          )}
+        </span>
+      ))}
+      {tags.length === 0 && !adding && (
+        <span style={{ fontSize: 11, color: '#57534e', fontStyle: 'italic' }}>
+          none — add a tag to flag this deal
+        </span>
+      )}
+      {canEdit && !adding && (
+        <button onClick={() => setAdding(true)}
+          style={{ background: 'transparent', border: '1px dashed #44403c', color: '#a8a29e', padding: '3px 9px', borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+          + Add tag
+        </button>
+      )}
+      {adding && (
+        <>
+          <input
+            autoFocus
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="type tag, Enter to add (comma-separate for multiple)"
+            style={{ ...inputStyle, fontSize: 11, padding: '3px 8px', minWidth: 220, flex: 1 }}
+          />
+          <button onClick={commitInput} style={{ ...btnPrimary, fontSize: 10, padding: '3px 10px' }}>Add</button>
+          <button onClick={() => { setAdding(false); setInput(''); }} style={{ ...btnGhost, fontSize: 10, padding: '3px 8px' }}>Cancel</button>
+          {popularTags.length > 0 && (
+            <div style={{ width: '100%', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+              <span style={{ fontSize: 9, color: '#57534e', marginRight: 4 }}>quick add:</span>
+              {popularTags.filter(t => !tags.includes(t)).map(t => (
+                <button key={t} onClick={() => addTag(t)}
+                  style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', padding: '2px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  + {t}
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav }) {
   const [tab, setTab] = useState(initialTab || "overview");
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
@@ -9103,6 +9247,12 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.filed_at || deal.filed_at ? `Filed ${daysSince(m.filed_at || deal.filed_at)}d ago` : "Not yet filed"} color="#f59e0b" />
         </div>
       )}
+
+      <DealTagsBar
+        deal={deal}
+        canEdit={true}
+        onSave={(patch) => onUpdateDeal(patch)}
+      />
 
       <div className="detail-tabs" style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
         {tabs.map(id => (
