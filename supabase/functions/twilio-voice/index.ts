@@ -71,6 +71,15 @@ Deno.serve(async (req: Request) => {
     } catch (_) {}
   }
 
+  // Resolve deal name for the browser overlay
+  let dealName: string | null = null;
+  if (dealId) {
+    try {
+      const { data: dealRow } = await db.from('deals').select('name').eq('id', dealId).single();
+      dealName = dealRow?.name || null;
+    } catch (_) {}
+  }
+
   // Log the call in 'ringing' state. The status callback will finalize it.
   const { data: callRow } = await db.from('call_logs').insert({
     deal_id: dealId,
@@ -88,10 +97,8 @@ Deno.serve(async (req: Request) => {
   const projectRef = supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] || '';
   const statusUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-status`;
 
-  // TwiML: ring the DCC browser client first (simultaneous with iPhone).
-  // The browser answers via Twilio.Device; if neither answers in RING_SECONDS
-  // Twilio hangs up and the status callback marks it missed + fires auto-SMS.
-  const callerName = encodeURIComponent(from);
+  // TwiML: ring the DCC browser client + Nathan's iPhone simultaneously.
+  // callerName is the raw E.164 number (no encoding — phone numbers are XML-safe).
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
@@ -106,8 +113,9 @@ Deno.serve(async (req: Request) => {
     <Client>
       <Identity>dcc-browser</Identity>
       <Parameter name="from" value="${from}"/>
-      <Parameter name="callerName" value="${callerName}"/>
+      <Parameter name="callerName" value="${from}"/>
       <Parameter name="dealId" value="${dealId || ''}"/>
+      <Parameter name="dealName" value="${(dealName || '').replace(/"/g, '&quot;')}"/>
       <Parameter name="contactId" value="${contactId || ''}"/>
     </Client>
     <Number>${NATHAN_IPHONE}</Number>

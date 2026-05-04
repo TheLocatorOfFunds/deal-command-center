@@ -88,10 +88,22 @@ Deno.serve(async (req: Request) => {
         ended_at:         new Date().toISOString(),
       })
       .eq('twilio_call_sid', callSid)
-      .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent')
+      .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent, direction')
       .single();
 
     await maybeSendMissedCallSms(db, row, isMissed);
+
+    // Missed inbound call → play voicemail greeting so caller can leave a message.
+    if (isMissed && row?.direction === 'inbound') {
+      return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="Polly.Joanna">You've reached FundLocators. Please leave a message after the beep and we'll call you right back.</Say>
+  <Record maxLength="120" playBeep="true"
+    recordingStatusCallback="${supabaseUrl}/functions/v1/twilio-voice-status"
+    recordingStatusCallbackMethod="POST"/>
+</Response>`, { status: 200, headers: { 'Content-Type': 'text/xml' } });
+    }
+
     return TWIML_OK;
   }
 

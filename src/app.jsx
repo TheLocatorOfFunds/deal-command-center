@@ -16407,6 +16407,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const callTimerRef    = React.useRef(null);
   const ringAudioRef    = React.useRef(null);  // Web Audio context for ringtone
   const ringTitleRef    = React.useRef(null);  // { interval, origTitle } for tab title flash
+  const sharedAudioCtx  = React.useRef(null);  // Pre-warmed AudioContext (unlocked by first click)
   const threadRef = useRef(null);
 
   const startEditNote = (note) => {
@@ -16676,13 +16677,28 @@ function OutboundMessages({ dealId, vendors, deal }) {
         allowIncomingWhileBusy: false,
       });
       device.on('incoming', (call) => {
-        const params = call.customParameters;
+        // customParameters is a Map<string,string> in SDK v2. Use a safe
+        // accessor that also handles plain-object fallback and URL-decodes values.
+        const getP = (key) => {
+          try {
+            const p = call.customParameters;
+            if (!p) return null;
+            const raw = typeof p.get === 'function' ? p.get(key) : p[key];
+            if (raw == null) return null;
+            const s = String(raw);
+            try { return decodeURIComponent(s); } catch { return s; }
+          } catch { return null; }
+        };
+        const from = call.parameters?.From || getP('from') || 'Unknown';
         setIncomingCall({
           call,
-          from:       call.parameters.From || params?.get('from') || 'Unknown',
-          callerName: params?.get('callerName') || null,
-          dealId:     params?.get('dealId')     || null,
+          from,
+          callerName: getP('callerName') || null,
+          dealId:     getP('dealId')     || null,
+          dealName:   getP('dealName')   || null,
         });
+        // Auto-dismiss if caller hangs up or call is answered on another device
+        call.on('cancel', () => { stopRingtone(); setIncomingCall(null); });
         startRingtone();
       });
       device.on('error', (err) => {
@@ -16723,24 +16739,27 @@ function OutboundMessages({ dealId, vendors, deal }) {
       ringTitleRef.current = null;
     }
     // Web Audio: US telephone ring (440 Hz + 480 Hz, 2 s on / 4 s off)
+    // Use pre-warmed shared context so browser autoplay policy doesn't block it.
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = sharedAudioCtx.current || new (window.AudioContext || window.webkitAudioContext)();
+      if (!sharedAudioCtx.current) sharedAudioCtx.current = ctx;
       ringAudioRef.current = ctx;
-      const ring = () => {
+      const play = () => {
         if (ringAudioRef.current !== ctx) return;
+        ctx.resume().catch(() => {});
         [440, 480].forEach(freq => {
           const osc  = ctx.createOscillator();
           const gain = ctx.createGain();
           osc.connect(gain);
           gain.connect(ctx.destination);
           osc.frequency.value = freq;
-          gain.gain.setValueAtTime(0.07, ctx.currentTime);
+          gain.gain.setValueAtTime(0.12, ctx.currentTime);
           osc.start(ctx.currentTime);
           osc.stop(ctx.currentTime + 2);
         });
-        ctx._ringTimer = setTimeout(ring, 6000);
+        ctx._ringTimer = setTimeout(play, 6000);
       };
-      ring();
+      play();
     } catch (_) {}
     // Flash document title when the tab is in the background
     const origTitle = document.title;
@@ -16806,16 +16825,20 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const answerIncoming = React.useCallback(() => {
     if (!incomingCall) return;
     stopRingtone();
-    incomingCall.call.accept();
-    setCallStatus('in-progress');
-    setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
-    activeCallRef.current = incomingCall.call;
-    startCallTimer();
-    incomingCall.call.on('disconnect', () => {
-      setCallStatus('ended');
-      stopCallTimer();
-      setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
-    });
+    try {
+      incomingCall.call.accept();
+      setCallStatus('in-progress');
+      setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
+      activeCallRef.current = incomingCall.call;
+      startCallTimer();
+      incomingCall.call.on('disconnect', () => {
+        setCallStatus('ended');
+        stopCallTimer();
+        setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
+      });
+    } catch (e) {
+      console.error('Failed to accept call:', e);
+    }
     setIncomingCall(null);
   }, [incomingCall, startCallTimer, stopCallTimer, stopRingtone]);
 
@@ -16832,6 +16855,27 @@ function OutboundMessages({ dealId, vendors, deal }) {
     return () => {
       if (twilioDeviceRef.current) { twilioDeviceRef.current.destroy(); twilioDeviceRef.current = null; }
       stopCallTimer();
+    };
+  }, []);
+
+  // Pre-warm Web Audio context on first user interaction so ringtone can
+  // play without being blocked by browser autoplay policy.
+  React.useEffect(() => {
+    const unlock = () => {
+      if (!sharedAudioCtx.current) {
+        try {
+          sharedAudioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (_) {}
+      }
+      if (sharedAudioCtx.current?.state === 'suspended') {
+        sharedAudioCtx.current.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('click',      unlock, { once: true });
+    document.addEventListener('touchstart', unlock, { once: true });
+    return () => {
+      document.removeEventListener('click',      unlock);
+      document.removeEventListener('touchstart', unlock);
     };
   }, []);
 
@@ -18070,23 +18114,31 @@ function OutboundMessages({ dealId, vendors, deal }) {
             animation: 'ring-pulse 1.4s ease-out infinite',
             display: 'flex', flexDirection: 'column', gap: 14,
           }}>
+            {/* X dismiss button — stops ring but does NOT reject (caller keeps hearing ringback) */}
+            <button onClick={() => { stopRingtone(); setIncomingCall(null); }} style={{
+              position: 'absolute', top: 10, right: 10,
+              background: 'transparent', border: 'none', color: '#57534e',
+              fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: 4,
+            }} title="Dismiss notification">✕</button>
+
             <div style={{ fontSize: 11, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>📞 Incoming call</div>
             <div style={{ fontSize: 17, fontWeight: 700, color: '#fafaf9' }}>
-              {incomingCall.callerName || incomingCall.from}
+              {incomingCall.from}
             </div>
-            {incomingCall.callerName && (
-              <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace", marginTop: -8 }}>{incomingCall.from}</div>
-            )}
             {incomingCall.dealId && (
-              <div style={{ fontSize: 12, color: '#78716c' }}>
-                Deal:{' '}
-                <a
-                  href={`#deal=${incomingCall.dealId}`}
-                  onClick={() => { stopRingtone(); setIncomingCall(null); incomingCall.call.reject(); }}
-                  style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}
-                >
-                  {incomingCall.dealId}
-                </a>
+              <div style={{ fontSize: 12, color: '#a8a29e', marginTop: -8 }}>
+                {incomingCall.dealName
+                  ? <><span style={{ color: '#78716c' }}>Deal: </span>
+                      <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
+                        {incomingCall.dealName}
+                      </a>
+                    </>
+                  : <><span style={{ color: '#78716c' }}>Deal: </span>
+                      <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
+                        {incomingCall.dealId}
+                      </a>
+                    </>
+                }
               </div>
             )}
             <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
