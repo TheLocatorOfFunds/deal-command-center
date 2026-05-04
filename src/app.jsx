@@ -16706,7 +16706,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
       const device = await initTwilioDevice();
       if (!device) throw new Error('Could not initialize calling device');
       const call = await device.connect({
-        params: { To: contact.phone, CallerId: '+15135162306' },
+        params: { To: contact.phone, CallerId: fromNumber || '+15139985440' },
       });
       activeCallRef.current = call;
       call.on('ringing',    () => setCallStatus('ringing'));
@@ -16784,10 +16784,12 @@ function OutboundMessages({ dealId, vendors, deal }) {
     loadDealContacts();
     loadContactUrls();
     load();
-    sb.from('phone_numbers').select('*').eq('active', true).eq('gateway', 'mac_bridge').order('created_at').then(({ data }) => {
+    sb.from('phone_numbers').select('*').eq('active', true).order('created_at').then(({ data }) => {
       const nums = data || [];
       setPhoneNumbers(nums);
-      if (nums.length > 0 && !fromNumber) setFromNumber(nums[0].number);
+      // Default to the Twilio number so outbound calls show the business line
+      const twilioNum = nums.find(n => n.gateway === 'twilio') || nums[0];
+      if (twilioNum && !fromNumber) setFromNumber(twilioNum.number);
     });
     const ch = sb.channel(`comms-${dealId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
