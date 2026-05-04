@@ -4161,6 +4161,91 @@ function applyAdvancedFilters(d, f) {
   return true;
 }
 
+// Helpers for AdvancedFiltersModal — defined OUTSIDE the modal function
+// so that React doesn't see a fresh component identity per parent render
+// and remount the inputs (which yanks focus on every keystroke). Per
+// Nathan 2026-05-04: typing in the County / Case Number / Attorney
+// fields kicked focus after one letter — that's this exact bug.
+//
+// Each helper takes primitive value + onChange callbacks instead of
+// reaching into a `draft` closure so the modal stays the only place
+// holding state.
+function FilterSection({ label, children }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#a5731c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #292524' }}>{label}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{children}</div>
+    </div>
+  );
+}
+function FilterField({ label, children, span2 }) {
+  return (
+    <div style={{ gridColumn: span2 ? 'span 2' : 'span 1' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+function FilterTextInput({ value, onChange, placeholder }) {
+  return <input type="text" value={value || ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '100%' }} />;
+}
+function FilterNumRange({ min, max, onMinChange, onMaxChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input type="number" placeholder="min" value={min ?? ''} onChange={e => onMinChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+      <input type="number" placeholder="max" value={max ?? ''} onChange={e => onMaxChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+    </div>
+  );
+}
+function FilterDateRange({ from, to, onFromChange, onToChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input type="date" value={from || ''} onChange={e => onFromChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+      <input type="date" value={to || ''} onChange={e => onToChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+    </div>
+  );
+}
+function FilterTriBool({ value, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {['any', 'yes', 'no'].map(opt => (
+        <button key={opt} onClick={() => onChange(opt)}
+          style={{
+            flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 4,
+            border: '1px solid ' + (value === opt ? '#d97706' : '#292524'),
+            background: value === opt ? '#78350f' : 'transparent',
+            color: value === opt ? '#fbbf24' : '#78716c',
+            cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
+          }}>{opt}</button>
+      ))}
+    </div>
+  );
+}
+function FilterMultiSelect({ values, onChange, options }) {
+  const arr = values || [];
+  const toggle = (opt) => {
+    const next = arr.includes(opt) ? arr.filter(x => x !== opt) : [...arr, opt];
+    onChange(next);
+  };
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {options.map(opt => {
+        const on = arr.includes(opt);
+        return (
+          <button key={opt} onClick={() => toggle(opt)}
+            style={{
+              fontSize: 10, padding: '4px 9px', borderRadius: 4,
+              border: '1px solid ' + (on ? '#d97706' : '#292524'),
+              background: on ? '#78350f' : 'transparent',
+              color: on ? '#fbbf24' : '#78716c',
+              cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
+            }}>{opt}</button>
+        );
+      })}
+    </div>
+  );
+}
+
 function AdvancedFiltersModal({ value, onApply, onClose }) {
   // Local draft so user can build up the filter set then commit on Apply.
   const [draft, setDraft] = useState(value || ADVANCED_FILTERS_DEFAULT);
@@ -4168,74 +4253,6 @@ function AdvancedFiltersModal({ value, onApply, onClose }) {
   const set = (patch) => setDraft(d => ({ ...d, ...patch }));
   const setRange = (key, sub, val) => setDraft(d => ({ ...d, [key]: { ...d[key], [sub]: val } }));
   const reset = () => setDraft(ADVANCED_FILTERS_DEFAULT);
-
-  const Section = ({ label, children }) => (
-    <div style={{ marginBottom: 18 }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: '#a5731c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #292524' }}>{label}</div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{children}</div>
-    </div>
-  );
-
-  const Field = ({ label, children, span1 }) => (
-    <div style={{ gridColumn: span1 ? 'span 1' : 'span 1' }}>
-      <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
-      {children}
-    </div>
-  );
-
-  const NumRange = ({ k }) => (
-    <div style={{ display: 'flex', gap: 6 }}>
-      <input type="number" placeholder="min" value={draft[k]?.min ?? ''} onChange={e => setRange(k, 'min', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
-      <input type="number" placeholder="max" value={draft[k]?.max ?? ''} onChange={e => setRange(k, 'max', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
-    </div>
-  );
-  const DateRange = ({ k }) => (
-    <div style={{ display: 'flex', gap: 6 }}>
-      <input type="date" value={draft[k]?.from || ''} onChange={e => setRange(k, 'from', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
-      <input type="date" value={draft[k]?.to || ''} onChange={e => setRange(k, 'to', e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
-    </div>
-  );
-  const TextInput = ({ k, placeholder }) => (
-    <input type="text" value={draft[k] || ''} onChange={e => set({ [k]: e.target.value })} placeholder={placeholder} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '100%' }} />
-  );
-  const TriBool = ({ k }) => (
-    <div style={{ display: 'flex', gap: 4 }}>
-      {['any', 'yes', 'no'].map(opt => (
-        <button key={opt} onClick={() => set({ [k]: opt })}
-          style={{
-            flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 4,
-            border: '1px solid ' + (draft[k] === opt ? '#d97706' : '#292524'),
-            background: draft[k] === opt ? '#78350f' : 'transparent',
-            color: draft[k] === opt ? '#fbbf24' : '#78716c',
-            cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
-          }}>{opt}</button>
-      ))}
-    </div>
-  );
-  const MultiSelect = ({ k, options }) => {
-    const arr = draft[k] || [];
-    const toggle = (opt) => {
-      const next = arr.includes(opt) ? arr.filter(x => x !== opt) : [...arr, opt];
-      set({ [k]: next });
-    };
-    return (
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-        {options.map(opt => {
-          const on = arr.includes(opt);
-          return (
-            <button key={opt} onClick={() => toggle(opt)}
-              style={{
-                fontSize: 10, padding: '4px 9px', borderRadius: 4,
-                border: '1px solid ' + (on ? '#d97706' : '#292524'),
-                background: on ? '#78350f' : 'transparent',
-                color: on ? '#fbbf24' : '#78716c',
-                cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
-              }}>{opt}</button>
-          );
-        })}
-      </div>
-    );
-  };
 
   const ALL_STATUSES = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
   const SOURCES = ['ghl-import', 'castle', 'dcc-manual', 'lead-intake', 'manual'];
@@ -4261,42 +4278,41 @@ function AdvancedFiltersModal({ value, onApply, onClose }) {
 
   return (
     <Modal onClose={onClose} title="🎚 Advanced filters" wide>
-      <Section label="Classification">
-        <Field label="Status (any of)"><MultiSelect k="status" options={ALL_STATUSES} /></Field>
-        <Field label="Deal type (any of)"><MultiSelect k="type" options={['flip','surplus','wholesale','rental','other']} /></Field>
-        <Field label="Source (any of)"><MultiSelect k="source" options={SOURCES} /></Field>
-        <Field label="30 days to sale"><TriBool k="is_30dts" /></Field>
+      <FilterSection label="Classification">
+        <FilterField label="Status (any of)"><FilterMultiSelect values={draft.status} onChange={v => set({ status: v })} options={ALL_STATUSES} /></FilterField>
+        <FilterField label="Deal type (any of)"><FilterMultiSelect values={draft.type} onChange={v => set({ type: v })} options={['flip','surplus','wholesale','rental','other']} /></FilterField>
+        <FilterField label="Source (any of)"><FilterMultiSelect values={draft.source} onChange={v => set({ source: v })} options={SOURCES} /></FilterField>
+        <FilterField label="30 days to sale"><FilterTriBool value={draft.is_30dts} onChange={v => set({ is_30dts: v })} /></FilterField>
         {tagOptions.length > 0 && (
-          <div style={{ gridColumn: 'span 2' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>Tags (any of)</div>
-            <MultiSelect k="tags" options={tagOptions} />
-          </div>
+          <FilterField label="Tags (any of)" span2>
+            <FilterMultiSelect values={draft.tags} onChange={v => set({ tags: v })} options={tagOptions} />
+          </FilterField>
         )}
-      </Section>
-      <Section label="Identity">
-        <Field label="Homeowner name (contains)"><TextInput k="homeowner_name" placeholder="e.g. Phillips" /></Field>
-        <Field label="Property address (contains)"><TextInput k="address" placeholder="e.g. Main St" /></Field>
-        <Field label="County (contains)"><TextInput k="county" placeholder="e.g. Hamilton" /></Field>
-        <Field label="Case number (contains)"><TextInput k="case_number" placeholder="e.g. A2304" /></Field>
-        <Field label="Attorney (contains)"><TextInput k="attorney" placeholder="e.g. Kainiz" /></Field>
-        <Field label="Has assigned attorney"><TriBool k="has_attorney" /></Field>
-      </Section>
-      <Section label="Money (range)">
-        <Field label="Estimated surplus $"><NumRange k="surplus_estimate" /></Field>
-        <Field label="Sale price $"><NumRange k="sale_price" /></Field>
-        <Field label="Judgment amount $"><NumRange k="judgment_amount" /></Field>
-        <Field label="Total debt $"><NumRange k="total_debt" /></Field>
-      </Section>
-      <Section label="Dates (range)">
-        <Field label="Sale date"><DateRange k="sale_date" /></Field>
-        <Field label="Confirmation of sale"><DateRange k="confirmation_of_sale_date" /></Field>
-        <Field label="Redemption deadline"><DateRange k="redemption_deadline" /></Field>
-      </Section>
-      <Section label="Outreach readiness">
-        <Field label="Has phone"><TriBool k="has_phone" /></Field>
-        <Field label="Has personalized URL"><TriBool k="has_url" /></Field>
-        <Field label="Homeowner deceased"><TriBool k="deceased" /></Field>
-      </Section>
+      </FilterSection>
+      <FilterSection label="Identity">
+        <FilterField label="Homeowner name (contains)"><FilterTextInput value={draft.homeowner_name} onChange={v => set({ homeowner_name: v })} placeholder="e.g. Phillips" /></FilterField>
+        <FilterField label="Property address (contains)"><FilterTextInput value={draft.address} onChange={v => set({ address: v })} placeholder="e.g. Main St" /></FilterField>
+        <FilterField label="County (contains)"><FilterTextInput value={draft.county} onChange={v => set({ county: v })} placeholder="e.g. Hamilton" /></FilterField>
+        <FilterField label="Case number (contains)"><FilterTextInput value={draft.case_number} onChange={v => set({ case_number: v })} placeholder="e.g. A2304" /></FilterField>
+        <FilterField label="Attorney (contains)"><FilterTextInput value={draft.attorney} onChange={v => set({ attorney: v })} placeholder="e.g. Kainiz" /></FilterField>
+        <FilterField label="Has assigned attorney"><FilterTriBool value={draft.has_attorney} onChange={v => set({ has_attorney: v })} /></FilterField>
+      </FilterSection>
+      <FilterSection label="Money (range)">
+        <FilterField label="Estimated surplus $"><FilterNumRange min={draft.surplus_estimate?.min} max={draft.surplus_estimate?.max} onMinChange={v => setRange('surplus_estimate', 'min', v)} onMaxChange={v => setRange('surplus_estimate', 'max', v)} /></FilterField>
+        <FilterField label="Sale price $"><FilterNumRange min={draft.sale_price?.min} max={draft.sale_price?.max} onMinChange={v => setRange('sale_price', 'min', v)} onMaxChange={v => setRange('sale_price', 'max', v)} /></FilterField>
+        <FilterField label="Judgment amount $"><FilterNumRange min={draft.judgment_amount?.min} max={draft.judgment_amount?.max} onMinChange={v => setRange('judgment_amount', 'min', v)} onMaxChange={v => setRange('judgment_amount', 'max', v)} /></FilterField>
+        <FilterField label="Total debt $"><FilterNumRange min={draft.total_debt?.min} max={draft.total_debt?.max} onMinChange={v => setRange('total_debt', 'min', v)} onMaxChange={v => setRange('total_debt', 'max', v)} /></FilterField>
+      </FilterSection>
+      <FilterSection label="Dates (range)">
+        <FilterField label="Sale date"><FilterDateRange from={draft.sale_date?.from} to={draft.sale_date?.to} onFromChange={v => setRange('sale_date', 'from', v)} onToChange={v => setRange('sale_date', 'to', v)} /></FilterField>
+        <FilterField label="Confirmation of sale"><FilterDateRange from={draft.confirmation_of_sale_date?.from} to={draft.confirmation_of_sale_date?.to} onFromChange={v => setRange('confirmation_of_sale_date', 'from', v)} onToChange={v => setRange('confirmation_of_sale_date', 'to', v)} /></FilterField>
+        <FilterField label="Redemption deadline"><FilterDateRange from={draft.redemption_deadline?.from} to={draft.redemption_deadline?.to} onFromChange={v => setRange('redemption_deadline', 'from', v)} onToChange={v => setRange('redemption_deadline', 'to', v)} /></FilterField>
+      </FilterSection>
+      <FilterSection label="Outreach readiness">
+        <FilterField label="Has phone"><FilterTriBool value={draft.has_phone} onChange={v => set({ has_phone: v })} /></FilterField>
+        <FilterField label="Has personalized URL"><FilterTriBool value={draft.has_url} onChange={v => set({ has_url: v })} /></FilterField>
+        <FilterField label="Homeowner deceased"><FilterTriBool value={draft.deceased} onChange={v => set({ deceased: v })} /></FilterField>
+      </FilterSection>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #292524', paddingTop: 14, marginTop: 4, position: 'sticky', bottom: -24, background: '#1c1917', paddingBottom: 4 }}>
         <button onClick={reset} style={{ ...btnGhost, fontSize: 11 }}>↺ Reset all</button>
