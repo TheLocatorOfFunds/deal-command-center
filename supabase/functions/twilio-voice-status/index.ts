@@ -1,13 +1,21 @@
 // Twilio Voice status + recording callback.
 //
-// Twilio POSTs here after the <Dial> completes AND when the recording is
-// processed (two separate events, same URL — differentiate by the presence
-// of RecordingUrl vs DialCallStatus). We:
-//   1. Update the call_logs row with final status + duration.
-//   2. Attach the recording URL when Twilio delivers it.
-//   3. If the call was missed (no-answer / busy), fire the auto-SMS back.
+// This function receives three distinct event types from Twilio, all POSTed
+// to the same URL. We differentiate by which params are present:
 //
-// Deploy with verify_jwt=false.
+//   1. RecordingUrl present → recording is ready; store proxy URL in call_logs.
+//
+//   2. DialCallStatus present → <Dial> action callback; fires when the dialed
+//      leg completes for non-browser calls. CallSid = parent call SID.
+//      (For browser SDK calls this often does NOT fire — see case 3.)
+//
+//   3. CallStatus + ParentCallSid present → <Number> statusCallback; fires for
+//      every status change on the child (outgoing) call leg. CallSid = child
+//      SID, ParentCallSid = parent SID (what's stored in call_logs).
+//      For browser SDK calls, this is the ONLY reliable completion signal.
+//      We update only on CallStatus=completed|busy|no-answer|failed|canceled.
+//
+// Deploy with verify_jwt=false (Twilio webhooks carry no Supabase JWT).
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -21,107 +29,139 @@ const normalizePhone = (p: string): string => {
 
 const MISSED_CALL_TEMPLATE = `Hey, it's Nathan with RefundLocators — just saw I missed your call. Reply here and I'll get right back to you, or call again anytime at (513) 516-2306.`;
 
+const TWIML_OK = new Response('<Response/>', {
+  status: 200,
+  headers: { 'Content-Type': 'text/xml' },
+});
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return new Response('POST only', { status: 405 });
 
   const form = await req.formData();
-  const callSid = form.get('CallSid')?.toString() || '';
-  const dialStatus = form.get('DialCallStatus')?.toString() || '';
-  const dialDuration = form.get('DialCallDuration')?.toString() || '';
-  const recordingUrl = form.get('RecordingUrl')?.toString() || '';
-  const recordingSid = form.get('RecordingSid')?.toString() || '';
+
+  const callSid        = form.get('CallSid')?.toString() || '';
+  const parentCallSid  = form.get('ParentCallSid')?.toString() || '';
+  const callStatus     = form.get('CallStatus')?.toString() || '';       // <Number> statusCallback
+  const callDuration   = form.get('CallDuration')?.toString() || '';     // <Number> statusCallback
+  const dialStatus     = form.get('DialCallStatus')?.toString() || '';   // <Dial> action
+  const dialDuration   = form.get('DialCallDuration')?.toString() || ''; // <Dial> action
+  const recordingUrl   = form.get('RecordingUrl')?.toString() || '';
+  const recordingSid   = form.get('RecordingSid')?.toString() || '';
   const recordingDuration = form.get('RecordingDuration')?.toString() || '';
 
-  if (!callSid) return new Response('<Response/>', { status: 200, headers: { 'Content-Type': 'text/xml' } });
+  if (!callSid) return TWIML_OK;
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const db = createClient(supabaseUrl, serviceKey);
 
-  // Recording callback — Twilio delivers these separately, sometimes later.
+  // ── Case 1: Recording ready ──────────────────────────────────────────────
   if (recordingUrl) {
-    // Store a proxy URL instead of the raw Twilio URL (which requires Basic Auth
-    // and causes the browser to show a login dialog when <audio> tries to load it).
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const proxyUrl = `${supabaseUrl}/functions/v1/twilio-recording?sid=${recordingSid}`;
     await db.from('call_logs')
       .update({
-        recording_url: proxyUrl,
-        recording_sid: recordingSid,
+        recording_url:      proxyUrl,
+        recording_sid:      recordingSid,
         recording_duration: Number(recordingDuration) || null,
       })
       .eq('twilio_call_sid', callSid);
-    return new Response('<Response/>', { status: 200, headers: { 'Content-Type': 'text/xml' } });
+    return TWIML_OK;
   }
 
-  // Status callback — final state of the call
-  const statusMap: Record<string, string> = {
-    'answered':   'completed',
-    'completed':  'completed',
-    'no-answer':  'no-answer',
-    'busy':       'busy',
-    'failed':     'failed',
-    'canceled':   'canceled',
-  };
-  const finalStatus = statusMap[dialStatus] || 'completed';
-  const isMissed = ['no-answer', 'busy', 'canceled'].includes(finalStatus);
+  // ── Case 2: <Dial> action callback (browser SDK calls may skip this) ─────
+  if (dialStatus) {
+    const statusMap: Record<string, string> = {
+      answered:  'completed',
+      completed: 'completed',
+      'no-answer': 'no-answer',
+      busy:      'busy',
+      failed:    'failed',
+      canceled:  'canceled',
+    };
+    const finalStatus = statusMap[dialStatus] || 'completed';
+    const isMissed = ['no-answer', 'busy', 'canceled'].includes(finalStatus);
 
-  const { data: row } = await db.from('call_logs')
-    .update({
-      status: isMissed ? 'missed' : finalStatus,
-      duration_seconds: Number(dialDuration) || 0,
-      ended_at: new Date().toISOString(),
-    })
-    .eq('twilio_call_sid', callSid)
-    .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent')
-    .single();
+    const { data: row } = await db.from('call_logs')
+      .update({
+        status:           isMissed ? 'missed' : finalStatus,
+        duration_seconds: Number(dialDuration) || 0,
+        ended_at:         new Date().toISOString(),
+      })
+      .eq('twilio_call_sid', callSid)
+      .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent')
+      .single();
 
-  // Missed-call auto-SMS back to the caller. Only send once per call.
-  if (row && isMissed && !row.auto_sms_sent) {
-    const twilioSid = Deno.env.get('TWILIO_ACCOUNT_SID');
-    const twilioToken = Deno.env.get('TWILIO_AUTH_TOKEN');
-    if (twilioSid && twilioToken) {
-      try {
-        const resp = await fetch(
-          `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
-          {
-            method: 'POST',
-            headers: {
-              'Authorization': 'Basic ' + btoa(`${twilioSid}:${twilioToken}`),
-              'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: new URLSearchParams({
-              To: row.from_number,
-              From: row.to_number,
-              Body: MISSED_CALL_TEMPLATE,
-            }).toString(),
-          }
-        );
-        if (resp.ok) {
-          const body = await resp.json();
-          await db.from('call_logs').update({ auto_sms_sent: true }).eq('id', row.id);
-          // Also log the auto-SMS as a normal messages_outbound row so it
-          // shows up in the Comms thread alongside the missed-call bubble.
-          await db.from('messages_outbound').insert({
-            deal_id: row.deal_id,
-            contact_id: row.contact_id,
-            thread_key: row.contact_id
-              ? `${row.deal_id}:contact:${row.contact_id}`
-              : `${row.deal_id}:phone:${normalizePhone(row.from_number)}`,
-            direction: 'outbound',
-            channel: 'sms',
-            from_number: row.to_number,
-            to_number: row.from_number,
-            body: MISSED_CALL_TEMPLATE,
-            status: 'sent',
-            twilio_sid: body.sid,
-          });
-        }
-      } catch (_) {
-        // Non-fatal — we still logged the missed call itself
-      }
-    }
+    await maybeSendMissedCallSms(db, row, isMissed);
+    return TWIML_OK;
   }
 
-  return new Response('<Response/>', { status: 200, headers: { 'Content-Type': 'text/xml' } });
+  // ── Case 3: <Number> statusCallback (child call leg) ────────────────────
+  // Fires for every status transition on the outgoing (child) call.
+  // CallSid = child SID; ParentCallSid = parent SID stored in call_logs.
+  // We only act on terminal statuses to avoid premature updates.
+  const terminalStatuses = new Set(['completed', 'busy', 'no-answer', 'failed', 'canceled']);
+  if (callStatus && parentCallSid && terminalStatuses.has(callStatus)) {
+    const isMissed = ['busy', 'no-answer', 'failed', 'canceled'].includes(callStatus);
+    const finalStatus = isMissed ? 'missed' : 'completed';
+
+    const { data: row } = await db.from('call_logs')
+      .update({
+        status:           finalStatus,
+        duration_seconds: Number(callDuration) || 0,
+        ended_at:         new Date().toISOString(),
+      })
+      .eq('twilio_call_sid', parentCallSid)
+      .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent')
+      .single();
+
+    await maybeSendMissedCallSms(db, row, isMissed);
+  }
+
+  return TWIML_OK;
 });
+
+async function maybeSendMissedCallSms(db: ReturnType<typeof createClient>, row: any, isMissed: boolean) {
+  if (!row || !isMissed || row.auto_sms_sent) return;
+
+  const twilioSid   = Deno.env.get('TWILIO_ACCOUNT_SID');
+  const twilioToken = Deno.env.get('TWILIO_AUTH_TOKEN');
+  if (!twilioSid || !twilioToken) return;
+
+  try {
+    const resp = await fetch(
+      `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Basic ' + btoa(`${twilioSid}:${twilioToken}`),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          To:   row.from_number,
+          From: row.to_number,
+          Body: MISSED_CALL_TEMPLATE,
+        }).toString(),
+      }
+    );
+    if (!resp.ok) return;
+
+    const body = await resp.json();
+    await db.from('call_logs').update({ auto_sms_sent: true }).eq('id', row.id);
+    await db.from('messages_outbound').insert({
+      deal_id:    row.deal_id,
+      contact_id: row.contact_id,
+      thread_key: row.contact_id
+        ? `${row.deal_id}:contact:${row.contact_id}`
+        : `${row.deal_id}:phone:${normalizePhone(row.from_number)}`,
+      direction:   'outbound',
+      channel:     'sms',
+      from_number: row.to_number,
+      to_number:   row.from_number,
+      body:        MISSED_CALL_TEMPLATE,
+      status:      'sent',
+      twilio_sid:  body.sid,
+    });
+  } catch (_) {
+    // Non-fatal
+  }
+}
