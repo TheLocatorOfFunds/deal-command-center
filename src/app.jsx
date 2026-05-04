@@ -1331,21 +1331,20 @@ function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMar
       const lastReadByThread = {};
       (reads || []).forEach(r => { lastReadByThread[r.thread_id] = r.last_read_at; });
 
-      // 3. Pull recent messages across my threads. Use the earliest
-      //    last-read as a hard cutoff so we don't fetch ancient history.
-      //    Fallback to last 30d if no reads yet.
-      const readsTs = Object.values(lastReadByThread).filter(Boolean).map(d => new Date(d).getTime());
-      const cutoffMs = readsTs.length ? Math.min(...readsTs) : (Date.now() - 30 * 86400 * 1000);
-      const cutoffISO = new Date(cutoffMs).toISOString();
-
-      // Don't filter sender_id at the query level — supabase-js .neq()
-      // excludes NULL rows, but Lauren messages have sender_id = NULL
-      // (their sender_kind = 'lauren'). Match the team_unread_per_thread
-      // RPC's "is distinct from" semantics by filtering client-side instead.
+      // 3. Pull most-recent messages across my threads. No date cutoff —
+      //    the previous "Math.min of last_reads" cutoff failed when a
+      //    thread had NO read row yet (the user was added after the
+      //    messages were posted), because the cutoff used existing reads
+      //    as a floor and excluded older messages from no-read threads.
+      //    The (thread_id, created_at) index + .limit(80) bounds the query.
+      //
+      //    Don't filter sender_id at the query level — supabase-js .neq()
+      //    excludes NULL rows, but Lauren messages have sender_id = NULL
+      //    (their sender_kind = 'lauren'). Match the team_unread_per_thread
+      //    RPC's "is distinct from" semantics by filtering client-side.
       const { data: msgs } = await sb.from('team_messages')
         .select('id, thread_id, sender_id, sender_kind, body, created_at')
         .in('thread_id', threadIds)
-        .gt('created_at', cutoffISO)
         .is('deleted_at', null)
         .order('created_at', { ascending: false })
         .limit(80);
