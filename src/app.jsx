@@ -22008,12 +22008,33 @@ function LaurenDCC() {
     const expectLaurenReply = thread?.thread_type === 'lauren_dm'
       || /(@lauren\b|^\s*lauren[,:]|^\s*L:)/i.test(text);
     if (expectLaurenReply) setBusy(true);
-    const { error: insErr } = await sb.from('team_messages').insert({
-      thread_id: threadId,
+
+    // Try insert. Per Nathan 2026-05-04 — sometimes the panel's
+    // threadId points at a thread that no longer exists in
+    // team_threads (state corruption, manually-deleted thread, etc.).
+    // The PG error code for FK violations is 23503. On that specific
+    // error, recover by re-resolving the user's solo lauren_dm via
+    // RPC and retrying with that thread_id, so the UI doesn't get
+    // permanently stuck on a bad reference.
+    const tryInsert = async (tid) => sb.from('team_messages').insert({
+      thread_id: tid,
       sender_id: me.id,
       sender_kind: 'admin',
       body: text,
     });
+
+    let { error: insErr } = await tryInsert(threadId);
+
+    if (insErr && insErr.code === '23503') {
+      const { data: freshTid } = await sb.rpc('lauren_get_or_create_dm');
+      if (freshTid && freshTid !== threadId) {
+        setHomeThreadId(freshTid);
+        setThreadId(freshTid);
+        const retry = await tryInsert(freshTid);
+        insErr = retry.error;
+      }
+    }
+
     if (insErr) {
       setError('Send failed: ' + insErr.message);
       setBusy(false);
