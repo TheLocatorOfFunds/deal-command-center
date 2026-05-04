@@ -8976,9 +8976,230 @@ function DealTagsBar({ deal, canEdit, onSave }) {
   );
 }
 
+// ─── Notes Drawer ───────────────────────────────────────────────────
+// Per Nathan 2026-05-04 (GHL pattern): notes moved out of inline
+// rendering on the deal Overview and into a slide-out right-side
+// drawer. Only opens when the user clicks the floating 📝 Notes pill
+// on the right edge — keeps the main scroll lean.
+//
+// Shows ALL notes for the deal (no 5-cap like the old QuickNotes).
+// Add via the textarea at the top. Search filters client-side once
+// you have more than a handful. Realtime sub keeps the list in sync.
+// Outside-click closes.
+function NotesDrawer({ dealId, userId, isOpen, onClose }) {
+  const [notes, setNotes] = useState([]);
+  const [draft, setDraft] = useState('');
+  const [search, setSearch] = useState('');
+  const [adding, setAdding] = useState(false);
+  const drawerRef = useRef(null);
+
+  const load = async () => {
+    const { data } = await sb.from('deal_notes')
+      .select('id, title, body, author_id, created_at, updated_at')
+      .eq('deal_id', dealId)
+      .order('updated_at', { ascending: false });
+    setNotes(data || []);
+  };
+  useEffect(() => { if (isOpen) load(); /* eslint-disable-next-line */ }, [dealId, isOpen]);
+  useEffect(() => {
+    const ch = sb.channel('notes-drawer-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId]);
+
+  // Outside-click close (only while open). Defer attach so the click
+  // that opened the drawer doesn't immediately close it.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onMouseDown = (e) => {
+      if (drawerRef.current && !drawerRef.current.contains(e.target)) {
+        // Allow clicks on the trigger button (which has role=open-notes-drawer)
+        // to toggle without immediately re-closing.
+        if (e.target.closest && e.target.closest('[data-notes-trigger]')) return;
+        onClose();
+      }
+    };
+    const t = setTimeout(() => document.addEventListener('mousedown', onMouseDown), 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', onMouseDown); };
+  }, [isOpen, onClose]);
+
+  const add = async () => {
+    const body = draft.trim();
+    if (!body || adding) return;
+    setAdding(true);
+    const { error } = await sb.from('deal_notes').insert({ deal_id: dealId, body, author_id: userId || null });
+    setAdding(false);
+    if (error) { alert('Could not save note: ' + error.message); return; }
+    setDraft('');
+  };
+  const remove = async (id) => {
+    if (!window.confirm('Delete this note? This cannot be undone.')) return;
+    await sb.from('deal_notes').delete().eq('id', id);
+  };
+
+  const fmtWhen = (iso) => {
+    const d = new Date(iso);
+    const diffMin = Math.round((Date.now() - d.getTime()) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const hrs = Math.round(diffMin / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.round(hrs / 24);
+    return days < 7 ? `${days}d ago` : d.toLocaleDateString();
+  };
+
+  if (!isOpen) return null;
+
+  const filtered = !search.trim() ? notes : notes.filter(n => {
+    const q = search.toLowerCase();
+    return (n.body || '').toLowerCase().includes(q) || (n.title || '').toLowerCase().includes(q);
+  });
+
+  return (
+    <div ref={drawerRef} style={{
+      position: 'fixed', top: 0, right: 0, bottom: 0,
+      width: 400, maxWidth: '92vw',
+      background: '#1c1917', borderLeft: '1px solid #44403c',
+      boxShadow: '-12px 0 32px rgba(0,0,0,0.55)',
+      zIndex: 1300,
+      display: 'flex', flexDirection: 'column',
+      animation: 'notesDrawerSlide 0.22s ease-out',
+    }}>
+      {/* Header */}
+      <div style={{ padding: '13px 16px', borderBottom: '1px solid #292524', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: '#fafaf9', letterSpacing: '0.04em' }}>
+          📝 Notes <span style={{ fontWeight: 600, color: '#78716c' }}>· {notes.length}</span>
+        </span>
+        <button onClick={onClose} title="Close (Esc)"
+          style={{ ...btnGhost, fontSize: 16, padding: '4px 10px' }}>×</button>
+      </div>
+
+      {/* Add input */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid #292524', flexShrink: 0 }}>
+        <textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') add(); }}
+          placeholder="Quick note — observations, reminders…  (⌘+Enter to save)"
+          rows={2}
+          style={{ ...inputStyle, width: '100%', fontFamily: 'inherit', resize: 'vertical', fontSize: 13, lineHeight: 1.5, padding: '8px 10px' }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+          <button onClick={add} disabled={!draft.trim() || adding}
+            style={{
+              background: (draft.trim() && !adding) ? '#d97706' : '#292524',
+              color: (draft.trim() && !adding) ? '#0c0a09' : '#57534e',
+              border: 'none', borderRadius: 6, padding: '6px 14px',
+              fontSize: 11, fontWeight: 700, cursor: (draft.trim() && !adding) ? 'pointer' : 'default',
+              fontFamily: 'inherit',
+            }}>
+            {adding ? 'Saving…' : '+ Add note'}
+          </button>
+        </div>
+      </div>
+
+      {/* Search (only if there's enough to bother filtering) */}
+      {notes.length > 5 && (
+        <div style={{ padding: '8px 14px', borderBottom: '1px solid #292524', flexShrink: 0 }}>
+          <input type="text" placeholder="🔍 Search notes…" value={search} onChange={e => setSearch(e.target.value)}
+            style={{ ...inputStyle, width: '100%', fontSize: 12, padding: '6px 10px' }} />
+        </div>
+      )}
+
+      {/* List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px' }}>
+        {filtered.length === 0 && (
+          <div style={{ fontSize: 12, color: '#57534e', fontStyle: 'italic', padding: '14px 4px', textAlign: 'center' }}>
+            {search ? 'No notes match your search.' : 'No notes yet — use the input above to add the first one.'}
+          </div>
+        )}
+        {filtered.map(n => (
+          <div key={n.id} style={{ padding: '10px 0', borderBottom: '1px solid #292524' }}>
+            {n.title && <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9', marginBottom: 3 }}>{n.title}</div>}
+            <div style={{ fontSize: 12, color: '#d6d3d1', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>{n.body}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
+              <span style={{ fontSize: 9, color: '#57534e' }}>{fmtWhen(n.updated_at || n.created_at)}</span>
+              <button onClick={() => remove(n.id)} title="Delete note"
+                style={{ background: 'transparent', border: 'none', color: '#57534e', fontSize: 14, padding: '2px 4px', cursor: 'pointer', lineHeight: 1 }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#fca5a5')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#57534e')}>×</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Floating right-edge pill that opens the NotesDrawer. Only rendered
+// when a deal is open — lives at the DealDetail level. Vertical
+// orientation so it sits in the page margin without consuming
+// horizontal space.
+function NotesDrawerTrigger({ count, onClick, isOpen }) {
+  if (isOpen) return null; // hide trigger while drawer is open
+  return (
+    <button onClick={onClick}
+      data-notes-trigger
+      title={`Notes${count > 0 ? ` · ${count}` : ' · empty'}`}
+      style={{
+        position: 'fixed', top: '50%', right: 0, transform: 'translateY(-50%)',
+        background: count > 0 ? '#78350f' : '#1c1917',
+        color: count > 0 ? '#fbbf24' : '#a8a29e',
+        border: '1px solid ' + (count > 0 ? '#d97706' : '#44403c'),
+        borderRight: 'none',
+        borderRadius: '8px 0 0 8px',
+        padding: '14px 10px',
+        fontSize: 11, fontWeight: 800, letterSpacing: '0.08em',
+        cursor: 'pointer', fontFamily: 'inherit',
+        writingMode: 'vertical-rl', textOrientation: 'mixed',
+        zIndex: 1100,
+        boxShadow: '-4px 4px 14px rgba(0,0,0,0.4)',
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+      }}>
+      <span>📝 Notes</span>
+      {count > 0 && (
+        <span style={{
+          background: '#dc2626', color: '#fff', borderRadius: 8,
+          padding: '0 6px', fontSize: 9, fontWeight: 700,
+          minWidth: 14, textAlign: 'center',
+          writingMode: 'horizontal-tb',
+        }}>{count}</span>
+      )}
+    </button>
+  );
+}
+
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav }) {
   const [tab, setTab] = useState(initialTab || "overview");
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
+  const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
+  const [notesCount, setNotesCount] = useState(0);
+
+  // Light count poll for the floating Notes pill so it surfaces "there are
+  // N notes" without opening the drawer. Realtime sub keeps it live as
+  // notes are added / removed elsewhere.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { count } = await sb.from('deal_notes').select('id', { count: 'exact', head: true }).eq('deal_id', deal.id);
+      if (active) setNotesCount(count || 0);
+    };
+    load();
+    const ch = sb.channel('notes-count-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${deal.id}` }, load)
+      .subscribe();
+    return () => { active = false; sb.removeChannel(ch); };
+  }, [deal.id]);
+
+  // Esc closes the notes drawer
+  useEffect(() => {
+    if (!notesDrawerOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setNotesDrawerOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [notesDrawerOpen]);
 
   // Compute unread counts per tab based on this user's last_seen_at per tab.
   // Docket = non-backfill events received after last docket view.
@@ -9395,6 +9616,13 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           onSent={async () => { await loadAll(); }}
         />
       )}
+
+      {/* Notes drawer — slide-out from the right. Trigger pill sits on
+          the right edge of the viewport whenever a deal is open. Both
+          live at the DealDetail level so they're available regardless
+          of which tab is active. */}
+      <NotesDrawerTrigger count={notesCount} isOpen={notesDrawerOpen} onClick={() => setNotesDrawerOpen(true)} />
+      <NotesDrawer dealId={deal.id} userId={userId} isOpen={notesDrawerOpen} onClose={() => setNotesDrawerOpen(false)} />
     </div>
   );
 }
@@ -9475,7 +9703,10 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
   return (
     <div>
       <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
-      <QuickNotes dealId={deal.id} userId={userId} onJumpToTab={onJumpToTab} />
+      {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
+          NotesDrawer rendered at the DealDetail level. The drawer
+          handles all reads + writes; this overview no longer plasters
+          notes inline. */}
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         {isAdmin && <Card title="Live P&L Waterfall">
@@ -11757,7 +11988,10 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
   return (
     <div>
       <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
-      <QuickNotes dealId={deal.id} userId={userId} onJumpToTab={onJumpToTab} />
+      {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
+          NotesDrawer rendered at the DealDetail level. The drawer
+          handles all reads + writes; this overview no longer plasters
+          notes inline. */}
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Case Details">
