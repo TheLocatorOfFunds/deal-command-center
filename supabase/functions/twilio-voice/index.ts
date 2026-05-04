@@ -14,7 +14,7 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const NATHAN_IPHONE = '+15135162306';
+const NATHAN_IPHONE = '+14794595671'; // Nathan's personal iPhone
 const RING_SECONDS = 18;
 
 const normalizePhone = (p: string): string => {
