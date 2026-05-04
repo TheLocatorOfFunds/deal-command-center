@@ -1375,6 +1375,7 @@ function DealCommandCenter({ session, profile }) {
         <Modal onClose={() => setShowMoreSheet(false)} title="More">
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[
+              { label: '📬 Inbox',      onClick: () => setView('inbox'),    count: 0 },
               { label: '⚑ Flagged',     onClick: () => setView('flagged'),  count: 0 },
               { label: '🩺 Hygiene',    onClick: () => setView('hygiene'),  count: 0 },
               { label: '📦 Closed',     onClick: () => setView('archive'),  count: 0 },
@@ -1876,7 +1877,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("attention", "🔔 Attention", 0)}
-          {groupBtn("outreach", "🎯 Outreach", ["outreach", "leads", "forecast"], 0)}
+          {groupBtn("outreach", "🎯 Outreach", ["outreach", "inbox", "leads", "forecast"], 0)}
           {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {(isAdmin || userRole === 'va') && viewBtn("time", "⏱ Time", 0)}
@@ -1892,9 +1893,10 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           Outreach hub:  drafts/replies · leads · forecast
           Deals hub:     active · flagged · hygiene · closed · kanban
           Insights hub:  reports · analytics · traffic */}
-      {["outreach", "leads", "forecast"].includes(view) && (
+      {["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("outreach", "🤖 Drafts & Replies")}
+          {chipBtn("inbox", "📬 Inbox")}
           {chipBtn("leads", "📨 Leads")}
           {chipBtn("forecast", "📅 Forecast")}
         </div>
@@ -1948,7 +1950,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -1977,7 +1979,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -1985,6 +1987,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
+          ) : view === "inbox" ? (
+            <InboxView deals={deals} onSelect={onSelect} />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
           ) : view === "leads" ? (
@@ -5873,6 +5877,257 @@ function OutreachView({ deals, onSelect }) {
 
       <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
         <b style={{ color: '#a8a29e' }}>How this hub works:</b> Drafts come from <code style={{ color: '#a8a29e' }}>outreach_queue</code> — Justin's AI auto-drafts the intro + each cadence-day follow-up the moment a deal is queued. You review + send. Replies surface from <code style={{ color: '#a8a29e' }}>messages_outbound</code> where direction='inbound' and read_by_team_at is null. Realtime — new replies pop in without refresh. Once Lauren intake-and-classify lands (Justin), some replies will auto-escalate or auto-draft responses for your review.
+      </div>
+    </div>
+  );
+}
+
+// ─── InboxView — unified cross-deal inbound feed ─────────────────────
+// Aggregates inbound SMS (messages_outbound), inbound calls (call_logs),
+// and inbound emails (emails) into a single chronological stream so
+// Nathan/Eric can see "what came in today" without bouncing between
+// Comms tabs deal-by-deal. Filters: all / sms / calls / email / unread.
+// Window: rolling 7 days (toggleable to 30). Click any row to open the
+// originating deal's Comms tab.
+function InboxView({ deals, onSelect }) {
+  const [items, setItems] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [days, setDays] = useState(7);
+  const alive = useAliveRef();
+
+  const load = React.useCallback(async () => {
+    if (!deals || deals.length === 0) { setItems([]); return; }
+    const ids = deals.map(d => d.id);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const [smsRes, callsRes, emailsRes] = await Promise.all([
+      sb.from('messages_outbound')
+        .select('id, deal_id, body, from_number, created_at, read_by_team_at')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(300),
+      sb.from('call_logs')
+        .select('id, deal_id, direction, status, started_at, duration_seconds, from_number, recording_url')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('started_at', since)
+        .order('started_at', { ascending: false })
+        .limit(200),
+      sb.from('emails')
+        .select('id, deal_id, subject, from_email, body_text, created_at')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(200),
+    ]);
+
+    if (!alive.current) return;
+    const dealsById = Object.fromEntries(deals.map(d => [d.id, d]));
+
+    const sms = (smsRes.data || []).map(r => ({
+      kind: 'sms',
+      key: 'sms-' + r.id,
+      raw: r,
+      ts: r.created_at,
+      deal: dealsById[r.deal_id] || null,
+      sender: r.from_number || 'Unknown',
+      preview: r.body || '',
+      unread: !r.read_by_team_at,
+    }));
+    const calls = (callsRes.data || []).map(r => {
+      const dur = r.duration_seconds || 0;
+      const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : '';
+      const statusStr = r.status === 'missed' || r.status === 'no-answer'
+        ? 'Missed call'
+        : r.status === 'completed' && dur > 0
+          ? `Call · ${durStr}`
+          : `Call · ${r.status}`;
+      return {
+        kind: 'call',
+        key: 'call-' + r.id,
+        raw: r,
+        ts: r.started_at,
+        deal: dealsById[r.deal_id] || null,
+        sender: r.from_number || 'Unknown',
+        preview: statusStr + (r.recording_url ? ' · 🎙 recording' : ''),
+        unread: false,
+      };
+    });
+    const emails = (emailsRes.data || []).map(r => ({
+      kind: 'email',
+      key: 'email-' + r.id,
+      raw: r,
+      ts: r.created_at,
+      deal: dealsById[r.deal_id] || null,
+      sender: r.from_email || 'Unknown',
+      preview: r.subject || (r.body_text ? r.body_text.slice(0, 120) : '(no subject)'),
+      unread: false,
+    }));
+
+    const merged = [...sms, ...calls, ...emails].sort((a, b) =>
+      new Date(b.ts).getTime() - new Date(a.ts).getTime()
+    );
+    setItems(merged);
+  }, [deals, days, alive]);
+
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('inbox-view-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, () => loadRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'emails' }, () => loadRef.current())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const markSmsSeen = async (id) => {
+    const { error } = await sb.from('messages_outbound')
+      .update({ read_by_team_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) { alert('Could not mark seen: ' + error.message); return; }
+    await load();
+  };
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    if (m < 1440) return (m / 60).toFixed(1) + 'h ago';
+    return Math.floor(m / 1440) + 'd ago';
+  };
+
+  const filtered = !items ? null : items.filter(i => {
+    if (filter === 'all') return true;
+    if (filter === 'unread') return i.unread;
+    return i.kind === filter;
+  });
+
+  const counts = !items ? { all: 0, sms: 0, call: 0, email: 0, unread: 0 } : {
+    all: items.length,
+    sms: items.filter(i => i.kind === 'sms').length,
+    call: items.filter(i => i.kind === 'call').length,
+    email: items.filter(i => i.kind === 'email').length,
+    unread: items.filter(i => i.unread).length,
+  };
+
+  const KIND_META = {
+    sms:   { icon: '📱', label: 'SMS',   stripe: '#3b82f6' },
+    call:  { icon: '☎',  label: 'Call',  stripe: '#10b981' },
+    email: { icon: '📧', label: 'Email', stripe: '#a78bfa' },
+  };
+
+  const ChipBtn = ({ id, label, count, color }) => (
+    <button onClick={() => setFilter(id)}
+      style={{
+        background: filter === id ? '#292524' : 'transparent',
+        color: filter === id ? '#fafaf9' : '#a8a29e',
+        border: filter === id ? `1px solid ${color || '#44403c'}` : '1px solid transparent',
+        padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+        cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6
+      }}>
+      {label}
+      <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{count}</span>
+    </button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          📬 Inbox
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· every inbound SMS, call &amp; email across every deal</span>
+        </h2>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18, padding: 6, background: '#1c1917', border: '1px solid #292524', borderRadius: 8 }}>
+        <ChipBtn id="all"    label="All"    count={counts.all} />
+        <ChipBtn id="sms"    label="📱 SMS"    count={counts.sms} color="#3b82f6" />
+        <ChipBtn id="call"   label="☎ Calls"  count={counts.call} color="#10b981" />
+        <ChipBtn id="email"  label="📧 Email"  count={counts.email} color="#a78bfa" />
+        <ChipBtn id="unread" label="🔴 Unread" count={counts.unread} color="#ef4444" />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700 }}>Window</span>
+          <button onClick={() => setDays(7)} style={{ background: days === 7 ? '#292524' : 'transparent', color: days === 7 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>7d</button>
+          <button onClick={() => setDays(30)} style={{ background: days === 30 ? '#292524' : 'transparent', color: days === 30 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>30d</button>
+        </div>
+      </div>
+
+      {filtered === null && (
+        <div style={{ fontSize: 12, color: '#78716c', padding: 18 }}>Loading inbox…</div>
+      )}
+      {filtered && filtered.length === 0 && (
+        <div style={{ fontSize: 12, color: '#78716c', padding: 24, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
+          {filter === 'all'
+            ? `No inbound activity in the last ${days} days. Replies, calls, and emails will appear here in real time.`
+            : `No ${filter === 'unread' ? 'unread items' : filter + ' items'} in the last ${days} days.`}
+        </div>
+      )}
+
+      {filtered && filtered.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {filtered.map(it => {
+            const meta = KIND_META[it.kind];
+            return (
+              <div key={it.key}
+                onClick={() => it.deal && onSelect && onSelect(it.deal.id)}
+                style={{
+                  background: '#0c0a09',
+                  border: '1px solid #292524',
+                  borderLeft: `3px solid ${meta.stripe}`,
+                  borderRadius: 7,
+                  padding: '10px 12px',
+                  cursor: it.deal ? 'pointer' : 'default',
+                  display: 'grid',
+                  gridTemplateColumns: '28px 1fr auto',
+                  gap: 10,
+                  alignItems: 'start',
+                }}>
+                <div style={{ fontSize: 18, lineHeight: 1, marginTop: 2 }}>{meta.icon}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
+                      {it.deal?.name || '(unmatched)'}
+                    </span>
+                    {it.deal?.lead_tier && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.05em' }}>
+                        TIER {it.deal.lead_tier}
+                      </span>
+                    )}
+                    {it.unread && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: '#7f1d1d', color: '#fca5a5', padding: '1px 6px', borderRadius: 3, letterSpacing: '0.05em' }}>
+                        UNREAD
+                      </span>
+                    )}
+                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {it.sender}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, fontStyle: it.kind === 'sms' ? 'italic' : 'normal', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                    {it.kind === 'sms' ? `"${it.preview}"` : it.preview}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>
+                    {fmtAge(it.ts)}
+                  </span>
+                  {it.kind === 'sms' && it.unread && (
+                    <button onClick={(e) => { e.stopPropagation(); markSmsSeen(it.raw.id); }}
+                      style={{ ...btnGhost, fontSize: 10, padding: '2px 7px', color: '#a8a29e' }}>
+                      Mark seen
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        <b style={{ color: '#a8a29e' }}>What's here:</b> Every inbound SMS (<code style={{ color: '#a8a29e' }}>messages_outbound</code> direction=inbound), inbound call (<code style={{ color: '#a8a29e' }}>call_logs</code> direction=inbound), and inbound email (<code style={{ color: '#a8a29e' }}>emails</code> direction=inbound) across every deal you can access, sorted newest first. Click any row to jump to that deal's Comms tab. Realtime — new inbound items pop in without refresh.
       </div>
     </div>
   );
