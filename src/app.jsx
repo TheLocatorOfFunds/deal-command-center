@@ -16338,6 +16338,8 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const twilioDeviceRef = React.useRef(null);
   const activeCallRef   = React.useRef(null);
   const callTimerRef    = React.useRef(null);
+  const ringAudioRef    = React.useRef(null);  // Web Audio context for ringtone
+  const ringTitleRef    = React.useRef(null);  // { interval, origTitle } for tab title flash
   const threadRef = useRef(null);
 
   const startEditNote = (note) => {
@@ -16614,6 +16616,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
           callerName: params?.get('callerName') || null,
           dealId:     params?.get('dealId')     || null,
         });
+        startRingtone();
       });
       device.on('error', (err) => {
         console.error('Twilio Device error:', err);
@@ -16637,6 +16640,61 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const stopCallTimer = React.useCallback(() => {
     if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
     setCallDuration(0);
+  }, []);
+
+  // ── Ringtone + tab-title flash for inbound calls ──────────────────────────
+  const startRingtone = React.useCallback(() => {
+    // Stop any prior ring first
+    if (ringAudioRef.current) {
+      clearTimeout(ringAudioRef.current._ringTimer);
+      try { ringAudioRef.current.close(); } catch (_) {}
+      ringAudioRef.current = null;
+    }
+    if (ringTitleRef.current) {
+      clearInterval(ringTitleRef.current.interval);
+      document.title = ringTitleRef.current.origTitle;
+      ringTitleRef.current = null;
+    }
+    // Web Audio: US telephone ring (440 Hz + 480 Hz, 2 s on / 4 s off)
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      ringAudioRef.current = ctx;
+      const ring = () => {
+        if (ringAudioRef.current !== ctx) return;
+        [440, 480].forEach(freq => {
+          const osc  = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.07, ctx.currentTime);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 2);
+        });
+        ctx._ringTimer = setTimeout(ring, 6000);
+      };
+      ring();
+    } catch (_) {}
+    // Flash document title when the tab is in the background
+    const origTitle = document.title;
+    let flash = false;
+    ringTitleRef.current = {
+      interval:  setInterval(() => { document.title = (flash = !flash) ? '📞 INCOMING CALL' : origTitle; }, 700),
+      origTitle,
+    };
+  }, []);
+
+  const stopRingtone = React.useCallback(() => {
+    if (ringAudioRef.current) {
+      clearTimeout(ringAudioRef.current._ringTimer);
+      try { ringAudioRef.current.close(); } catch (_) {}
+      ringAudioRef.current = null;
+    }
+    if (ringTitleRef.current) {
+      clearInterval(ringTitleRef.current.interval);
+      document.title = ringTitleRef.current.origTitle;
+      ringTitleRef.current = null;
+    }
   }, []);
 
   const startCall = React.useCallback(async (contact) => {
@@ -16680,6 +16738,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
   const answerIncoming = React.useCallback(() => {
     if (!incomingCall) return;
+    stopRingtone();
     incomingCall.call.accept();
     setCallStatus('in-progress');
     setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
@@ -16691,13 +16750,14 @@ function OutboundMessages({ dealId, vendors, deal }) {
       setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
     });
     setIncomingCall(null);
-  }, [incomingCall, startCallTimer, stopCallTimer]);
+  }, [incomingCall, startCallTimer, stopCallTimer, stopRingtone]);
 
   const rejectIncoming = React.useCallback(() => {
     if (!incomingCall) return;
+    stopRingtone();
     incomingCall.call.reject();
     setIncomingCall(null);
-  }, [incomingCall]);
+  }, [incomingCall, stopRingtone]);
 
   // Register device on mount so inbound calls ring immediately
   React.useEffect(() => {
@@ -17926,28 +17986,54 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
       {/* ── Incoming call overlay ──────────────────────────────────────────── */}
       {incomingCall && (
-        <div style={{
-          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
-          background: '#1c1917', border: '2px solid #16a34a', borderRadius: 16,
-          padding: '20px 24px', minWidth: 280, boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-          display: 'flex', flexDirection: 'column', gap: 14,
-        }}>
-          <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>📞 Incoming call</div>
-          <div style={{ fontSize: 16, fontWeight: 700, color: '#fafaf9' }}>
-            {incomingCall.callerName || incomingCall.from}
+        <>
+          <style>{`
+            @keyframes ring-pulse {
+              0%   { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0.8); }
+              60%  { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 18px rgba(22,163,74,0);   }
+              100% { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0);    }
+            }
+          `}</style>
+          <div style={{
+            position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+            background: '#1c1917', border: '2px solid #16a34a', borderRadius: 16,
+            padding: '20px 24px', minWidth: 300,
+            animation: 'ring-pulse 1.4s ease-out infinite',
+            display: 'flex', flexDirection: 'column', gap: 14,
+          }}>
+            <div style={{ fontSize: 11, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>📞 Incoming call</div>
+            <div style={{ fontSize: 17, fontWeight: 700, color: '#fafaf9' }}>
+              {incomingCall.callerName || incomingCall.from}
+            </div>
+            {incomingCall.callerName && (
+              <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace", marginTop: -8 }}>{incomingCall.from}</div>
+            )}
+            {incomingCall.dealId && (
+              <div style={{ fontSize: 12, color: '#78716c' }}>
+                Deal:{' '}
+                <a
+                  href={`#deal=${incomingCall.dealId}`}
+                  onClick={() => { stopRingtone(); setIncomingCall(null); incomingCall.call.reject(); }}
+                  style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}
+                >
+                  {incomingCall.dealId}
+                </a>
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+              <button onClick={answerIncoming} style={{
+                flex: 1, background: '#16a34a', border: 'none', color: '#fff',
+                borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                letterSpacing: '0.03em',
+              }}>✓ Answer</button>
+              <button onClick={rejectIncoming} style={{
+                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+                borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+                letterSpacing: '0.03em',
+              }}>✕ Decline</button>
+            </div>
           </div>
-          <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{incomingCall.from}</div>
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={answerIncoming} style={{
-              flex: 1, background: '#16a34a', border: 'none', color: '#fff',
-              borderRadius: 10, padding: '10px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-            }}>Answer</button>
-            <button onClick={rejectIncoming} style={{
-              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
-              borderRadius: 10, padding: '10px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-            }}>Decline</button>
-          </div>
-        </div>
+        </>
       )}
 
       {/* ── Active call overlay ────────────────────────────────────────────── */}
