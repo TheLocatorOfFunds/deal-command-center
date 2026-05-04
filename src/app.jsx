@@ -298,6 +298,75 @@ function SetNewPassword({ onDone }) {
   );
 }
 
+// ─── Notification chirp ──────────────────────────────────────────────
+// Singleton AudioContext + bell-like ding (A5 fundamental + E6 harmonic,
+// ~600ms decay). One context, resumed eagerly on every user gesture so
+// the autoplay policy doesn't suppress the first chirp after page load.
+// Console-warns on suppression so we have a signal when sound fails.
+let _notifyAudioCtx = null;
+let _notifyResumeBound = false;
+function _notifyEnsureAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) {
+    console.warn('[notifications] Web Audio not supported in this browser — sound suppressed');
+    return null;
+  }
+  if (!_notifyAudioCtx) {
+    try { _notifyAudioCtx = new Ctx(); }
+    catch (e) { console.warn('[notifications] AudioContext create failed', e); return null; }
+  }
+  if (!_notifyResumeBound) {
+    _notifyResumeBound = true;
+    const resume = () => {
+      if (_notifyAudioCtx?.state === 'suspended') {
+        _notifyAudioCtx.resume().catch(err => console.warn('[notifications] AudioContext resume failed', err));
+      }
+    };
+    document.addEventListener('click', resume);
+    document.addEventListener('keydown', resume);
+    document.addEventListener('touchstart', resume, { passive: true });
+  }
+  return _notifyAudioCtx;
+}
+function playNotifyChirp() {
+  const ctx = _notifyEnsureAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+  if (ctx.state !== 'running') {
+    console.warn('[notifications] AudioContext not running (state=' + ctx.state + ') — chirp suppressed; awaiting user gesture in tab');
+    return;
+  }
+  try {
+    const now = ctx.currentTime;
+    const dur = 0.6;
+    // Fundamental — A5
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.32, now + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+    o.connect(g).connect(ctx.destination);
+    o.start(now); o.stop(now + dur + 0.05);
+    // Brightness harmonic — E6 (3:2 ratio gives a bell-like character)
+    const o2 = ctx.createOscillator();
+    const g2 = ctx.createGain();
+    o2.type = 'sine';
+    o2.frequency.value = 1320;
+    g2.gain.setValueAtTime(0.0001, now);
+    g2.gain.exponentialRampToValueAtTime(0.12, now + 0.005);
+    g2.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.55);
+    o2.connect(g2).connect(ctx.destination);
+    o2.start(now); o2.stop(now + dur * 0.55 + 0.05);
+  } catch (e) {
+    console.warn('[notifications] chirp playback failed', e);
+  }
+}
+
 // ─── Root: session gate ──────────────────────────────────────────────
 function Root() {
   const [session, setSession]       = useState(null);
@@ -453,6 +522,20 @@ function DealCommandCenter({ session, profile }) {
   // and pings the user when one lands. Audio chirp if the tab is focused;
   // a browser Notification when it isn't (clicking it navigates to the
   // Team chat view). Skips messages the current user sent themselves.
+  //
+  // Audio reliability — 2026-05-04 hardening pass after Justin reported
+  // "sometimes we hear sounds when we get a notification, sometimes we don't."
+  // Root causes:
+  //   1. Old code created a fresh AudioContext per ding and closed it after
+  //      600ms. Chrome caps simultaneous AudioContexts at ~6; rapid-fire
+  //      messages would silently fail to allocate a new one.
+  //   2. AudioContext starts in 'suspended' state until any user gesture has
+  //      occurred in the tab. The first chirp after a fresh page load was
+  //      always silent.
+  //   3. No diagnostics — when audio failed, there was no console signal.
+  // Fix: singleton context, eager resume() on every user gesture, console
+  // warnings on suppression so we can tell whether the issue is autoplay
+  // policy or something else.
   useEffect(() => {
     if (!session?.user?.id) return;
     const myId = session.user.id;
@@ -461,44 +544,6 @@ function DealCommandCenter({ session, profile }) {
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
-
-    // Web Audio "ding" — A5 fundamental + E6 harmonic, ~600ms decay.
-    // Per Nathan 2026-05-04 the prior 120ms two-tone chirp was too quiet
-    // and clipped too fast to register as a notification. This one rings
-    // out longer (bell-like decay) at ~80% higher peak gain so it cuts
-    // through whatever else the user has going on. Still gated by the
-    // browser's autoplay policy — first ding requires a prior user
-    // gesture in the tab.
-    const playChirp = () => {
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) return;
-        const ctx = new Ctx();
-        const now = ctx.currentTime;
-        const dur = 0.6;
-        // Fundamental — A5
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = 'sine';
-        o.frequency.value = 880;
-        g.gain.setValueAtTime(0.0001, now);
-        g.gain.exponentialRampToValueAtTime(0.32, now + 0.005);
-        g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
-        o.connect(g).connect(ctx.destination);
-        o.start(now); o.stop(now + dur + 0.05);
-        // Brightness harmonic — E6 (3:2 ratio gives a bell-like character)
-        const o2 = ctx.createOscillator();
-        const g2 = ctx.createGain();
-        o2.type = 'sine';
-        o2.frequency.value = 1320;
-        g2.gain.setValueAtTime(0.0001, now);
-        g2.gain.exponentialRampToValueAtTime(0.12, now + 0.005);
-        g2.gain.exponentialRampToValueAtTime(0.0001, now + dur * 0.55);
-        o2.connect(g2).connect(ctx.destination);
-        o2.start(now); o2.stop(now + dur * 0.55 + 0.05);
-        setTimeout(() => ctx.close(), (dur + 0.1) * 1000);
-      } catch {/* audio blocked or unsupported */}
-    };
 
     const ch = sb.channel('global-chat-notify')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_messages' }, async (payload) => {
@@ -528,15 +573,50 @@ function DealCommandCenter({ session, profile }) {
                 setChatJumpThreadId(msg.thread_id);
                 n.close();
               };
+            } else {
+              console.warn('[notifications] tab hidden, but Notification permission is', Notification.permission, '— message arrived silently');
             }
-          } catch {/* notification blocked */}
+          } catch (e) { console.warn('[notifications] browser Notification failed', e); }
         } else {
           // Tab focused but maybe not on Team view — chirp.
-          playChirp();
+          playNotifyChirp();
         }
       })
       .subscribe();
-    return () => { sb.removeChannel(ch); };
+
+    // Inbound SMS replies — added 2026-05-04 in the notifications QA pass.
+    // Plays the same chirp + browser notification when an inbound reply
+    // lands while DCC is open. Skips messages already marked read.
+    const smsCh = sb.channel('global-sms-notify')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages_outbound' }, async (payload) => {
+        const msg = payload.new;
+        if (!msg || msg.direction !== 'inbound') return;
+        if (msg.read_by_team_at) return;
+        const fromNum = msg.from_number || 'unknown number';
+        const preview = (msg.body || '').slice(0, 140);
+        if (document.hidden) {
+          try {
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              const n = new Notification(`📲 SMS from ${fromNum}`, { body: preview, tag: 'dcc-inbound-sms-' + (msg.deal_id || msg.id) });
+              n.onclick = () => {
+                window.focus();
+                if (msg.deal_id) {
+                  setActiveDealId(msg.deal_id);
+                  window.location.hash = `#/deal/${msg.deal_id}/comms`;
+                } else {
+                  setView('outreach');
+                }
+                n.close();
+              };
+            }
+          } catch (e) { console.warn('[notifications] inbound-SMS Notification failed', e); }
+        } else {
+          playNotifyChirp();
+        }
+      })
+      .subscribe();
+
+    return () => { sb.removeChannel(ch); sb.removeChannel(smsCh); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.id]);
 
