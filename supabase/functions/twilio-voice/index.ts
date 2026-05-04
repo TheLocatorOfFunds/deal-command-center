@@ -81,7 +81,7 @@ Deno.serve(async (req: Request) => {
   }
 
   // Log the call in 'ringing' state. The status callback will finalize it.
-  const { data: callRow } = await db.from('call_logs').insert({
+  const { data: callRow, error: insertError } = await db.from('call_logs').insert({
     deal_id: dealId,
     contact_id: contactId,
     thread_key: threadKey,
@@ -92,6 +92,7 @@ Deno.serve(async (req: Request) => {
     twilio_call_sid: callSid,
     started_at: new Date().toISOString(),
   }).select('id').single();
+  if (insertError) console.error('call_logs INSERT error:', JSON.stringify(insertError), {dealId, contactId, threadKey, from, to, callSid});
 
   // Edge Function URL for the status callback
   const projectRef = supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] || '';

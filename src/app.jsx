@@ -16764,13 +16764,19 @@ function OutboundMessages({ dealId, vendors, deal }) {
             try { return decodeURIComponent(s); } catch { return s; }
           } catch { return null; }
         };
-        const from = call.parameters?.From || getP('from') || 'Unknown';
+        // Prefer the custom 'from' parameter (actual caller number) over
+        // call.parameters.From which Twilio sets to the callerId (our Twilio number).
+        const from = getP('from') || call.parameters?.From || 'Unknown';
+        const dealId   = getP('dealId')   || null;
+        const dealName = getP('dealName') || null;
+        console.log('[incoming] from:', from, 'dealId:', dealId, 'dealName:', dealName,
+          'customParams:', call.customParameters);
         setIncomingCall({
           call,
           from,
           callerName: getP('callerName') || null,
-          dealId:     getP('dealId')     || null,
-          dealName:   getP('dealName')   || null,
+          dealId,
+          dealName,
         });
         // Auto-dismiss if caller hangs up or call is answered on another device
         call.on('cancel', () => { stopRingtone(); setIncomingCall(null); });
