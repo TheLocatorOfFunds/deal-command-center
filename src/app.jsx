@@ -4350,9 +4350,16 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
 
   const counties = [...new Set(candidates.map(d => d.meta?.county).filter(Boolean))].sort();
 
+  // Per Eric 2026-05-04 — if no tier pills are selected, treat that as
+  // "no tier constraint" rather than "exclude every tier". Tiers stack
+  // ON TOP OF the other filters; they shouldn't gate them. With every
+  // pill off, advanced filters / search / county still return matches
+  // across all tiers.
+  const anyTierSelected = Object.values(tierFilter).some(Boolean);
+
   const filtered = candidates.filter(d => {
     const tier = d.lead_tier || 'other';
-    if (!tierFilter[tier]) return false;
+    if (anyTierSelected && !tierFilter[tier]) return false;
     if (countyFilter && (d.meta?.county || '') !== countyFilter) return false;
     if (search) {
       const q = search.toLowerCase();
