@@ -564,6 +564,230 @@ function DealCommandCenter({ session, profile }) {
     close: () => { setRecordingDeal(null); setRecordingMinimized(false); },
   }), [recordingDeal, recordingMinimized]);
 
+  // ── Twilio Voice — global device (always registered, not deal-scoped) ────
+  // Device lives here so the phone rings even on the deals list, not just
+  // when the Comms tab of a specific deal is open.
+  const [callStatus, setCallStatus]     = useState(null); // null|'connecting'|'ringing'|'in-progress'|'ended'
+  const [callContact, setCallContact]   = useState(null); // { name, phone }
+  const [callDuration, setCallDuration] = useState(0);
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [callMuted, setCallMuted]       = useState(false);
+  const [twilioStatus, setTwilioStatus] = useState('initializing'); // 'initializing'|'registered'|'error'
+  const twilioDeviceRef = React.useRef(null);
+  const activeCallRef   = React.useRef(null);
+  const callTimerRef    = React.useRef(null);
+  const ringAudioRef    = React.useRef(null);
+  const ringTitleRef    = React.useRef(null);
+  const sharedAudioCtx  = React.useRef(null);
+
+  const initTwilioDevice = React.useCallback(async () => {
+    if (twilioDeviceRef.current) return twilioDeviceRef.current;
+    try {
+      const { data, error } = await sb.functions.invoke('twilio-token');
+      if (error || !data?.token) throw new Error(error?.message || 'No token');
+      console.log('[twilio-device] token received, identity:', data.identity);
+      const device = new window.Twilio.Device(data.token, {
+        codecPreferences: ['opus', 'pcmu'],
+        enableRingingState: true,
+        allowIncomingWhileBusy: false,
+      });
+      device.on('registered',   () => { console.log('[twilio-device] registered ✓'); setTwilioStatus('registered'); });
+      device.on('unregistered', () => { console.log('[twilio-device] unregistered'); setTwilioStatus('initializing'); });
+      device.on('incoming', (call) => {
+        const getP = (key) => {
+          try {
+            const p = call.customParameters;
+            if (!p) return null;
+            const raw = typeof p.get === 'function' ? p.get(key) : p[key];
+            if (raw == null) return null;
+            const s = String(raw);
+            try { return decodeURIComponent(s); } catch { return s; }
+          } catch { return null; }
+        };
+        const from = getP('from') || call.parameters?.From || 'Unknown';
+        const dealId   = getP('dealId')   || null;
+        const dealName = getP('dealName') || null;
+        console.log('[incoming] from:', from, 'dealId:', dealId, 'dealName:', dealName,
+          'customParams:', call.customParameters);
+        setIncomingCall({ call, from, callerName: getP('callerName') || null, dealId, dealName });
+        call.on('cancel', () => { stopRingtone(); setIncomingCall(null); });
+        startRingtone();
+      });
+      device.on('error', (err) => {
+        console.error('Twilio Device error:', err);
+        setTwilioStatus('error');
+        setCallStatus(null);
+      });
+      await device.register();
+      twilioDeviceRef.current = device;
+      return device;
+    } catch (err) {
+      console.error('Failed to init Twilio device:', err);
+      setTwilioStatus('error');
+      return null;
+    }
+  }, []);
+
+  const startCallTimer = React.useCallback(() => {
+    setCallDuration(0);
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+  }, []);
+
+  const stopCallTimer = React.useCallback(() => {
+    if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
+    setCallDuration(0);
+  }, []);
+
+  const startRingtone = React.useCallback(() => {
+    if (ringAudioRef.current) {
+      clearTimeout(ringAudioRef.current._ringTimer);
+      try { ringAudioRef.current.close(); } catch (_) {}
+      ringAudioRef.current = null;
+    }
+    if (ringTitleRef.current) {
+      clearInterval(ringTitleRef.current.interval);
+      document.title = ringTitleRef.current.origTitle;
+      ringTitleRef.current = null;
+    }
+    try {
+      const ctx = sharedAudioCtx.current || new (window.AudioContext || window.webkitAudioContext)();
+      if (!sharedAudioCtx.current) sharedAudioCtx.current = ctx;
+      ringAudioRef.current = ctx;
+      const play = () => {
+        if (ringAudioRef.current !== ctx) return;
+        ctx.resume().catch(() => {});
+        [440, 480].forEach(freq => {
+          const osc  = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.12, ctx.currentTime);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 2);
+        });
+        ctx._ringTimer = setTimeout(play, 6000);
+      };
+      play();
+    } catch (_) {}
+    const origTitle = document.title;
+    let flash = false;
+    ringTitleRef.current = {
+      interval:  setInterval(() => { document.title = (flash = !flash) ? '📞 INCOMING CALL' : origTitle; }, 700),
+      origTitle,
+    };
+  }, []);
+
+  const stopRingtone = React.useCallback(() => {
+    if (ringAudioRef.current) {
+      clearTimeout(ringAudioRef.current._ringTimer);
+      try { ringAudioRef.current.close(); } catch (_) {}
+      ringAudioRef.current = null;
+    }
+    if (ringTitleRef.current) {
+      clearInterval(ringTitleRef.current.interval);
+      document.title = ringTitleRef.current.origTitle;
+      ringTitleRef.current = null;
+    }
+  }, []);
+
+  const startCall = React.useCallback(async (contact) => {
+    if (callStatus) return;
+    setCallStatus('connecting');
+    setCallContact(contact);
+    setCallMuted(false);
+    try {
+      const device = await initTwilioDevice();
+      if (!device) throw new Error('Could not initialize calling device');
+      const call = await device.connect({
+        params: { To: contact.phone, CallerId: '+15139985440' },
+      });
+      activeCallRef.current = call;
+      call.on('ringing',    () => setCallStatus('ringing'));
+      call.on('accept',     () => { setCallStatus('in-progress'); startCallTimer(); });
+      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); });
+      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+    } catch (err) {
+      console.error('startCall error:', err);
+      setCallStatus(null);
+      setCallContact(null);
+    }
+  }, [callStatus, initTwilioDevice, startCallTimer, stopCallTimer]);
+
+  const hangupCall = React.useCallback(() => {
+    if (activeCallRef.current) { activeCallRef.current.disconnect(); activeCallRef.current = null; }
+    stopCallTimer();
+    setCallStatus(null);
+    setCallContact(null);
+    setCallMuted(false);
+  }, [stopCallTimer]);
+
+  const toggleMute = React.useCallback(() => {
+    if (!activeCallRef.current) return;
+    const muted = !callMuted;
+    activeCallRef.current.mute(muted);
+    setCallMuted(muted);
+  }, [callMuted]);
+
+  const answerIncoming = React.useCallback(() => {
+    if (!incomingCall) return;
+    stopRingtone();
+    try {
+      incomingCall.call.accept();
+      setCallStatus('in-progress');
+      setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
+      activeCallRef.current = incomingCall.call;
+      startCallTimer();
+      incomingCall.call.on('disconnect', () => {
+        setCallStatus('ended');
+        stopCallTimer();
+        setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
+      });
+    } catch (e) {
+      console.error('Failed to accept call:', e);
+    }
+    setIncomingCall(null);
+  }, [incomingCall, startCallTimer, stopCallTimer, stopRingtone]);
+
+  const rejectIncoming = React.useCallback(() => {
+    if (!incomingCall) return;
+    stopRingtone();
+    incomingCall.call.reject();
+    setIncomingCall(null);
+  }, [incomingCall, stopRingtone]);
+
+  // Register device on mount so inbound calls ring immediately
+  React.useEffect(() => {
+    initTwilioDevice();
+    return () => {
+      if (twilioDeviceRef.current) { twilioDeviceRef.current.destroy(); twilioDeviceRef.current = null; }
+      stopCallTimer();
+    };
+  }, []);
+
+  // Pre-warm Web Audio context on first user interaction so ringtone can
+  // play without being blocked by browser autoplay policy.
+  React.useEffect(() => {
+    const unlock = () => {
+      if (!sharedAudioCtx.current) {
+        try {
+          sharedAudioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
+        } catch (_) {}
+      }
+      if (sharedAudioCtx.current?.state === 'suspended') {
+        sharedAudioCtx.current.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('click',      unlock, { once: true });
+    document.addEventListener('touchstart', unlock, { once: true });
+    return () => {
+      document.removeEventListener('click',      unlock);
+      document.removeEventListener('touchstart', unlock);
+    };
+  }, []);
+
   // Warn before navigating away if a recording is in progress (Eric lost
   // a recording when both tabs got refreshed mid-capture). beforeunload
   // gives him a "Are you sure?" prompt instead of silent destruction.
@@ -1031,8 +1255,11 @@ function DealCommandCenter({ session, profile }) {
 
   if (!loaded) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading deals...</div></Shell>;
 
+  const fmtCallDuration = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
   return (
     <RecordingContext.Provider value={recordingValue}>
+    <>
     <Shell>
       {/* Header */}
       <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
@@ -1375,6 +1602,7 @@ function DealCommandCenter({ session, profile }) {
         <Modal onClose={() => setShowMoreSheet(false)} title="More">
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[
+              { label: '📬 Inbox',      onClick: () => setView('inbox'),    count: 0 },
               { label: '⚑ Flagged',     onClick: () => setView('flagged'),  count: 0 },
               { label: '🩺 Hygiene',    onClick: () => setView('hygiene'),  count: 0 },
               { label: '📦 Closed',     onClick: () => setView('archive'),  count: 0 },
@@ -1473,6 +1701,99 @@ function DealCommandCenter({ session, profile }) {
         />
       )}
     </Shell>
+
+    {/* ── Incoming call overlay — rendered at DCC level so it shows on every view ── */}
+    {incomingCall && (
+      <>
+        <style>{`
+          @keyframes ring-pulse {
+            0%   { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0.8); }
+            60%  { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 18px rgba(22,163,74,0);   }
+            100% { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0);    }
+          }
+        `}</style>
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: '#1c1917', border: '2px solid #16a34a', borderRadius: 16,
+          padding: '20px 24px', minWidth: 300,
+          animation: 'ring-pulse 1.4s ease-out infinite',
+          display: 'flex', flexDirection: 'column', gap: 14,
+        }}>
+          {/* X dismiss button — stops ring but does NOT reject (caller keeps hearing ringback) */}
+          <button onClick={() => { stopRingtone(); setIncomingCall(null); }} style={{
+            position: 'absolute', top: 10, right: 10,
+            background: 'transparent', border: 'none', color: '#57534e',
+            fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: 4,
+          }} title="Dismiss notification">✕</button>
+
+          <div style={{ fontSize: 11, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>📞 Incoming call</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: '#fafaf9' }}>
+            {incomingCall.from}
+          </div>
+          {incomingCall.dealId && (
+            <div style={{ fontSize: 12, color: '#a8a29e', marginTop: -8 }}>
+              {incomingCall.dealName
+                ? <><span style={{ color: '#78716c' }}>Deal: </span>
+                    <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
+                      {incomingCall.dealName}
+                    </a>
+                  </>
+                : <><span style={{ color: '#78716c' }}>Deal: </span>
+                    <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
+                      {incomingCall.dealId}
+                    </a>
+                  </>
+              }
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button onClick={answerIncoming} style={{
+              flex: 1, background: '#16a34a', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              letterSpacing: '0.03em',
+            }}>✓ Answer</button>
+            <button onClick={rejectIncoming} style={{
+              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              letterSpacing: '0.03em',
+            }}>✕ Decline</button>
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* ── Active call overlay — rendered at DCC level so it shows on every view ── */}
+    {callStatus && callContact && (
+      <div style={{
+        position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+        background: '#1c1917', border: `2px solid ${callStatus === 'in-progress' ? '#16a34a' : callStatus === 'ended' ? '#ef4444' : '#d97706'}`,
+        borderRadius: 16, padding: '20px 24px', minWidth: 280,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+        display: 'flex', flexDirection: 'column', gap: 10,
+      }}>
+        <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          {callStatus === 'connecting' ? '⏳ Connecting…' : callStatus === 'ringing' ? '🔔 Ringing…' : callStatus === 'in-progress' ? '📞 On call' : '📵 Call ended'}
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#fafaf9' }}>{callContact.name}</div>
+        <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{callContact.phone}</div>
+        {callStatus === 'in-progress' && (
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a', fontFamily: "'DM Mono', monospace" }}>{fmtCallDuration(callDuration)}</div>
+        )}
+        {callStatus !== 'ended' && (
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button onClick={toggleMute} style={{
+              flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
+              borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
+            <button onClick={hangupCall} style={{
+              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+            }}>End</button>
+          </div>
+        )}
+      </div>
+    )}
+    </>
     </RecordingContext.Provider>
   );
 }
@@ -1876,7 +2197,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
           {viewBtn("today", "📌 Today", 0)}
           {viewBtn("attention", "🔔 Attention", 0)}
-          {groupBtn("outreach", "🎯 Outreach", ["outreach", "leads", "forecast"], 0)}
+          {groupBtn("outreach", "🎯 Outreach", ["outreach", "inbox", "leads", "forecast"], 0)}
           {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
           {viewBtn("tasks", "✓ Tasks", 0)}
           {(isAdmin || userRole === 'va') && viewBtn("time", "⏱ Time", 0)}
@@ -1892,9 +2213,10 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           Outreach hub:  drafts/replies · leads · forecast
           Deals hub:     active · flagged · hygiene · closed · kanban
           Insights hub:  reports · analytics · traffic */}
-      {["outreach", "leads", "forecast"].includes(view) && (
+      {["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("outreach", "🤖 Drafts & Replies")}
+          {chipBtn("inbox", "📬 Inbox")}
           {chipBtn("leads", "📨 Leads")}
           {chipBtn("forecast", "📅 Forecast")}
         </div>
@@ -1948,7 +2270,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -1977,7 +2299,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -1985,6 +2307,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
+          ) : view === "inbox" ? (
+            <InboxView deals={deals} onSelect={onSelect} />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
           ) : view === "leads" ? (
@@ -5873,6 +6197,257 @@ function OutreachView({ deals, onSelect }) {
 
       <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
         <b style={{ color: '#a8a29e' }}>How this hub works:</b> Drafts come from <code style={{ color: '#a8a29e' }}>outreach_queue</code> — Justin's AI auto-drafts the intro + each cadence-day follow-up the moment a deal is queued. You review + send. Replies surface from <code style={{ color: '#a8a29e' }}>messages_outbound</code> where direction='inbound' and read_by_team_at is null. Realtime — new replies pop in without refresh. Once Lauren intake-and-classify lands (Justin), some replies will auto-escalate or auto-draft responses for your review.
+      </div>
+    </div>
+  );
+}
+
+// ─── InboxView — unified cross-deal inbound feed ─────────────────────
+// Aggregates inbound SMS (messages_outbound), inbound calls (call_logs),
+// and inbound emails (emails) into a single chronological stream so
+// Nathan/Eric can see "what came in today" without bouncing between
+// Comms tabs deal-by-deal. Filters: all / sms / calls / email / unread.
+// Window: rolling 7 days (toggleable to 30). Click any row to open the
+// originating deal's Comms tab.
+function InboxView({ deals, onSelect }) {
+  const [items, setItems] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [days, setDays] = useState(7);
+  const alive = useAliveRef();
+
+  const load = React.useCallback(async () => {
+    if (!deals || deals.length === 0) { setItems([]); return; }
+    const ids = deals.map(d => d.id);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const [smsRes, callsRes, emailsRes] = await Promise.all([
+      sb.from('messages_outbound')
+        .select('id, deal_id, body, from_number, created_at, read_by_team_at')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(300),
+      sb.from('call_logs')
+        .select('id, deal_id, direction, status, started_at, duration_seconds, from_number, recording_url')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('started_at', since)
+        .order('started_at', { ascending: false })
+        .limit(200),
+      sb.from('emails')
+        .select('id, deal_id, subject, from_email, body_text, created_at')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(200),
+    ]);
+
+    if (!alive.current) return;
+    const dealsById = Object.fromEntries(deals.map(d => [d.id, d]));
+
+    const sms = (smsRes.data || []).map(r => ({
+      kind: 'sms',
+      key: 'sms-' + r.id,
+      raw: r,
+      ts: r.created_at,
+      deal: dealsById[r.deal_id] || null,
+      sender: r.from_number || 'Unknown',
+      preview: r.body || '',
+      unread: !r.read_by_team_at,
+    }));
+    const calls = (callsRes.data || []).map(r => {
+      const dur = r.duration_seconds || 0;
+      const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : '';
+      const statusStr = r.status === 'missed' || r.status === 'no-answer'
+        ? 'Missed call'
+        : r.status === 'completed' && dur > 0
+          ? `Call · ${durStr}`
+          : `Call · ${r.status}`;
+      return {
+        kind: 'call',
+        key: 'call-' + r.id,
+        raw: r,
+        ts: r.started_at,
+        deal: dealsById[r.deal_id] || null,
+        sender: r.from_number || 'Unknown',
+        preview: statusStr + (r.recording_url ? ' · 🎙 recording' : ''),
+        unread: false,
+      };
+    });
+    const emails = (emailsRes.data || []).map(r => ({
+      kind: 'email',
+      key: 'email-' + r.id,
+      raw: r,
+      ts: r.created_at,
+      deal: dealsById[r.deal_id] || null,
+      sender: r.from_email || 'Unknown',
+      preview: r.subject || (r.body_text ? r.body_text.slice(0, 120) : '(no subject)'),
+      unread: false,
+    }));
+
+    const merged = [...sms, ...calls, ...emails].sort((a, b) =>
+      new Date(b.ts).getTime() - new Date(a.ts).getTime()
+    );
+    setItems(merged);
+  }, [deals, days, alive]);
+
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('inbox-view-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, () => loadRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'emails' }, () => loadRef.current())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const markSmsSeen = async (id) => {
+    const { error } = await sb.from('messages_outbound')
+      .update({ read_by_team_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) { alert('Could not mark seen: ' + error.message); return; }
+    await load();
+  };
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    if (m < 1440) return (m / 60).toFixed(1) + 'h ago';
+    return Math.floor(m / 1440) + 'd ago';
+  };
+
+  const filtered = !items ? null : items.filter(i => {
+    if (filter === 'all') return true;
+    if (filter === 'unread') return i.unread;
+    return i.kind === filter;
+  });
+
+  const counts = !items ? { all: 0, sms: 0, call: 0, email: 0, unread: 0 } : {
+    all: items.length,
+    sms: items.filter(i => i.kind === 'sms').length,
+    call: items.filter(i => i.kind === 'call').length,
+    email: items.filter(i => i.kind === 'email').length,
+    unread: items.filter(i => i.unread).length,
+  };
+
+  const KIND_META = {
+    sms:   { icon: '📱', label: 'SMS',   stripe: '#3b82f6' },
+    call:  { icon: '☎',  label: 'Call',  stripe: '#10b981' },
+    email: { icon: '📧', label: 'Email', stripe: '#a78bfa' },
+  };
+
+  const ChipBtn = ({ id, label, count, color }) => (
+    <button onClick={() => setFilter(id)}
+      style={{
+        background: filter === id ? '#292524' : 'transparent',
+        color: filter === id ? '#fafaf9' : '#a8a29e',
+        border: filter === id ? `1px solid ${color || '#44403c'}` : '1px solid transparent',
+        padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+        cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6
+      }}>
+      {label}
+      <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{count}</span>
+    </button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          📬 Inbox
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· every inbound SMS, call &amp; email across every deal</span>
+        </h2>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18, padding: 6, background: '#1c1917', border: '1px solid #292524', borderRadius: 8 }}>
+        <ChipBtn id="all"    label="All"    count={counts.all} />
+        <ChipBtn id="sms"    label="📱 SMS"    count={counts.sms} color="#3b82f6" />
+        <ChipBtn id="call"   label="☎ Calls"  count={counts.call} color="#10b981" />
+        <ChipBtn id="email"  label="📧 Email"  count={counts.email} color="#a78bfa" />
+        <ChipBtn id="unread" label="🔴 Unread" count={counts.unread} color="#ef4444" />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700 }}>Window</span>
+          <button onClick={() => setDays(7)} style={{ background: days === 7 ? '#292524' : 'transparent', color: days === 7 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>7d</button>
+          <button onClick={() => setDays(30)} style={{ background: days === 30 ? '#292524' : 'transparent', color: days === 30 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>30d</button>
+        </div>
+      </div>
+
+      {filtered === null && (
+        <div style={{ fontSize: 12, color: '#78716c', padding: 18 }}>Loading inbox…</div>
+      )}
+      {filtered && filtered.length === 0 && (
+        <div style={{ fontSize: 12, color: '#78716c', padding: 24, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
+          {filter === 'all'
+            ? `No inbound activity in the last ${days} days. Replies, calls, and emails will appear here in real time.`
+            : `No ${filter === 'unread' ? 'unread items' : filter + ' items'} in the last ${days} days.`}
+        </div>
+      )}
+
+      {filtered && filtered.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {filtered.map(it => {
+            const meta = KIND_META[it.kind];
+            return (
+              <div key={it.key}
+                onClick={() => it.deal && onSelect && onSelect(it.deal.id)}
+                style={{
+                  background: '#0c0a09',
+                  border: '1px solid #292524',
+                  borderLeft: `3px solid ${meta.stripe}`,
+                  borderRadius: 7,
+                  padding: '10px 12px',
+                  cursor: it.deal ? 'pointer' : 'default',
+                  display: 'grid',
+                  gridTemplateColumns: '28px 1fr auto',
+                  gap: 10,
+                  alignItems: 'start',
+                }}>
+                <div style={{ fontSize: 18, lineHeight: 1, marginTop: 2 }}>{meta.icon}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
+                      {it.deal?.name || '(unmatched)'}
+                    </span>
+                    {it.deal?.lead_tier && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.05em' }}>
+                        TIER {it.deal.lead_tier}
+                      </span>
+                    )}
+                    {it.unread && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: '#7f1d1d', color: '#fca5a5', padding: '1px 6px', borderRadius: 3, letterSpacing: '0.05em' }}>
+                        UNREAD
+                      </span>
+                    )}
+                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {it.sender}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, fontStyle: it.kind === 'sms' ? 'italic' : 'normal', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                    {it.kind === 'sms' ? `"${it.preview}"` : it.preview}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>
+                    {fmtAge(it.ts)}
+                  </span>
+                  {it.kind === 'sms' && it.unread && (
+                    <button onClick={(e) => { e.stopPropagation(); markSmsSeen(it.raw.id); }}
+                      style={{ ...btnGhost, fontSize: 10, padding: '2px 7px', color: '#a8a29e' }}>
+                      Mark seen
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        <b style={{ color: '#a8a29e' }}>What's here:</b> Every inbound SMS (<code style={{ color: '#a8a29e' }}>messages_outbound</code> direction=inbound), inbound call (<code style={{ color: '#a8a29e' }}>call_logs</code> direction=inbound), and inbound email (<code style={{ color: '#a8a29e' }}>emails</code> direction=inbound) across every deal you can access, sorted newest first. Click any row to jump to that deal's Comms tab. Realtime — new inbound items pop in without refresh.
       </div>
     </div>
   );
@@ -10084,7 +10659,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         <ErrorBoundary label="comms">
           <div>
             <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
-            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />
+            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} />
             <div style={{ marginTop: 20 }}>
               <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
             </div>
@@ -16527,7 +17102,7 @@ function normalizePhone(p) {
   return p;
 }
 
-function OutboundMessages({ dealId, vendors, deal }) {
+function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   // Hoisted to the top: groupThreads useMemo below references this. Was
   // declared mid-function which caused a TDZ ReferenceError ('Cannot access
   // Ce before initialization') the first time a deal had messages with a
@@ -16646,20 +17221,6 @@ function OutboundMessages({ dealId, vendors, deal }) {
     }
   };
   const [contactUrlCopied, setContactUrlCopied] = useState(null);
-  // ── Voice call state ──────────────────────────────────────────────────────
-  const [callStatus, setCallStatus]     = useState(null); // null|'connecting'|'ringing'|'in-progress'|'ended'
-  const [callContact, setCallContact]   = useState(null); // { name, phone }
-  const [callDuration, setCallDuration] = useState(0);
-  const [incomingCall, setIncomingCall] = useState(null); // { call, from, callerName, dealId }
-  const [callMuted, setCallMuted]       = useState(false);
-  // 'initializing' | 'registered' | 'error' — shown as a dot in the header
-  const [twilioStatus, setTwilioStatus] = useState('initializing');
-  const twilioDeviceRef = React.useRef(null);
-  const activeCallRef   = React.useRef(null);
-  const callTimerRef    = React.useRef(null);
-  const ringAudioRef    = React.useRef(null);  // Web Audio context for ringtone
-  const ringTitleRef    = React.useRef(null);  // { interval, origTitle } for tab title flash
-  const sharedAudioCtx  = React.useRef(null);  // Pre-warmed AudioContext (unlocked by first click)
   const threadRef = useRef(null);
 
   const startEditNote = (note) => {
@@ -16916,231 +17477,6 @@ function OutboundMessages({ dealId, vendors, deal }) {
       setMintingContactId(null);
     }
   };
-
-  // ── Twilio Voice device ───────────────────────────────────────────────────
-  const initTwilioDevice = React.useCallback(async () => {
-    if (twilioDeviceRef.current) return twilioDeviceRef.current;
-    try {
-      const { data, error } = await sb.functions.invoke('twilio-token');
-      if (error || !data?.token) throw new Error(error?.message || 'No token');
-      console.log('[twilio-device] token received, identity:', data.identity);
-      const device = new window.Twilio.Device(data.token, {
-        codecPreferences: ['opus', 'pcmu'],
-        enableRingingState: true,
-        allowIncomingWhileBusy: false,
-      });
-      device.on('registered',   () => { console.log('[twilio-device] registered ✓'); setTwilioStatus('registered'); });
-      device.on('unregistered', () => { console.log('[twilio-device] unregistered'); setTwilioStatus('initializing'); });
-      device.on('incoming', (call) => {
-        // customParameters is a Map<string,string> in SDK v2. Use a safe
-        // accessor that also handles plain-object fallback and URL-decodes values.
-        const getP = (key) => {
-          try {
-            const p = call.customParameters;
-            if (!p) return null;
-            const raw = typeof p.get === 'function' ? p.get(key) : p[key];
-            if (raw == null) return null;
-            const s = String(raw);
-            try { return decodeURIComponent(s); } catch { return s; }
-          } catch { return null; }
-        };
-        // Prefer the custom 'from' parameter (actual caller number) over
-        // call.parameters.From which Twilio sets to the callerId (our Twilio number).
-        const from = getP('from') || call.parameters?.From || 'Unknown';
-        const dealId   = getP('dealId')   || null;
-        const dealName = getP('dealName') || null;
-        console.log('[incoming] from:', from, 'dealId:', dealId, 'dealName:', dealName,
-          'customParams:', call.customParameters);
-        setIncomingCall({
-          call,
-          from,
-          callerName: getP('callerName') || null,
-          dealId,
-          dealName,
-        });
-        // Auto-dismiss if caller hangs up or call is answered on another device
-        call.on('cancel', () => { stopRingtone(); setIncomingCall(null); });
-        startRingtone();
-      });
-      device.on('error', (err) => {
-        console.error('Twilio Device error:', err);
-        setTwilioStatus('error');
-        setCallStatus(null);
-      });
-      await device.register();
-      twilioDeviceRef.current = device;
-      return device;
-    } catch (err) {
-      console.error('Failed to init Twilio device:', err);
-      setTwilioStatus('error');
-      return null;
-    }
-  }, []);
-
-  const startCallTimer = React.useCallback(() => {
-    setCallDuration(0);
-    if (callTimerRef.current) clearInterval(callTimerRef.current);
-    callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
-  }, []);
-
-  const stopCallTimer = React.useCallback(() => {
-    if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
-    setCallDuration(0);
-  }, []);
-
-  // ── Ringtone + tab-title flash for inbound calls ──────────────────────────
-  const startRingtone = React.useCallback(() => {
-    // Stop any prior ring first
-    if (ringAudioRef.current) {
-      clearTimeout(ringAudioRef.current._ringTimer);
-      try { ringAudioRef.current.close(); } catch (_) {}
-      ringAudioRef.current = null;
-    }
-    if (ringTitleRef.current) {
-      clearInterval(ringTitleRef.current.interval);
-      document.title = ringTitleRef.current.origTitle;
-      ringTitleRef.current = null;
-    }
-    // Web Audio: US telephone ring (440 Hz + 480 Hz, 2 s on / 4 s off)
-    // Use pre-warmed shared context so browser autoplay policy doesn't block it.
-    try {
-      const ctx = sharedAudioCtx.current || new (window.AudioContext || window.webkitAudioContext)();
-      if (!sharedAudioCtx.current) sharedAudioCtx.current = ctx;
-      ringAudioRef.current = ctx;
-      const play = () => {
-        if (ringAudioRef.current !== ctx) return;
-        ctx.resume().catch(() => {});
-        [440, 480].forEach(freq => {
-          const osc  = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.frequency.value = freq;
-          gain.gain.setValueAtTime(0.12, ctx.currentTime);
-          osc.start(ctx.currentTime);
-          osc.stop(ctx.currentTime + 2);
-        });
-        ctx._ringTimer = setTimeout(play, 6000);
-      };
-      play();
-    } catch (_) {}
-    // Flash document title when the tab is in the background
-    const origTitle = document.title;
-    let flash = false;
-    ringTitleRef.current = {
-      interval:  setInterval(() => { document.title = (flash = !flash) ? '📞 INCOMING CALL' : origTitle; }, 700),
-      origTitle,
-    };
-  }, []);
-
-  const stopRingtone = React.useCallback(() => {
-    if (ringAudioRef.current) {
-      clearTimeout(ringAudioRef.current._ringTimer);
-      try { ringAudioRef.current.close(); } catch (_) {}
-      ringAudioRef.current = null;
-    }
-    if (ringTitleRef.current) {
-      clearInterval(ringTitleRef.current.interval);
-      document.title = ringTitleRef.current.origTitle;
-      ringTitleRef.current = null;
-    }
-  }, []);
-
-  const startCall = React.useCallback(async (contact) => {
-    if (callStatus) return;
-    setCallStatus('connecting');
-    setCallContact(contact);
-    setCallMuted(false);
-    try {
-      const device = await initTwilioDevice();
-      if (!device) throw new Error('Could not initialize calling device');
-      const call = await device.connect({
-        params: { To: contact.phone, CallerId: fromNumber || '+15139985440' },
-      });
-      activeCallRef.current = call;
-      call.on('ringing',    () => setCallStatus('ringing'));
-      call.on('accept',     () => { setCallStatus('in-progress'); startCallTimer(); });
-      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
-      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); });
-      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
-    } catch (err) {
-      console.error('startCall error:', err);
-      setCallStatus(null);
-      setCallContact(null);
-    }
-  }, [callStatus, initTwilioDevice, startCallTimer, stopCallTimer]);
-
-  const hangupCall = React.useCallback(() => {
-    if (activeCallRef.current) { activeCallRef.current.disconnect(); activeCallRef.current = null; }
-    stopCallTimer();
-    setCallStatus(null);
-    setCallContact(null);
-    setCallMuted(false);
-  }, [stopCallTimer]);
-
-  const toggleMute = React.useCallback(() => {
-    if (!activeCallRef.current) return;
-    const muted = !callMuted;
-    activeCallRef.current.mute(muted);
-    setCallMuted(muted);
-  }, [callMuted]);
-
-  const answerIncoming = React.useCallback(() => {
-    if (!incomingCall) return;
-    stopRingtone();
-    try {
-      incomingCall.call.accept();
-      setCallStatus('in-progress');
-      setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
-      activeCallRef.current = incomingCall.call;
-      startCallTimer();
-      incomingCall.call.on('disconnect', () => {
-        setCallStatus('ended');
-        stopCallTimer();
-        setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
-      });
-    } catch (e) {
-      console.error('Failed to accept call:', e);
-    }
-    setIncomingCall(null);
-  }, [incomingCall, startCallTimer, stopCallTimer, stopRingtone]);
-
-  const rejectIncoming = React.useCallback(() => {
-    if (!incomingCall) return;
-    stopRingtone();
-    incomingCall.call.reject();
-    setIncomingCall(null);
-  }, [incomingCall, stopRingtone]);
-
-  // Register device on mount so inbound calls ring immediately
-  React.useEffect(() => {
-    initTwilioDevice();
-    return () => {
-      if (twilioDeviceRef.current) { twilioDeviceRef.current.destroy(); twilioDeviceRef.current = null; }
-      stopCallTimer();
-    };
-  }, []);
-
-  // Pre-warm Web Audio context on first user interaction so ringtone can
-  // play without being blocked by browser autoplay policy.
-  React.useEffect(() => {
-    const unlock = () => {
-      if (!sharedAudioCtx.current) {
-        try {
-          sharedAudioCtx.current = new (window.AudioContext || window.webkitAudioContext)();
-        } catch (_) {}
-      }
-      if (sharedAudioCtx.current?.state === 'suspended') {
-        sharedAudioCtx.current.resume().catch(() => {});
-      }
-    };
-    document.addEventListener('click',      unlock, { once: true });
-    document.addEventListener('touchstart', unlock, { once: true });
-    return () => {
-      document.removeEventListener('click',      unlock);
-      document.removeEventListener('touchstart', unlock);
-    };
-  }, []);
 
   const fmtDuration = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
@@ -18359,99 +18695,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
         </div>
       )}
     </div>
-
-      {/* ── Incoming call overlay ──────────────────────────────────────────── */}
-      {incomingCall && (
-        <>
-          <style>{`
-            @keyframes ring-pulse {
-              0%   { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0.8); }
-              60%  { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 18px rgba(22,163,74,0);   }
-              100% { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0);    }
-            }
-          `}</style>
-          <div style={{
-            position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
-            background: '#1c1917', border: '2px solid #16a34a', borderRadius: 16,
-            padding: '20px 24px', minWidth: 300,
-            animation: 'ring-pulse 1.4s ease-out infinite',
-            display: 'flex', flexDirection: 'column', gap: 14,
-          }}>
-            {/* X dismiss button — stops ring but does NOT reject (caller keeps hearing ringback) */}
-            <button onClick={() => { stopRingtone(); setIncomingCall(null); }} style={{
-              position: 'absolute', top: 10, right: 10,
-              background: 'transparent', border: 'none', color: '#57534e',
-              fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: 4,
-            }} title="Dismiss notification">✕</button>
-
-            <div style={{ fontSize: 11, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>📞 Incoming call</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: '#fafaf9' }}>
-              {incomingCall.from}
-            </div>
-            {incomingCall.dealId && (
-              <div style={{ fontSize: 12, color: '#a8a29e', marginTop: -8 }}>
-                {incomingCall.dealName
-                  ? <><span style={{ color: '#78716c' }}>Deal: </span>
-                      <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
-                        {incomingCall.dealName}
-                      </a>
-                    </>
-                  : <><span style={{ color: '#78716c' }}>Deal: </span>
-                      <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
-                        {incomingCall.dealId}
-                      </a>
-                    </>
-                }
-              </div>
-            )}
-            <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
-              <button onClick={answerIncoming} style={{
-                flex: 1, background: '#16a34a', border: 'none', color: '#fff',
-                borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-                letterSpacing: '0.03em',
-              }}>✓ Answer</button>
-              <button onClick={rejectIncoming} style={{
-                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
-                borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-                letterSpacing: '0.03em',
-              }}>✕ Decline</button>
-            </div>
-          </div>
-        </>
-      )}
-
-      {/* ── Active call overlay ────────────────────────────────────────────── */}
-      {callStatus && callContact && (
-        <div style={{
-          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
-          background: '#1c1917', border: `2px solid ${callStatus === 'in-progress' ? '#16a34a' : callStatus === 'ended' ? '#ef4444' : '#d97706'}`,
-          borderRadius: 16, padding: '20px 24px', minWidth: 280,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-          display: 'flex', flexDirection: 'column', gap: 10,
-        }}>
-          <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            {callStatus === 'connecting' ? '⏳ Connecting…' : callStatus === 'ringing' ? '🔔 Ringing…' : callStatus === 'in-progress' ? '📞 On call' : '📵 Call ended'}
-          </div>
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#fafaf9' }}>{callContact.name}</div>
-          <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{callContact.phone}</div>
-          {callStatus === 'in-progress' && (
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a', fontFamily: "'DM Mono', monospace" }}>{fmtDuration(callDuration)}</div>
-          )}
-          {callStatus !== 'ended' && (
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              <button onClick={toggleMute} style={{
-                flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
-                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
-              <button onClick={hangupCall} style={{
-                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
-                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-              }}>End</button>
-            </div>
-          )}
-        </div>
-      )}
-    </>
+  </>
   );
 }
 
