@@ -21901,6 +21901,45 @@ function dateKey(d) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Range presets for the admin payroll view. Each returns {start, end, label, isPayPeriod}.
+function rangePreset(name) {
+  const today = new Date();
+  if (name === 'current') {
+    const p = computePayPeriod(today);
+    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+  }
+  if (name === 'previous') {
+    // Subtract 15 days to land in the previous half-month, then compute that period
+    const prior = new Date(today.getTime() - 15 * 24 * 60 * 60 * 1000);
+    const p = computePayPeriod(prior);
+    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+  }
+  if (name === 'thisMonth') {
+    const yr = today.getFullYear(); const mo = today.getMonth();
+    return { start: new Date(yr, mo, 1), end: new Date(yr, mo + 1, 0), label: today.toLocaleString('en-US', { month: 'long', year: 'numeric' }), isPayPeriod: false };
+  }
+  if (name === 'lastMonth') {
+    const yr = today.getFullYear(); const mo = today.getMonth() - 1;
+    const first = new Date(yr, mo, 1); const last = new Date(yr, mo + 1, 0);
+    return { start: first, end: last, label: first.toLocaleString('en-US', { month: 'long', year: 'numeric' }), isPayPeriod: false };
+  }
+  if (name === 'last7') {
+    const start = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
+    return { start, end: today, label: 'Last 7 days', isPayPeriod: false };
+  }
+  if (name === 'last30') {
+    const start = new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000);
+    return { start, end: today, label: 'Last 30 days', isPayPeriod: false };
+  }
+  // Default current
+  const p = computePayPeriod(today);
+  return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+}
+
+function isoStartOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0).toISOString(); }
+function isoEndOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).toISOString(); }
+function inputDateValue(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().slice(0, 10); }
+
 function TimeTrackingView({ userId, isAdmin }) {
   const [openEntry, setOpenEntry] = React.useState(null);
   const [myEntries, setMyEntries] = React.useState([]);
@@ -21908,15 +21947,17 @@ function TimeTrackingView({ userId, isAdmin }) {
   const [loading, setLoading] = React.useState(true);
   const [busy, setBusy] = React.useState(false);
   const [notes, setNotes] = React.useState('');
+  const [showManualEntry, setShowManualEntry] = React.useState(false);
 
   const [vaProfiles, setVaProfiles] = React.useState([]);
   const [teamEntries, setTeamEntries] = React.useState([]);
   const [rates, setRates] = React.useState({});
   const [payments, setPayments] = React.useState([]);
+  const [adminRange, setAdminRange] = React.useState(() => rangePreset('current'));
 
   const period = computePayPeriod(new Date());
-  const periodStartIso = period.periodStart.toISOString();
-  const periodEndIso = new Date(period.periodEnd.getFullYear(), period.periodEnd.getMonth(), period.periodEnd.getDate(), 23, 59, 59, 999).toISOString();
+  const adminStartIso = isoStartOfDay(adminRange.start);
+  const adminEndIso = isoEndOfDay(adminRange.end);
 
   React.useEffect(() => {
     if (!openEntry) return;
@@ -21942,18 +21983,18 @@ function TimeTrackingView({ userId, isAdmin }) {
       sb.from('profiles').select('id, name, role').eq('role', 'va'),
       sb.from('hourly_rates').select('*').order('effective_from', { ascending: false }),
       sb.from('time_entries').select('*')
-        .gte('start_at', periodStartIso).lte('start_at', periodEndIso)
+        .gte('start_at', adminStartIso).lte('start_at', adminEndIso)
         .not('end_at', 'is', null),
       sb.from('payments').select('*')
-        .gte('period_end', new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+        .gte('period_end', new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
         .order('period_start', { ascending: false }),
     ]);
     setVaProfiles(profs || []);
     const r = {};
-    const periodEndDate = period.periodEnd.toISOString().slice(0, 10);
+    const rangeEndDate = adminRange.end.toISOString().slice(0, 10);
     (rateRows || []).forEach(row => {
-      if (row.effective_from > periodEndDate) return;
-      if (row.effective_to && row.effective_to < periodEndDate) return;
+      if (row.effective_from > rangeEndDate) return;
+      if (row.effective_to && row.effective_to < rangeEndDate) return;
       if (!r[row.user_id] || r[row.user_id].effective_from < row.effective_from) {
         r[row.user_id] = { rate: row.rate, effective_from: row.effective_from, id: row.id };
       }
@@ -21961,7 +22002,7 @@ function TimeTrackingView({ userId, isAdmin }) {
     setRates(r);
     setTeamEntries(tes || []);
     setPayments(pmts || []);
-  }, [isAdmin, periodStartIso, periodEndIso]);
+  }, [isAdmin, adminStartIso, adminEndIso, adminRange.end]);
 
   React.useEffect(() => { loadMine(); }, [loadMine]);
   React.useEffect(() => { loadAdmin(); }, [loadAdmin]);
@@ -22008,6 +22049,33 @@ function TimeTrackingView({ userId, isAdmin }) {
     if (!confirm('Delete this entry?')) return;
     await sb.from('time_entries').delete().eq('id', id);
     loadMine();
+  };
+
+  const submitManualEntry = async ({ targetUserId, date, startTime, endTime, entryNotes }) => {
+    if (busy) return;
+    if (!date || !startTime || !endTime) { alert('Date, start time, and end time are all required.'); return; }
+    const startAt = new Date(`${date}T${startTime}:00`);
+    const endAt = new Date(`${date}T${endTime}:00`);
+    if (endAt <= startAt) {
+      // Treat end-before-start as next-day shift only if duration looks plausible (< 16h)
+      endAt.setDate(endAt.getDate() + 1);
+      if (endAt - startAt > 16 * 3600 * 1000) {
+        alert('End time must be after start time.');
+        return;
+      }
+    }
+    setBusy(true);
+    const { error } = await sb.from('time_entries').insert({
+      user_id: targetUserId || userId,
+      start_at: startAt.toISOString(),
+      end_at: endAt.toISOString(),
+      notes: entryNotes || null,
+    });
+    setBusy(false);
+    if (error) { alert('Save failed: ' + error.message); return; }
+    setShowManualEntry(false);
+    loadMine();
+    loadAdmin();
   };
 
   const myPeriodMs = myEntries.reduce((sum, e) => {
@@ -22068,11 +22136,17 @@ function TimeTrackingView({ userId, isAdmin }) {
       )
     ),
     React.createElement('div', { style: { ...card, marginBottom: 16 } },
-      React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 10 } }, 'Recent entries'),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
+        React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, 'Recent entries'),
+        React.createElement('button', {
+          onClick: () => setShowManualEntry(true),
+          style: { padding: '6px 14px', background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+        }, '+ Add manual entry')
+      ),
       loading
         ? React.createElement('div', { style: { padding: 12, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'Loading…')
         : myEntries.length === 0
-          ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No entries yet. Click "Clock In" to start.')
+          ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No entries yet. Click "Clock In" or "+ Add manual entry" to start.')
           : React.createElement('div', null,
               myEntries.slice(0, 30).map(e => {
                 const start = new Date(e.start_at);
@@ -22097,13 +22171,95 @@ function TimeTrackingView({ userId, isAdmin }) {
             )
     ),
     isAdmin && React.createElement(AdminPayrollSection, {
-      vaProfiles, teamEntries, rates, payments, period,
+      vaProfiles, teamEntries, rates, payments,
+      adminRange, setAdminRange,
       onReload: loadAdmin,
+    }),
+    showManualEntry && React.createElement(ManualEntryModal, {
+      isAdmin, userId, vaProfiles,
+      onClose: () => setShowManualEntry(false),
+      onSubmit: submitManualEntry,
+      busy,
     })
   );
 }
 
-function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period, onReload }) {
+function ManualEntryModal({ isAdmin, userId, vaProfiles, onClose, onSubmit, busy }) {
+  const [targetUserId, setTargetUserId] = React.useState(userId);
+  const [date, setDate] = React.useState(inputDateValue(new Date()));
+  const [startTime, setStartTime] = React.useState('09:00');
+  const [endTime, setEndTime] = React.useState('17:00');
+  const [entryNotes, setEntryNotes] = React.useState('');
+
+  const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 };
+  const modal = { background: '#1c1917', border: '1px solid #44403c', borderRadius: 12, padding: 24, width: '100%', maxWidth: 480 };
+  const label = { display: 'block', fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: 6 };
+  const input = { width: '100%', padding: '8px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
+
+  // Compute duration preview
+  let durLabel = '—';
+  try {
+    const s = new Date(`${date}T${startTime}:00`);
+    let e = new Date(`${date}T${endTime}:00`);
+    if (e <= s) e.setDate(e.getDate() + 1);
+    const ms = e - s;
+    if (ms > 0 && ms <= 16 * 3600 * 1000) durLabel = (ms / 3600000).toFixed(2) + 'h';
+  } catch (_) {}
+
+  return React.createElement('div', { style: overlay, onClick: e => { if (e.target === e.currentTarget) onClose(); } },
+    React.createElement('div', { style: modal },
+      React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: '#fafaf9', marginBottom: 16 } }, 'Add manual time entry'),
+      isAdmin && vaProfiles.length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
+        React.createElement('label', { style: label }, 'Person'),
+        React.createElement('select', {
+          value: targetUserId,
+          onChange: e => setTargetUserId(e.target.value),
+          style: input,
+        },
+          React.createElement('option', { value: userId }, 'Me'),
+          vaProfiles.filter(p => p.id !== userId).map(p =>
+            React.createElement('option', { key: p.id, value: p.id }, p.name || '(unnamed)')
+          )
+        )
+      ),
+      React.createElement('div', { style: { marginBottom: 12 } },
+        React.createElement('label', { style: label }, 'Date'),
+        React.createElement('input', { type: 'date', value: date, onChange: e => setDate(e.target.value), style: input })
+      ),
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 10, marginBottom: 12 } },
+        React.createElement('div', null,
+          React.createElement('label', { style: label }, 'Start'),
+          React.createElement('input', { type: 'time', value: startTime, onChange: e => setStartTime(e.target.value), style: input })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { style: label }, 'End'),
+          React.createElement('input', { type: 'time', value: endTime, onChange: e => setEndTime(e.target.value), style: input })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { style: label }, 'Total'),
+          React.createElement('div', { style: { ...input, padding: '9px 12px', fontFamily: "'DM Mono', monospace", fontWeight: 700, color: durLabel === '—' ? '#78716c' : '#10b981', textAlign: 'center' } }, durLabel)
+        )
+      ),
+      React.createElement('div', { style: { marginBottom: 16 } },
+        React.createElement('label', { style: label }, 'Notes (optional)'),
+        React.createElement('input', { type: 'text', value: entryNotes, onChange: e => setEntryNotes(e.target.value), placeholder: 'What did you work on?', style: input })
+      ),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
+        React.createElement('button', {
+          onClick: onClose,
+          style: { padding: '10px 18px', background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 6, fontSize: 13, cursor: 'pointer' }
+        }, 'Cancel'),
+        React.createElement('button', {
+          onClick: () => onSubmit({ targetUserId, date, startTime, endTime, entryNotes }),
+          disabled: busy,
+          style: { padding: '10px 18px', background: '#10b981', color: '#fafaf9', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }
+        }, busy ? 'Saving…' : 'Save entry')
+      )
+    )
+  );
+}
+
+function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRange, setAdminRange, onReload }) {
   const [editingRateFor, setEditingRateFor] = React.useState(null);
   const [newRate, setNewRate] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -22117,17 +22273,20 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period,
     hoursByUser[e.user_id] = (hoursByUser[e.user_id] || 0) + ms;
   });
 
-  const periodStartStr = period.periodStart.toISOString().slice(0, 10);
-  const periodEndStr = period.periodEnd.toISOString().slice(0, 10);
+  // Pay-period boundary strings — only meaningful when the range IS a pay period
+  const rangeStartStr = adminRange.start.toISOString().slice(0, 10);
+  const rangeEndStr = adminRange.end.toISOString().slice(0, 10);
   const paidThisPeriod = {};
-  payments.forEach(p => {
-    if (p.period_start === periodStartStr && p.period_end === periodEndStr) {
-      paidThisPeriod[p.user_id] = p;
-    }
-  });
+  if (adminRange.isPayPeriod) {
+    payments.forEach(p => {
+      if (p.period_start === rangeStartStr && p.period_end === rangeEndStr) {
+        paidThisPeriod[p.user_id] = p;
+      }
+    });
+  }
 
   const markPaid = async (userId, ms, rate) => {
-    if (busy) return;
+    if (busy || !adminRange.isPayPeriod) return;
     const hours = ms / 3600000;
     const amount = +(hours * rate).toFixed(2);
     if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(amount)} as paid for this period?`)) return;
@@ -22135,8 +22294,8 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period,
     const { data: { user } } = await sb.auth.getUser();
     const { error } = await sb.from('payments').insert({
       user_id: userId,
-      period_start: periodStartStr,
-      period_end: periodEndStr,
+      period_start: rangeStartStr,
+      period_end: rangeEndStr,
       hours_worked: hours.toFixed(2),
       rate_used: rate,
       amount_paid: amount,
@@ -22183,12 +22342,31 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period,
   const paidThisMonth = payments.filter(p => p.paid_at && p.paid_at.slice(0, 7) === thisMonth).reduce((s, p) => s + Number(p.amount_paid || 0), 0);
   const paidLastMonth = payments.filter(p => p.paid_at && p.paid_at.slice(0, 7) === lastMonth).reduce((s, p) => s + Number(p.amount_paid || 0), 0);
 
+  const presetBtn = (id, label) => {
+    const isActive = adminRange.label === rangePreset(id).label;
+    return React.createElement('button', {
+      key: id,
+      onClick: () => setAdminRange(rangePreset(id)),
+      style: {
+        padding: '5px 10px', fontSize: 11, fontWeight: 600,
+        background: isActive ? '#292524' : 'transparent',
+        color: isActive ? '#fafaf9' : '#a8a29e',
+        border: '1px solid ' + (isActive ? '#44403c' : 'transparent'),
+        borderRadius: 5, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+      }
+    }, label);
+  };
+
   return React.createElement('div', null,
     React.createElement('div', { style: { ...card, marginBottom: 16, borderTop: '2px solid #d97706' } },
-      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 10 } },
         React.createElement('div', null,
           React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, '💵 Team Payroll'),
-          React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginTop: 4 } }, 'Period: ' + period.label + ' · pay date ' + period.payDate.toLocaleDateString())
+          React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginTop: 4 } },
+            adminRange.label,
+            adminRange.isPayPeriod && adminRange.period && React.createElement('span', null, ' · pay date ' + adminRange.period.payDate.toLocaleDateString()),
+            !adminRange.isPayPeriod && React.createElement('span', { style: { color: '#78716c', marginLeft: 6, fontStyle: 'italic' } }, '(report mode — Mark Paid disabled for non-pay-period ranges)')
+          )
         ),
         React.createElement('div', { style: { display: 'flex', gap: 16 } },
           React.createElement('div', { style: { textAlign: 'right' } },
@@ -22200,6 +22378,33 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period,
             React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#a8a29e', fontFamily: "'DM Mono', monospace" } }, fmtMoney(paidLastMonth))
           )
         )
+      ),
+      // ----- Range picker bar -----
+      React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14, padding: 8, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 } },
+        presetBtn('current', 'Current period'),
+        presetBtn('previous', 'Previous period'),
+        presetBtn('thisMonth', 'This month'),
+        presetBtn('lastMonth', 'Last month'),
+        presetBtn('last7', 'Last 7'),
+        presetBtn('last30', 'Last 30'),
+        React.createElement('div', { style: { width: 1, height: 18, background: '#292524', margin: '0 6px' } }),
+        React.createElement('input', {
+          type: 'date', value: inputDateValue(adminRange.start),
+          onChange: e => {
+            const newStart = new Date(e.target.value + 'T00:00:00');
+            setAdminRange({ start: newStart, end: adminRange.end, label: `${e.target.value} → ${inputDateValue(adminRange.end)}`, isPayPeriod: false });
+          },
+          style: { padding: '4px 6px', background: '#1c1917', border: '1px solid #292524', borderRadius: 4, color: '#fafaf9', fontSize: 11, fontFamily: 'inherit' }
+        }),
+        React.createElement('span', { style: { color: '#78716c', fontSize: 11 } }, '→'),
+        React.createElement('input', {
+          type: 'date', value: inputDateValue(adminRange.end),
+          onChange: e => {
+            const newEnd = new Date(e.target.value + 'T23:59:59');
+            setAdminRange({ start: adminRange.start, end: newEnd, label: `${inputDateValue(adminRange.start)} → ${e.target.value}`, isPayPeriod: false });
+          },
+          style: { padding: '4px 6px', background: '#1c1917', border: '1px solid #292524', borderRadius: 4, color: '#fafaf9', fontSize: 11, fontFamily: 'inherit' }
+        })
       ),
       vaProfiles.length === 0
         ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No VAs found. Add Erik / Anam via the Team modal.')
@@ -22240,7 +22445,9 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, period,
                           React.createElement('span', { style: { color: '#10b981', fontSize: 11, fontWeight: 700 } }, '✓ Paid ' + new Date(paid.paid_at).toLocaleDateString()),
                           React.createElement('button', { onClick: () => unmarkPaid(paid.id), style: { background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 10 }, title: 'Undo' }, '↶')
                         )
-                      : React.createElement('button', { onClick: () => markPaid(p.id, ms, rate), disabled: !rate || ms === 0 || busy, style: { padding: '5px 12px', background: (!rate || ms === 0) ? '#44403c' : '#d97706', color: '#fafaf9', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: (!rate || ms === 0) ? 'not-allowed' : 'pointer', opacity: (!rate || ms === 0) ? 0.5 : 1 } }, 'Mark Paid')
+                      : adminRange.isPayPeriod
+                        ? React.createElement('button', { onClick: () => markPaid(p.id, ms, rate), disabled: !rate || ms === 0 || busy, style: { padding: '5px 12px', background: (!rate || ms === 0) ? '#44403c' : '#d97706', color: '#fafaf9', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: (!rate || ms === 0) ? 'not-allowed' : 'pointer', opacity: (!rate || ms === 0) ? 0.5 : 1 } }, 'Mark Paid')
+                        : React.createElement('span', { style: { color: '#78716c', fontSize: 10, fontStyle: 'italic' } }, 'report only')
                   )
                 );
               })
