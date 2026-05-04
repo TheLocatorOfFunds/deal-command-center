@@ -47,3 +47,8 @@ verify_jwt = false
 [functions.twilio-voice]
 # Called by Twilio for inbound call routing — no Supabase JWT.
 verify_jwt = false
+
+[functions.twilio-recording]
+# Called by <audio src="..."> elements — browser can't send JWT on media requests.
+# The RE... recording SID is Twilio's own unguessable token (access control).
+verify_jwt = false
