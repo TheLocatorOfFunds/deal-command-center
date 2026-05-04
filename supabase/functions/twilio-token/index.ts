@@ -54,7 +54,9 @@ Deno.serve(async (req: Request) => {
     if (token) {
       const parts = token.split('.');
       if (parts.length === 3) {
-        const padded = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        // base64url → base64: swap chars, then re-add stripped '=' padding
+        const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
         const payload = JSON.parse(atob(padded));
         const email: string | undefined = payload.email ?? payload.user_metadata?.email;
         if (email) {
