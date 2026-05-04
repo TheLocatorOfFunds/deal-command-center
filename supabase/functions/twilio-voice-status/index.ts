@@ -40,9 +40,13 @@ Deno.serve(async (req: Request) => {
 
   // Recording callback — Twilio delivers these separately, sometimes later.
   if (recordingUrl) {
+    // Store a proxy URL instead of the raw Twilio URL (which requires Basic Auth
+    // and causes the browser to show a login dialog when <audio> tries to load it).
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const proxyUrl = `${supabaseUrl}/functions/v1/twilio-recording?sid=${recordingSid}`;
     await db.from('call_logs')
       .update({
-        recording_url: recordingUrl + '.mp3',
+        recording_url: proxyUrl,
         recording_sid: recordingSid,
         recording_duration: Number(recordingDuration) || null,
       })
