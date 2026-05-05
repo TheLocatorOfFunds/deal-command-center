@@ -1543,6 +1543,7 @@ function DealCommandCenter({ session, profile }) {
 
           {/* Notifications bell — aggregates Docket, Leads, Walkthroughs, Offers, Alerts */}
           {isTeam && (() => {
+            // Bell does NOT include unread chat — the red banner handles that separately
             const totalNotifs = unackDocketCount + newLeadCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
             return (
               <div style={{ position: 'relative' }}>
@@ -1557,7 +1558,6 @@ function DealCommandCenter({ session, profile }) {
                     onClick={() => setShowNotifDropdown(false)}>
                     <div style={{ padding: '10px 14px 6px', fontSize: 10, color: '#57534e', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', borderBottom: '1px solid #1c1917' }}>Notifications</div>
                     {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
-                    {unreadChatCount > 0 && <button onClick={() => { setActiveDealId(null); setView('team'); markAllChatRead(); setChatBannerDismissedAt(unreadChatCount); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>💬 <span style={{ flex: 1 }}>{unreadChatCount} unread message{unreadChatCount !== 1 ? 's' : ''}</span></button>}
                     {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
                     {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
                     {pendingWalkthroughs.length > 0 && <button onClick={() => setShowWalkthroughs(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🏠 <span style={{ flex: 1 }}>{pendingWalkthroughs.length} walkthrough{pendingWalkthroughs.length !== 1 ? 's' : ''}</span></button>}
@@ -1736,33 +1736,20 @@ function DealCommandCenter({ session, profile }) {
         <div
           onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); markAllChatRead(); }}
           style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-            background: 'linear-gradient(90deg, rgba(220,38,38,0.18), rgba(220,38,38,0.08))',
-            border: '1px solid #b91c1c', borderRadius: 8,
-            padding: '10px 14px', marginBottom: 16, cursor: 'pointer',
-            animation: 'unreadBannerSlide 0.22s ease-out',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'rgba(220,38,38,0.12)',
+            borderLeft: '3px solid #dc2626',
+            padding: '7px 12px', marginBottom: 14, cursor: 'pointer',
+            animation: 'unreadBannerSlide 0.18s ease-out',
           }}
           title="Click to open chat"
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 28, height: 28, borderRadius: '50%', background: '#dc2626', color: '#fff',
-              fontSize: 13, fontWeight: 800, flexShrink: 0,
-              animation: 'chatBadgePulse 1.6s ease-in-out infinite',
-            }}>💬</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#fecaca' }}>
-              You have {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'}
-            </span>
-            <span style={{ fontSize: 12, color: '#fca5a5' }}>— click to open</span>
-          </div>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#fca5a5' }}>
+            💬 {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'} — click to open
+          </span>
           <button
             onClick={(e) => { e.stopPropagation(); setChatBannerDismissedAt(unreadChatCount); }}
-            title="Dismiss (will reappear when a new message arrives)"
-            style={{
-              background: 'transparent', border: 'none', color: '#fca5a5',
-              cursor: 'pointer', fontSize: 18, padding: '0 4px', lineHeight: 1, flexShrink: 0,
-            }}
+            style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
           >×</button>
         </div>
       )}
@@ -2538,35 +2525,29 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
   return (
     <div>
-      {/* Portfolio summary */}
-      <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
-        <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
-        <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
-        {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
-        <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
-      </div>
-
-      <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
-          {viewBtn("today", "📌 Today", 0)}
-          {viewBtn("attention", "🔔 Attention", 0)}
-          {groupBtn("outreach", "🎯 Outreach", ["outreach", "inbox", "leads", "forecast"], 0)}
-          {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
-          {viewBtn("tasks", "✓ Tasks", 0)}
-          {(isAdmin || userRole === 'va') && viewBtn("time", "⏱ Time", 0)}
-          {isAdmin && groupBtn("reports", "📊 Insights", ["reports", "analytics", "traffic"], 0)}
+      {/* Portfolio summary — Insights only */}
+      {["reports", "analytics", "traffic"].includes(view) && (
+        <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+          {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
+          <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
+          <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
+          {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
+          <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+      )}
+
+      {/* Action bar — Export CSV + New Deal. Only shown on deal-list views. */}
+      {["active","flagged","hygiene","archive","pipeline","leads-phase"].includes(view) && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
           <button className="desktop-new-deal" onClick={onNew} style={btnPrimary}>+ New Deal</button>
         </div>
-      </div>
+      )}
 
-      {/* Hub sub-chips — second-level nav inside the consolidated tabs.
-          Outreach hub:  drafts/replies · leads · forecast
-          Deals hub:     active · flagged · hygiene · closed · kanban
-          Insights hub:  reports · analytics · traffic */}
+      {/* Hub sub-chips — second-level nav inside sidebar sections.
+          Outreach:  Drafts & Replies · Inbox · Leads · Forecast
+          Deals:     New Leads · Active · Flagged · Hygiene · Closed · Kanban
+          Insights:  Reports · Analytics · Traffic */}
       {["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("outreach", "🤖 Drafts & Replies")}
@@ -24272,10 +24253,125 @@ function TeamChatBubble() {
   );
 }
 
+// ─── CombinedFAB — single floating button for Chat + Lauren ─────────────
+// Replaces the separate Chat (bottom-left) and Lauren (bottom-right) FABs.
+// One amber pill sits bottom-right. Click it to expand a mini menu:
+//   💬 Chat   — dispatches dcc:open-team-chat → TeamChatBubble opens
+//   🤖 Lauren — dispatches dcc:open-lauren    → LaurenDCC opens
+// Hidden on mobile (≤640px) via .combined-fab-btn CSS class; mobile
+// users reach Chat + Lauren via the bottom-nav More sheet.
+function CombinedFAB() {
+  const [open, setOpen] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
+  const [laurenPending, setLaurenPending] = useState(0);
+
+  // Live unread + pending counts so the FAB badge stays current
+  React.useEffect(() => {
+    const refreshChat = async () => {
+      const { data: { user } } = await sb.auth.getUser().catch(() => ({ data: { user: null } }));
+      if (!user) return;
+      const { data } = await sb.rpc('team_unread_count', { p_user_id: user.id }).catch(() => ({ data: 0 }));
+      setChatUnread(Number(data) || 0);
+    };
+    const refreshLauren = async () => {
+      const { data } = await sb.rpc('lauren_flagged_count').catch(() => ({ data: 0 }));
+      setLaurenPending(Number(data) || 0);
+    };
+    refreshChat(); refreshLauren();
+    const iv = setInterval(() => { refreshChat(); refreshLauren(); }, 30_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const totalBadge = chatUnread + laurenPending;
+
+  const pick = (event) => {
+    window.dispatchEvent(new Event(event));
+    setOpen(false);
+  };
+
+  return React.createElement(React.Fragment, null,
+    // Backdrop to close menu on outside click
+    open && React.createElement('div', {
+      style: { position: 'fixed', inset: 0, zIndex: 8998 },
+      onClick: () => setOpen(false),
+    }),
+
+    // Mini menu (shown above the FAB when open)
+    open && React.createElement('div', {
+      style: {
+        position: 'fixed', bottom: 76, right: 24, zIndex: 8999,
+        background: '#1c1917', border: '1px solid #44403c',
+        borderRadius: 12, overflow: 'hidden',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        display: 'flex', flexDirection: 'column',
+        minWidth: 160,
+      }
+    },
+      React.createElement('button', {
+        onClick: () => pick('dcc:open-team-chat'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          borderBottom: '1px solid #292524',
+          color: '#fafaf9', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        }
+      },
+        React.createElement('span', { style: { fontSize: 16 } }, '💬'),
+        React.createElement('span', { style: { flex: 1 } }, 'Team Chat'),
+        chatUnread > 0 && React.createElement('span', {
+          style: { background: '#dc2626', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }
+        }, chatUnread > 99 ? '99+' : chatUnread),
+      ),
+      React.createElement('button', {
+        onClick: () => pick('dcc:open-lauren'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          color: '#fafaf9', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        }
+      },
+        React.createElement('span', { style: { fontSize: 16 } }, '🤖'),
+        React.createElement('span', { style: { flex: 1 } }, 'Lauren'),
+        laurenPending > 0 && React.createElement('span', {
+          style: { background: '#f59e0b', color: '#1c0a00', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }
+        }, laurenPending),
+      ),
+    ),
+
+    // Main FAB button
+    React.createElement('button', {
+      className: 'combined-fab-btn',
+      onClick: () => setOpen(o => !o),
+      title: 'Chat & Lauren',
+      style: {
+        position: 'fixed', bottom: 24, right: 24, zIndex: 9000,
+        background: '#d97706', color: '#1c0a00', border: 'none',
+        borderRadius: 24, padding: '0 18px', height: 44,
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        fontSize: 13, fontWeight: 700, cursor: 'pointer',
+        boxShadow: totalBadge > 0
+          ? '0 4px 24px rgba(217,119,6,.85), 0 0 0 3px rgba(217,119,6,.25)'
+          : '0 4px 16px rgba(217,119,6,.45)',
+        fontFamily: 'inherit',
+        transition: 'transform .1s, box-shadow .2s',
+      }
+    },
+      React.createElement('span', { style: { fontSize: 15 } }, open ? '✕' : '💬'),
+      open ? 'Close' : 'Chat',
+      totalBadge > 0 && !open && React.createElement('span', {
+        style: { background: '#dc2626', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700, marginLeft: 2 }
+      }, totalBadge > 99 ? '99+' : totalBadge),
+    ),
+  );
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   React.createElement(React.Fragment, null,
     React.createElement(Root),
     React.createElement(LaurenDCC),
-    React.createElement(TeamChatBubble)
+    React.createElement(TeamChatBubble),
+    React.createElement(CombinedFAB),
   )
 );

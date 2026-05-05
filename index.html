@@ -72,6 +72,12 @@
   /* ─── Sidebar ───────────────────────────────────────────────── */
   .dcc-sidebar { transition: width 0.18s ease, min-width 0.18s ease; }
 
+  /* ─── Combined FAB replaces individual Lauren + Chat FABs ───── */
+  /* Hide the original individual floating buttons everywhere;
+     CombinedFAB (bottom-right, desktop only) handles both. */
+  .lauren-fab { display: none !important; }
+  .team-chat-bubble { display: none !important; }
+
   /* ─── Tablet (≤768px) ──────────────────────────────────────── */
   @media (max-width: 768px) {
     .dcc-sidebar { display: none !important; }
@@ -136,12 +142,12 @@
     /* Show FAB on phone (shifted up to clear the bottom nav) */
     .fab { display: inline-flex; bottom: calc(92px + env(safe-area-inset-bottom)) !important; }
 
-    /* Hide Lauren's desktop floating pill on mobile — she lives in the
-       More sheet instead so she doesn't crowd the bottom nav. */
+    /* Hide individual Lauren + Chat FABs on mobile — combined FAB handles both */
     .lauren-fab { display: none !important; }
-    /* Same for the Messenger-style team-chat bubble — phones use the
-       in-app /team view via the bottom-nav More sheet. */
-    .team-chat-bubble, .team-chat-panel { display: none !important; }
+    .team-chat-bubble { display: none !important; }
+    .team-chat-panel { display: none !important; }
+    /* Also hide combined FAB on mobile (bottom nav + More sheet cover it) */
+    .combined-fab-btn { display: none !important; }
     /* ─── Comms: mobile-first rebuild ─────────────────────────────
        Goal: iMessage-/LeadConnector-feel. Container takes the viewport
        (minus the deal-detail chrome above it), composer is sticky at
