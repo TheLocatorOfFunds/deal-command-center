@@ -2988,15 +2988,10 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const fileInputRef = useRef(null);
 
   // Ensure the current user has their Lauren DM (Hub mode). Idempotent RPC.
-  // Runs once on TeamView mount; if the user has no Lauren DM yet, one is
-  // auto-created and shows up in the thread list on next loadThreads().
-  useEffect(() => {
-    sb.rpc('lauren_get_or_create_dm').then(({ error }) => {
-      // Migration may not be applied yet — fail silently and let the rest
-      // of TeamView work without the Lauren DM thread.
-      if (error) console.debug('[lauren_get_or_create_dm]', error);
-    });
-  }, []);
+  // NOTE: lauren_get_or_create_dm is intentionally NOT called here.
+  // The Lauren FAB (LaurenDCC component) creates/finds the DM on demand.
+  // Calling it from TeamView caused duplicate Lauren threads to accumulate
+  // and re-appear every time the Chat tab was opened, even after deletion.
 
   // Load current user + initial threads + their profile names
   const loadThreads = async () => {
@@ -3466,7 +3461,28 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
           </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-          {threads.map(t => {
+          {/* ── Permanent Jitsi video rooms — always at top of thread list ── */}
+          <div style={{ padding: '6px 6px 4px' }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#57534e', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 5, paddingLeft: 2 }}>📹 Video Rooms</div>
+            <div style={{ display: 'flex', gap: 5 }}>
+              {[
+                { label: 'Eric', url: 'https://meet.jit.si/DCC-Eric-Room' },
+                { label: 'Anam', url: 'https://meet.jit.si/DCC-Anam-Room' },
+              ].map(room => (
+                <button key={room.url}
+                  onClick={() => window.open(room.url, '_blank', 'noopener,noreferrer')}
+                  title={`Join ${room.label}'s room on Jitsi`}
+                  style={{ flex: 1, background: '#14532d', color: '#86efac', border: '1px solid #16a34a', borderRadius: 6, padding: '6px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  📹 {room.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ height: 1, background: '#1c1917', margin: '4px 0 6px' }} />
+          {/* Lauren threads filtered out — they live in the Lauren FAB.
+              Showing them here creates confusing duplicates; they auto-recreate
+              on every TeamView mount so deleting them is futile. */}
+          {threads.filter(t => t.thread_type !== 'lauren_dm' && t.thread_type !== 'lauren_room').map(t => {
             const icon = t.thread_type === 'dm' ? '💬' : t.thread_type === 'deal' ? '🏠' : '#';
             let label = t.title;
             if (t.thread_type === 'dm') {
