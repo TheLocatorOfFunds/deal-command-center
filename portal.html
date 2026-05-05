@@ -157,7 +157,33 @@
   .case-hero-status-text { font-size: 13px; color: var(--text); margin-top: 6px; line-height: 1.6; }
   .case-hero-status-cta { font-size: 12px; color: var(--navy-mid); font-weight: 600; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); line-height: 1.5; }
 
+  /* Inline 5-step tracker — sits between the dark hero band and the
+     beige status band. Cream bg connects the two visually. */
+  .case-hero-tracker { background: var(--bg-card); padding: 18px 28px 14px; border-top: 1px solid var(--border); }
+  .case-hero-tracker-strip { display: flex; align-items: flex-start; gap: 0; position: relative; padding: 0 4px; }
+  .case-hero-tracker-step { flex: 1; display: flex; flex-direction: column; align-items: center; text-align: center; position: relative; padding: 0 4px; min-width: 0; }
+  .case-hero-tracker-step:not(:last-child)::after { content: ''; position: absolute; top: 14px; left: calc(50% + 16px); right: calc(-50% + 16px); height: 2px; background: var(--border); z-index: 0; }
+  .case-hero-tracker-step.done::after { background: var(--gold); }
+  .case-hero-tracker-dot { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-card); border: 2px solid var(--border-strong); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: var(--text-muted); position: relative; z-index: 1; }
+  .case-hero-tracker-step.done .case-hero-tracker-dot { background: var(--gold); color: var(--navy); border-color: var(--gold); }
+  .case-hero-tracker-step.current .case-hero-tracker-dot { background: var(--navy); color: #fffcf5; border-color: var(--navy); box-shadow: 0 0 0 4px rgba(11, 31, 58, 0.12); animation: tracker-pulse 2s ease-in-out infinite; }
+  .case-hero-tracker-label { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-top: 8px; line-height: 1.2; letter-spacing: 0.02em; }
+  .case-hero-tracker-step.done .case-hero-tracker-label, .case-hero-tracker-step.current .case-hero-tracker-label { color: var(--navy); }
+  .case-hero-tracker-step.current .case-hero-tracker-label { font-weight: 700; }
+
   .case-hero-next { background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%); padding: 20px 28px; border-top: 1px solid var(--border); }
+
+  /* Inline court-record band — closing section of the unified hero.
+     Uses cream bg + serif prose so it reads as a continuation of the
+     story rather than a separate card. */
+  .case-hero-record { background: var(--bg-card); padding: 22px 28px 24px; border-top: 1px solid var(--border); }
+  .case-hero-record-label { font-size: 11px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 10px; }
+  .case-hero-record-prose { font-family: 'Fraunces', Georgia, serif; font-weight: 400; font-size: 15px; line-height: 1.65; color: var(--text); }
+  .case-hero-record-prose b { color: var(--navy); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .case-hero-record-surplus { margin-top: 14px; padding: 14px 16px; background: var(--gold-soft); border-radius: 10px; border-left: 4px solid var(--gold); display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .case-hero-record-surplus-label { font-size: 10px; font-weight: 700; color: var(--amber); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+  .case-hero-record-surplus-sub { font-size: 12px; color: var(--text-muted); line-height: 1.5; max-width: 380px; }
+  .case-hero-record-surplus-amount { font-family: 'Fraunces', Georgia, serif; font-weight: 500; font-size: 28px; color: var(--navy); letter-spacing: -0.015em; font-variant-numeric: tabular-nums; }
   .case-hero-next-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px; }
   .case-hero-next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); letter-spacing: -0.015em; margin-bottom: 6px; line-height: 1.25; }
   .case-hero-next-estimate { font-size: 13px; font-weight: 600; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
@@ -167,11 +193,18 @@
     .case-hero-payout { padding: 22px 20px 20px; }
     .case-hero-amount { font-size: 36px; }
     .case-hero-progress-marks { font-size: 9px; }
+    .case-hero-tracker { padding: 14px 16px 10px; }
+    .case-hero-tracker-dot { width: 26px; height: 26px; font-size: 11px; }
+    .case-hero-tracker-step:not(:last-child)::after { top: 12px; left: calc(50% + 14px); right: calc(-50% + 14px); }
+    .case-hero-tracker-label { font-size: 9px; }
     .case-hero-status { padding: 18px 20px; gap: 12px; }
     .case-hero-status-icon { width: 42px; height: 42px; font-size: 22px; }
     .case-hero-status-headline { font-size: 17px; }
     .case-hero-next { padding: 18px 20px; }
     .case-hero-next-headline { font-size: 18px; }
+    .case-hero-record { padding: 18px 20px 20px; }
+    .case-hero-record-prose { font-size: 14px; }
+    .case-hero-record-surplus-amount { font-size: 24px; }
   }
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
   .stat { background: var(--bg-card-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
@@ -407,7 +440,10 @@ const isClientFacing = (action) => {
 // Every status gets a plain-English explanation of "what's happening now"
 // plus a typical timeline and whether the client needs to take action.
 function statusIntel(status, filedAt) {
-  const filedDays = filedAt ? Math.floor((Date.now() - new Date(filedAt).getTime()) / 86400000) : 0;
+  // Same guard as payoutWindow — see isPlausibleFiledAt above.
+  const filedDays = isPlausibleFiledAt(filedAt)
+    ? Math.floor((Date.now() - new Date(filedAt).getTime()) / 86400000)
+    : 0;
   const filedPhrase = filedDays > 0 ? `${filedDays} days ago` : "recently";
 
   const messages = {
@@ -482,10 +518,22 @@ function statusIntel(status, filedAt) {
 }
 
 // Typical Ohio surplus case: 3-6 months from filing.
+// Guard against absurdly-old or future filed dates that would produce
+// "737815 days ago" or "Jul 8, 6 — Oct 6, 6" in the UI. Anything outside
+// 1990 ↔ current_year+2 is treated as missing — better to show no
+// progress info than confidently-wrong info.
+// (Triggered for John Dunn 2026-05-05: filed_at = '0006-04-10'.)
+function isPlausibleFiledAt(filedAt) {
+  if (!filedAt) return false;
+  const d = new Date(filedAt);
+  if (isNaN(d)) return false;
+  const y = d.getFullYear();
+  return y >= 1990 && y <= new Date().getFullYear() + 2;
+}
+
 function payoutWindow(filedAt) {
-  if (!filedAt) return null;
+  if (!isPlausibleFiledAt(filedAt)) return null;
   const filed = new Date(filedAt);
-  if (isNaN(filed)) return null;
   const earliest = new Date(filed); earliest.setDate(earliest.getDate() + 90);
   const latest = new Date(filed); latest.setDate(latest.getDate() + 180);
   return { earliest, latest, filed };
@@ -954,7 +1002,7 @@ function TimelineExpectation({ filedAt, status }) {
 // block. Replaces the old NextMilestone + payout-hero + StatusIntel +
 // TimelineExpectation stack so the home view feels less like a list and more
 // like a single case snapshot.
-function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJointCase, claimantCount, perClaimantShare }) {
+function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJointCase, claimantCount, perClaimantShare, deal }) {
   const info = statusIntel(status, filedAt);
   const next = getNextMilestone(status, filedAt);
   const w = payoutWindow(filedAt);
@@ -1020,6 +1068,12 @@ function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJo
         )}
       </div>
 
+      {/* Step tracker — same 5-step model that used to live in a
+          separate SurplusTracker card above the hero. Folded inline
+          per Nathan 2026-05-05 so the whole status story flows as
+          one connected card. */}
+      <CaseHeroTracker status={status} />
+
       <div className={"case-hero-status case-hero-status-" + info.tone}>
         <div className="case-hero-status-icon">{info.icon}</div>
         <div className="case-hero-status-body">
@@ -1036,6 +1090,90 @@ function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJo
           <div className="case-hero-next-headline">{next.title}</div>
           {next.estimate && <div className="case-hero-next-estimate">{next.estimate}</div>}
           <div className="case-hero-next-body">{next.body}</div>
+        </div>
+      )}
+
+      {/* Court record narrative — also folded inline so the user sees
+          one continuous flow: how much you'll get → where the case is →
+          what's next → and here's the court math behind it all. */}
+      {deal && <CaseHeroCourtRecord deal={deal} />}
+    </div>
+  );
+}
+
+// Inline 5-step tracker, used inside CaseHero. Shares logic + step
+// definitions with the standalone SurplusTracker but visually compact
+// to fit between the hero band and the status band.
+function CaseHeroTracker({ status }) {
+  const currentIdx = trackerIndexForStatus(status);
+  const isDead = currentIdx === -2;
+  if (isDead) return null;
+  return (
+    <div className="case-hero-tracker">
+      <div className="case-hero-tracker-strip">
+        {TRACKER_STEPS.map((step, idx) => {
+          const isDone    = idx < currentIdx;
+          const isCurrent = idx === currentIdx;
+          let cls = 'case-hero-tracker-step';
+          if (isDone)    cls += ' done';
+          if (isCurrent) cls += ' current';
+          return (
+            <div key={step.key} className={cls}>
+              <div className="case-hero-tracker-dot">
+                {isDone ? '✓' : step.icon}
+              </div>
+              <div className="case-hero-tracker-label">{step.label}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Inline court-record summary — used to live in its own
+// <CaseSnapshotCard /> below the hero. Per Nathan 2026-05-05: looked
+// disconnected. Now folds into CaseHero as the closing band.
+function CaseHeroCourtRecord({ deal }) {
+  const m = deal?.meta || {};
+  const judgment  = m.judgmentAmount ?? null;
+  const salePrice = m.salePrice ?? null;
+  const surplus   = m.verifiedSurplus ?? m.estimatedSurplus ?? null;
+  const verified  = m.verifiedSurplus != null;
+  const saleDate  = m.saleDate || null;
+  if (judgment == null && salePrice == null) return null;
+
+  const fmt = (v) => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const saleLabel = saleDate
+    ? new Date(saleDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null;
+
+  return (
+    <div className="case-hero-record">
+      <div className="case-hero-record-label">Court record</div>
+      <div className="case-hero-record-prose">
+        {judgment != null && salePrice != null ? (
+          <>
+            The bank was owed <b>{fmt(judgment)}</b> on the judgment.
+            {' '}The home sold for <b>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.
+          </>
+        ) : judgment != null ? (
+          <>The bank was owed <b>{fmt(judgment)}</b> on the judgment.</>
+        ) : (
+          <>The home sold for <b>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.</>
+        )}
+      </div>
+      {surplus != null && (
+        <div className="case-hero-record-surplus">
+          <div>
+            <div className="case-hero-record-surplus-label">{verified ? 'Verified surplus' : 'Estimated surplus'}</div>
+            <div className="case-hero-record-surplus-sub">
+              {verified
+                ? 'Court-confirmed — the funds we are now working to release to you.'
+                : 'After fees and costs come out of the sale, this is what is left for you to recover.'}
+            </div>
+          </div>
+          <div className="case-hero-record-surplus-amount">{fmt(surplus)}</div>
         </div>
       )}
     </div>
@@ -2535,8 +2673,11 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
 
-      <SurplusTracker status={deal.status} filedAt={filedAt} />
-
+      {/* Per Nathan 2026-05-05: SurplusTracker + CaseHero + CaseSnapshotCard
+          used to be three separate cards stacked here. Now folded into ONE
+          unified <CaseHero /> that flows: estimated share → step tracker →
+          where you are → what's next → court record. CaseSnapshotCard kept
+          as a back-compat export but no longer rendered separately. */}
       {isRecovered ? (
         <CelebrationHero clientShare={clientShare} address={deal.address} />
       ) : (
@@ -2550,8 +2691,8 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
             isJointCase={isJointCase}
             claimantCount={claimantCount}
             perClaimantShare={perClaimantShare}
+            deal={deal}
           />
-          <CaseSnapshotCard deal={deal} />
           <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} activity={activity} />
         </>
       )}
