@@ -17896,7 +17896,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   React.useEffect(() => {
     if (!rvmMode) return;
     sb.from('rvm_templates')
-      .select('id, name, cadence_day, script')
+      .select('id, name, cadence_day, script, generation_mode')
       .eq('active', true)
       .order('cadence_day', { ascending: true, nullsLast: true })
       .then(({ data }) => {
@@ -18034,6 +18034,8 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
           : 'Audio generated. Slybroadcast delivery still pending API approval — preview below.',
         mp3_url: data?.mp3_url,
         rendered_script: data?.rendered_script,
+        generation_mode: data?.generation_mode,
+        case_intel_used: data?.case_intel_used,
       });
     } catch (e) {
       setRvmResult({ type: 'error', text: 'Failed: ' + (e.message || 'unknown') });
@@ -18835,10 +18837,21 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               {rvmTemplates.length === 0 && <option value="">(no templates yet — add via SQL or admin tool)</option>}
               {rvmTemplates.map(t => (
                 <option key={t.id} value={t.id}>
-                  {t.cadence_day != null ? `Day ${t.cadence_day} — ` : ''}{t.name}
+                  {t.cadence_day != null ? `Day ${t.cadence_day} — ` : ''}{t.name}{t.generation_mode === 'ai_personalized' ? '  🤖' : ''}
                 </option>
               ))}
             </select>
+            {(() => {
+              const sel = rvmTemplates.find(t => t.id === rvmTemplateId);
+              if (sel?.generation_mode === 'ai_personalized') {
+                return (
+                  <div style={{ gridColumn: '2 / 3', fontSize: 11, color: '#a8a29e', fontStyle: 'italic', marginTop: -4 }}>
+                    🤖 AI-personalized — will refresh case intelligence and write a per-case script. Adds ~5-10s and a small Claude cost ({'<'}$0.005).
+                  </div>
+                );
+              }
+              return null;
+            })()}
             <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To (override):</label>
             <input value={rvmPhone} onChange={e => setRvmPhone(e.target.value)}
               placeholder="Leave blank to use deal/contact phone"
@@ -18866,7 +18879,14 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               <div>{rvmResult.text}</div>
               {rvmResult.rendered_script && (
                 <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: '#a8a29e', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 6 }}>
-                  <div style={{ color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, marginBottom: 3 }}>rendered script</div>
+                  <div style={{ color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>rendered script</span>
+                    {rvmResult.generation_mode && (
+                      <span style={{ color: rvmResult.generation_mode === 'ai_personalized' ? '#a78bfa' : '#78716c' }}>
+                        {rvmResult.generation_mode === 'ai_personalized' ? '🤖 AI · case intel ' + (rvmResult.case_intel_used ? 'used' : 'unavailable') : 'merge fields'}
+                      </span>
+                    )}
+                  </div>
                   {rvmResult.rendered_script}
                 </div>
               )}
