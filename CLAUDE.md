@@ -188,7 +188,7 @@ Nathan's column — leave it alone and ask. Same in reverse.
 | Castle / docket integration | **Nathan** | `docket_events`, `docket_events_unmatched`, `scrape_runs`, `supabase/functions/docket-webhook` |
 | Email / Resend triggers | **Nathan** | `messages_email_notify`, `docket_events_client_notify`, `send_daily_digest` |
 | Lead intake + dup detection | **Nathan** | `lead-intake.html`, `leads` table, `find_lead_duplicates` RPC |
-| Lauren / pgvector AI chat | **Justin** | `lauren_*` tables, pgvector embeddings |
+| Lauren / pgvector AI chat | **Both (co-owned)** | `lauren_*` tables, pgvector embeddings — Nathan + Justin own equally; coordinate before substantive changes (per Nathan, 2026-05-05) |
 | Phase 3 Library | **Nathan** | Designed — not yet built |
 | Phase 4 Financials | **Nathan** | Not yet built |
 | **Shared (either can touch)** | Both | `deals`, `vendors`, `tasks`, `expenses`, `activity`, `deal_notes`, `documents`, `contacts`, `contact_deals`, `index.html` shell + nav + shared components |
