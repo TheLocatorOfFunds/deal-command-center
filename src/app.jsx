@@ -1884,7 +1884,10 @@ function DealCommandCenter({ session, profile }) {
               { label: '🔍 Search',      onClick: () => setShowSearch(true),   count: 0 },
               ...(pendingWalkthroughs.length > 0 ? [{ label: '🏠 Walkthroughs', onClick: () => setShowWalkthroughs(true), count: pendingWalkthroughs.length }] : []),
               { sep: 'Account' },
-              ...(isAdmin ? [{ label: '👤 Team',        onClick: () => setShowTeam(true),     count: 0 }] : []),
+              ...(isAdmin ? [
+                { label: '👤 Team',         onClick: () => setShowTeam(true),                                count: 0 },
+                { label: '🤖 VA Queue',     onClick: () => { setActiveDealId(null); setView('va-queue'); }, count: 0 },
+              ] : []),
               { label: '↪ Sign out',     onClick: signOut, count: 0, destructive: true },
             ].filter(i => i.show !== false).map((item, idx) => {
               if (item.sep) {
@@ -2644,7 +2647,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "va-queue" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -2673,7 +2676,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -2705,6 +2708,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <TimeTrackingView userId={userId} isAdmin={isAdmin} />
           ) : view === "team" ? (
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
+          ) : view === "va-queue" ? (
+            isAdmin ? <VaQueueView userId={userId} /> : null
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -2747,7 +2752,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -7138,6 +7143,308 @@ async function mintPersonalizedLinkSlug(firstName, lastName) {
     candidate = base + (suffix + 1);
   }
   return randomNanoid();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// VA work queue review — Phase 3 of Lauren-on-top
+//
+// Admin-only view for reviewing actions that VA-audience Lauren has
+// queued (records-request, outreach-draft, case-flag). Pending rows
+// at the top with Approve / Reject buttons + optional reviewer note;
+// completed rows below in read-only form.
+//
+// Approval is a pure status flip today — no auto-execution. Owner
+// reviews the request, hits Approve, then performs the actual
+// records request / outreach drafting manually. The audit trail is
+// the queue row itself (who requested, when, what, reason; who
+// reviewed, when, note).
+// ─────────────────────────────────────────────────────────────────────
+function VaQueueView({ userId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [noteInputs, setNoteInputs] = useState({}); // queue_id → note text
+  const alive = useAliveRef();
+
+  const fmtRel = (iso) => {
+    if (!iso) return "—";
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.round(sec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const TOOL_LABELS = {
+    queue_records_request: "Records request",
+    queue_outreach_draft:  "Outreach draft",
+    queue_case_flag:       "Case flag",
+  };
+  const TOOL_ICONS = {
+    queue_records_request: "📂",
+    queue_outreach_draft:  "✉️",
+    queue_case_flag:       "🚩",
+  };
+
+  const STATUS_PILL = {
+    pending:   { label: "Pending",   bg: "#78350f30", color: "#fcd34d" },
+    approved:  { label: "Approved",  bg: "#065f4630", color: "#86efac" },
+    rejected:  { label: "Rejected",  bg: "#7f1d1d30", color: "#fca5a5" },
+    executed:  { label: "Executed",  bg: "#1e3a8a30", color: "#93c5fd" },
+    cancelled: { label: "Cancelled", bg: "#3f3f4630", color: "#a8a29e" },
+    failed:    { label: "Failed",    bg: "#7f1d1d30", color: "#fca5a5" },
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await sb
+      .from("va_work_queue")
+      .select("*, requester:requested_by_id(id, name, display_name), reviewer:reviewed_by_id(id, name, display_name)")
+      .order("status", { ascending: true })  // pending sorts before others alphabetically too
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (!alive.current) return;
+    if (error) {
+      console.error("va_work_queue load failed", error);
+      setRows([]);
+    } else {
+      setRows(data || []);
+    }
+    setLoading(false);
+  }, [alive]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setStatus = async (id, nextStatus) => {
+    setBusyId(id);
+    const note = (noteInputs[id] || "").trim() || null;
+    const { error } = await sb
+      .from("va_work_queue")
+      .update({
+        status: nextStatus,
+        reviewer_note: note,
+        reviewed_by_id: userId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (error) {
+      alert(`Couldn't update: ${error.message}`);
+      setBusyId(null);
+      return;
+    }
+    if (alive.current) {
+      setNoteInputs((n) => { const next = { ...n }; delete next[id]; return next; });
+      await load();
+    }
+    setBusyId(null);
+  };
+
+  const pending = rows.filter((r) => r.status === "pending");
+  const completed = rows.filter((r) => r.status !== "pending");
+
+  const renderRow = (r, kind /* 'pending' | 'history' */) => {
+    const args = r.tool_args || {};
+    const name = TOOL_LABELS[r.tool_name] || r.tool_name;
+    const icon = TOOL_ICONS[r.tool_name] || "📌";
+    const reqName = r.requester?.display_name || r.requester?.name || "(unknown VA)";
+    const revName = r.reviewer?.display_name || r.reviewer?.name || null;
+    const pill = STATUS_PILL[r.status] || STATUS_PILL.pending;
+    return (
+      <div key={r.id} style={{
+        background: "#1c1917",
+        border: kind === "pending" ? "1px solid #d97706" : "1px solid #292524",
+        borderRadius: 10,
+        padding: 16,
+        marginBottom: 12,
+        opacity: kind === "pending" ? 1 : 0.85,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 18 }} aria-hidden>{icon}</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#fafaf9" }}>{name}</span>
+          <span style={{
+            background: pill.bg, color: pill.color,
+            padding: "2px 8px", borderRadius: 999,
+            fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+          }}>{pill.label}</span>
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "#78716c" }}>
+            {reqName} · {fmtRel(r.created_at)}
+          </span>
+        </div>
+
+        {r.reason && (
+          <div style={{
+            background: "#0c0a09",
+            border: "1px solid #292524",
+            borderRadius: 6,
+            padding: "10px 12px",
+            marginBottom: 8,
+            fontSize: 13,
+            color: "#d6d3d1",
+            lineHeight: 1.5,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>VA's reason</div>
+            {r.reason}
+          </div>
+        )}
+
+        {Object.keys(args).length > 0 && (
+          <details style={{ marginBottom: 8 }}>
+            <summary style={{ cursor: "pointer", fontSize: 11, color: "#a8a29e", padding: "4px 0" }}>
+              Request details ({Object.keys(args).length} fields)
+            </summary>
+            <pre style={{
+              background: "#0c0a09",
+              border: "1px solid #292524",
+              borderRadius: 6,
+              padding: 10,
+              marginTop: 4,
+              fontSize: 11,
+              color: "#a8a29e",
+              fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+              whiteSpace: "pre-wrap",
+              maxHeight: 200,
+              overflow: "auto",
+            }}>{JSON.stringify(args, null, 2)}</pre>
+          </details>
+        )}
+
+        {r.reviewer_note && (
+          <div style={{
+            fontSize: 12,
+            color: "#d6d3d1",
+            padding: "8px 0",
+            borderTop: "1px dashed #292524",
+            marginTop: 8,
+          }}>
+            <span style={{ fontWeight: 600 }}>{revName || "Reviewer"}</span>: {r.reviewer_note}
+            <span style={{ color: "#78716c", marginLeft: 8 }}>· {fmtRel(r.reviewed_at)}</span>
+          </div>
+        )}
+
+        {kind === "pending" && (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={noteInputs[r.id] || ""}
+              onChange={(e) => setNoteInputs({ ...noteInputs, [r.id]: e.target.value })}
+              placeholder="Optional note for the VA…"
+              disabled={busyId === r.id}
+              style={{
+                flex: 1, minWidth: 200,
+                background: "#0c0a09",
+                border: "1px solid #44403c",
+                borderRadius: 6,
+                color: "#fafaf9",
+                padding: "8px 10px",
+                fontSize: 13,
+              }}
+            />
+            <button
+              type="button"
+              disabled={busyId === r.id}
+              onClick={() => setStatus(r.id, "approved")}
+              style={{
+                background: "#10b981",
+                color: "#0c0a09",
+                border: "none",
+                borderRadius: 6,
+                padding: "8px 14px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: busyId === r.id ? "default" : "pointer",
+                opacity: busyId === r.id ? 0.6 : 1,
+              }}
+            >
+              {busyId === r.id ? "…" : "Approve"}
+            </button>
+            <button
+              type="button"
+              disabled={busyId === r.id}
+              onClick={() => setStatus(r.id, "rejected")}
+              style={{
+                background: "transparent",
+                color: "#fca5a5",
+                border: "1px solid #7f1d1d",
+                borderRadius: 6,
+                padding: "8px 14px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: busyId === r.id ? "default" : "pointer",
+                opacity: busyId === r.id ? 0.6 : 1,
+              }}
+            >
+              Reject
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fafaf9", margin: 0 }}>
+          VA Queue
+        </h2>
+        <p style={{ marginTop: 4, marginBottom: 0, color: "#a8a29e", fontSize: 13 }}>
+          Action requests from VA-audience Lauren. Approve to clear; manual execution still needed for now.
+        </p>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#78716c" }}>Loading…</div>
+      ) : (
+        <>
+          {pending.length === 0 ? (
+            <div style={{
+              background: "#0c0a09",
+              border: "1px dashed #292524",
+              borderRadius: 10,
+              padding: 40,
+              textAlign: "center",
+              color: "#78716c",
+              fontSize: 14,
+              marginBottom: 20,
+            }}>
+              No pending requests. VAs queue actions through Lauren and they land here.
+            </div>
+          ) : (
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
+                Pending review · {pending.length}
+              </div>
+              {pending.map((r) => renderRow(r, "pending"))}
+            </div>
+          )}
+
+          {completed.length > 0 && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowHistory((s) => !s)}
+                style={{
+                  background: "transparent",
+                  border: "1px solid #292524",
+                  borderRadius: 6,
+                  color: "#a8a29e",
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  marginBottom: 12,
+                }}
+              >
+                {showHistory ? "▾" : "▸"} History · {completed.length}
+              </button>
+              {showHistory && completed.map((r) => renderRow(r, "history"))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 // Manual entry form for ad-hoc personalized_links rows.
