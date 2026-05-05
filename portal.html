@@ -1072,7 +1072,23 @@ function clientEventTitle(e) {
   return 'New court filing';
 }
 
-function ClientDocketCard({ dealId, access, isPreview }) {
+// Some Castle scrapers emit junk single-cell docket events — descriptions
+// that are just a date ("06/18/2025"), just a dollar amount ("$21,759.90"),
+// or empty. Those are scraper artifacts (table cells parsed as separate
+// events) and shouldn't show on the client portal — they're confusing.
+// This is the conservative filter: keep anything that's clearly a real
+// filing description, drop anything that's just a number/date/blank.
+function isJunkDocketEvent(e) {
+  const d = (e?.description || '').trim();
+  if (!d) return true;                               // blank
+  if (/^\$[\d.,]+$/.test(d)) return true;            // pure dollar amount
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(d)) return true; // pure date
+  if (/^\d+$/.test(d)) return true;                  // pure integer
+  if (d.length < 10 && !/[a-z]{3,}/i.test(d)) return true; // very short and no real word
+  return false;
+}
+
+function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
   const [events, setEvents] = React.useState({ live: [], history: [] });
   const [loading, setLoading] = React.useState(true);
   const [prefsOpen, setPrefsOpen] = React.useState(false);
@@ -1086,14 +1102,18 @@ function ClientDocketCard({ dealId, access, isPreview }) {
       .eq('deal_id', dealId)
       .eq('is_backfill', false)
       .order('event_date', { ascending: false })
-      .limit(20);
+      .limit(40);
     const { data: history } = await sb.from('docket_events')
       .select('id, event_type, event_date, description, court_system, detected_at, is_backfill, document_url')
       .eq('deal_id', dealId)
       .eq('is_backfill', true)
       .order('event_date', { ascending: false })
       .limit(200);
-    setEvents({ live: live || [], history: history || [] });
+    // Apply junk filter at load time so we never even render the noise
+    setEvents({
+      live: (live || []).filter(e => !isJunkDocketEvent(e)),
+      history: (history || []).filter(e => !isJunkDocketEvent(e)),
+    });
     setLoading(false);
   };
 
@@ -1105,6 +1125,17 @@ function ClientDocketCard({ dealId, access, isPreview }) {
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [dealId]);
+
+  // Team-posted activity entries that AREN'T just shadow copies of
+  // docket events. The trigger that mirrors docket_events into activity
+  // prefixes the action with "Docket:" or "Docket ·" — anything else is
+  // a real human update (Nathan posted, status changed, document
+  // uploaded, etc.) and earns a slot in the unified timeline.
+  const teamUpdates = (activity || []).filter(a => {
+    const action = String(a.action || '');
+    if (/^Docket\b/i.test(action)) return false;        // docket shadow
+    return action.length > 0;
+  });
 
   if (loading) return null;
 
@@ -1182,8 +1213,9 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                     <div style={{ marginTop: 8 }}>
                       {e.document_url ? (
                         <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                          title="Opens the court PDF — view in browser or save to your device"
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gold)', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid var(--gold)', borderRadius: 6, background: 'transparent' }}>
-                          📄 View the filing →
+                          📄 View or download PDF →
                         </a>
                       ) : (
                         <span title="The court portal didn't expose a PDF for this entry"
@@ -1202,6 +1234,36 @@ function ClientDocketCard({ dealId, access, isPreview }) {
               );
             })}
           </div>
+
+          {/* Team-posted updates — non-docket activity entries fold in
+              below the docket feed so the client sees ONE chronological
+              source-of-truth for their case instead of two duplicated
+              cards. Per Nathan 2026-05-05. */}
+          {teamUpdates.length > 0 && (
+            <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>
+                Updates from your team
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {teamUpdates.slice(0, 10).map((a, i) => (
+                  <div key={a.id || i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--gold)', marginTop: 6, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{a.action}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                        {a.created_at && new Date(a.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {teamUpdates.length > 10 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic', paddingLeft: 20 }}>
+                    + {teamUpdates.length - 10} earlier update{teamUpdates.length - 10 === 1 ? '' : 's'}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {(events.history || []).length > 0 && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: '2px solid var(--border)' }}>
@@ -1239,8 +1301,9 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                             <span>{e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                             {e.document_url ? (
                               <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                                title="Opens the court PDF — view or save"
                                 style={{ color: 'var(--gold)', textDecoration: 'none', fontWeight: 600 }}>
-                                · 📄 View filing →
+                                · 📄 View or download PDF →
                               </a>
                             ) : (
                               <span title="No PDF for this entry" style={{ color: 'var(--text-subtle)', fontStyle: 'italic' }}>
@@ -2367,7 +2430,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
             perClaimantShare={perClaimantShare}
           />
           <CaseSnapshotCard deal={deal} />
-          <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} />
+          <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} activity={activity} />
         </>
       )}
 
@@ -2430,21 +2493,12 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       {/* Messages thread */}
       <MessagesThread dealId={deal.id} session={session} clientName={deal.name} isPreview={isPreview} />
 
-      {/* Timeline */}
-      <div className="card">
-        <p className="card-title">Case Timeline</p>
-        {activity.length === 0 ? (
-          <div className="empty">No case updates yet. We'll post updates here as your case progresses.</div>
-        ) : (
-          activity.map((a, i) => (
-            <div className="timeline-item" key={a.id || i}>
-              <div className="timeline-dot"></div>
-              <div className="timeline-action">{a.action}</div>
-              <div className="timeline-date">{fmtDateShort(a.created_at)}</div>
-            </div>
-          ))
-        )}
-      </div>
+      {/* Case Timeline removed 2026-05-05 per Nathan — it was duplicating
+          the Court Activity card. The trigger that mirrors docket_events
+          into the activity table caused 90%+ of timeline rows to be
+          shadow copies of docket entries already shown above with
+          PDFs. Non-docket activity (real team posts, status changes)
+          now folds into the bottom of the Court Activity card. */}
 
       {/* Documents */}
       <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} isPreview={isPreview} />
