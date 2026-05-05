@@ -210,16 +210,43 @@
   .case-hero-next-estimate { font-size: 12px; font-weight: 600; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
   .case-hero-next-body { font-size: 13.5px; color: var(--text); line-height: 1.65; }
 
-  /* Court record — same cream bg, just a label + prose. The surplus
-     pull-quote stays gold-bordered because that IS the headline number
-     for the client and deserves emphasis. */
-  .case-hero-record-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 8px; }
-  .case-hero-record-prose { font-family: 'Fraunces', Georgia, serif; font-weight: 400; font-size: 15px; line-height: 1.65; color: var(--text); }
+  /* Court record — polished closing band. Prose tells the story, then
+     a hero pull-quote with the surplus number drives it home. The
+     pull-quote uses a soft gold gradient + drop shadow so it lifts
+     off the cream bg without breaking the unified-card feel. */
+  .case-hero-record { padding: 28px 32px 32px; }
+  .case-hero-record-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 12px; }
+  .case-hero-record-prose { font-family: 'Fraunces', Georgia, serif; font-weight: 400; font-size: 16px; line-height: 1.7; color: var(--text); max-width: 64ch; }
   .case-hero-record-prose b { color: var(--navy); font-variant-numeric: tabular-nums; font-weight: 600; }
-  .case-hero-record-surplus { margin-top: 16px; padding: 14px 18px; background: var(--gold-soft); border-radius: 10px; border-left: 4px solid var(--gold); display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .case-hero-record-surplus-label { font-size: 10px; font-weight: 700; color: var(--amber); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
-  .case-hero-record-surplus-sub { font-size: 12px; color: var(--text-muted); line-height: 1.5; max-width: 380px; }
-  .case-hero-record-surplus-amount { font-family: 'Fraunces', Georgia, serif; font-weight: 500; font-size: 28px; color: var(--navy); letter-spacing: -0.015em; font-variant-numeric: tabular-nums; }
+
+  .case-hero-record-surplus {
+    margin-top: 22px;
+    padding: 22px 26px;
+    background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%);
+    border-radius: 14px;
+    border-left: 5px solid var(--gold);
+    box-shadow: 0 4px 16px rgba(201, 162, 74, 0.15), 0 1px 2px rgba(0,0,0,0.04);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 24px;
+  }
+  .case-hero-record-surplus-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
+  .case-hero-record-surplus-sub { font-size: 13px; color: var(--text); line-height: 1.6; max-width: 380px; font-weight: 400; }
+  .case-hero-record-surplus-amount {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 500;
+    font-size: 42px;
+    color: var(--navy);
+    letter-spacing: -0.025em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    text-align: right;
+  }
+  @media (max-width: 640px) {
+    .case-hero-record-surplus { grid-template-columns: 1fr; gap: 14px; }
+    .case-hero-record-surplus-amount { text-align: left; font-size: 34px; }
+  }
   .case-hero-next-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px; }
   .case-hero-next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); letter-spacing: -0.015em; margin-bottom: 6px; line-height: 1.25; }
   .case-hero-next-estimate { font-size: 13px; font-weight: 600; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
@@ -429,7 +456,7 @@ const { useState, useEffect } = React;
 // at a glance which build the page is rendering. Bump this on every
 // portal commit. If Nathan reports "nothing looks different" and the
 // stamp is older than the latest commit, it's a stale cache, not a bug.
-const PORTAL_VERSION = '20260505j';
+const PORTAL_VERSION = '20260505k';
 
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
