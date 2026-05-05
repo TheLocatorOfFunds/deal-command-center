@@ -48,6 +48,9 @@ const SYSTEM = [
   "- Tasks",
   "- Contacts",
   "- Ohio Intel: 8000+ scheduled foreclosure cases statewide, with grade, surplus estimate, sale date, defendant, address, plaintiff, judgment amount, total debt, opening bid, sale price (post-sale), auction status, plus a recent docket-event timeline per case. Cross-link to DCC via dcc_deal_id when pushed. Use intel_search_cases / intel_get_case / intel_county_summary / intel_upcoming_sales.",
+  "- Ohio Intel surplus events (~11k rows): Castle-verified post-sale orders with PDFs (disbursement orders, distribution orders, satisfactions). Use intel_get_surplus_events to filter by case / county / amount / recency / keyword.",
+  "- Ohio Intel homeowner info: skip-traced phones, emails, relatives, addresses, employer per case. Use intel_get_homeowner_info — but always announce when you're sharing PII, especially with VAs.",
+  "- Ohio Intel full docket: intel_get_full_docket gives the entire docket history for a case without truncation, paginated. Use this when intel_get_case's last-20-truncated-to-200 isn't enough.",
   "",
   "How to respond:",
   "- Short answers unless detail is explicitly needed",
@@ -97,11 +100,11 @@ const TOOLS = [
   // access; VA audience gets the same tools but is told via the
   // system-prompt overlay to gate homeowner contact info.
   { name: "intel_search_cases",
-    description: "Search Ohio Intel for cases by defendant name, case number, or property address. Use for 'find me cases for Jane Doe' or 'show me cases at 123 Main St'. Returns case_number, county, defendant, address, sale date, financials, grade, status, and DCC link if pushed.",
+    description: "Search Ohio Intel for cases by defendant name, case number, plaintiff (lender/bank), or property address. Use for 'find me cases for Jane Doe', 'all PHH Mortgage cases', or 'show me cases at 123 Main St'. Returns case_number, county, defendant, address, sale date, financials, grade, status, and DCC link if pushed.",
     input_schema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Defendant name, case number, or partial address" },
+        query: { type: "string", description: "Defendant name, plaintiff/lender name, case number, or partial address" },
         county: { type: "string", description: "Optional county filter (e.g. 'hamilton'). Lowercase." },
         auction_status: { type: "string", description: "Optional auction status filter: PENDING, SOLD, WITHDRAWN, CANCELLED, POSTPONED, etc." },
         limit: { type: "number", description: "Max results (default 10, max 25)" },
@@ -139,6 +142,46 @@ const TOOLS = [
         grade: { type: "string", description: "Optional grade filter: 'A' | 'B' | 'C'" },
         limit: { type: "number", description: "Max results (default 25, max 100)" },
       },
+    } },
+
+  // ─── Phase 5a: deeper Ohio Intel coverage ─────────────────────────
+
+  { name: "intel_get_surplus_events",
+    description: "Query Castle's verified surplus_docket_event sweep (~11k rows). These are real post-sale events with PDFs — disbursement orders, distribution orders, satisfactions of judgment. Use for 'show me surplus events filed this week over $50k' or 'what surplus has been confirmed for case X'. Returns entry_date, description, amount, and pdf_storage_path so you can link to the PDF.",
+    input_schema: {
+      type: "object",
+      properties: {
+        case_number: { type: "string", description: "Filter to one case" },
+        county: { type: "string", description: "Filter to one county (lowercase)" },
+        min_amount: { type: "number", description: "Floor — exclude events with amount below this" },
+        days: { type: "number", description: "Filter to events filed in the last N days" },
+        keyword: { type: "string", description: "Substring match on the event description (case-insensitive)" },
+        limit: { type: "number", description: "Max results (default 25, max 100)" },
+      },
+    } },
+
+  { name: "intel_get_homeowner_info",
+    description: "Get skip-traced homeowner contact info for a case: phones, emails, relatives, known addresses, employer, dob. Joins ohio_case → property → person_property → ohio_person. Use sparingly and call out that you are sharing PII when you do — especially in VA-audience conversations.",
+    input_schema: {
+      type: "object",
+      properties: {
+        case_number: { type: "string", description: "Court case number" },
+        county: { type: "string", description: "County (lowercase)" },
+      },
+      required: ["case_number", "county"],
+    } },
+
+  { name: "intel_get_full_docket",
+    description: "Full docket history for a case, no description truncation. Use after intel_get_case when you need the full text of a long entry (judgment, sheriff's return, satisfaction, etc.). Paginated.",
+    input_schema: {
+      type: "object",
+      properties: {
+        case_number: { type: "string", description: "Court case number" },
+        county: { type: "string", description: "County (lowercase)" },
+        offset: { type: "number", description: "Pagination offset (default 0)" },
+        limit: { type: "number", description: "Max results per page (default 50, max 200)" },
+      },
+      required: ["case_number", "county"],
     } },
 
   // ─── VA work queue (Phase 3 of Lauren-on-top) ─────────────────────
@@ -285,7 +328,9 @@ async function intelSearchCases(
     .select(
       "case_number, county, defendant_primary, sale_at, sale_price, opening_bid, judgment_amount, total_debt_on_deed, surplus_estimate, grade, case_status, auction_status, auction_status_reason, plaintiff, dcc_pushed_at, dcc_deal_id, property:property_id(address, parcel_id)",
     )
-    .or(`defendant_primary.ilike.${q},case_number.ilike.${q}`);
+    // Plaintiff added 2026-05-05 (Phase 5a) so "all PHH Mortgage cases"
+    // works. ohio_case has the plaintiff inline; no join needed.
+    .or(`defendant_primary.ilike.${q},case_number.ilike.${q},plaintiff.ilike.${q}`);
   if (county) req = req.eq("county", county.toLowerCase());
   if (auctionStatus) req = req.eq("auction_status", auctionStatus.toUpperCase());
   req = req.order("sale_at", { ascending: true, nullsFirst: false }).limit(lim);
@@ -386,6 +431,179 @@ async function intelCountySummary(county?: string) {
     .slice(0, 10)
     .map(([county, count]) => ({ county, count, is_high_volume: HIGH_VOLUME_COUNTIES.has(county) }));
   return { top_counties: top, total_counties: Object.keys(counts).length };
+}
+
+// ─── Phase 5a tools ─────────────────────────────────────────────────
+
+/**
+ * Query Castle's verified surplus_docket_event sweep. Filterable by
+ * case, county, amount floor, recency window, and keyword in the
+ * event description. Returns rows ordered by entry_date desc.
+ */
+async function intelGetSurplusEvents(input: {
+  case_number?: string;
+  county?: string;
+  min_amount?: number;
+  days?: number;
+  keyword?: string;
+  limit?: number;
+}) {
+  const intel = intelSb();
+  if (!intel) return INTEL_NOT_CONFIGURED;
+  const lim = Math.min(Math.max(Number(input.limit) || 25, 1), 100);
+
+  let req = intel
+    .from("surplus_docket_event")
+    .select(
+      "id, county, case_number, entry_date, description, amount, has_image, pdf_storage_path, fetched_at",
+    );
+
+  if (input.case_number) req = req.eq("case_number", String(input.case_number).trim().toUpperCase());
+  if (input.county)      req = req.eq("county", String(input.county).trim().toLowerCase());
+  if (typeof input.min_amount === "number" && input.min_amount > 0) {
+    req = req.gte("amount", input.min_amount);
+  }
+  if (typeof input.days === "number" && input.days > 0) {
+    const since = new Date(Date.now() - input.days * 24 * 60 * 60 * 1000).toISOString();
+    req = req.gte("entry_date", since);
+  }
+  if (input.keyword) {
+    const kw = String(input.keyword).slice(0, 200).trim();
+    if (kw) req = req.ilike("description", `%${kw}%`);
+  }
+  req = req.order("entry_date", { ascending: false, nullsFirst: false }).limit(lim);
+
+  const { data, error } = await req;
+  if (error) return { error: error.message };
+  if (!data || data.length === 0) return { found: false, message: "No surplus events match those filters" };
+
+  return {
+    found: true,
+    count: data.length,
+    events: data.map((e: any) => ({
+      county: e.county,
+      case_number: e.case_number,
+      entry_date: e.entry_date,
+      description: e.description,
+      amount: e.amount,
+      has_pdf: !!e.pdf_storage_path,
+      pdf_path: e.pdf_storage_path || null,
+      has_image: e.has_image,
+      fetched_at: e.fetched_at,
+    })),
+  };
+}
+
+/**
+ * Get skip-traced homeowner info for a case. The audience overlay (set
+ * up in Phase 1's system prompt) tells Lauren to gate this and
+ * announce when she's surfacing it — the tool itself returns full
+ * data and trusts the LLM to follow the audience rules.
+ */
+async function intelGetHomeownerInfo(caseNumber: string, county: string) {
+  const intel = intelSb();
+  if (!intel) return INTEL_NOT_CONFIGURED;
+  const cn = String(caseNumber || "").trim().toUpperCase();
+  const cty = String(county || "").trim().toLowerCase();
+  if (!cn || !cty) return { error: "case_number and county required" };
+
+  // Resolve property_id off the case row.
+  const { data: caseRow, error: caseErr } = await intel
+    .from("ohio_case")
+    .select("case_number, county, defendant_primary, property_id")
+    .eq("case_number", cn)
+    .eq("county", cty)
+    .maybeSingle();
+  if (caseErr) return { error: caseErr.message };
+  if (!caseRow) return { found: false, message: "Case not found" };
+  if (!caseRow.property_id) {
+    return { found: false, message: "Case has no linked property — no homeowner data on file" };
+  }
+
+  // person_property is the link table; person_id → ohio_person.
+  const { data: links, error: linkErr } = await intel
+    .from("person_property")
+    .select("role, ohio_person:person_id(id, full_name, first_name, last_name, dob, ssn_last4, known_addresses, phones, emails, relatives, employer, notes)")
+    .eq("property_id", caseRow.property_id);
+  if (linkErr) return { error: linkErr.message };
+
+  const people = (links || [])
+    .filter((l: any) => l.ohio_person)
+    .map((l: any) => ({
+      role: l.role || null,
+      person_id: l.ohio_person.id,
+      full_name: l.ohio_person.full_name,
+      first_name: l.ohio_person.first_name,
+      last_name: l.ohio_person.last_name,
+      dob: l.ohio_person.dob,
+      ssn_last4: l.ohio_person.ssn_last4,
+      phones: l.ohio_person.phones,
+      emails: l.ohio_person.emails,
+      relatives: l.ohio_person.relatives,
+      known_addresses: l.ohio_person.known_addresses,
+      employer: l.ohio_person.employer,
+      notes: l.ohio_person.notes,
+    }));
+
+  return {
+    found: people.length > 0,
+    case_number: cn,
+    county: cty,
+    case_defendant: caseRow.defendant_primary,
+    person_count: people.length,
+    people,
+  };
+}
+
+/**
+ * Full docket history for a case — paginated, no description
+ * truncation. Companion to intel_get_case which only shows the last 20
+ * truncated to 200 chars.
+ */
+async function intelGetFullDocket(
+  caseNumber: string,
+  county: string,
+  offset?: number,
+  limit?: number,
+) {
+  const intel = intelSb();
+  if (!intel) return INTEL_NOT_CONFIGURED;
+  const cn = String(caseNumber || "").trim().toUpperCase();
+  const cty = String(county || "").trim().toLowerCase();
+  const off = Math.max(Number(offset) || 0, 0);
+  const lim = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  if (!cn || !cty) return { error: "case_number and county required" };
+
+  const { data: caseRow } = await intel
+    .from("ohio_case")
+    .select("id")
+    .eq("case_number", cn)
+    .eq("county", cty)
+    .maybeSingle();
+  if (!caseRow) return { found: false, message: "Case not found" };
+
+  const { data: events, error, count } = await intel
+    .from("docket_event")
+    .select("event_date, event_type, description, raw_text", { count: "exact" })
+    .eq("case_id", caseRow.id)
+    .order("event_date", { ascending: false })
+    .range(off, off + lim - 1);
+  if (error) return { error: error.message };
+
+  return {
+    found: true,
+    case_number: cn,
+    county: cty,
+    total: count ?? null,
+    offset: off,
+    limit: lim,
+    events: (events || []).map((e: any) => ({
+      date: e.event_date,
+      type: e.event_type,
+      description: e.description,        // no slice — full text
+      raw_text: e.raw_text,              // include as well for completeness
+    })),
+  };
 }
 
 // ─── VA work queue helpers (Phase 3) ────────────────────────────────
@@ -590,6 +808,10 @@ async function runTool(
   if (name === "intel_get_case") return intelGetCase(input.case_number, input.county);
   if (name === "intel_county_summary") return intelCountySummary(input.county);
   if (name === "intel_upcoming_sales") return intelUpcomingSales(input.days, input.county, input.grade, input.limit);
+  // Phase 5a — deeper Intel coverage
+  if (name === "intel_get_surplus_events") return intelGetSurplusEvents(input || {});
+  if (name === "intel_get_homeowner_info") return intelGetHomeownerInfo(input.case_number, input.county);
+  if (name === "intel_get_full_docket") return intelGetFullDocket(input.case_number, input.county, input.offset, input.limit);
   // VA work queue tools (Phase 3) — always enqueue. Owner audience
   // asking for these means Lauren misjudged; queue is harmless +
   // visible so it's safer than executing.
