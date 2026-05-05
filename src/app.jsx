@@ -23536,7 +23536,9 @@ function TeamChatBubble() {
       const { error } = await sb.from('team_messages').insert({
         thread_id: activeThreadId,
         sender_id: me.id,
-        sender_kind: 'human',
+        // sender_kind constraint: 'lauren' | 'va' | 'admin'. Map our
+        // role to the right value or every send 23514s out.
+        sender_kind: me.role === 'va' ? 'va' : 'admin',
         body: trimmed,
       });
       if (error) { alert('Could not send: ' + error.message); return; }
