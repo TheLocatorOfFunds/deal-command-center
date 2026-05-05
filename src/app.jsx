@@ -11482,15 +11482,56 @@ function ClientPortalCard({ deal, logAct }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [editRequests, setEditRequests] = useState([]);
 
   const load = async () => {
     setLoading(true);
-    const { data } = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true });
-    setAccessList(data || []);
+    const [{ data: accessData }, { data: editData }] = await Promise.all([
+      sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true }),
+      sb.from('client_edit_requests').select('*').eq('deal_id', deal.id).eq('status', 'pending').order('requested_at', { ascending: true }),
+    ]);
+    setAccessList(accessData || []);
+    setEditRequests(editData || []);
     setLoading(false);
   };
 
   useEffect(() => { load(); }, [deal.id]);
+
+  const approveEdit = async (req) => {
+    setBusy(true); setMsg(null);
+    try {
+      if (req.field === 'email') {
+        await sb.from('client_access').update({ email: req.new_value }).eq('id', req.client_access_id);
+      } else if (req.field === 'phone') {
+        // Fetch current prefs then merge
+        const { data: caRow } = await sb.from('client_access').select('prefs').eq('id', req.client_access_id).single();
+        const newPrefs = { ...(caRow?.prefs || {}), notify_phone: req.new_value };
+        await sb.from('client_access').update({ prefs: newPrefs }).eq('id', req.client_access_id);
+      }
+      await sb.from('client_edit_requests').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', req.id);
+      if (logAct) await logAct(`Client contact info updated (${req.field}: ${req.new_value}) — request approved`);
+      setMsg({ type: 'success', text: `${req.field === 'email' ? 'Email' : 'Phone'} updated to ${req.new_value}` });
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rejectEdit = async (req) => {
+    setBusy(true); setMsg(null);
+    try {
+      await sb.from('client_edit_requests').update({ status: 'rejected', reviewed_at: new Date().toISOString() }).eq('id', req.id);
+      if (logAct) await logAct(`Client ${req.field} change request rejected (requested: ${req.new_value})`);
+      setMsg({ type: 'success', text: 'Request declined.' });
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const invite = async () => {
     if (!email) return;
@@ -24547,11 +24588,121 @@ function CombinedFAB() {
   );
 }
 
+// ─── ErrorBoundary ───────────────────────────────────────────────────
+// Per Nathan 2026-05-05: deep-URL loads (#/deal/<id>/<tab>) intermittently
+// rendered nothing — black screen, no error visible because production
+// React swallows the stack when there's no boundary. The HostRoot fiber
+// showed the DidCapture flag, confirming an error was caught at the root.
+//
+// This boundary:
+//   1. Logs the actual error + component stack to console
+//   2. POSTs a row to system_alerts so the next time this fires we have
+//      a server-side record (alert kind = 'dcc_render_error')
+//   3. Renders a recoverable UI (retry button + "back to home") instead
+//      of a black void, so a flaky one-off doesn't leave the user stuck
+//   4. Clears the error state when the URL changes — most often the
+//      offending state is the hash, so navigating elsewhere recovers
+class DCCErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error('[DCC ErrorBoundary] caught error during render:', error);
+    console.error('[DCC ErrorBoundary] component stack:', info?.componentStack);
+    this.setState({ info });
+    // Best-effort log to server. Don't fail the boundary if this fails.
+    try {
+      const payload = {
+        kind: 'dcc_render_error',
+        severity: 'error',
+        message: String(error?.message || error || 'unknown render error').slice(0, 500),
+        details: {
+          stack: String(error?.stack || '').slice(0, 4000),
+          componentStack: String(info?.componentStack || '').slice(0, 4000),
+          hash: window.location.hash,
+          ua: navigator.userAgent,
+          ts: new Date().toISOString(),
+        },
+      };
+      sb.from('system_alerts').insert(payload).then(() => {}, () => {});
+    } catch (_) { /* ignore */ }
+
+    // Auto-recover when the URL changes — the hash is the most common
+    // trigger for these crashes, so navigating to a different view
+    // typically fixes things. We DON'T auto-recover on a timer because
+    // re-rendering the same broken state would just loop.
+    this._onHash = () => this.setState({ error: null, info: null });
+    window.addEventListener('hashchange', this._onHash);
+  }
+  componentWillUnmount() {
+    if (this._onHash) window.removeEventListener('hashchange', this._onHash);
+  }
+  retry = () => {
+    if (this._onHash) window.removeEventListener('hashchange', this._onHash);
+    this.setState({ error: null, info: null });
+  };
+  render() {
+    if (!this.state.error) return this.props.children;
+    const errMsg = String(this.state.error?.message || this.state.error || 'Unknown error');
+    return React.createElement('div', {
+      style: {
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24, background: '#0c0a09', color: '#fafaf9', fontFamily: "'DM Sans', system-ui",
+      }
+    },
+      React.createElement('div', {
+        style: { maxWidth: 560, width: '100%', textAlign: 'center' }
+      },
+        React.createElement('div', { style: { fontSize: 38, marginBottom: 12 } }, '⚠'),
+        React.createElement('div', { style: { fontSize: 20, fontWeight: 700, marginBottom: 8 } }, 'Something broke while rendering'),
+        React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginBottom: 20, lineHeight: 1.5 } },
+          'DCC caught an error before it could finish rendering this page. The error has been logged. Try one of:'
+        ),
+        React.createElement('div', {
+          style: {
+            background: '#1c1917', border: '1px solid #292524', borderRadius: 8,
+            padding: '12px 14px', fontSize: 12, color: '#fbbf24',
+            fontFamily: "'DM Mono', monospace", textAlign: 'left',
+            marginBottom: 20, wordBreak: 'break-word', maxHeight: 160, overflow: 'auto',
+          }
+        }, errMsg),
+        React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' } },
+          React.createElement('button', {
+            onClick: this.retry,
+            style: {
+              background: '#d97706', color: '#1c0a00', border: 'none',
+              borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }
+          }, '↻ Try again'),
+          React.createElement('button', {
+            onClick: () => { window.location.hash = '#/view/today'; this.retry(); },
+            style: {
+              background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c',
+              borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }
+          }, '← Back to Today'),
+          React.createElement('button', {
+            onClick: () => window.location.reload(),
+            style: {
+              background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c',
+              borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }
+          }, '↺ Reload')
+        )
+      )
+    );
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
-  React.createElement(React.Fragment, null,
-    React.createElement(Root),
-    React.createElement(LaurenDCC),
-    React.createElement(TeamChatBubble),
-    React.createElement(CombinedFAB),
+  React.createElement(DCCErrorBoundary, null,
+    React.createElement(React.Fragment, null,
+      React.createElement(Root),
+      React.createElement(LaurenDCC),
+      React.createElement(TeamChatBubble),
+      React.createElement(CombinedFAB),
+    )
   )
 );
