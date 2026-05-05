@@ -606,6 +606,8 @@ function DealCommandCenter({ session, profile }) {
   const [callDuration, setCallDuration] = useState(0);
   const [incomingCall, setIncomingCall] = useState(null);
   const [callMuted, setCallMuted]       = useState(false);
+  const [showDialpad, setShowDialpad]   = useState(false);
+  const [dialpadNumber, setDialpadNumber] = useState('');
   // 'idle' = not yet enabled (needs click) | 'initializing' | 'registered' | 'error'
   const [twilioStatus, setTwilioStatus] = useState('idle');
   const twilioDeviceRef = React.useRef(null);
@@ -1399,11 +1401,17 @@ function DealCommandCenter({ session, profile }) {
           {isTeam && (() => {
             if (twilioStatus === 'registered') {
               return (
-                <span title="Phone ready — browser will ring on inbound calls"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#10b981', cursor: 'default' }}>
-                  <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block',
-                    boxShadow: '0 0 0 2px #0c0a09, 0 0 6px #10b981' }} />
-                  Phone
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span title="Phone ready — browser will ring on inbound calls"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#10b981', cursor: 'default' }}>
+                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block',
+                      boxShadow: '0 0 0 2px #0c0a09, 0 0 6px #10b981' }} />
+                    Phone
+                  </span>
+                  <button onClick={() => { setShowDialpad(v => !v); }}
+                    title="Open dialpad"
+                    style={{ background: 'transparent', border: 'none', color: '#78716c', fontSize: 13,
+                      cursor: 'pointer', padding: '0 2px', lineHeight: 1, fontFamily: 'inherit' }}>⌨</button>
                 </span>
               );
             }
@@ -1841,6 +1849,86 @@ function DealCommandCenter({ session, profile }) {
           </div>
         </div>
       </>
+    )}
+
+    {/* ── Dialpad overlay ── */}
+    {showDialpad && !callStatus && (
+      <div style={{
+        position: 'fixed', bottom: 24, right: 24, zIndex: 9998,
+        background: '#1c1917', border: '2px solid #44403c', borderRadius: 16,
+        padding: '18px 20px 20px', width: 280,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
+        display: 'flex', flexDirection: 'column', gap: 14,
+      }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontSize: 11, color: '#a8a29e', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>☎ Dial</span>
+          <button onClick={() => { setShowDialpad(false); setDialpadNumber(''); }}
+            style={{ background: 'transparent', border: 'none', color: '#57534e', fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
+        </div>
+
+        {/* Number display */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <input
+            value={dialpadNumber}
+            onChange={e => setDialpadNumber(e.target.value.replace(/[^0-9+*#]/g, ''))}
+            placeholder="Enter number…"
+            style={{ flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8,
+              color: '#fafaf9', fontSize: 18, fontFamily: "'DM Mono', monospace",
+              padding: '10px 12px', outline: 'none', letterSpacing: '0.05em' }}
+          />
+          <button
+            onClick={() => setDialpadNumber(n => n.slice(0, -1))}
+            title="Backspace"
+            style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 8,
+              color: '#a8a29e', fontSize: 16, cursor: 'pointer', padding: '10px 13px', lineHeight: 1 }}>⌫</button>
+        </div>
+
+        {/* Keypad grid */}
+        {(() => {
+          const keys = [
+            { d: '1', s: '' }, { d: '2', s: 'ABC' }, { d: '3', s: 'DEF' },
+            { d: '4', s: 'GHI' }, { d: '5', s: 'JKL' }, { d: '6', s: 'MNO' },
+            { d: '7', s: 'PQRS' }, { d: '8', s: 'TUV' }, { d: '9', s: 'WXYZ' },
+            { d: '*', s: '' }, { d: '0', s: '+' }, { d: '#', s: '' },
+          ];
+          return (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+              {keys.map(({ d, s }) => (
+                <button key={d} onClick={() => setDialpadNumber(n => n + d)}
+                  style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 10,
+                    color: '#fafaf9', cursor: 'pointer', padding: '12px 0',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                    fontFamily: 'inherit' }}>
+                  <span style={{ fontSize: 18, fontWeight: 600, lineHeight: 1 }}>{d}</span>
+                  {s && <span style={{ fontSize: 8, color: '#78716c', letterSpacing: '0.12em' }}>{s}</span>}
+                </button>
+              ))}
+            </div>
+          );
+        })()}
+
+        {/* Call button */}
+        <button
+          onClick={() => {
+            if (!dialpadNumber) return;
+            const raw = dialpadNumber.replace(/\s/g, '');
+            const e164 = raw.startsWith('+') ? raw
+              : raw.replace(/\D/g, '').length === 10 ? '+1' + raw.replace(/\D/g, '')
+              : '+' + raw.replace(/\D/g, '');
+            setShowDialpad(false);
+            setDialpadNumber('');
+            startCall({ name: e164, phone: e164 });
+          }}
+          disabled={!dialpadNumber}
+          style={{ background: dialpadNumber ? '#16a34a' : '#292524',
+            border: 'none', color: dialpadNumber ? '#fff' : '#57534e',
+            borderRadius: 10, padding: '14px 0', fontSize: 15, fontWeight: 700,
+            cursor: dialpadNumber ? 'pointer' : 'default', fontFamily: 'inherit',
+            transition: 'background 0.15s' }}>
+          📞 Call
+        </button>
+      </div>
     )}
 
     {/* ── Active call overlay — rendered at DCC level so it shows on every view ── */}
