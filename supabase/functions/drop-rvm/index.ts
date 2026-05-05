@@ -113,15 +113,81 @@ function naturalDate(iso: string | null | undefined): string {
   return `${month} ${day}${suffix(day)}`
 }
 
-/** "423 Sample Rd, Oxford, OH 45056" → { street, city, state_zip } */
+// USPS-style street-suffix abbreviations → spelled-out words. Without this,
+// TTS reads "423 Sample Rd" as "four-two-three Sample R-D". Justin caught
+// this in the first AI-generated voicemail; expanding to "Road" fixes it.
+const STREET_SUFFIX_MAP: Record<string, string> = {
+  ALY: 'Alley', ANX: 'Annex', ARC: 'Arcade', AVE: 'Avenue', AV: 'Avenue',
+  BCH: 'Beach', BLF: 'Bluff', BLVD: 'Boulevard', BLV: 'Boulevard', BR: 'Branch',
+  BRG: 'Bridge', BRK: 'Brook', BYP: 'Bypass', CIR: 'Circle', CLB: 'Club',
+  CMN: 'Common', COR: 'Corner', CRK: 'Creek', CRES: 'Crescent', CRS: 'Crossing',
+  CSWY: 'Causeway', CT: 'Court', CTR: 'Center', CTS: 'Courts', CV: 'Cove',
+  CYN: 'Canyon', DR: 'Drive', DRWY: 'Driveway', EST: 'Estate', ESTS: 'Estates',
+  EXPY: 'Expressway', EXT: 'Extension', FLD: 'Field', FLDS: 'Fields',
+  FRD: 'Ford', FRG: 'Forge', FRK: 'Fork', FRST: 'Forest', FT: 'Fort',
+  FWY: 'Freeway', GDN: 'Garden', GDNS: 'Gardens', GLN: 'Glen', GR: 'Grove',
+  GRN: 'Green', HBR: 'Harbor', HLS: 'Hills', HOLW: 'Hollow', HTS: 'Heights',
+  HWY: 'Highway', IS: 'Island', ISLE: 'Isle', JCT: 'Junction', KY: 'Key',
+  LK: 'Lake', LN: 'Lane', LNDG: 'Landing', LP: 'Loop', MDW: 'Meadow',
+  MDWS: 'Meadows', ML: 'Mill', MLS: 'Mills', MNR: 'Manor', MT: 'Mount',
+  MTN: 'Mountain', MTWY: 'Motorway', PKWY: 'Parkway', PK: 'Park', PL: 'Place',
+  PLN: 'Plain', PLZ: 'Plaza', PNE: 'Pine', PT: 'Point', PRT: 'Port',
+  RD: 'Road', RDG: 'Ridge', RIV: 'River', RNCH: 'Ranch', RTE: 'Route',
+  SHR: 'Shore', SQ: 'Square', ST: 'Street', STA: 'Station', TER: 'Terrace',
+  TPKE: 'Turnpike', TRL: 'Trail', TUNL: 'Tunnel', UN: 'Union', VLG: 'Village',
+  VLY: 'Valley', VW: 'View', WL: 'Well', XING: 'Crossing',
+}
+
+const DIRECTIONAL_MAP: Record<string, string> = {
+  N: 'North', S: 'South', E: 'East', W: 'West',
+  NE: 'Northeast', NW: 'Northwest', SE: 'Southeast', SW: 'Southwest',
+}
+
+/** Replace street-suffix abbreviations and directional prefixes for spoken delivery.
+ *  "423 Sample Rd, Oxford, OH 45056" → "423 Sample Road, Oxford, OH 45056"
+ *  "456 N Main St"                   → "456 North Main Street"
+ *  Only operates on the street portion (before the first comma). City/state/zip
+ *  are left alone since "St. Louis" and "OH" should not be re-expanded.
+ */
+function expandAddressForSpeech(addr: string): string {
+  if (!addr) return addr
+  const parts = addr.split(',')
+  let street = (parts[0] ?? '').trim()
+  if (!street) return addr
+
+  // Expand directional standalone tokens anywhere in the street.
+  street = street.replace(/\b([NSEW]|NE|NW|SE|SW)\b\.?/g, (m, abbrev) => {
+    const u = abbrev.toUpperCase()
+    return DIRECTIONAL_MAP[u] ?? m
+  })
+
+  // Expand street suffix at the end of the street portion (or before unit
+  // designators). Common pattern: "...Rd" or "...Rd Apt 5" or "...Rd #3".
+  // We catch the LAST cap-token before optional unit/end.
+  street = street.replace(
+    /\b([A-Za-z]{2,5})\.?\b(\s*(?:Apt|Apartment|Unit|Suite|Ste|#|No)?[^,]*)?$/i,
+    (full, abbrev, tail) => {
+      const u = abbrev.toUpperCase()
+      const expanded = STREET_SUFFIX_MAP[u]
+      if (!expanded) return full
+      return `${expanded}${tail || ''}`
+    },
+  )
+
+  parts[0] = street
+  return parts.join(',')
+}
+
+/** "423 Sample Rd, Oxford, OH 45056" → { street, city, state_zip } with abbreviations expanded for TTS */
 function parseAddress(addr: string | null | undefined) {
   if (!addr) return { street: '', city: '', stateZip: '', full: '' }
-  const parts = addr.split(',').map(s => s.trim())
+  const expanded = expandAddressForSpeech(addr)
+  const parts = expanded.split(',').map(s => s.trim())
   return {
     street: parts[0] || '',
     city: parts[1] || '',
     stateZip: parts.slice(2).join(', ') || '',
-    full: addr.trim(),
+    full: expanded.trim(),
   }
 }
 
@@ -142,6 +208,35 @@ function normalizePhone(raw: string): string {
   return raw
 }
 
+// ───── Callback phone (the Twilio number we want recipients to call back) ───
+// Hardcoded to the FundLocators Main Twilio number per Justin 2026-05-05.
+// If we ever rotate the callback number, override via CALLBACK_PHONE env var.
+const DEFAULT_CALLBACK_PHONE = '+15139985440'
+
+/** "5139985440" → "five one three, nine nine eight, five four four oh"
+ *  Spelled-out form is the safest for TTS — bypasses any model-specific
+ *  digit-grouping quirks (some TTS read 5440 as "fifty-four forty"). */
+function naturalPhone(raw: string | null | undefined): string {
+  if (!raw) return ''
+  const digits = String(raw).replace(/\D/g, '')
+  const local = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits
+  if (local.length !== 10) return raw // not standard US, return as-is
+  const spell = (d: string) => d === '0' ? 'oh' : ['zero','one','two','three','four','five','six','seven','eight','nine'][parseInt(d, 10)]
+  const area = Array.from(local.slice(0, 3)).map(spell).join(' ')
+  const exch = Array.from(local.slice(3, 6)).map(spell).join(' ')
+  const sub = Array.from(local.slice(6, 10)).map(spell).join(' ')
+  return `${area}, ${exch}, ${sub}`
+}
+
+/** "+15139985440" → "513-998-5440" — display form for the merge field */
+function displayPhone(raw: string | null | undefined): string {
+  if (!raw) return ''
+  const digits = String(raw).replace(/\D/g, '')
+  const local = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits
+  if (local.length !== 10) return raw
+  return `${local.slice(0, 3)}-${local.slice(3, 6)}-${local.slice(6, 10)}`
+}
+
 // ───── Strategy A: Merge field rendering ─────────────────────────────────────
 // Sensible fallbacks so missing fields don't render as literal "{first_name}"
 const FALLBACKS: Record<string, string> = {
@@ -157,6 +252,8 @@ const FALLBACKS: Record<string, string> = {
   sale_date: 'your sale date',
   sale_natural_date: 'your sale date',
   post_auction_phrase: 'about your property',
+  callback_phone: '513-998-5440',
+  callback_phone_natural: 'five one three, nine nine eight, five four four oh',
 }
 
 function renderTemplate(text: string, vars: Record<string, string | null | undefined>): string {
@@ -210,7 +307,13 @@ function buildMergeVars(deal: any, contact: any, overrideFirstName: string | und
     days_to_sale: deal?.days_to_sale != null ? String(deal.days_to_sale) : '',
     post_auction_phrase: postAuctionPhrase,
     is_post_auction: isPostAuction ? 'yes' : 'no',
+    callback_phone: displayPhone(callbackPhone()),
+    callback_phone_natural: naturalPhone(callbackPhone()),
   }
+}
+
+function callbackPhone(): string {
+  return Deno.env.get('CALLBACK_PHONE') || DEFAULT_CALLBACK_PHONE
 }
 
 // ───── Strategy B: AI-personalized script via Claude ─────────────────────────
@@ -228,9 +331,11 @@ STRUCTURE (60 words MAX, ~25 seconds spoken):
 1. Greeting with first name + identify as Nathan from RefundLocators (5 sec)
 2. ONE specific case fact that proves we know their situation (10 sec) — typically property location + sale date OR surplus amount
 3. ONE concrete value statement (5 sec) — the surplus we identified
-4. Soft CTA (5 sec) — "give me a call back when you can, same number"
+4. Soft CTA (5 sec) — end with the callback phone number, spoken digit-by-digit (the user will pass you the spoken form, e.g. "five one three, nine nine eight, five four four oh"). Use that exact spoken phrasing — DO NOT format the phone number with hyphens or as a single number string. The TTS engine reads digits ambiguously, so we always say each one out loud.
 
 TONE: warm, calm, low-pressure. NOT a sales pitch. Like a friend who's done the work and is sharing news.
+
+ADDRESS HANDLING: when you say the property's street, use the spoken form provided in the facts (e.g. "Sample Road"). NEVER say abbreviations like "Rd" or "St" — those will be read literally as letter sounds.
 
 Output ONLY the spoken script. No preamble, no markdown, no labels. Just what Nathan would say into the voicemail.`
 
@@ -243,10 +348,12 @@ async function generateAiScript(args: {
   const userMsg = `CASE FACTS YOU MAY USE (only these, plus what's in the intel summary that passes the rules):
 
 - First name: ${args.facts.first_name || '(unknown)'}
-- Property: ${args.facts.property_street || args.facts.property_address || '(unknown)'} in ${args.facts.county ? `${args.facts.county} County` : '(unknown county)'}
+- Property street (already TTS-friendly, suffixes expanded — use as-is): ${args.facts.property_street || args.facts.property_address || '(unknown)'}
+- County: ${args.facts.county ? `${args.facts.county} County` : '(unknown county)'}
 - Estimated surplus: ${args.facts.surplus_natural || '(unknown)'}
 - Sale state: ${args.facts.is_post_auction === 'yes' ? `already sold ${args.facts.sale_natural_date || 'recently'}` : (args.facts.sale_natural_date ? `sale scheduled ${args.facts.sale_natural_date}` : 'no sale date set')}
 - Judgment amount: ${args.facts.judgment_natural || '(unknown)'}
+- Callback phone (use this EXACT spoken form in the CTA, do not reformat): "${args.facts.callback_phone_natural || naturalPhone(callbackPhone())}"
 
 CASE INTEL SUMMARY (filter heavily — extract case-only facts, ignore internal operational state):
 ${args.caseIntelText || '(no intel summary available — work with the structured facts above)'}
@@ -254,7 +361,7 @@ ${args.caseIntelText || '(no intel summary available — work with the structure
 TONE / STRUCTURE GUIDANCE FROM THIS TEMPLATE:
 ${args.toneGuidance || 'Default warm, brief, specific.'}
 
-Write the voicemail script Nathan will speak.`
+Write the voicemail script Nathan will speak. End with the spoken callback phone number from the facts above.`
 
   const res = await fetch(ANTHROPIC_URL, {
     method: 'POST',
