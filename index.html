@@ -69,8 +69,12 @@
     border-radius: 10px; padding: 1px 5px; font-size: 9px; font-weight: 700;
     min-width: 16px; text-align: center; }
 
+  /* ─── Sidebar ───────────────────────────────────────────────── */
+  .dcc-sidebar { transition: width 0.18s ease, min-width 0.18s ease; }
+
   /* ─── Tablet (≤768px) ──────────────────────────────────────── */
   @media (max-width: 768px) {
+    .dcc-sidebar { display: none !important; }
     .portfolio-stats { grid-template-columns: 1fr 1fr !important; }
     .deal-grid { grid-template-columns: 1fr !important; }
     .main-grid { grid-template-columns: 1fr !important; }
