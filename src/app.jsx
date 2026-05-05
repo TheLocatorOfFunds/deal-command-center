@@ -17886,10 +17886,24 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const [showIntroModal, setShowIntroModal] = useState(false);
   const [rvmMode, setRvmMode] = useState(false);
   const [rvmPhone, setRvmPhone] = useState('');
-  const [rvmAudioUrl, setRvmAudioUrl] = useState('');
-  const [rvmTemplate, setRvmTemplate] = useState('intro');
+  const [rvmTemplates, setRvmTemplates] = useState([]);
+  const [rvmTemplateId, setRvmTemplateId] = useState('');
+  const [rvmOverrideFirstName, setRvmOverrideFirstName] = useState('');
+  const [rvmDryRun, setRvmDryRun] = useState(true);  // default ON until Slybroadcast delivery is wired
   const [rvmSending, setRvmSending] = useState(false);
-  const [rvmResult, setRvmResult] = useState(null);
+  const [rvmResult, setRvmResult] = useState(null);  // { type, text, mp3_url, rendered_script }
+  // Load active RVM templates when the panel opens
+  React.useEffect(() => {
+    if (!rvmMode) return;
+    sb.from('rvm_templates')
+      .select('id, name, cadence_day, script')
+      .eq('active', true)
+      .order('cadence_day', { ascending: true, nullsLast: true })
+      .then(({ data }) => {
+        setRvmTemplates(data || []);
+        if (data && data.length && !rvmTemplateId) setRvmTemplateId(data[0].id);
+      });
+  }, [rvmMode]);
   const [mediaUrl, setMediaUrl] = useState('');
   const [showMediaInput, setShowMediaInput] = useState(false);
   // Drag-drop state for the composer. Per Nathan: drop screenshots
@@ -17991,28 +18005,36 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
     if (error) alert('Could not delete: ' + error.message);
   };
 
-  const RVM_TEMPLATES = {
-    intro:    { label: 'Intro — surplus funds', url: '' },
-    followup: { label: 'Follow-up day 3',       url: '' },
-    final:    { label: 'Final touch day 7',      url: '' },
-  };
-
+  // Drop a personalized RVM. New flow (2026-05-05): drop-rvm renders a
+  // template's script with merge fields, generates audio via Fish Audio
+  // using Nathan's voice clone, uploads to Supabase Storage, returns the
+  // public mp3 URL. Slybroadcast delivery is wired separately once their
+  // API approval lands. Until then, dry_run=true is the default and the
+  // user listens to the generated audio in the embedded player.
   const dropRvm = async () => {
-    if (!rvmPhone.trim() || rvmSending) return;
+    if (!rvmTemplateId || rvmSending) return;
     setRvmSending(true); setRvmResult(null);
     try {
       const { data, error } = await sb.functions.invoke('drop-rvm', {
         body: {
-          to: rvmPhone.trim(),
-          audio_url: rvmAudioUrl.trim() || RVM_TEMPLATES[rvmTemplate]?.url,
+          template_id: rvmTemplateId,
           deal_id: dealId,
-          contact_id: activeContact?.contact_id,
-          template: RVM_TEMPLATES[rvmTemplate]?.label,
+          contact_id: activeContact?.contact_id || null,
+          to_number: rvmPhone.trim() || undefined,
+          override_first_name: rvmOverrideFirstName.trim() || undefined,
+          dry_run: rvmDryRun,
         }
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.details || data.error);
-      setRvmResult({ type: 'success', text: 'Voicemail dropped successfully.' });
+      setRvmResult({
+        type: 'success',
+        text: rvmDryRun
+          ? 'Audio generated (dry-run, no drop sent). Preview below.'
+          : 'Audio generated. Slybroadcast delivery still pending API approval — preview below.',
+        mp3_url: data?.mp3_url,
+        rendered_script: data?.rendered_script,
+      });
     } catch (e) {
       setRvmResult({ type: 'error', text: 'Failed: ' + (e.message || 'unknown') });
     }
@@ -18797,40 +18819,60 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
         <SendIntroTextModal deal={deal} onClose={() => setShowIntroModal(false)} onSent={load} />
       )}
 
-      {/* RVM compose panel */}
+      {/* RVM compose panel — Fish Audio TTS + Nathan's voice clone, Slybroadcast delivery */}
       {rvmMode && (
         <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
             📣 Drop Ringless Voicemail
+            <span style={{ fontWeight: 400, color: '#78716c', textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}>
+              · Nathan's voice (Fish Audio) · Slybroadcast delivery pending API approval
+            </span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 10px', alignItems: 'center', marginBottom: 10 }}>
-            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To:</label>
-            <input value={rvmPhone} onChange={e => setRvmPhone(e.target.value)}
-              placeholder="+1 (555) 000-0000"
-              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+          <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 10px', alignItems: 'center', marginBottom: 10 }}>
             <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Template:</label>
-            <select value={rvmTemplate} onChange={e => setRvmTemplate(e.target.value)}
+            <select value={rvmTemplateId} onChange={e => setRvmTemplateId(e.target.value)}
               style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
-              {Object.entries(RVM_TEMPLATES).map(([key, t]) => (
-                <option key={key} value={key}>{t.label}</option>
+              {rvmTemplates.length === 0 && <option value="">(no templates yet — add via SQL or admin tool)</option>}
+              {rvmTemplates.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.cadence_day != null ? `Day ${t.cadence_day} — ` : ''}{t.name}
+                </option>
               ))}
             </select>
-            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Audio URL:</label>
-            <input value={rvmAudioUrl} onChange={e => setRvmAudioUrl(e.target.value)}
-              placeholder="Override audio URL (optional)"
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To (override):</label>
+            <input value={rvmPhone} onChange={e => setRvmPhone(e.target.value)}
+              placeholder="Leave blank to use deal/contact phone"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>{'{first_name}'} override:</label>
+            <input value={rvmOverrideFirstName} onChange={e => setRvmOverrideFirstName(e.target.value)}
+              placeholder="Leave blank to use contact/deal name"
               style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Mode:</label>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#a8a29e', cursor: 'pointer' }}>
+              <input type="checkbox" checked={rvmDryRun} onChange={e => setRvmDryRun(e.target.checked)} />
+              Dry run (generate audio + listen, no actual drop)
+            </label>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-            <button onClick={() => { setRvmMode(false); setRvmResult(null); setRvmAudioUrl(''); }}
+            <button onClick={() => { setRvmMode(false); setRvmResult(null); }}
               style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-            <button onClick={dropRvm} disabled={rvmSending || !rvmPhone.trim()}
-              style={{ background: (!rvmSending && rvmPhone.trim()) ? '#f97316' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-              {rvmSending ? 'Dropping…' : '📣 Drop VM'}
+            <button onClick={dropRvm} disabled={rvmSending || !rvmTemplateId}
+              style={{ background: (!rvmSending && rvmTemplateId) ? '#f97316' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {rvmSending ? 'Generating…' : (rvmDryRun ? '🎧 Generate preview' : '📣 Generate + drop')}
             </button>
           </div>
           {rvmResult && (
-            <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, fontSize: 12, background: rvmResult.type === 'success' ? '#064e3b' : '#7f1d1d', color: rvmResult.type === 'success' ? '#6ee7b7' : '#fca5a5' }}>
-              {rvmResult.text}
+            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 6, fontSize: 12, background: rvmResult.type === 'success' ? '#064e3b' : '#7f1d1d', color: rvmResult.type === 'success' ? '#6ee7b7' : '#fca5a5' }}>
+              <div>{rvmResult.text}</div>
+              {rvmResult.rendered_script && (
+                <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: '#a8a29e', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 6 }}>
+                  <div style={{ color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, marginBottom: 3 }}>rendered script</div>
+                  {rvmResult.rendered_script}
+                </div>
+              )}
+              {rvmResult.mp3_url && (
+                <audio controls src={rvmResult.mp3_url} style={{ marginTop: 8, width: '100%' }} />
+              )}
             </div>
           )}
         </div>
