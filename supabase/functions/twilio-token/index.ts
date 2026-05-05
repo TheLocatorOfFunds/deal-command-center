@@ -54,7 +54,7 @@ Deno.serve(async (req: Request) => {
     iss:    API_KEY,
     sub:    ACCOUNT_SID,
     nbf:    now,
-    exp:    now + 3600, // 1-hour token
+    exp:    now + 43200, // 12-hour token (tokenWillExpire auto-refreshes at T-3min)
     grants: {
       identity: DCC_IDENTITY,
       voice: {

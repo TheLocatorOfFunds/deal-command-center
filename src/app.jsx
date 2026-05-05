@@ -588,17 +588,19 @@ function DealCommandCenter({ session, profile }) {
   // Device lives here so the phone rings even on the deals list, not just
   // when the Comms tab of a specific deal is open.
   //
-  // IMPORTANT — browser autoplay policy:
-  // Twilio's SDK uses an AudioContext for all sounds (ring, disconnect, etc).
-  // Browsers block AudioContext audio until the user has interacted with the
-  // page. The fix is to always initialize the Device inside a user click
-  // handler, never on page load. We show an "Enable phone" button in the
-  // header; clicking it calls getUserMedia (grants mic + raises media
-  // engagement score so AudioContext is allowed) then creates + registers the
-  // Device. The Twilio SDK then handles the ringtone automatically.
+  // Auto-init: Device is created automatically when a team-member session
+  // loads. getUserMedia is attempted silently first — if mic was previously
+  // granted it resolves immediately, unlocking the AudioContext so the SDK's
+  // built-in ringtone works. If mic was never granted we still register; the
+  // incoming-call overlay + tab-title flash work without mic, and the user is
+  // prompted for mic when they click Answer.
   //
-  // Ref: https://www.twilio.com/docs/voice/sdks/javascript/best-practices
-  //   "we recommend calling device.register() in response to a user gesture"
+  // Token lifetime: tokens are 12 hours. The `tokenWillExpire` event fires
+  // ~3 min before expiry and we silently swap in a fresh token, so the Device
+  // stays registered indefinitely for open tabs. No manual "Enable phone"
+  // click is ever needed after the initial page load.
+  //
+  // The enablePhone callback remains as a retry mechanism for error states.
   const [callStatus, setCallStatus]     = useState(null); // null|'connecting'|'ringing'|'in-progress'|'ended'
   const [callContact, setCallContact]   = useState(null); // { name, phone }
   const [callDuration, setCallDuration] = useState(0);
@@ -629,11 +631,17 @@ function DealCommandCenter({ session, profile }) {
         codecPreferences: ['opus', 'pcmu'],
         enableRingingState: true,
         allowIncomingWhileBusy: false,
-        // SDK plays its own ring via AudioContext — works because Device is
-        // created inside a user gesture (the "Enable phone" click)
       });
       device.on('registered',   () => { console.log('[twilio-device] registered ✓'); setTwilioStatus('registered'); });
       device.on('unregistered', () => { console.log('[twilio-device] unregistered'); setTwilioStatus('idle'); });
+      // Silent token refresh ~3 min before expiry — device stays registered indefinitely.
+      device.on('tokenWillExpire', async () => {
+        console.log('[twilio-device] token expiring — auto-refreshing…');
+        try {
+          const { data: td } = await sb.functions.invoke('twilio-token');
+          if (td?.token) { device.updateToken(td.token); console.log('[twilio-device] token refreshed ✓'); }
+        } catch (e) { console.error('[twilio-device] token refresh failed:', e); }
+      });
       device.on('incoming', (call) => {
         const getP = (key) => {
           try {
@@ -669,16 +677,12 @@ function DealCommandCenter({ session, profile }) {
     }
   }, []);
 
-  // "Enable phone" button handler — MUST be called directly from a user click.
-  // Calls getUserMedia first (unlocks AudioContext + pre-grants mic for accept()),
-  // then initializes the Device so the AudioContext is created post-gesture.
+  // Manual retry handler — shown in the header only when status === 'error'.
+  // Also used as the fallback if auto-init somehow fails on page load.
   const enablePhone = React.useCallback(async () => {
     setTwilioStatus('initializing');
     try {
-      // getUserMedia grants mic permission AND signals user interaction to the
-      // browser, which allows the AudioContext to run (autoplay policy unlock).
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      // Stop tracks immediately — we just needed the permission + gesture.
       stream.getTracks().forEach(t => t.stop());
     } catch (e) {
       console.error('[twilio-device] mic permission denied:', e);
@@ -760,9 +764,16 @@ function DealCommandCenter({ session, profile }) {
     setCallMuted(muted);
   }, [callMuted]);
 
-  const answerIncoming = React.useCallback(() => {
+  const answerIncoming = React.useCallback(async () => {
     if (!incomingCall) return;
     stopTitleFlash();
+    // Ensure mic is granted within this user gesture (Answer click).
+    // If already granted this resolves instantly; if not, browser shows prompt.
+    // Either way, call.accept() runs with mic ready.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach(t => t.stop());
+    } catch (_) { /* denied/unavailable — proceed; caller may still hear hold music */ }
     try {
       incomingCall.call.accept();
       setCallStatus('in-progress');
@@ -817,6 +828,25 @@ function DealCommandCenter({ session, profile }) {
   // changes) gate on email match against the OWNER_EMAILS set defined
   // module-scope. Currently Nathan + Justin only.
   const isOwner = !!session.user.email && OWNER_EMAILS.has(String(session.user.email).toLowerCase());
+
+  // Auto-init Twilio Device for team members on page load.
+  // Attempt getUserMedia silently first: if mic was previously granted it
+  // resolves immediately and unlocks the AudioContext so SDK ringtone works.
+  // If mic was never granted we skip it and register anyway — the incoming
+  // call overlay + tab-title flash work without audio, and the user gets the
+  // mic prompt when they actually click Answer.
+  React.useEffect(() => {
+    if (!isTeam) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream.getTracks().forEach(t => t.stop()); // unlock AudioContext only
+      } catch (_) { /* not yet granted — proceed, device can still register */ }
+      if (!cancelled) initTwilioDevice();
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // refundlocators.com/admin/lauren redirects here with ?openLauren=1.
   // Pop the modal once and strip the param so a reload doesn't re-open it.
@@ -1365,13 +1395,9 @@ function DealCommandCenter({ session, profile }) {
         </div>
         <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
           <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
-          {/* Phone status — "Enable phone" button until clicked once per session */}
+          {/* Phone status — auto-inits on load, shows retry button only on error */}
           {isTeam && (() => {
-            const isReady = twilioStatus === 'registered';
-            const isBusy  = twilioStatus === 'initializing';
-            const isError = twilioStatus === 'error';
-            const dotColor = isReady ? '#10b981' : isError ? '#ef4444' : '#f59e0b';
-            if (isReady) {
+            if (twilioStatus === 'registered') {
               return (
                 <span title="Phone ready — browser will ring on inbound calls"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#10b981', cursor: 'default' }}>
@@ -1381,19 +1407,26 @@ function DealCommandCenter({ session, profile }) {
                 </span>
               );
             }
+            if (twilioStatus === 'error') {
+              return (
+                <button onClick={enablePhone}
+                  title="Phone failed to connect — click to retry"
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10,
+                    color: '#ef4444', background: 'transparent', border: '1px solid #ef4444',
+                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
+                  Phone error — retry
+                </button>
+              );
+            }
+            // idle or initializing — auto-init is running in background
             return (
-              <button
-                onClick={isBusy ? undefined : enablePhone}
-                disabled={isBusy}
-                title={isError ? 'Phone failed to start — click to retry' : isBusy ? 'Enabling phone…' : 'Click to enable phone for this session (required once per browser load)'}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10,
-                  color: dotColor, background: 'transparent', border: `1px solid ${dotColor}`,
-                  borderRadius: 4, padding: '2px 8px', cursor: isBusy ? 'default' : 'pointer',
-                  fontFamily: 'inherit', opacity: isBusy ? 0.7 : 1 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, display: 'inline-block',
-                  animation: isBusy ? 'chatBadgePulse 1.6s ease-in-out infinite' : 'none' }} />
-                {isError ? 'Phone error — retry' : isBusy ? 'Enabling…' : '📞 Enable phone'}
-              </button>
+              <span title="Phone connecting…"
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#f59e0b', cursor: 'default', opacity: 0.75 }}>
+                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block',
+                  animation: 'chatBadgePulse 1.6s ease-in-out infinite' }} />
+                Phone…
+              </span>
             );
           })()}
           <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
