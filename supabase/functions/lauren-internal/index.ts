@@ -284,12 +284,17 @@ const HIGH_VOLUME_COUNTIES = new Set([
  */
 function formatIntelCase(row: any): Record<string, unknown> {
   const prop = row.property || {};
+  // Property table stores address as street/city/state/zip pieces;
+  // assemble a single-line address for Lauren consumption.
+  const addrParts = [prop.street, prop.city, prop.state, prop.zip]
+    .filter((p) => p && String(p).trim());
+  const address = addrParts.length > 0 ? addrParts.join(", ") : null;
   return {
     case_number: row.case_number,
     county: row.county,
     defendant: row.defendant_primary || null,
-    address: prop.address || null,
-    parcel_id: prop.parcel_id || null,
+    address,
+    parcel_number: prop.parcel_number || null,
     sale_at: row.sale_at,
     sale_price: row.sale_price,
     opening_bid: row.opening_bid,
@@ -326,7 +331,7 @@ async function intelSearchCases(
   let req = intel
     .from("ohio_case")
     .select(
-      "case_number, county, defendant_primary, sale_at, sale_price, opening_bid, judgment_amount, total_debt_on_deed, surplus_estimate, grade, case_status, auction_status, auction_status_reason, plaintiff, dcc_pushed_at, dcc_deal_id, property:property_id(address, parcel_id)",
+      "case_number, county, defendant_primary, sale_at, sale_price, opening_bid, judgment_amount, total_debt_on_deed, surplus_estimate, grade, case_status, auction_status, auction_status_reason, plaintiff, dcc_pushed_at, dcc_deal_id, property:property_id(street, city, state, zip, parcel_number)",
     )
     // Plaintiff added 2026-05-05 (Phase 5a) so "all PHH Mortgage cases"
     // works. ohio_case has the plaintiff inline; no join needed.
@@ -352,7 +357,7 @@ async function intelGetCase(caseNumber: string, county: string) {
   const { data: caseRow, error: caseErr } = await intel
     .from("ohio_case")
     .select(
-      "*, property:property_id(address, parcel_id, city, state, zip)",
+      "*, property:property_id(street, city, state, zip, parcel_number)",
     )
     .eq("case_number", cn)
     .eq("county", cty)
@@ -663,7 +668,7 @@ async function intelUpcomingSales(
   let req = intel
     .from("ohio_case")
     .select(
-      "case_number, county, defendant_primary, sale_at, sale_price, opening_bid, judgment_amount, surplus_estimate, grade, auction_status, dcc_pushed_at, dcc_deal_id, property:property_id(address)",
+      "case_number, county, defendant_primary, sale_at, sale_price, opening_bid, judgment_amount, surplus_estimate, grade, auction_status, dcc_pushed_at, dcc_deal_id, property:property_id(street, city, state, zip)",
     )
     .gte("sale_at", now.toISOString())
     .lte("sale_at", horizon.toISOString())
