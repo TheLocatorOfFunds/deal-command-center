@@ -1755,7 +1755,7 @@ function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
 // Shows the client their current email and phone on file.
 // They can request a change; the change lands in client_edit_requests
 // as 'pending' — Nathan approves/rejects from the DCC ClientPortalCard.
-function ContactInfoCard({ access, isPreview }) {
+function ContactInfoCard({ access, deal, isPreview }) {
   const [editField, setEditField]   = React.useState(null); // 'email' | 'phone' | null
   const [editValue, setEditValue]   = React.useState('');
   const [busy, setBusy]             = React.useState(false);
@@ -1778,11 +1778,27 @@ function ContactInfoCard({ access, isPreview }) {
       });
   }, [access?.id]);
 
-  const currentPhone = access?.prefs?.notify_phone || '';
+  // Source-of-truth ladder for contact display:
+  //   1. client_access — what the client has confirmed via the portal
+  //      (notify_phone they set in NotificationPreferences, the email
+  //       they used to sign in)
+  //   2. deal.meta.homeownerEmail / homeownerPhone — what Nathan / Eric
+  //      recorded on the team side. Per Nathan 2026-05-05: this card
+  //      was showing "Not on file" for John Dunn even though we have
+  //      johndunn211@yahoo.com + (513) 615-0796 on the deal.
+  // First non-empty wins. Avoids the previous bug where a fresh portal
+  // signup (client_access.email=null) made the card look amnesia.
+  const m = deal?.meta || {};
+  const currentEmail = (access?.email && access.email.trim())
+    || (m.homeownerEmail && String(m.homeownerEmail).trim())
+    || '';
+  const currentPhone = (access?.prefs?.notify_phone && access.prefs.notify_phone.trim())
+    || (m.homeownerPhone && String(m.homeownerPhone).trim())
+    || '';
 
   const openEdit = (field) => {
     setEditField(field);
-    setEditValue(field === 'email' ? (access?.email || '') : currentPhone);
+    setEditValue(field === 'email' ? currentEmail : currentPhone);
     setStatus(null);
   };
 
@@ -1790,7 +1806,7 @@ function ContactInfoCard({ access, isPreview }) {
 
   const submitRequest = async () => {
     if (!editValue.trim()) return;
-    const oldVal = editField === 'email' ? (access?.email || '') : currentPhone;
+    const oldVal = editField === 'email' ? currentEmail : currentPhone;
     if (editValue.trim() === oldVal) { cancelEdit(); return; }
     if (isPreview) { cancelEdit(); setStatus('sent'); return; }
     setBusy(true);
@@ -1825,7 +1841,7 @@ function ContactInfoCard({ access, isPreview }) {
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Email</div>
           <div style={{ fontSize: 14, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {access?.email || <span style={{ color: 'var(--text-muted)' }}>Not on file</span>}
+            {currentEmail || <span style={{ color: 'var(--text-muted)' }}>Not on file</span>}
           </div>
           {pendingFields.email && (
             <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 3 }}>Change requested — your team will review it shortly</div>
@@ -2611,7 +2627,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
 
-      <ContactInfoCard access={access} isPreview={isPreview} />
+      <ContactInfoCard access={access} deal={deal} isPreview={isPreview} />
 
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
