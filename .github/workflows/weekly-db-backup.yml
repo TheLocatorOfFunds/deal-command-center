@@ -43,7 +43,20 @@ jobs:
             | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
           sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update -qq
+          # Pin priority so PGDG wins over the older Ubuntu archive copy of
+          # postgresql-client. Without this the system can fall back to the
+          # archive's v16 even when v17 is requested, leading to "server
+          # version mismatch" against PG 17 servers.
+          sudo sh -c 'cat > /etc/apt/preferences.d/pgdg.pref <<'\''EOF'\''
+Package: *
+Pin: release o=apt.postgresql.org
+Pin-Priority: 600
+EOF'
           sudo apt-get install -y postgresql-client-17
+          # Put the explicit v17 binary path first so `pg_dump` in PATH
+          # resolves to v17 regardless of update-alternatives quirks.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
 
           # AWS CLI v2 — apt's `awscli` package was dropped from Ubuntu 24.04
           # (Noble). Install the official v2 zip directly. ~50MB download,
