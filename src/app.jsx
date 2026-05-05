@@ -13322,17 +13322,32 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
     return null;
   };
 
-  const judgment     = aggregate('judgment_amount');
-  const appraised    = aggregate('appraised_value');
-  const salePrice    = aggregate('sale_price');
-  const minBid       = aggregate('minimum_bid');
-  const surplus      = aggregate(['surplus_amount', 'surplus_amount_estimated']);
-  const caseNumber   = aggregate('case_number') || deal.meta?.courtCase;
-  const county       = aggregate('county') || deal.meta?.county;
-  const plaintiff    = aggregate(['plaintiff_name', 'firm_name']);
-  const defendant    = aggregate(['defendant_name', 'client_name']);
-  const propertyAddr = aggregate('property_address') || deal.address;
-  const judge        = aggregate('judge_name');
+  // Prefer the value Nathan edited in Case Details over the AI-extracted
+  // value. Per Nathan 2026-05-05: he updated John Dunn's judgment from
+  // the AI's $910,262.26 to the correct $1,004,005.32 and the display
+  // tiles still showed the old AI number. Source-of-truth is now meta.
+  // Each variable still falls back to AI extraction so brand-new deals
+  // (no manual edits yet) still surface what the docs say.
+  const m = deal?.meta || {};
+  const aiJudgment   = aggregate('judgment_amount');
+  const aiAppraised  = aggregate('appraised_value');
+  const aiSalePrice  = aggregate('sale_price');
+  const aiMinBid     = aggregate('minimum_bid');
+  const aiSurplus    = aggregate(['surplus_amount', 'surplus_amount_estimated']);
+  const judgment     = m.judgmentAmount       ?? aiJudgment;
+  const appraised    = m.courtAppraisalValue  ?? aiAppraised;
+  const salePrice    = m.salePrice            ?? aiSalePrice;
+  const minBid       = m.minimumBidAmount     ?? aiMinBid;
+  // Surplus tile: verifiedSurplus (court-confirmed) > estimatedSurplus
+  // (Nathan's manual estimate) > AI machine-extracted. The order matters:
+  // verified is gospel, manual is reviewed-by-Nathan, AI is best-guess.
+  const surplus      = m.verifiedSurplus      ?? m.estimatedSurplus ?? aiSurplus;
+  const caseNumber   = m.courtCase            || aggregate('case_number');
+  const county       = m.county               || aggregate('county');
+  const plaintiff    = m.plaintiff            || aggregate(['plaintiff_name', 'firm_name']);
+  const defendant    = m.defendant            || aggregate(['defendant_name', 'client_name']);
+  const propertyAddr = deal.address           || aggregate('property_address');
+  const judge        = m.judgeName            || aggregate('judge_name');
 
   // Derived: Ohio statute sets minimum bid at 2/3 of appraised value
   const derivedMinBid = !minBid && appraised ? Math.round((appraised * 2) / 3) : null;
@@ -13456,7 +13471,6 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
           of silently overwriting Nathan's manual estimates. */}
       {(() => {
         if (!onUpdateDeal) return null;
-        const m = deal.meta || {};
         const toNum = (v) => {
           if (v == null) return null;
           if (typeof v === 'number') return v;
@@ -13477,22 +13491,28 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
         // - aiValue: what came out of the doc-OCR aggregator above
         // - existing: what's currently stored
         // - apply(): write the value to deals row (via onUpdateDeal)
+        // Target meta keys must match what the Case Details form on the
+        // Overview tab uses — otherwise Apply lands the value somewhere
+        // the form never reads, and the user thinks nothing happened.
+        // See SurplusOverview ~13802 for the canonical key names.
         const candidates = [
-          { key: 'salePrice',                label: 'Sale price',          kind: 'money', aiValue: salePrice,  existing: m.salePrice },
-          { key: 'judgmentAmount',           label: 'Judgment amount',     kind: 'money', aiValue: judgment,   existing: m.judgmentAmount },
-          { key: 'appraisedValue',           label: 'Appraised value',     kind: 'money', aiValue: appraised,  existing: m.appraisedValue },
-          { key: 'minBid',                   label: 'Minimum bid',         kind: 'money', aiValue: minBid,     existing: m.minBid },
-          { key: 'estimatedSurplusFromCourt',label: 'Court-calc surplus',  kind: 'money', aiValue: surplus,    existing: m.estimatedSurplusFromCourt,
-            // Compare AGAINST the manual estimate too — surfaces the mismatch
-            // (John Dunn case: manual $200K vs machine $31.5K).
+          { key: 'salePrice',           label: 'Sale price',         kind: 'money', aiValue: aiSalePrice, existing: m.salePrice },
+          { key: 'judgmentAmount',      label: 'Judgment debt',      kind: 'money', aiValue: aiJudgment,  existing: m.judgmentAmount },
+          { key: 'courtAppraisalValue', label: 'Court appraisal',    kind: 'money', aiValue: aiAppraised, existing: m.courtAppraisalValue },
+          { key: 'minimumBidAmount',    label: 'Minimum bid',        kind: 'money', aiValue: aiMinBid,    existing: m.minimumBidAmount },
+          { key: 'verifiedSurplus',     label: 'Verified surplus (court-confirmed)',
+                                                                     kind: 'money', aiValue: aiSurplus,   existing: m.verifiedSurplus,
+            // Cross-check against Nathan's manual estimate AND the
+            // computed (sale - judgment) value so we surface mismatches
+            // before they hit client comms.
             secondaryCompare: { value: m.estimatedSurplus, label: 'manual est.' } },
-          { key: 'courtCase',                label: 'Case number',         kind: 'text',  aiValue: caseNumber, existing: m.courtCase },
-          { key: 'county',                   label: 'County',              kind: 'text',  aiValue: county,     existing: m.county },
-          { key: 'plaintiff',                label: 'Plaintiff',           kind: 'text',  aiValue: plaintiff,  existing: m.plaintiff },
-          { key: 'defendant',                label: 'Defendant',           kind: 'text',  aiValue: defendant,  existing: m.defendant },
-          { key: 'judgeName',                label: 'Judge',               kind: 'text',  aiValue: judge,      existing: m.judgeName },
+          { key: 'courtCase',           label: 'Case number',        kind: 'text',  aiValue: aggregate('case_number'),                  existing: m.courtCase },
+          { key: 'county',              label: 'County',             kind: 'text',  aiValue: aggregate('county'),                       existing: m.county },
+          { key: 'plaintiff',           label: 'Plaintiff',          kind: 'text',  aiValue: aggregate(['plaintiff_name', 'firm_name']), existing: m.plaintiff },
+          { key: 'defendant',           label: 'Defendant',          kind: 'text',  aiValue: aggregate(['defendant_name', 'client_name']), existing: m.defendant },
+          { key: 'judgeName',           label: 'Judge',              kind: 'text',  aiValue: aggregate('judge_name'),                    existing: m.judgeName },
           // Address goes on the deal row itself, not meta. Special-case below.
-          { key: 'address', metaKey: null,   label: 'Property address',    kind: 'address', aiValue: propertyAddr, existing: deal.address },
+          { key: 'address', metaKey: null, label: 'Property address', kind: 'address', aiValue: aggregate('property_address'), existing: deal.address },
         ];
 
         // Compute the rows to show: AI has a value AND (no existing OR conflict)
