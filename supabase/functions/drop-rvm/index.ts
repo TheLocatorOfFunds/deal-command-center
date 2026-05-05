@@ -344,7 +344,24 @@ async function generateAiScript(args: {
   caseIntelText: string
   facts: Record<string, string>
   toneGuidance: string
+  customNote?: string                                 // per-drop hint from the user, e.g. "mention the upcoming court date"
+  thumbsUpExamples?: string[]                         // recent scripts the user 👍'd — train on what they like
+  thumbsDownExamples?: { script: string, note?: string }[]  // recent scripts the user 👎'd, with reasons
 }): Promise<string> {
+  // Build feedback context. Cap counts to keep prompt tight (~400 tokens overhead).
+  const upBlock = (args.thumbsUpExamples?.length ?? 0) > 0
+    ? `\nEXAMPLES THE USER LIKED (write in this style — match the voice and structure):\n${args.thumbsUpExamples!.slice(0, 3).map((s, i) => `${i + 1}. "${s.replace(/"/g, '\\"')}"`).join('\n')}\n`
+    : ''
+  const downBlock = (args.thumbsDownExamples?.length ?? 0) > 0
+    ? `\nPATTERNS TO AVOID (the user disliked these — read the reasons carefully):\n${args.thumbsDownExamples!.slice(0, 2).map((d, i) => {
+        const reason = d.note ? ` — Reason: ${d.note}` : ''
+        return `${i + 1}. "${d.script.replace(/"/g, '\\"')}"${reason}`
+      }).join('\n')}\n`
+    : ''
+  const customNoteBlock = args.customNote && args.customNote.trim()
+    ? `\nUSER'S SPECIFIC INSTRUCTION FOR THIS DROP (treat as authoritative, work it into the script naturally):\n"${args.customNote.trim().replace(/"/g, '\\"')}"\n`
+    : ''
+
   const userMsg = `CASE FACTS YOU MAY USE (only these, plus what's in the intel summary that passes the rules):
 
 - First name: ${args.facts.first_name || '(unknown)'}
@@ -360,7 +377,7 @@ ${args.caseIntelText || '(no intel summary available — work with the structure
 
 TONE / STRUCTURE GUIDANCE FROM THIS TEMPLATE:
 ${args.toneGuidance || 'Default warm, brief, specific.'}
-
+${customNoteBlock}${upBlock}${downBlock}
 Write the voicemail script Nathan will speak. End with the spoken callback phone number from the facts above.`
 
   const res = await fetch(ANTHROPIC_URL, {
@@ -385,6 +402,21 @@ Write the voicemail script Nathan will speak. End with the spoken callback phone
   const text = (json.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
   if (!text) throw new Error('Claude returned empty script')
   return text
+}
+
+async function loadFeedbackForTraining(sb: ReturnType<typeof createClient>) {
+  // Pull last 3 thumbs-up + last 2 thumbs-down with notes for few-shot context.
+  const [{ data: ups }, { data: downs }] = await Promise.all([
+    sb.from('rvm_ai_feedback').select('rendered_script')
+      .eq('rating', 'up').order('rated_at', { ascending: false }).limit(3),
+    sb.from('rvm_ai_feedback').select('rendered_script, feedback_note')
+      .eq('rating', 'down').not('feedback_note', 'is', null)
+      .order('rated_at', { ascending: false }).limit(2),
+  ])
+  return {
+    thumbsUp: (ups || []).map((r: any) => r.rendered_script as string).filter(Boolean),
+    thumbsDown: (downs || []).map((r: any) => ({ script: r.rendered_script as string, note: r.feedback_note as string })).filter(d => d.script),
+  }
 }
 
 async function refreshCaseIntel(args: {
@@ -527,6 +559,7 @@ Deno.serve(async (req) => {
       override_first_name,
       to_number,
       dry_run = false,
+      custom_note,  // optional per-drop hint for AI mode (e.g. "mention the upcoming court date")
     } = body
 
     // ─── Resolve template ─────────────────────────────────────────────────
@@ -615,13 +648,11 @@ Deno.serve(async (req) => {
         })
       }
 
-      // Refresh case intelligence right before generating, per Justin's call
-      const freshIntel = await refreshCaseIntel({
-        supabaseUrl,
-        serviceRoleKey,
-        authToken,
-        dealId: deal_id,
-      })
+      // Refresh case intelligence + load feedback signal in parallel
+      const [freshIntel, feedback] = await Promise.all([
+        refreshCaseIntel({ supabaseUrl, serviceRoleKey, authToken, dealId: deal_id }),
+        loadFeedbackForTraining(sb),
+      ])
 
       // Re-fetch deal to pick up any meta updates from the intel refresh
       const { data: refreshedDeal } = await sb.from('deals').select('*').eq('id', deal_id).maybeSingle()
@@ -633,6 +664,9 @@ Deno.serve(async (req) => {
         caseIntelText: caseIntelUsed || '',
         facts: mergeVars,
         toneGuidance: template.script || template.ai_prompt || '',
+        customNote: custom_note,
+        thumbsUpExamples: feedback.thumbsUp,
+        thumbsDownExamples: feedback.thumbsDown,
       })
       // Even AI output gets a final merge-field pass — Claude is supposed to
       // emit clean text but if it accidentally leaves a {first_name} in there
@@ -690,6 +724,7 @@ Deno.serve(async (req) => {
       generation_mode: generationMode,
       ai_script_raw: aiScriptRaw,        // for debugging / preview
       case_intel_used: !!caseIntelUsed,  // boolean — was intel pulled?
+      custom_note_used: custom_note ?? null,  // for the feedback save flow
       to_number: phoneE164,
       voice_id: voiceId,
       template_id: template_id ?? null,
