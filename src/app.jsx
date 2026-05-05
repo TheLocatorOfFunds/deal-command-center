@@ -11214,7 +11214,7 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
 
   return (
     <div>
-      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
+      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
       {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
           NotesDrawer rendered at the DealDetail level. The drawer
           handles all reads + writes; this overview no longer plasters
@@ -13239,13 +13239,19 @@ function QuickNotes({ dealId, userId, userName, onJumpToTab }) {
   );
 }
 
-function CaseIntelligence({ dealId, deal, onJumpToTab }) {
+function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const [docs, setDocs] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(deal?.meta?.case_intel_summary || null);
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [summaryErr, setSummaryErr] = useState(null);
+  // Per-row "Skip" persistence — rows the user explicitly skipped on this
+  // deal don't reappear until the user re-promotes via "Show all again".
+  // Stored in deal.meta.case_intel_skipped (array of meta-keys / 'address').
+  const [showSkipped, setShowSkipped] = useState(false);
+  const [applying, setApplying] = useState(null); // null | 'all' | <metaKey>
+  const skippedKeys = (deal?.meta?.case_intel_skipped || []);
 
   const load = async () => {
     const [docsRes, eventsRes] = await Promise.all([
@@ -13442,6 +13448,211 @@ function CaseIntelligence({ dealId, deal, onJumpToTab }) {
         </div>
       )}
 
+      {/* ── Promote-to-Case-Details panel ────────────────────────────────
+          Per Nathan 2026-05-05: Case Intelligence already aggregates 8-10
+          structured fields from documents.extracted.fields. Surface what's
+          NOT yet in deal.meta as one-click apply rows. Conflict detection
+          on money fields (>10% delta vs current value) flags ⚠ instead
+          of silently overwriting Nathan's manual estimates. */}
+      {(() => {
+        if (!onUpdateDeal) return null;
+        const m = deal.meta || {};
+        const toNum = (v) => {
+          if (v == null) return null;
+          if (typeof v === 'number') return v;
+          const n = parseFloat(String(v).replace(/[^0-9.-]/g, ''));
+          return Number.isNaN(n) ? null : n;
+        };
+        const moneyDelta = (a, b) => {
+          const na = toNum(a), nb = toNum(b);
+          if (na == null || nb == null || nb === 0) return 0;
+          return Math.abs(na - nb) / Math.max(Math.abs(na), Math.abs(nb));
+        };
+        const textDiff = (a, b) => {
+          if (a == null || b == null) return false;
+          return String(a).trim().toLowerCase() !== String(b).trim().toLowerCase();
+        };
+        // Field map: AI-extracted value → which meta key it lands in.
+        // - kind: 'money' | 'text' | 'address' (address writes to deal.address column, not meta)
+        // - aiValue: what came out of the doc-OCR aggregator above
+        // - existing: what's currently stored
+        // - apply(): write the value to deals row (via onUpdateDeal)
+        const candidates = [
+          { key: 'salePrice',                label: 'Sale price',          kind: 'money', aiValue: salePrice,  existing: m.salePrice },
+          { key: 'judgmentAmount',           label: 'Judgment amount',     kind: 'money', aiValue: judgment,   existing: m.judgmentAmount },
+          { key: 'appraisedValue',           label: 'Appraised value',     kind: 'money', aiValue: appraised,  existing: m.appraisedValue },
+          { key: 'minBid',                   label: 'Minimum bid',         kind: 'money', aiValue: minBid,     existing: m.minBid },
+          { key: 'estimatedSurplusFromCourt',label: 'Court-calc surplus',  kind: 'money', aiValue: surplus,    existing: m.estimatedSurplusFromCourt,
+            // Compare AGAINST the manual estimate too — surfaces the mismatch
+            // (John Dunn case: manual $200K vs machine $31.5K).
+            secondaryCompare: { value: m.estimatedSurplus, label: 'manual est.' } },
+          { key: 'courtCase',                label: 'Case number',         kind: 'text',  aiValue: caseNumber, existing: m.courtCase },
+          { key: 'county',                   label: 'County',              kind: 'text',  aiValue: county,     existing: m.county },
+          { key: 'plaintiff',                label: 'Plaintiff',           kind: 'text',  aiValue: plaintiff,  existing: m.plaintiff },
+          { key: 'defendant',                label: 'Defendant',           kind: 'text',  aiValue: defendant,  existing: m.defendant },
+          { key: 'judgeName',                label: 'Judge',               kind: 'text',  aiValue: judge,      existing: m.judgeName },
+          // Address goes on the deal row itself, not meta. Special-case below.
+          { key: 'address', metaKey: null,   label: 'Property address',    kind: 'address', aiValue: propertyAddr, existing: deal.address },
+        ];
+
+        // Compute the rows to show: AI has a value AND (no existing OR conflict)
+        const isEmpty = (v, kind) => {
+          if (v == null || v === '') return true;
+          if (kind === 'money') {
+            const n = toNum(v);
+            return n == null || n === 0;
+          }
+          return false;
+        };
+        const rows = candidates.filter(c => {
+          if (c.aiValue == null || c.aiValue === '') return false;
+          if (!showSkipped && skippedKeys.includes(c.key)) return false;
+          if (isEmpty(c.existing, c.kind)) return true;                        // missing → suggest
+          if (c.kind === 'money')   return moneyDelta(c.aiValue, c.existing) > 0.01; // any gap shows as conflict
+          return textDiff(c.aiValue, c.existing);                              // text differs
+        }).map(c => {
+          let conflict = false, conflictNote = null;
+          if (!isEmpty(c.existing, c.kind)) {
+            if (c.kind === 'money' && moneyDelta(c.aiValue, c.existing) > 0.10) {
+              conflict = true;
+              conflictNote = `current: ${fmtMoney(c.existing)} (${Math.round(moneyDelta(c.aiValue, c.existing) * 100)}% gap)`;
+            } else if (c.kind !== 'money') {
+              conflict = true;
+              conflictNote = `current: "${c.existing}"`;
+            }
+          }
+          // Cross-check secondary value (e.g. machine surplus vs manual estimate)
+          if (!conflict && c.secondaryCompare?.value != null && c.kind === 'money') {
+            const d = moneyDelta(c.aiValue, c.secondaryCompare.value);
+            if (d > 0.10) {
+              conflict = true;
+              conflictNote = `${c.secondaryCompare.label}: ${fmtMoney(c.secondaryCompare.value)} (${Math.round(d * 100)}% gap)`;
+            }
+          }
+          return { ...c, conflict, conflictNote };
+        });
+
+        if (rows.length === 0 && skippedKeys.length === 0) return null;
+
+        const apply = async (row) => {
+          setApplying(row.key);
+          try {
+            const patch = row.kind === 'address'
+              ? { address: row.aiValue }
+              : { meta: { ...m, [row.key]: row.aiValue } };
+            await onUpdateDeal(patch);
+          } finally {
+            setApplying(null);
+          }
+        };
+        const skip = async (row) => {
+          const next = Array.from(new Set([...(skippedKeys || []), row.key]));
+          await onUpdateDeal({ meta: { ...m, case_intel_skipped: next } });
+        };
+        const unskip = async (row) => {
+          const next = (skippedKeys || []).filter(k => k !== row.key);
+          await onUpdateDeal({ meta: { ...m, case_intel_skipped: next } });
+        };
+        const applyAllNonConflict = async () => {
+          setApplying('all');
+          try {
+            const safeRows = rows.filter(r => !r.conflict);
+            if (safeRows.length === 0) { setApplying(null); return; }
+            // Build one combined patch so we don't fire 8 sequential updates.
+            const metaPatches = {};
+            const dealPatches = {};
+            for (const r of safeRows) {
+              if (r.kind === 'address') dealPatches.address = r.aiValue;
+              else                       metaPatches[r.key] = r.aiValue;
+            }
+            const patch = {
+              ...dealPatches,
+              ...(Object.keys(metaPatches).length ? { meta: { ...m, ...metaPatches } } : {}),
+            };
+            await onUpdateDeal(patch);
+          } finally {
+            setApplying(null);
+          }
+        };
+
+        const safeCount = rows.filter(r => !r.conflict).length;
+
+        return (
+          <div style={{ background: '#0f0d0c', border: '1px solid #292524', borderLeft: '2px solid #10b981', borderRadius: 6, padding: '12px 14px', marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: rows.length ? 10 : 0 }}>
+              <div>
+                <span style={{ fontSize: 9, fontWeight: 700, color: '#10b981', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📥 Apply to Case Details</span>
+                <span style={{ fontSize: 11, color: '#a8a29e', marginLeft: 8 }}>
+                  {rows.length === 0
+                    ? 'All AI-found facts already match Case Details.'
+                    : `${rows.length} fact${rows.length === 1 ? '' : 's'} the AI found that aren't in Case Details yet${rows.some(r => r.conflict) ? ` (${rows.filter(r => r.conflict).length} flagged ⚠)` : ''}.`}
+                </span>
+              </div>
+              {safeCount > 1 && (
+                <button onClick={applyAllNonConflict} disabled={applying === 'all'}
+                  style={{ background: applying === 'all' ? '#1c1917' : '#065f46', color: applying === 'all' ? '#78716c' : '#6ee7b7', border: '1px solid ' + (applying === 'all' ? '#44403c' : '#10b981'), borderRadius: 6, padding: '4px 11px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: applying === 'all' ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                  {applying === 'all' ? '⏳ Applying…' : `✓ Apply all ${safeCount} (no conflicts)`}
+                </button>
+              )}
+              {skippedKeys.length > 0 && (
+                <button onClick={() => setShowSkipped(s => !s)}
+                  style={{ background: 'transparent', color: '#78716c', border: '1px dashed #44403c', borderRadius: 6, padding: '4px 11px', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {showSkipped ? '× hide skipped' : `+ show ${skippedKeys.length} skipped`}
+                </button>
+              )}
+            </div>
+            {rows.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rows.map(r => {
+                  const isSkipped = skippedKeys.includes(r.key);
+                  const displayValue = r.kind === 'money' ? fmtMoney(r.aiValue) : String(r.aiValue);
+                  return (
+                    <div key={r.key} style={{
+                      display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: 10, alignItems: 'center',
+                      padding: '8px 10px', background: r.conflict ? '#1c0f00' : '#0c0a09',
+                      border: '1px solid ' + (r.conflict ? '#7c2d12' : '#1c1917'),
+                      borderLeft: '2px solid ' + (r.conflict ? '#f59e0b' : '#10b981'),
+                      borderRadius: 5,
+                      opacity: isSkipped ? 0.5 : 1,
+                    }}>
+                      <div style={{ fontSize: 11, color: '#a8a29e', fontWeight: 600 }}>
+                        {r.conflict && <span style={{ marginRight: 4 }}>⚠</span>}
+                        {r.label}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: r.conflict ? '#fbbf24' : '#fafaf9', fontFamily: r.kind === 'money' ? "'DM Mono', monospace" : 'inherit', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {displayValue}
+                        </div>
+                        {r.conflictNote && <div style={{ fontSize: 10, color: '#a8a29e', marginTop: 1 }}>{r.conflictNote}</div>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {isSkipped ? (
+                          <button onClick={() => unskip(r)}
+                            style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 5, padding: '3px 9px', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                            Restore
+                          </button>
+                        ) : (
+                          <>
+                            <button onClick={() => apply(r)} disabled={applying != null}
+                              style={{ background: applying === r.key ? '#1c1917' : (r.conflict ? '#78350f' : '#065f46'), color: applying === r.key ? '#78716c' : (r.conflict ? '#fbbf24' : '#6ee7b7'), border: 'none', borderRadius: 5, padding: '3px 11px', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', cursor: applying != null ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                              {applying === r.key ? '…' : (r.conflict ? 'Apply anyway' : 'Apply')}
+                            </button>
+                            <button onClick={() => skip(r)} disabled={applying != null}
+                              style={{ background: 'transparent', color: '#78716c', border: '1px solid #292524', borderRadius: 5, padding: '3px 9px', fontSize: 10, fontWeight: 600, cursor: applying != null ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                              Skip
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {docs.length > 0 && (() => {
         // Doc type distribution so Nathan sees the shape of the file at a glance
         const typeCounts = docs.reduce((acc, d) => {
@@ -13540,7 +13751,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
     <div>
-      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
+      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
       {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
           NotesDrawer rendered at the DealDetail level. The drawer
           handles all reads + writes; this overview no longer plasters
