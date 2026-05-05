@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1f3a">
+<!-- Cache control: GitHub Pages serves portal.html with max-age=600
+     which means clients (and Nathan testing) keep seeing a 10-min-stale
+     copy after every deploy. Per Nathan 2026-05-05 — this kept biting.
+     These three meta tags tell modern browsers to revalidate every
+     visit. Trade-off is a ~50ms server check on each load (worth it
+     for a portal that updates frequently). -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>RefundLocators Case Portal</title>
 <link rel="manifest" href="portal-manifest.json" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -388,6 +397,12 @@
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script type="text/babel" data-presets="env,react">
 const { useState, useEffect } = React;
+
+// Visible version stamp at the bottom of the portal so Nathan can see
+// at a glance which build the page is rendering. Bump this on every
+// portal commit. If Nathan reports "nothing looks different" and the
+// stamp is older than the latest commit, it's a stale cache, not a bug.
+const PORTAL_VERSION = '20260505i';
 
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
@@ -2608,6 +2623,8 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your sale progresses.
+        <br/>
+        <span style={{ opacity: 0.5, fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>v{PORTAL_VERSION}</span>
       </p>
 
       <StickyCallButton />
@@ -2773,6 +2790,8 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your case progresses.
+        <br/>
+        <span style={{ opacity: 0.5, fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>v{PORTAL_VERSION}</span>
       </p>
 
       <StickyCallButton />
