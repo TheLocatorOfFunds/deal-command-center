@@ -993,7 +993,7 @@ function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJo
             </div>
             <div className="case-hero-amount">{fmt$2(clientShare)}</div>
             <div className="case-hero-sub">
-              Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% contingency
+              Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% recovery fee
               {isJointCase && claimantCount > 1 && <> · ≈ {fmt$2(perClaimantShare)} per claimant</>}
             </div>
             {progressPct !== null && (
@@ -2188,7 +2188,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
         {estimatedSurplus > 0 && (
           <div className="fee-breakdown">
             <div className="fee-line"><span>Estimated surplus funds</span><span className="amt">{fmt$2(estimatedSurplus)}</span></div>
-            <div className="fee-line sub"><span>Our contingency fee ({feePct}%)</span><span className="amt">−{fmt$2(ourFee)}</span></div>
+            <div className="fee-line sub"><span>Recovery fee ({feePct}%)</span><span className="amt">−{fmt$2(ourFee)}</span></div>
             <div className="fee-line total"><span>Your estimated share</span><span className="amt">{fmt$2(clientShare)}</span></div>
           </div>
         )}
