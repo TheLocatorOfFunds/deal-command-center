@@ -32,13 +32,18 @@ jobs:
     steps:
       - name: Install Postgres client + AWS CLI
         run: |
+          # Match the major version of Supabase Postgres. Ubuntu 22.04 / 24.04
+          # ship older clients; install v17 from PGDG so `pg_dump` matches whatever
+          # major Supabase is running (currently 15-17 across projects). v17 client
+          # can dump from any v15+ server.
+          #
+          # IMPORTANT: the sources.list line must reference the keyring file with
+          # signed-by=, otherwise apt-get update fails with NO_PUBKEY on Ubuntu 24+.
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update -qq
-          # Match the major version of Supabase Postgres (15+). Ubuntu 22.04
-          # ships with v14 client; install v15 from PGDG to avoid format-version mismatch.
-          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
-          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client-15 awscli
+          sudo apt-get install -y postgresql-client-17 awscli
 
       - name: pg_dump → gzip
         env:
