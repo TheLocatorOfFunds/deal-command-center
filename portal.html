@@ -219,33 +219,37 @@
   .case-hero-record-prose { font-family: 'Fraunces', Georgia, serif; font-weight: 400; font-size: 16px; line-height: 1.7; color: var(--text); max-width: 64ch; }
   .case-hero-record-prose b { color: var(--navy); font-variant-numeric: tabular-nums; font-weight: 600; }
 
+  /* Pull-quote is now visually subordinate to the dark hero amount —
+     this is the GROSS surplus pool, not what the client takes home.
+     Per Nathan 2026-05-05: don't make it too bold, since his actual
+     number is the hero ($share, already 25% deducted). Smaller pad,
+     softer tones, smaller number. */
   .case-hero-record-surplus {
-    margin-top: 22px;
-    padding: 22px 26px;
-    background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%);
-    border-radius: 14px;
-    border-left: 5px solid var(--gold);
-    box-shadow: 0 4px 16px rgba(201, 162, 74, 0.15), 0 1px 2px rgba(0,0,0,0.04);
+    margin-top: 18px;
+    padding: 14px 18px;
+    background: var(--gold-soft);
+    border-radius: 10px;
+    border-left: 3px solid var(--gold);
     display: grid;
     grid-template-columns: 1fr auto;
     align-items: center;
-    gap: 24px;
+    gap: 18px;
   }
-  .case-hero-record-surplus-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 6px; }
-  .case-hero-record-surplus-sub { font-size: 13px; color: var(--text); line-height: 1.6; max-width: 380px; font-weight: 400; }
+  .case-hero-record-surplus-label { font-size: 10px; font-weight: 700; color: var(--amber); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+  .case-hero-record-surplus-sub { font-size: 12px; color: var(--text-muted); line-height: 1.55; max-width: 420px; font-weight: 400; }
   .case-hero-record-surplus-amount {
     font-family: 'Fraunces', Georgia, serif;
-    font-weight: 500;
-    font-size: 42px;
-    color: var(--navy);
-    letter-spacing: -0.025em;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--navy-mid);
+    letter-spacing: -0.01em;
     font-variant-numeric: tabular-nums;
     line-height: 1;
     text-align: right;
   }
   @media (max-width: 640px) {
-    .case-hero-record-surplus { grid-template-columns: 1fr; gap: 14px; }
-    .case-hero-record-surplus-amount { text-align: left; font-size: 34px; }
+    .case-hero-record-surplus { grid-template-columns: 1fr; gap: 10px; }
+    .case-hero-record-surplus-amount { text-align: left; font-size: 20px; }
   }
   .case-hero-next-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px; }
   .case-hero-next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); letter-spacing: -0.015em; margin-bottom: 6px; line-height: 1.25; }
@@ -456,7 +460,7 @@ const { useState, useEffect } = React;
 // at a glance which build the page is rendering. Bump this on every
 // portal commit. If Nathan reports "nothing looks different" and the
 // stamp is older than the latest commit, it's a stale cache, not a bug.
-const PORTAL_VERSION = '20260505k';
+const PORTAL_VERSION = '20260505l';
 
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
@@ -1235,11 +1239,11 @@ function CaseHeroCourtRecord({ deal }) {
       {surplus != null && (
         <div className="case-hero-record-surplus">
           <div>
-            <div className="case-hero-record-surplus-label">{verified ? 'Verified surplus' : 'Estimated surplus'}</div>
+            <div className="case-hero-record-surplus-label">{verified ? 'Verified surplus pool' : 'Estimated surplus pool'}</div>
             <div className="case-hero-record-surplus-sub">
               {verified
-                ? 'Court-confirmed — the funds we are now working to release to you.'
-                : 'After fees and costs come out of the sale, this is what is left for you to recover.'}
+                ? 'Court-confirmed — the gross amount before fees. Your share above is calculated from this.'
+                : 'An estimate of the gross surplus left in the case file before fees. Your share above is your portion of this number, after our 25% recovery fee.'}
             </div>
           </div>
           <div className="case-hero-record-surplus-amount">{fmt(surplus)}</div>
@@ -2742,7 +2746,11 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       <WelcomeVideoBlock url={welcomeVideoUrl} />
 
-      <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
+      {/* SIGNED status pill removed 2026-05-05 — was redundant with the
+          5-step tracker inside CaseHero, which already shows "Engaged"
+          (or whichever step is current) prominently. The pill was opaque
+          to clients ("what does SIGNED mean?") and competed with the
+          dark hero for attention. */}
 
       {/* Per Nathan 2026-05-05: SurplusTracker + CaseHero + CaseSnapshotCard
           used to be three separate cards stacked here. Now folded into ONE
