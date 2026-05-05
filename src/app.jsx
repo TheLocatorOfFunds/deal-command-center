@@ -486,6 +486,19 @@ function DealCommandCenter({ session, profile }) {
   const [deals, setDeals] = useState([]);
 
   // ── Hash routing helpers ──────────────────────────────────────────
+  // Hash schemes:
+  //   #/deal/<id>/<tab>     — open a specific deal on a specific tab
+  //   #/view/<viewname>     — top-level view (today / outreach / inbox / etc.)
+  //   #/                    — defaults to "today"
+  // Per Nathan 2026-05-05: refresh must keep you on the tab you were on,
+  // not bounce back to Today. The deal-route was already hash-encoded;
+  // the view-route is new — was just ephemeral useState before, so
+  // any refresh while NOT on a deal reset to today.
+  const VALID_VIEWS = [
+    'today', 'attention', 'outreach', 'inbox', 'leads', 'forecast',
+    'active', 'flagged', 'hygiene', 'archive', 'pipeline', 'leads-phase',
+    'tasks', 'time', 'reports', 'analytics', 'traffic', 'team',
+  ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
     let tab = parts[2] || 'overview';
@@ -496,7 +509,12 @@ function DealCommandCenter({ session, profile }) {
     if (tab === 'vendors') tab = 'contacts';
     if (tab === 'notes') tab = 'files';
     if (tab === 'documents') tab = 'files';
-    return { dealId: parts[0] === 'deal' && parts[1] ? parts[1] : null, tab };
+    const dealId = parts[0] === 'deal' && parts[1] ? parts[1] : null;
+    let view = null;
+    if (parts[0] === 'view' && parts[1] && VALID_VIEWS.includes(parts[1])) {
+      view = parts[1];
+    }
+    return { dealId, tab, view };
   };
 
   const [activeDealId, setActiveDealId] = useState(() => parseHash().dealId);
@@ -548,7 +566,9 @@ function DealCommandCenter({ session, profile }) {
   const [showImport, setShowImport] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
-  const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
+  // Seed from hash so refresh keeps the user on the same view. Falls back
+  // to "today" when no #/view/<x> or deal route is present.
+  const [view, setView] = useState(() => parseHash().view || "today");
 
   // App-level recording state — survives any deal/tab/section unmount.
   // null when not recording. {dealId, dealName} while modal/pill is up.
@@ -1152,6 +1172,29 @@ function DealCommandCenter({ session, profile }) {
     setDeals(data || []);
     setLoaded(true);
   };
+
+  // ── Auto-refresh: keep `deals` fresh without a hard reload ────────
+  // Per Nathan 2026-05-05: "I want the DCC to have auto-refresh where
+  // the screen is continuously always refreshing." We refetch every
+  // 60s + whenever the tab becomes visible after being hidden (e.g.
+  // user comes back from another tab). Other views (Outreach, Inbox,
+  // Attention, Today) already have their own realtime subs, so this
+  // mainly keeps the deals array — which feeds every list/card view —
+  // fresh in case a realtime channel dropped a message.
+  useEffect(() => {
+    const REFRESH_MS = 60_000;
+    const tick = () => { loadDeals(); };
+    const id = setInterval(tick, REFRESH_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const loadTeam = async () => {
     const { data } = await sb.from('profiles').select('name').order('name');
     if (data) setTeamMembers(data.map(d => d.name));
@@ -1229,21 +1272,25 @@ function DealCommandCenter({ session, profile }) {
 
   const activeDeal = deals.find(d => d.id === activeDealId);
 
-  // Sync activeDealId → hash (tab portion managed by DealDetail)
+  // Sync activeDealId / view → hash. When a deal is open, the hash
+  // encodes deal+tab. When NOT on a deal, the hash encodes the
+  // top-level view (today / outreach / etc.) so refresh restores it.
   useEffect(() => {
     if (activeDealId) {
       const { tab } = parseHash();
       window.location.hash = `#/deal/${activeDealId}/${tab}`;
     } else {
-      window.location.hash = '#/';
+      window.location.hash = `#/view/${view}`;
     }
-  }, [activeDealId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDealId, view]);
 
-  // Back/forward button support
+  // Back/forward button support — restore both deal and view from hash
   useEffect(() => {
     const onHashChange = () => {
-      const { dealId } = parseHash();
-      setActiveDealId(dealId);
+      const parsed = parseHash();
+      setActiveDealId(parsed.dealId);
+      if (!parsed.dealId && parsed.view) setView(parsed.view);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
