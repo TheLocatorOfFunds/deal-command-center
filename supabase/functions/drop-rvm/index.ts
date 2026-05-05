@@ -1,33 +1,26 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 /**
- * drop-rvm — Fish Audio TTS → Supabase Storage → (Slybroadcast delivery, when API approval lands)
+ * drop-rvm — Personalized RVM pipeline
  *
- * Replaces the prior Drop Cowboy implementation per Justin's 2026-05-05 RVM
- * provider evaluation:
- *   - TTS: Fish Audio (PAYG, ~$15/M chars, voice cloning included free tier)
- *   - Delivery: Slybroadcast (PAYG, $0.04-0.10/drop, API approval pending as of ship)
- *   - Until Slybroadcast API is approved, the function generates audio,
- *     uploads to Supabase Storage `rvm-audio` bucket, returns the public URL,
- *     and inserts messages_outbound with status='audio_generated'. No actual
- *     phone drop yet — that's a 5-minute change once the approval lands.
+ * Two generation modes per template (rvm_templates.generation_mode):
  *
- * Two call patterns:
+ *   merge_fields   — mechanical {placeholder} substitution from deal/contact/meta.
+ *                    Predictable, fast, cheap. For bulk cadence drops.
  *
- *   Production (template-driven, cadence engine path):
- *     POST { template_id, deal_id, contact_id?, dry_run? }
- *     → fetches deal + contact + template, renders script with merge fields,
- *       generates audio, uploads to storage, returns mp3_url + message_id
+ *   ai_personalized — regenerates the deal's case_intel_summary, then asks
+ *                    Claude to write a per-case voicemail script using only
+ *                    public-facing case facts (no internal operational state).
+ *                    For high-priority Tier A cases.
  *
- *   Manual / test:
- *     POST { template_id, override_text?, override_first_name?, to_number, dry_run? }
- *     → renders override template (or override_text directly), generates audio
+ * Both modes flow through Fish Audio TTS → Supabase Storage → (Slybroadcast
+ * delivery, when API approval lands).
  *
- * Edge Function secrets required:
- *   - FISH_AUDIO_API_KEY        (set 2026-05-05)
- *   - NATHAN_VOICE_ID           (default voice if template doesn't specify; set 2026-05-05)
- *   - SUPABASE_URL              (auto)
- *   - SUPABASE_SERVICE_ROLE_KEY (auto)
+ * Edge Function secrets:
+ *   - FISH_AUDIO_API_KEY        (Fish Audio TTS)
+ *   - NATHAN_VOICE_ID           (default voice)
+ *   - ANTHROPIC_API_KEY         (Claude for ai_personalized mode + case intel)
+ *   - SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (auto)
  *   - SLYBROADCAST_*            (TODO when Slybroadcast API approval lands)
  */
 
@@ -38,20 +31,132 @@ const corsHeaders = {
 
 const STORAGE_BUCKET = 'rvm-audio'
 const FISH_AUDIO_TTS_URL = 'https://api.fish.audio/v1/tts'
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
+const CLAUDE_MODEL = 'claude-sonnet-4-5'
 const DEFAULT_TTS_MODEL = 's1'
 
-// ───── Merge field rendering ─────────────────────────────────────────────────
-// Replaces {first_name}, {county}, {case_number}, etc. in a template. Missing
-// keys fall through to a sensible default rather than leaving "{first_name}"
-// in the rendered audio.
+// ───── Formatting helpers ───────────────────────────────────────────────────
+
+/** Round to natural-sounding spoken value: $208,283 → "around two hundred thousand dollars" */
+function naturalDollars(n: number | string | null | undefined): string {
+  if (n == null || n === '') return ''
+  const num = typeof n === 'number' ? n : parseFloat(String(n).replace(/[$,]/g, ''))
+  if (isNaN(num) || num <= 0) return ''
+  if (num >= 1_000_000) {
+    const m = Math.round(num / 100_000) / 10
+    return `around ${m} million dollars`
+  }
+  if (num >= 100_000) {
+    // Round to nearest $10K and spell it: 208283 → "two hundred and ten thousand"
+    const tens = Math.round(num / 10_000) * 10_000
+    return `around ${spellThousands(tens)} dollars`
+  }
+  if (num >= 10_000) {
+    const tens = Math.round(num / 1_000) * 1_000
+    return `around ${spellThousands(tens)} dollars`
+  }
+  return `around ${Math.round(num).toLocaleString()} dollars`
+}
+
+/** 210000 → "two hundred and ten thousand"; 50000 → "fifty thousand" */
+function spellThousands(n: number): string {
+  const k = Math.round(n / 1_000)
+  if (k === 0) return `${n}`
+  if (k < 10) return `${spellNumber(k)} thousand`
+  if (k < 100) {
+    const tens = Math.floor(k / 10) * 10
+    const ones = k % 10
+    return ones === 0 ? `${spellNumber(tens)} thousand` : `${spellNumber(tens)} ${spellNumber(ones)} thousand`
+  }
+  if (k < 1000) {
+    const hundreds = Math.floor(k / 100)
+    const remainder = k % 100
+    if (remainder === 0) return `${spellNumber(hundreds)} hundred thousand`
+    if (remainder < 10) return `${spellNumber(hundreds)} hundred and ${spellNumber(remainder)} thousand`
+    const tens = Math.floor(remainder / 10) * 10
+    const ones = remainder % 10
+    return ones === 0
+      ? `${spellNumber(hundreds)} hundred and ${spellNumber(tens)} thousand`
+      : `${spellNumber(hundreds)} hundred and ${spellNumber(tens)} ${spellNumber(ones)} thousand`
+  }
+  return `${k.toLocaleString()}`
+}
+
+function spellNumber(n: number): string {
+  const ones: Record<number, string> = {
+    0: 'zero', 1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five',
+    6: 'six', 7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten',
+    11: 'eleven', 12: 'twelve', 13: 'thirteen', 14: 'fourteen', 15: 'fifteen',
+    16: 'sixteen', 17: 'seventeen', 18: 'eighteen', 19: 'nineteen',
+  }
+  const tens: Record<number, string> = {
+    20: 'twenty', 30: 'thirty', 40: 'forty', 50: 'fifty',
+    60: 'sixty', 70: 'seventy', 80: 'eighty', 90: 'ninety',
+  }
+  if (n in ones) return ones[n]
+  if (n in tens) return tens[n]
+  return `${n}`
+}
+
+/** "2026-06-04" → "June 4th" */
+function naturalDate(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  const month = d.toLocaleString('en-US', { month: 'long', timeZone: 'UTC' })
+  const day = d.getUTCDate()
+  const suffix = (n: number) => {
+    if (n >= 11 && n <= 13) return 'th'
+    const last = n % 10
+    return last === 1 ? 'st' : last === 2 ? 'nd' : last === 3 ? 'rd' : 'th'
+  }
+  return `${month} ${day}${suffix(day)}`
+}
+
+/** "423 Sample Rd, Oxford, OH 45056" → { street, city, state_zip } */
+function parseAddress(addr: string | null | undefined) {
+  if (!addr) return { street: '', city: '', stateZip: '', full: '' }
+  const parts = addr.split(',').map(s => s.trim())
+  return {
+    street: parts[0] || '',
+    city: parts[1] || '',
+    stateZip: parts.slice(2).join(', ') || '',
+    full: addr.trim(),
+  }
+}
+
+function pickFirstName(name: string | null | undefined): string {
+  if (!name) return ''
+  return name.trim().split(/\s+/)[0] || ''
+}
+function pickLastName(name: string | null | undefined): string {
+  if (!name) return ''
+  const parts = name.trim().split(/\s+/)
+  return parts.length > 1 ? parts.slice(1).join(' ') : ''
+}
+
+function normalizePhone(raw: string): string {
+  const digits = (raw || '').replace(/\D/g, '')
+  if (digits.length === 10) return `+1${digits}`
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+  return raw
+}
+
+// ───── Strategy A: Merge field rendering ─────────────────────────────────────
+// Sensible fallbacks so missing fields don't render as literal "{first_name}"
 const FALLBACKS: Record<string, string> = {
   first_name: 'there',
   full_name: 'there',
   county: 'your county',
   case_number: 'your case',
   property_address: 'your property',
+  property_street: 'your property',
   estimated_surplus: 'the surplus we found',
+  surplus_natural: 'a significant surplus',
+  judgment_amount: 'the judgment amount',
   sale_date: 'your sale date',
+  sale_natural_date: 'your sale date',
+  post_auction_phrase: 'about your property',
 }
 
 function renderTemplate(text: string, vars: Record<string, string | null | undefined>): string {
@@ -62,18 +167,145 @@ function renderTemplate(text: string, vars: Record<string, string | null | undef
   })
 }
 
-function pickFirstName(name: string | null | undefined): string {
-  if (!name) return ''
-  const trimmed = name.trim()
-  if (!trimmed) return ''
-  return trimmed.split(/\s+/)[0]
+function buildMergeVars(deal: any, contact: any, overrideFirstName: string | undefined): Record<string, string> {
+  const meta = (deal?.meta ?? {}) as Record<string, any>
+  const homeownerName = contact?.name || meta.homeownerName || ''
+  const firstName = overrideFirstName || pickFirstName(homeownerName) || ''
+  const lastName = pickLastName(homeownerName)
+  const addr = parseAddress(deal?.address)
+  const surplus = meta.estimatedSurplus || deal?.surplus_estimate || meta.surplus_estimate || meta.verifiedSurplus || null
+  const judgment = meta.judgmentAmount || meta.totalDebt || null
+  const isPostAuction = meta.isPostAuction === true || meta.isPostAuction === 'true'
+  const saleDateNat = naturalDate(meta.saleDate)
+
+  // Branching helper — single phrase that hides the pre/post sale conditional
+  // from the script writer.
+  let postAuctionPhrase = ''
+  if (isPostAuction) {
+    postAuctionPhrase = saleDateNat
+      ? `your property went to sale on ${saleDateNat}`
+      : `your property recently went to sale`
+  } else {
+    postAuctionPhrase = saleDateNat
+      ? `your sale coming up ${saleDateNat}`
+      : `your case`
+  }
+
+  return {
+    first_name: firstName,
+    last_name: lastName,
+    full_name: homeownerName,
+    property_address: addr.full,
+    property_street: addr.street,
+    property_city: addr.city,
+    county: meta.county || '',
+    state: meta.state || '',
+    case_number: (meta.courtCase || meta.caseNumber || '').trim(),
+    estimated_surplus: surplus ? `$${Number(surplus).toLocaleString()}` : '',
+    surplus_natural: naturalDollars(surplus),
+    judgment_amount: judgment ? `$${Number(judgment).toLocaleString()}` : '',
+    judgment_natural: naturalDollars(judgment),
+    sale_date: meta.saleDate || '',
+    sale_natural_date: saleDateNat,
+    days_to_sale: deal?.days_to_sale != null ? String(deal.days_to_sale) : '',
+    post_auction_phrase: postAuctionPhrase,
+    is_post_auction: isPostAuction ? 'yes' : 'no',
+  }
 }
 
-function normalizePhone(raw: string): string {
-  const digits = (raw || '').replace(/\D/g, '')
-  if (digits.length === 10) return `+1${digits}`
-  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
-  return raw
+// ───── Strategy B: AI-personalized script via Claude ─────────────────────────
+
+const AI_SCRIPT_SYSTEM_PROMPT = `You write personalized voicemail scripts that Nathan from RefundLocators will leave for homeowners with surplus funds tied to foreclosure.
+
+ABSOLUTE RULES — failure to follow these is a critical error:
+- ONLY use facts about THE CASE: property, foreclosure, sale, surplus amount, judgment, plaintiff, court case number, county.
+- NEVER reference our internal state. Forbidden: anything about whether the homeowner has been contacted, whether they replied, whether outreach has happened, whether files are uploaded, whether internal action items exist, fee structures (25%, $13K gross, $X net), tier ratings (Tier A/B/C), agent names other than Nathan, Justin, internal notes, expense line items, the words "tier" / "imported" / "contacted yet" / "outreach" / "deal" / "lead".
+- NEVER mention dollar figures with cent precision. Always round: "$208,283" → "around two hundred thousand dollars" or "over two hundred thousand". Use natural spoken numbers, not digits.
+- NEVER include filler, greeting beyond "Hey {first_name}", or bullet lists. This is spoken audio.
+- NEVER quote the case number with verbal punctuation. If you must say it, say it once cleanly.
+
+STRUCTURE (60 words MAX, ~25 seconds spoken):
+1. Greeting with first name + identify as Nathan from RefundLocators (5 sec)
+2. ONE specific case fact that proves we know their situation (10 sec) — typically property location + sale date OR surplus amount
+3. ONE concrete value statement (5 sec) — the surplus we identified
+4. Soft CTA (5 sec) — "give me a call back when you can, same number"
+
+TONE: warm, calm, low-pressure. NOT a sales pitch. Like a friend who's done the work and is sharing news.
+
+Output ONLY the spoken script. No preamble, no markdown, no labels. Just what Nathan would say into the voicemail.`
+
+async function generateAiScript(args: {
+  anthropicKey: string
+  caseIntelText: string
+  facts: Record<string, string>
+  toneGuidance: string
+}): Promise<string> {
+  const userMsg = `CASE FACTS YOU MAY USE (only these, plus what's in the intel summary that passes the rules):
+
+- First name: ${args.facts.first_name || '(unknown)'}
+- Property: ${args.facts.property_street || args.facts.property_address || '(unknown)'} in ${args.facts.county ? `${args.facts.county} County` : '(unknown county)'}
+- Estimated surplus: ${args.facts.surplus_natural || '(unknown)'}
+- Sale state: ${args.facts.is_post_auction === 'yes' ? `already sold ${args.facts.sale_natural_date || 'recently'}` : (args.facts.sale_natural_date ? `sale scheduled ${args.facts.sale_natural_date}` : 'no sale date set')}
+- Judgment amount: ${args.facts.judgment_natural || '(unknown)'}
+
+CASE INTEL SUMMARY (filter heavily — extract case-only facts, ignore internal operational state):
+${args.caseIntelText || '(no intel summary available — work with the structured facts above)'}
+
+TONE / STRUCTURE GUIDANCE FROM THIS TEMPLATE:
+${args.toneGuidance || 'Default warm, brief, specific.'}
+
+Write the voicemail script Nathan will speak.`
+
+  const res = await fetch(ANTHROPIC_URL, {
+    method: 'POST',
+    headers: {
+      'x-api-key': args.anthropicKey,
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: CLAUDE_MODEL,
+      max_tokens: 400,
+      system: AI_SCRIPT_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userMsg }],
+    }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`Claude script generation failed (${res.status}): ${text}`)
+  }
+  const json = await res.json()
+  const text = (json.content || []).filter((b: any) => b.type === 'text').map((b: any) => b.text).join('').trim()
+  if (!text) throw new Error('Claude returned empty script')
+  return text
+}
+
+async function refreshCaseIntel(args: {
+  supabaseUrl: string
+  serviceRoleKey: string
+  authToken: string
+  dealId: string
+}): Promise<string | null> {
+  // Trigger generate-case-summary, which writes to deals.meta.case_intel_summary
+  try {
+    const res = await fetch(`${args.supabaseUrl}/functions/v1/generate-case-summary`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${args.authToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ deal_id: args.dealId }),
+    })
+    if (!res.ok) {
+      console.warn(`generate-case-summary returned ${res.status}, continuing with whatever's cached`)
+      return null
+    }
+    const json = await res.json()
+    return json.text ?? null
+  } catch (e) {
+    console.warn('case intel refresh failed, continuing with cached:', (e as Error).message)
+    return null
+  }
 }
 
 // ───── Fish Audio TTS ────────────────────────────────────────────────────────
@@ -146,6 +378,7 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const fishAudioKey = Deno.env.get('FISH_AUDIO_API_KEY')
+  const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')
   const defaultVoiceId = Deno.env.get('NATHAN_VOICE_ID')
 
   if (!fishAudioKey) {
@@ -163,10 +396,10 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
-    const token = authHeader.replace('Bearer ', '')
+    const authToken = authHeader.replace('Bearer ', '')
     let userId: string
     try {
-      const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+      const b64 = authToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
       const payload = JSON.parse(atob(b64))
       userId = payload.sub
       if (!userId) throw new Error('no sub')
@@ -191,7 +424,6 @@ Deno.serve(async (req) => {
 
     // ─── Resolve template ─────────────────────────────────────────────────
     let template: any = null
-    let scriptToRender: string
     let voiceId: string
 
     if (template_id) {
@@ -213,7 +445,6 @@ Deno.serve(async (req) => {
         })
       }
       template = tpl
-      scriptToRender = override_text ?? tpl.script
       voiceId = tpl.voice_id || defaultVoiceId || ''
     } else {
       if (!override_text) {
@@ -222,18 +453,17 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         })
       }
-      scriptToRender = override_text
       voiceId = defaultVoiceId || ''
     }
 
     if (!voiceId) {
-      return new Response(JSON.stringify({ error: 'No voice_id available (template had none, NATHAN_VOICE_ID not set)' }), {
+      return new Response(JSON.stringify({ error: 'No voice_id available' }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
-    // ─── Resolve recipient details for merge field rendering ──────────────
+    // ─── Resolve recipient details ────────────────────────────────────────
     let deal: any = null
     let contact: any = null
     if (deal_id) {
@@ -246,26 +476,65 @@ Deno.serve(async (req) => {
     }
 
     const meta = (deal?.meta ?? {}) as Record<string, any>
-    const recipientName = contact?.name ?? meta.homeownerName ?? meta.first_name ?? null
-    const firstName = override_first_name ?? pickFirstName(recipientName)
     const phone = to_number
       ?? contact?.phone
       ?? meta.homeownerPhone
       ?? null
     const phoneE164 = phone ? normalizePhone(phone) : null
 
-    const vars: Record<string, string> = {
-      first_name: firstName || '',
-      full_name: recipientName || '',
-      county: deal?.county || meta.county || '',
-      case_number: deal?.case_number || meta.case_number || '',
-      property_address: deal?.address || '',
-      estimated_surplus: meta.estimated_surplus_low
-        ? `about ${meta.estimated_surplus_low}`
-        : (meta.estimated_surplus || ''),
-      sale_date: meta.sale_date || '',
+    const mergeVars = buildMergeVars(deal, contact, override_first_name)
+
+    // ─── Generate script: merge_fields vs ai_personalized ─────────────────
+    let renderedScript: string
+    let generationMode = template?.generation_mode || 'merge_fields'
+    let caseIntelUsed: string | null = null
+    let aiScriptRaw: string | null = null
+
+    if (override_text) {
+      // Manual override always uses merge fields on the override text
+      renderedScript = renderTemplate(override_text, mergeVars)
+      generationMode = 'merge_fields' // override locks behavior
+    } else if (generationMode === 'ai_personalized') {
+      if (!anthropicKey) {
+        return new Response(JSON.stringify({ error: 'ANTHROPIC_API_KEY not configured (required for ai_personalized templates)' }), {
+          status: 503,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!deal_id) {
+        return new Response(JSON.stringify({ error: 'ai_personalized templates require deal_id' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      // Refresh case intelligence right before generating, per Justin's call
+      const freshIntel = await refreshCaseIntel({
+        supabaseUrl,
+        serviceRoleKey,
+        authToken,
+        dealId: deal_id,
+      })
+
+      // Re-fetch deal to pick up any meta updates from the intel refresh
+      const { data: refreshedDeal } = await sb.from('deals').select('*').eq('id', deal_id).maybeSingle()
+      const refreshedMeta = (refreshedDeal?.meta ?? {}) as Record<string, any>
+      caseIntelUsed = freshIntel ?? refreshedMeta.case_intel_summary?.text ?? meta.case_intel_summary?.text ?? null
+
+      aiScriptRaw = await generateAiScript({
+        anthropicKey,
+        caseIntelText: caseIntelUsed || '',
+        facts: mergeVars,
+        toneGuidance: template.script || template.ai_prompt || '',
+      })
+      // Even AI output gets a final merge-field pass — Claude is supposed to
+      // emit clean text but if it accidentally leaves a {first_name} in there
+      // (or we want to inject one explicitly), this catches it.
+      renderedScript = renderTemplate(aiScriptRaw, mergeVars)
+    } else {
+      // merge_fields mode — straight substitution
+      renderedScript = renderTemplate(template.script, mergeVars)
     }
-    const renderedScript = renderTemplate(scriptToRender, vars)
 
     // ─── Generate audio via Fish Audio ────────────────────────────────────
     const audio = await generateAudio({
@@ -284,8 +553,6 @@ Deno.serve(async (req) => {
     })
 
     // ─── Insert messages_outbound record ──────────────────────────────────
-    // Status = 'audio_generated' since Slybroadcast API approval is pending.
-    // When delivery is wired, this becomes 'queued' → 'sent'.
     const { data: msgRow, error: msgErr } = await sb
       .from('messages_outbound')
       .insert({
@@ -307,15 +574,15 @@ Deno.serve(async (req) => {
       console.error('messages_outbound insert failed:', msgErr.message)
     }
 
-    // TODO(slybroadcast): once API approval lands, swap this comment for an
-    // actual delivery call. The audio is already public-readable at publicUrl.
-
     return new Response(JSON.stringify({
       ok: true,
       message_id: msgRow?.id ?? null,
       mp3_url: publicUrl,
       mp3_path: path,
       rendered_script: renderedScript,
+      generation_mode: generationMode,
+      ai_script_raw: aiScriptRaw,        // for debugging / preview
+      case_intel_used: !!caseIntelUsed,  // boolean — was intel pulled?
       to_number: phoneE164,
       voice_id: voiceId,
       template_id: template_id ?? null,
