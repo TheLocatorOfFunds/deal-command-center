@@ -1262,6 +1262,78 @@ function ClientDocketCard({ dealId, access, isPreview }) {
   );
 }
 
+// ─── Case Snapshot — court-record dollars at a glance ────────────
+// Per Nathan 2026-05-05: bring the structured Case Intelligence the
+// team sees in DCC over to the client portal (the dollar tiles —
+// judgment, sale price, court appraisal, min bid, verified surplus).
+// Source-of-truth ladder mirrors DCC: meta > AI extraction > hidden.
+// We do NOT mirror the team's AI prose summary because it's written
+// for internal ops ("send him an update", "5 duplicate tasks") and
+// would feel weird for John to read about himself.
+function CaseSnapshotCard({ deal }) {
+  const m = deal?.meta || {};
+  const judgment    = m.judgmentAmount ?? null;
+  const salePrice   = m.salePrice ?? null;
+  const appraised   = m.courtAppraisalValue ?? null;
+  const minBid      = m.minimumBidAmount ?? null;
+  // Prefer court-confirmed surplus when set, else manual estimate.
+  const surplus     = m.verifiedSurplus ?? m.estimatedSurplus ?? null;
+  const verified    = m.verifiedSurplus != null;
+  const buyerName   = m.buyerName || null;
+  const saleDate    = m.saleDate || null;
+
+  const tiles = [];
+  if (judgment != null)  tiles.push({ label: 'Judgment debt',  value: judgment,  tone: 'red' });
+  if (appraised != null) tiles.push({ label: 'Court appraisal', value: appraised, tone: 'blue' });
+  if (minBid != null)    tiles.push({ label: 'Minimum bid',     value: minBid,     tone: 'amber' });
+  if (salePrice != null) tiles.push({ label: 'Sold for',        value: salePrice,  tone: 'green' });
+  if (surplus != null)   tiles.push({ label: verified ? 'Verified surplus' : 'Estimated surplus', value: surplus, tone: 'gold' });
+
+  if (tiles.length === 0) return null;
+
+  const fmtCurrency = (v) => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const tonePalette = {
+    red:   { fg: '#991b1b', bg: '#fef2f2', border: '#fca5a5' },
+    blue:  { fg: '#1e3a8a', bg: '#eff6ff', border: '#93c5fd' },
+    amber: { fg: '#92400e', bg: '#fffbeb', border: '#fcd34d' },
+    green: { fg: '#065f46', bg: '#f0fdf4', border: '#6ee7b7' },
+    gold:  { fg: '#78350f', bg: '#fffbeb', border: '#fbbf24' },
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <p className="card-title" style={{ marginBottom: 4 }}>Court record</p>
+      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        The numbers from the court file. Pulled straight from the docket and verified against the recorded documents.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
+        {tiles.map(t => {
+          const c = tonePalette[t.tone];
+          return (
+            <div key={t.label} style={{
+              background: c.bg, border: `1px solid ${c.border}`, borderRadius: 8, padding: '10px 12px',
+            }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: c.fg, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.85 }}>
+                {t.label}
+              </div>
+              <div style={{ fontSize: 19, fontWeight: 600, color: c.fg, fontVariantNumeric: 'tabular-nums', marginTop: 4 }}>
+                {fmtCurrency(t.value)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {(saleDate || buyerName) && (
+        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          {saleDate && <>Sold {new Date(saleDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>}
+          {saleDate && buyerName && ' · '}
+          {buyerName && <>to {buyerName}</>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Notification Preferences (inline in ClientDocketCard) ───
 function NotificationPreferences({ access, isPreview }) {
   const current = access?.prefs || {};
@@ -1514,6 +1586,141 @@ function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
       >
         {submitting ? 'Sending…' : 'Send to Nathan'}
       </button>
+    </div>
+  );
+}
+
+// ─── Contact Info Card (email / phone update requests) ───────────────
+// Shows the client their current email and phone on file.
+// They can request a change; the change lands in client_edit_requests
+// as 'pending' — Nathan approves/rejects from the DCC ClientPortalCard.
+function ContactInfoCard({ access, isPreview }) {
+  const [editField, setEditField]   = React.useState(null); // 'email' | 'phone' | null
+  const [editValue, setEditValue]   = React.useState('');
+  const [busy, setBusy]             = React.useState(false);
+  const [status, setStatus]         = React.useState(null); // 'sent' | 'error'
+  const [pendingFields, setPending] = React.useState({});   // { email: true, phone: true }
+
+  // Load any existing pending requests for this access row
+  React.useEffect(() => {
+    if (!access?.id) return;
+    sb.from('client_edit_requests')
+      .select('field')
+      .eq('client_access_id', access.id)
+      .eq('status', 'pending')
+      .then(({ data }) => {
+        if (data) {
+          const map = {};
+          data.forEach(r => { map[r.field] = true; });
+          setPending(map);
+        }
+      });
+  }, [access?.id]);
+
+  const currentPhone = access?.prefs?.notify_phone || '';
+
+  const openEdit = (field) => {
+    setEditField(field);
+    setEditValue(field === 'email' ? (access?.email || '') : currentPhone);
+    setStatus(null);
+  };
+
+  const cancelEdit = () => { setEditField(null); setEditValue(''); setStatus(null); };
+
+  const submitRequest = async () => {
+    if (!editValue.trim()) return;
+    const oldVal = editField === 'email' ? (access?.email || '') : currentPhone;
+    if (editValue.trim() === oldVal) { cancelEdit(); return; }
+    if (isPreview) { cancelEdit(); setStatus('sent'); return; }
+    setBusy(true);
+    try {
+      const { error } = await sb.from('client_edit_requests').insert({
+        client_access_id: access.id,
+        deal_id: access.deal_id,
+        field: editField,
+        new_value: editValue.trim(),
+        old_value: oldVal,
+      });
+      if (error) throw error;
+      setPending(prev => ({ ...prev, [editField]: true }));
+      setEditField(null);
+      setStatus('sent');
+    } catch (e) {
+      setStatus('error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <p className="card-title" style={{ marginBottom: 14 }}>Your Contact Info</p>
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        Need to update your email or phone? Submit a change request and we'll update it on our end.
+      </p>
+
+      {/* Email row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Email</div>
+          <div style={{ fontSize: 14, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {access?.email || <span style={{ color: 'var(--text-muted)' }}>Not on file</span>}
+          </div>
+          {pendingFields.email && (
+            <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 3 }}>Change requested — your team will review it shortly</div>
+          )}
+        </div>
+        {!pendingFields.email && editField !== 'email' && (
+          <button onClick={() => openEdit('email')} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Edit</button>
+        )}
+      </div>
+      {editField === 'email' && (
+        <div style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8, border: '1px solid var(--amber)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>New Email Address</div>
+          <input type="email" value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="your@email.com" style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, boxSizing: 'border-box' }} autoFocus />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={submitRequest} disabled={busy || !editValue.trim()} style={{ fontSize: 12, padding: '6px 14px', background: 'var(--navy)', color: 'var(--cream)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>{busy ? 'Sending…' : 'Submit Request'}</button>
+            <button onClick={cancelEdit} style={{ fontSize: 12, padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Phone row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Phone</div>
+          <div style={{ fontSize: 14, color: 'var(--text)' }}>
+            {currentPhone || <span style={{ color: 'var(--text-muted)' }}>Not on file</span>}
+          </div>
+          {pendingFields.phone && (
+            <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 3 }}>Change requested — your team will review it shortly</div>
+          )}
+        </div>
+        {!pendingFields.phone && editField !== 'phone' && (
+          <button onClick={() => openEdit('phone')} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Edit</button>
+        )}
+      </div>
+      {editField === 'phone' && (
+        <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8, border: '1px solid var(--amber)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>New Phone Number</div>
+          <input type="tel" value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="(513) 555-0100" style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, boxSizing: 'border-box' }} autoFocus />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={submitRequest} disabled={busy || !editValue.trim()} style={{ fontSize: 12, padding: '6px 14px', background: 'var(--navy)', color: 'var(--cream)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>{busy ? 'Sending…' : 'Submit Request'}</button>
+            <button onClick={cancelEdit} style={{ fontSize: 12, padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {status === 'sent' && (
+        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: '#064e3b', color: '#6ee7b7', fontSize: 12 }}>
+          ✓ Change request sent — your team will review and update your info shortly.
+        </div>
+      )}
+      {status === 'error' && (
+        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: '#7f1d1d', color: '#fca5a5', fontSize: 12 }}>
+          Something went wrong. Please call us at <a href="tel:+15139518855" style={{ color: '#fca5a5' }}>(513) 951-8855</a> to update your info.
+        </div>
+      )}
     </div>
   );
 }
@@ -2159,6 +2366,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
             claimantCount={claimantCount}
             perClaimantShare={perClaimantShare}
           />
+          <CaseSnapshotCard deal={deal} />
           <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} />
         </>
       )}
@@ -2242,6 +2450,8 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} isPreview={isPreview} />
 
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
+
+      <ContactInfoCard access={access} isPreview={isPreview} />
 
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
