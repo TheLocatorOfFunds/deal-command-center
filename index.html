@@ -135,6 +135,9 @@
     /* Hide Lauren's desktop floating pill on mobile — she lives in the
        More sheet instead so she doesn't crowd the bottom nav. */
     .lauren-fab { display: none !important; }
+    /* Same for the Messenger-style team-chat bubble — phones use the
+       in-app /team view via the bottom-nav More sheet. */
+    .team-chat-bubble, .team-chat-panel { display: none !important; }
     /* ─── Comms: mobile-first rebuild ─────────────────────────────
        Goal: iMessage-/LeadConnector-feel. Container takes the viewport
        (minus the deal-detail chrome above it), composer is sticky at
@@ -236,6 +239,6 @@
 <body>
 <div id="root"></div>
 
-<script src="app.js?v=20260504r" defer></script>
+<script src="app.js?v=20260505a" defer></script>
 </body>
 </html>

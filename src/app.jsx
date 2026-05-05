@@ -1390,15 +1390,12 @@ function DealCommandCenter({ session, profile }) {
           {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
           {isTeam && (
             <button onClick={() => {
-              // Click behavior splits on unread state:
-              // - unread > 0 → open the notification popover (preview-then-act)
-              // - unread = 0 → navigate straight to chat (nothing to preview)
-              if (unreadChatCount > 0) {
-                setShowChatPopover(prev => !prev);
-              } else {
-                setActiveDealId(null);
-                setView("team");
-              }
+              // Pop the floating Messenger-style bubble open. It handles both
+              // unread preview (thread list w/ badges) and reply-in-place
+              // without leaving the current deal/view. Pre-2026-05-05 this
+              // toggled ChatNotificationPopover (preview only) for unread or
+              // navigated to /team (read view) — the bubble subsumes both.
+              window.dispatchEvent(new Event('dcc:open-team-chat'));
             }}
               title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} — click to preview` : 'Team chat with Justin + Lauren'}
               style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
@@ -23360,9 +23357,434 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
   );
 }
 
+// ─── TeamChatBubble — Messenger-style floating team chat ─────────────
+// Per Eric (2026-05-05): a floating chat tab inside DCC so messages can
+// be read + replied to without leaving the current deal/view. Mirrors
+// the Lauren FAB pattern but on the LEFT side of the screen (Lauren
+// owns the right). Mounted at the React root alongside LaurenDCC so
+// it persists across every view including deal detail.
+//
+// Two modes inside the open panel:
+//   1. Thread list — every team_thread w/ last message + unread count
+//   2. Thread view — last 80 msgs of the active thread + composer
+//
+// Realtime: subscribed to team_messages + team_message_reads so the
+// list refreshes when new messages land or another device marks read.
+//
+// Mobile: hidden via media query in index.html (.team-chat-bubble &
+// .team-chat-panel set to display:none on ≤640px). Mobile users still
+// have the in-app /team view via the bottom-nav More sheet.
+function TeamChatBubble() {
+  const [open, setOpen] = useState(false);
+  const [me, setMe] = useState(null);
+  const [threads, setThreads] = useState([]);
+  const [unreadByThread, setUnreadByThread] = useState({});
+  const [lastMsgByThread, setLastMsgByThread] = useState({});
+  const [participantsByThreadId, setParticipantsByThreadId] = useState({});
+  const [profilesById, setProfilesById] = useState({});
+  const [activeThreadId, setActiveThreadId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  const composerRef = useRef(null);
+  const msgsEndRef = useRef(null);
+
+  // Boot: load user + threads + listen for global open-event so the
+  // header chat button (and anything else) can pop the bubble open.
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    window.addEventListener('dcc:open-team-chat', handler);
+    (async () => {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) return;
+      const { data: prof } = await sb.from('profiles').select('id, name, role').eq('id', user.id).single();
+      setMe({ id: user.id, name: prof?.name || user.email || 'Me', role: prof?.role || 'admin' });
+    })();
+    return () => window.removeEventListener('dcc:open-team-chat', handler);
+  }, []);
+
+  // Load threads + last message + participant maps + profile cache
+  const loadThreads = React.useCallback(async () => {
+    if (!me?.id) return;
+    const { data: t } = await sb.from('team_threads')
+      .select('id, title, thread_type, created_at')
+      .is('archived_at', null)
+      .order('created_at', { ascending: true });
+    setThreads(t || []);
+
+    if (!t || t.length === 0) return;
+    const ids = t.map(x => x.id);
+
+    // Last message per thread (one query, sort + de-dupe in JS)
+    const { data: latest } = await sb.from('team_messages')
+      .select('thread_id, sender_id, sender_kind, body, created_at')
+      .in('thread_id', ids)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    const lastMap = {};
+    (latest || []).forEach(m => {
+      if (!lastMap[m.thread_id]) lastMap[m.thread_id] = m;
+    });
+    setLastMsgByThread(lastMap);
+
+    // DM participants → so we can label "DM with Justin"
+    const dmIds = t.filter(x => x.thread_type === 'dm').map(x => x.id);
+    if (dmIds.length) {
+      const { data: parts } = await sb.from('team_thread_participants')
+        .select('thread_id, user_id').in('thread_id', dmIds);
+      const map = {};
+      (parts || []).forEach(p => {
+        if (!map[p.thread_id]) map[p.thread_id] = [];
+        map[p.thread_id].push(p.user_id);
+      });
+      setParticipantsByThreadId(map);
+    }
+  }, [me?.id]);
+
+  // Per-thread unread counts (RPC the main TeamView already uses)
+  const loadUnread = React.useCallback(async () => {
+    if (!me?.id) return;
+    const { data } = await sb.rpc('team_unread_per_thread', { p_user_id: me.id });
+    const map = {};
+    (data || []).forEach(r => { map[r.thread_id] = r.unread_count; });
+    setUnreadByThread(map);
+  }, [me?.id]);
+
+  useEffect(() => { loadThreads(); loadUnread(); }, [loadThreads, loadUnread]);
+
+  // Profile cache for sender names + DM labels
+  useEffect(() => {
+    (async () => {
+      const { data: profs } = await sb.from('profiles')
+        .select('id, name, display_name')
+        .in('role', ['admin', 'user', 'va']);
+      const byId = {};
+      (profs || []).forEach(p => { byId[p.id] = p; });
+      setProfilesById(byId);
+    })();
+  }, []);
+
+  // Realtime: refresh thread metadata + unread on every message change
+  useEffect(() => {
+    if (!me?.id) return;
+    const ch = sb.channel('team-chat-bubble')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, () => {
+        loadThreads(); loadUnread();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnread)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_threads' }, loadThreads)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [me?.id, loadThreads, loadUnread]);
+
+  // Load + subscribe to the active thread's messages
+  useEffect(() => {
+    if (!activeThreadId || !me?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('team_messages')
+        .select('id, sender_id, sender_kind, body, created_at')
+        .eq('thread_id', activeThreadId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: true })
+        .limit(80);
+      if (cancelled) return;
+      setMessages(data || []);
+      // Mark this thread read for me
+      await sb.from('team_message_reads').upsert({
+        thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
+      }, { onConflict: 'thread_id,user_id' });
+    })();
+    const ch = sb.channel('team-chat-bubble-msgs-' + activeThreadId)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'team_messages', filter: `thread_id=eq.${activeThreadId}`
+      }, (payload) => {
+        const row = payload.new;
+        if (row.deleted_at) return;
+        setMessages(prev => prev.find(m => m.id === row.id) ? prev : [...prev, row]);
+        // Auto mark-read for incoming messages while this thread is open
+        if (me?.id && row.sender_id !== me.id) {
+          setTimeout(() => {
+            sb.from('team_message_reads').upsert({
+              thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
+            }, { onConflict: 'thread_id,user_id' });
+          }, 600);
+        }
+      })
+      .subscribe();
+    return () => { cancelled = true; sb.removeChannel(ch); };
+  }, [activeThreadId, me?.id]);
+
+  // Auto-scroll to bottom on new message
+  useEffect(() => {
+    if (msgsEndRef.current) msgsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages.length, activeThreadId]);
+
+  // Auto-focus composer when entering a thread
+  useEffect(() => {
+    if (open && activeThreadId && composerRef.current) {
+      setTimeout(() => composerRef.current?.focus(), 80);
+    }
+  }, [open, activeThreadId]);
+
+  const sendBody = async () => {
+    const trimmed = body.trim();
+    if (!trimmed || !activeThreadId || !me?.id || sending) return;
+    setSending(true);
+    try {
+      const { error } = await sb.from('team_messages').insert({
+        thread_id: activeThreadId,
+        sender_id: me.id,
+        sender_kind: 'human',
+        body: trimmed,
+      });
+      if (error) { alert('Could not send: ' + error.message); return; }
+      setBody('');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Build a friendly thread label. DMs → "DM · Justin". Channels → title.
+  // Lauren channels (lauren_room / lauren_dm) get a robot prefix.
+  const threadLabel = (t) => {
+    if (!t) return '—';
+    if (t.thread_type === 'lauren_dm') return '🤖 Lauren';
+    if (t.thread_type === 'lauren_room') return '🤖 ' + (t.title || 'Lauren room');
+    if (t.thread_type === 'dm') {
+      const otherIds = (participantsByThreadId[t.id] || []).filter(uid => uid !== me?.id);
+      const otherName = otherIds.map(uid => profilesById[uid]?.display_name || profilesById[uid]?.name).filter(Boolean)[0];
+      return otherName ? `DM · ${otherName}` : (t.title || 'Direct message');
+    }
+    return t.title || 'Thread';
+  };
+
+  const senderName = (m) => {
+    if (!m) return '';
+    if (m.sender_kind === 'lauren') return '🤖 Lauren';
+    if (m.sender_id === me?.id) return 'You';
+    return profilesById[m.sender_id]?.display_name || profilesById[m.sender_id]?.name || 'Teammate';
+  };
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm';
+    if (m < 1440) return Math.floor(m / 60) + 'h';
+    return Math.floor(m / 1440) + 'd';
+  };
+
+  const totalUnread = Object.values(unreadByThread).reduce((s, n) => s + (n || 0), 0);
+
+  // Sort threads: ones with unread first, then by last message ts desc
+  const sortedThreads = [...threads].sort((a, b) => {
+    const ua = unreadByThread[a.id] || 0;
+    const ub = unreadByThread[b.id] || 0;
+    if (ua !== ub) return ub - ua;
+    const ta = lastMsgByThread[a.id]?.created_at || a.created_at;
+    const tb = lastMsgByThread[b.id]?.created_at || b.created_at;
+    return new Date(tb).getTime() - new Date(ta).getTime();
+  });
+
+  if (!me?.id) return null;
+
+  return (
+    <>
+      <button
+        className="team-chat-bubble"
+        onClick={() => setOpen(o => !o)}
+        title={totalUnread > 0 ? `${totalUnread} unread message${totalUnread === 1 ? '' : 's'}` : 'Team chat'}
+        style={{
+          position: 'fixed', bottom: 24, left: 24, zIndex: 9000,
+          background: totalUnread > 0 ? '#1e3a8a' : '#1c1917',
+          color: '#fafaf9',
+          border: '1px solid ' + (totalUnread > 0 ? '#3b82f6' : '#44403c'),
+          borderRadius: 24, padding: '0 16px', height: 44,
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          fontSize: 13, fontWeight: 700, cursor: 'pointer',
+          boxShadow: totalUnread > 0
+            ? '0 4px 20px rgba(59,130,246,.55), 0 0 0 4px rgba(59,130,246,.18)'
+            : '0 4px 16px rgba(0,0,0,.55)',
+          fontFamily: 'inherit',
+          transition: 'transform .1s, box-shadow .25s, background .25s',
+        }}>
+        <span style={{ fontSize: 16, lineHeight: 1 }}>💬</span>
+        Chat
+        {totalUnread > 0 && (
+          <span style={{
+            background: '#dc2626', color: '#fff', borderRadius: 10,
+            padding: '1px 7px', fontSize: 10, fontWeight: 700,
+            minWidth: 18, textAlign: 'center', marginLeft: 2,
+          }}>{totalUnread > 99 ? '99+' : totalUnread}</span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          className="team-chat-panel"
+          style={{
+            position: 'fixed', bottom: 80, left: 24, zIndex: 9001,
+            width: 380, height: 540,
+            background: '#1c1917', border: '1px solid #44403c',
+            borderRadius: 16, boxShadow: '0 16px 48px rgba(0,0,0,.65)',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          }}>
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
+            background: '#0c0a09', borderBottom: '1px solid #292524', flexShrink: 0,
+          }}>
+            {activeThreadId && (
+              <button onClick={() => setActiveThreadId(null)}
+                title="Back to threads"
+                style={{ background: '#292524', border: '1px solid #44403c', color: '#a8a29e',
+                         fontSize: 13, padding: '4px 9px', borderRadius: 6, cursor: 'pointer',
+                         fontFamily: 'inherit', flexShrink: 0 }}>←</button>
+            )}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {activeThreadId ? threadLabel(threads.find(t => t.id === activeThreadId)) : '💬 Team Chat'}
+              </div>
+              <div style={{ fontSize: 10, color: '#78716c', marginTop: 1 }}>
+                {activeThreadId
+                  ? `${messages.length} message${messages.length === 1 ? '' : 's'} · realtime`
+                  : `${threads.length} thread${threads.length === 1 ? '' : 's'} · ${totalUnread} unread`}
+              </div>
+            </div>
+            <button onClick={() => setOpen(false)} aria-label="Close chat"
+              style={{ background: '#292524', border: '1px solid #44403c', color: '#fafaf9',
+                       fontSize: 18, lineHeight: 1, cursor: 'pointer', borderRadius: 8,
+                       width: 32, height: 32, display: 'flex', alignItems: 'center',
+                       justifyContent: 'center', flexShrink: 0, fontFamily: 'inherit' }}>×</button>
+          </div>
+
+          {/* Body */}
+          {!activeThreadId ? (
+            // ── Thread list mode ──
+            <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              {sortedThreads.length === 0 && (
+                <div style={{ fontSize: 12, color: '#78716c', padding: 24, textAlign: 'center' }}>
+                  No threads yet. Open the full Team view to start one.
+                </div>
+              )}
+              {sortedThreads.map(t => {
+                const u = unreadByThread[t.id] || 0;
+                const last = lastMsgByThread[t.id];
+                const lastSnippet = last?.body
+                  ? (last.body.length > 60 ? last.body.slice(0, 60) + '…' : last.body)
+                  : '(no messages yet)';
+                return (
+                  <button key={t.id} onClick={() => setActiveThreadId(t.id)}
+                    style={{
+                      width: '100%', display: 'block', textAlign: 'left',
+                      background: 'transparent', border: 'none',
+                      padding: '10px 14px', cursor: 'pointer',
+                      borderBottom: '1px solid #1c1917', fontFamily: 'inherit',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                      <span style={{ fontSize: 13, fontWeight: u > 0 ? 700 : 600, color: u > 0 ? '#fafaf9' : '#d6d3d1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                        {threadLabel(t)}
+                      </span>
+                      {u > 0 && (
+                        <span style={{ background: '#dc2626', color: '#fff', borderRadius: 9, padding: '1px 6px', fontSize: 9, fontWeight: 700, minWidth: 16, textAlign: 'center', flexShrink: 0 }}>
+                          {u > 99 ? '99+' : u}
+                        </span>
+                      )}
+                      {last && (
+                        <span style={{ fontSize: 9, color: '#78716c', fontFamily: "'DM Mono', monospace", flexShrink: 0 }}>
+                          {fmtAge(last.created_at)}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: u > 0 ? '#a8a29e' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: u > 0 ? 500 : 400 }}>
+                      {last ? `${senderName(last)}: ${lastSnippet}` : lastSnippet}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            // ── Thread view mode ──
+            <>
+              <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {messages.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#78716c', padding: 16, textAlign: 'center' }}>
+                    No messages yet. Be the first to say hi.
+                  </div>
+                )}
+                {messages.map(m => {
+                  const isMe = m.sender_id === me.id;
+                  const isLauren = m.sender_kind === 'lauren';
+                  return (
+                    <div key={m.id} style={{
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: isMe ? 'flex-end' : 'flex-start', gap: 2,
+                    }}>
+                      {!isMe && (
+                        <div style={{ fontSize: 10, color: '#78716c', fontWeight: 600, paddingLeft: 6 }}>
+                          {senderName(m)}
+                        </div>
+                      )}
+                      <div style={{
+                        maxWidth: '82%', padding: '8px 12px',
+                        background: isMe ? '#d97706' : (isLauren ? '#312e81' : '#292524'),
+                        color: isMe ? '#1c0a00' : '#fafaf9',
+                        borderRadius: 12,
+                        borderBottomRightRadius: isMe ? 3 : 12,
+                        borderBottomLeftRadius: !isMe ? 3 : 12,
+                        fontSize: 12.5, lineHeight: 1.5,
+                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      }}>{m.body}</div>
+                      <div style={{ fontSize: 9, color: '#57534e', paddingLeft: isMe ? 0 : 6, paddingRight: isMe ? 6 : 0 }}>
+                        {fmtAge(m.created_at)} ago
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={msgsEndRef} />
+              </div>
+              <div style={{ padding: 10, background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', gap: 8, flexShrink: 0 }}>
+                <textarea
+                  ref={composerRef}
+                  value={body}
+                  onChange={e => setBody(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendBody();
+                    }
+                  }}
+                  placeholder="Type a reply… (Enter to send, Shift+Enter for newline)"
+                  rows={2}
+                  style={{
+                    flex: 1, background: '#1c1917', color: '#fafaf9',
+                    border: '1px solid #44403c', borderRadius: 8,
+                    padding: '8px 10px', fontSize: 12.5, lineHeight: 1.45,
+                    fontFamily: 'inherit', resize: 'none', outline: 'none',
+                  }} />
+                <button onClick={sendBody} disabled={!body.trim() || sending}
+                  style={{
+                    background: body.trim() && !sending ? '#d97706' : '#44403c',
+                    color: body.trim() && !sending ? '#1c0a00' : '#78716c',
+                    border: 'none', borderRadius: 8, padding: '0 14px',
+                    fontSize: 12, fontWeight: 700, cursor: body.trim() && !sending ? 'pointer' : 'not-allowed',
+                    fontFamily: 'inherit', alignSelf: 'stretch', minHeight: 36,
+                  }}>{sending ? '…' : 'Send'}</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   React.createElement(React.Fragment, null,
     React.createElement(Root),
-    React.createElement(LaurenDCC)
+    React.createElement(LaurenDCC),
+    React.createElement(TeamChatBubble)
   )
 );
