@@ -616,6 +616,23 @@ function DealCommandCenter({ session, profile }) {
   // to "today" when no #/view/<x> or deal route is present.
   const [view, setView] = useState(() => parseHash().view || "today");
 
+  // ── Sidebar ────────────────────────────────────────────────────────────
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem('dcc-sidebar-collapsed') === '1'
+  );
+  React.useEffect(() => {
+    localStorage.setItem('dcc-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
+
+  // ── Phone popover (replaces bottom-right dialpad) ──────────────────────
+  const [showPhonePopover, setShowPhonePopover] = useState(false);
+  const [phoneTab, setPhoneTab] = useState('dial'); // 'dial' | 'recents'
+  const [recentCalls, setRecentCalls] = useState([]);
+  const [dialpadContact, setDialpadContact] = useState(null); // { name, phone, dealName, dealId }
+
+  // ── Notifications dropdown (aggregates header badges) ──────────────────
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
+
   // App-level recording state — survives any deal/tab/section unmount.
   // null when not recording. {dealId, dealName} while modal/pill is up.
   const [recordingDeal, setRecordingDeal] = useState(null);
@@ -739,6 +756,39 @@ function DealCommandCenter({ session, profile }) {
     }
     initTwilioDevice();
   }, [initTwilioDevice]);
+
+  // Fetch the 20 most-recent call_logs for the phone popover Recents tab.
+  const fetchRecentCalls = React.useCallback(async () => {
+    const { data } = await sb.from('call_logs')
+      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, deal_id, contact_id, contacts(name), deals(name)')
+      .order('started_at', { ascending: false })
+      .limit(20);
+    if (data) setRecentCalls(data);
+  }, []);
+
+  // Live contact lookup as digits are typed into the dialpad.
+  React.useEffect(() => {
+    if (!dialpadNumber || dialpadNumber.replace(/\D/g,'').length < 4) { setDialpadContact(null); return; }
+    let cancelled = false;
+    const digits = dialpadNumber.replace(/\D/g,'');
+    (async () => {
+      // Match on trailing 10 digits so +1 prefix doesn't break the match
+      const tail = digits.slice(-10);
+      const { data } = await sb.from('contacts')
+        .select('id, name, phone, contact_deals(deal_id, deals(name, id))')
+        .ilike('phone', `%${tail}%`)
+        .limit(1);
+      if (cancelled) return;
+      const c = data?.[0];
+      if (c) {
+        const cd = c.contact_deals?.[0];
+        setDialpadContact({ name: c.name, phone: c.phone, dealName: cd?.deals?.name || null, dealId: cd?.deals?.id || cd?.deal_id || null });
+      } else {
+        setDialpadContact(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dialpadNumber]);
 
   const startCallTimer = React.useCallback(() => {
     setCallDuration(0);
@@ -872,6 +922,9 @@ function DealCommandCenter({ session, profile }) {
   const userName = profile.name;
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
   const isTeam = isAdmin || profile.role === 'va';
+  // Derived counts used by the sidebar badges (also computed in DealList
+  // but we need them here now that sidebar lives in DealCommandCenter).
+  const flaggedDeals = deals.filter(d => d.meta?.flagged);
   // Owner-only surfaces (Team Management, Lauren Control Center, role
   // changes) gate on email match against the OWNER_EMAILS set defined
   // module-scope. Currently Nathan + Justin only.
@@ -1373,10 +1426,94 @@ function DealCommandCenter({ session, profile }) {
   return (
     <RecordingContext.Provider value={recordingValue}>
     <>
-    <Shell>
-      {/* Header */}
-      <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+    {/* ── App shell: sidebar + main column ─────────────────────────────── */}
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0c0a09' }}>
+
+      {/* ── Collapsible sidebar (desktop only — hidden on mobile via class) ── */}
+      <nav className="dcc-sidebar" style={{
+        width: sidebarCollapsed ? 52 : 220, minWidth: sidebarCollapsed ? 52 : 220,
+        background: '#111110', borderRight: '1px solid #1c1917',
+        display: 'flex', flexDirection: 'column',
+        position: 'sticky', top: 0, height: '100vh',
+        overflowY: 'auto', overflowX: 'hidden',
+        transition: 'width 0.18s, min-width 0.18s',
+        zIndex: 200, flexShrink: 0,
+      }}>
+        {/* Brand + collapse toggle */}
+        <div style={{ padding: sidebarCollapsed ? '14px 0' : '14px 14px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: sidebarCollapsed ? 'center' : 'space-between', minHeight: 52 }}>
+          {!sidebarCollapsed && <span style={{ fontSize: 10, fontWeight: 800, color: '#d97706', letterSpacing: '0.1em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>RefundLocators</span>}
+          <button onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'Expand' : 'Collapse'}
+            style={{ background: 'transparent', border: 'none', color: '#44403c', fontSize: 14, cursor: 'pointer', padding: 4, lineHeight: 1, flexShrink: 0 }}>
+            {sidebarCollapsed ? '»' : '«'}
+          </button>
+        </div>
+        {/* Nav items */}
+        {(() => {
+          const navItem = (id, icon, label, opts = {}) => {
+            const { badge = 0, groupIds, onClick, adminOnly } = opts;
+            if (adminOnly && !isAdmin) return null;
+            const isActive = groupIds ? groupIds.includes(view) : view === id;
+            const handleClick = onClick || (() => { setActiveDealId(null); setView(id); });
+            return (
+              <button key={id} onClick={handleClick} title={sidebarCollapsed ? label : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: sidebarCollapsed ? '10px 0' : '9px 14px',
+                  justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                  background: isActive ? '#1c1917' : 'transparent',
+                  border: 'none', borderLeft: isActive ? '2px solid #d97706' : '2px solid transparent',
+                  color: isActive ? '#fafaf9' : '#78716c',
+                  cursor: 'pointer', fontFamily: 'inherit', width: '100%', textAlign: 'left',
+                  fontWeight: isActive ? 700 : 500, fontSize: 13,
+                  whiteSpace: 'nowrap', position: 'relative',
+                }}>
+                <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{icon}</span>
+                {!sidebarCollapsed && <span style={{ flex: 1 }}>{label}</span>}
+                {!sidebarCollapsed && badge > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{badge > 99 ? '99+' : badge}</span>}
+                {sidebarCollapsed && badge > 0 && <span style={{ position: 'absolute', top: 6, right: 6, width: 7, height: 7, background: '#ef4444', borderRadius: '50%' }} />}
+              </button>
+            );
+          };
+          const div = () => <div key={Math.random()} style={{ height: 1, background: '#1c1917', margin: '4px 0' }} />;
+          return (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
+              {navItem('today',    '📌', 'Today')}
+              {navItem('attention','⚡', 'Attention')}
+              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','inbox','leads','forecast'] })}
+              {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {navItem('tasks',    '✅', 'Tasks')}
+              {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
+              {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
+              {div()}
+              {navItem('calls',    '📞', 'Calls')}
+              {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
+              {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
+              {isTeam && navItem('_docket',   '⚖',  'Docket',   { onClick: () => setShowDocket(true),  badge: unackDocketCount })}
+              {isTeam && navItem('_leads',    '📋', 'Leads',    { onClick: () => setShowLeads(true),   badge: newLeadCount })}
+              {div()}
+              {isAdmin && navItem('_import',  '📥', 'Import',   { onClick: () => setShowImport(true) })}
+              {isTeam && navItem('_library',  '📚', 'Library',  { onClick: () => setShowLibrary(true) })}
+            </div>
+          );
+        })()}
+        {/* Bottom: Account + Sign out */}
+        <div style={{ borderTop: '1px solid #1c1917', padding: sidebarCollapsed ? '6px 0' : '6px 8px' }}>
+          <button onClick={() => setShowAccount(true)} title="Account settings"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: sidebarCollapsed ? '8px 0' : '8px 10px', justifyContent: sidebarCollapsed ? 'center' : 'flex-start', background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontFamily: 'inherit', width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>
+            <span>⚙</span>{!sidebarCollapsed && 'Account'}
+          </button>
+          <button onClick={signOut} title="Sign out"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: sidebarCollapsed ? '8px 0' : '8px 10px', justifyContent: sidebarCollapsed ? 'center' : 'flex-start', background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontFamily: 'inherit', width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>
+            <span>↩</span>{!sidebarCollapsed && 'Sign out'}
+          </button>
+        </div>
+      </nav>
+
+      {/* ── Main column (header + content) ─────────────────────────────── */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* ── Header ── */}
+      <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: '10px 20px', borderBottom: "1px solid #1c1917", background: '#111110', position: 'sticky', top: 0, zIndex: 100, gap: 16, minHeight: 52 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
           {activeDeal && (
             <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: 'nowrap', flexShrink: 0 }}>
               ← All Deals
@@ -1441,186 +1578,199 @@ function DealCommandCenter({ session, profile }) {
             })()}
           </div>
         </div>
-        <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
-          {/* Phone status — auto-inits on load, shows retry button only on error */}
+        <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {/* Universal search bar */}
+          <button onClick={() => setShowSearch(true)} title="Search deals, contacts, activity (⌘K)"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#1c1917', border: '1px solid #292524', borderRadius: 8, padding: '7px 14px', cursor: 'text', color: '#57534e', fontSize: 12, minWidth: 200 }}>
+            <span style={{ fontSize: 13 }}>🔍</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>Search deals, contacts…</span>
+            <kbd style={{ fontSize: 10, color: '#44403c', background: '#0c0a09', border: '1px solid #292524', borderRadius: 4, padding: '1px 5px', fontFamily: 'inherit' }}>⌘K</kbd>
+          </button>
+
+          {/* Notifications bell — aggregates Docket, Leads, Walkthroughs, Offers, Alerts */}
           {isTeam && (() => {
-            if (twilioStatus === 'registered') {
-              return (
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  <span title="Phone ready — browser will ring on inbound calls"
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#10b981', cursor: 'default' }}>
-                    <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10b981', display: 'inline-block',
-                      boxShadow: '0 0 0 2px #0c0a09, 0 0 6px #10b981' }} />
-                    Phone
-                  </span>
-                  <button onClick={() => { setShowDialpad(v => !v); }}
-                    title="Open dialpad"
-                    style={{ background: 'transparent', border: 'none', color: '#78716c', fontSize: 13,
-                      cursor: 'pointer', padding: '0 2px', lineHeight: 1, fontFamily: 'inherit' }}>⌨</button>
-                </span>
-              );
-            }
-            if (twilioStatus === 'error') {
-              return (
-                <button onClick={enablePhone}
-                  title="Phone failed to connect — click to retry"
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10,
-                    color: '#ef4444', background: 'transparent', border: '1px solid #ef4444',
-                    borderRadius: 4, padding: '2px 8px', cursor: 'pointer', fontFamily: 'inherit' }}>
-                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#ef4444', display: 'inline-block' }} />
-                  Phone error — retry
-                </button>
-              );
-            }
-            // idle or initializing — auto-init is running in background
+            // Bell does NOT include unread chat — the red banner handles that separately
+            const totalNotifs = unackDocketCount + newLeadCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
             return (
-              <span title="Phone connecting…"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 10, color: '#f59e0b', cursor: 'default', opacity: 0.75 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: '#f59e0b', display: 'inline-block',
-                  animation: 'chatBadgePulse 1.6s ease-in-out infinite' }} />
-                Phone…
-              </span>
+              <div style={{ position: 'relative' }}>
+                <button onClick={() => setShowNotifDropdown(v => !v)}
+                  title={totalNotifs > 0 ? `${totalNotifs} notification${totalNotifs !== 1 ? 's' : ''}` : 'Notifications'}
+                  style={{ background: totalNotifs > 0 ? '#1c1917' : 'transparent', border: `1px solid ${totalNotifs > 0 ? '#78350f' : '#292524'}`, color: totalNotifs > 0 ? '#fbbf24' : '#78716c', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: 14, lineHeight: 1, position: 'relative', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit' }}>
+                  🔔
+                  {totalNotifs > 0 && <span style={{ fontSize: 10, fontWeight: 700 }}>{totalNotifs > 99 ? '99+' : totalNotifs}</span>}
+                </button>
+                {showNotifDropdown && (
+                  <div style={{ position: 'fixed', top: 52, right: 24, background: '#111110', border: '1px solid #292524', borderRadius: 10, minWidth: 260, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', zIndex: 500, overflow: 'hidden' }}
+                    onClick={() => setShowNotifDropdown(false)}>
+                    <div style={{ padding: '10px 14px 6px', fontSize: 10, color: '#57534e', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', borderBottom: '1px solid #1c1917' }}>Notifications</div>
+                    {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
+                    {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
+                    {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
+                    {pendingWalkthroughs.length > 0 && <button onClick={() => setShowWalkthroughs(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🏠 <span style={{ flex: 1 }}>{pendingWalkthroughs.length} walkthrough{pendingWalkthroughs.length !== 1 ? 's' : ''}</span></button>}
+                    {pendingOffersCount > 0 && <button onClick={() => { sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', {ascending:false}).limit(1).then(({data}) => { if (data?.[0]) setActiveDealId(data[0].deal_id); }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#6ee7b7', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>💰 <span style={{ flex: 1 }}>{pendingOffersCount} investor offer{pendingOffersCount !== 1 ? 's' : ''}</span></button>}
+                    {isOwner && systemAlertCount > 0 && <button onClick={() => setShowSystemAlerts(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚠ <span style={{ flex: 1 }}>{systemAlertCount} system alert{systemAlertCount !== 1 ? 's' : ''}</span></button>}
+                    {isOwner && laurenFlaggedCount > 0 && <button onClick={() => setShowLaurenCC(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🤖 <span style={{ flex: 1 }}>{laurenFlaggedCount} Lauren flag{laurenFlaggedCount !== 1 ? 's' : ''}</span></button>}
+                  </div>
+                )}
+              </div>
             );
           })()}
-          <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
-          {/* Search — icon-only, ⌘K shortcut shown on hover */}
-          <button onClick={() => setShowSearch(true)} title="Search (⌘K)" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>🔍</button>
-          {/* Docket — badge-only, just the count. Click opens the full modal. */}
-          {isTeam && (
-            <button onClick={() => setShowDocket(true)} title={`Docket events · ${unackDocketCount} unacked`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: unackDocketCount > 0 ? '#78350f' : '#44403c', color: unackDocketCount > 0 ? '#fbbf24' : '#78716c', display: 'flex', alignItems: 'center', gap: 4 }}>
-              ⚖ {unackDocketCount > 0 && <span style={{ background: '#f59e0b', color: '#0c0a09', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{unackDocketCount}</span>}
-            </button>
-          )}
-          {/* Leads — badge-only, only renders when there are new leads */}
-          {isTeam && newLeadCount > 0 && (
-            <button onClick={() => setShowLeads(true)} title={`Lead intake · ${newLeadCount} new`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#78350f', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 4 }}>
-              📋 <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{newLeadCount}</span>
-            </button>
-          )}
-          {isTeam && pendingWalkthroughs.length > 0 && (
-            <button onClick={() => setShowWalkthroughs(true)} title="Investor walkthrough requests" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#78350f", color: "#fbbf24" }}>
-              🏠 Walkthroughs <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingWalkthroughs.length}</span>
-            </button>
-          )}
-          {isTeam && pendingOffersCount > 0 && (
-            <button
-              onClick={() => {
-                // Find the first deal with a pending offer and jump to it; if user is on a deal already, do nothing.
-                if (activeDealId) return;
-                sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', { ascending: false }).limit(1).then(({ data }) => {
-                  if (data && data[0]) setActiveDealId(data[0].deal_id);
-                });
-              }}
-              title="Pending investor offers"
-              style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#065f46", color: "#6ee7b7" }}
-            >
-              💰 Offers <span style={{ display: "inline-block", marginLeft: 4, background: "#10b981", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingOffersCount}</span>
-            </button>
-          )}
-          {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
-          {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
-          {isTeam && (
-            <button onClick={() => {
-              // Pop the floating Messenger-style bubble open. It handles both
-              // unread preview (thread list w/ badges) and reply-in-place
-              // without leaving the current deal/view. Pre-2026-05-05 this
-              // toggled ChatNotificationPopover (preview only) for unread or
-              // navigated to /team (read view) — the bubble subsumes both.
-              window.dispatchEvent(new Event('dcc:open-team-chat'));
-            }}
-              title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} — click to preview` : 'Team chat with Justin + Lauren'}
-              style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
-              💬 Chat
-              {unreadChatCount > 0 && (
-                <span style={{
-                  background: '#dc2626', color: '#fff', borderRadius: 8,
-                  padding: '0 6px', fontSize: 9, fontWeight: 700,
-                  minWidth: 14, textAlign: 'center',
-                  animation: 'chatBadgePulse 1.6s ease-in-out infinite',
-                }}>
-                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
-                </span>
-              )}
-            </button>
-          )}
-          {/* Active video call pills — one per teammate currently in a Jitsi
-              call (within the last 30 min). Click → join that room in a new
-              tab. Auto-disappear when the 30-min window lapses. */}
-          {isTeam && activeCalls.map(call => {
-            const minsAgo = Math.max(0, Math.round((Date.now() - new Date(call.started_at).getTime()) / 60_000));
+
+          {/* Phone button → popover with Dial + Recents tabs */}
+          {isTeam && (() => {
+            const dotColor = twilioStatus === 'registered' ? '#10b981' : twilioStatus === 'error' ? '#ef4444' : '#f59e0b';
+            const fmtRecentNum = (num) => {
+              const d = (num || '').replace(/\D/g,'');
+              if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+              if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+              return num || '—';
+            };
+            const keys = [
+              { d: '1', s: '' }, { d: '2', s: 'ABC' }, { d: '3', s: 'DEF' },
+              { d: '4', s: 'GHI' }, { d: '5', s: 'JKL' }, { d: '6', s: 'MNO' },
+              { d: '7', s: 'PQRS' }, { d: '8', s: 'TUV' }, { d: '9', s: 'WXYZ' },
+              { d: '*', s: '' }, { d: '0', s: '+' }, { d: '#', s: '' },
+            ];
             return (
-              <button key={call.user_id}
-                onClick={() => window.open(call.url, '_blank', 'noopener,noreferrer')}
-                title={`${call.name} started a video call ${minsAgo} min ago — click to join`}
-                style={{
-                  background: '#15803d', color: '#fff', border: '1px solid #16a34a',
-                  borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 700,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  boxShadow: '0 0 0 1px rgba(22,163,74,0.3)',
-                }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#fff', animation: 'pulse 1.5s infinite', boxShadow: '0 0 6px rgba(255,255,255,0.7)' }} />
-                📹 Join {call.name}
-                <span style={{ color: '#bbf7d0', fontSize: 9, fontWeight: 500 }}>{minsAgo}m</span>
-              </button>
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => {
+                    if (twilioStatus === 'error') { enablePhone(); return; }
+                    const next = !showPhonePopover;
+                    setShowPhonePopover(next);
+                    if (next) { setPhoneTab('dial'); fetchRecentCalls(); }
+                  }}
+                  title={twilioStatus === 'registered' ? 'Dialpad + call history' : twilioStatus === 'error' ? 'Phone error — retry' : 'Phone connecting…'}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: showPhonePopover ? '#1c1917' : 'transparent', border: `1px solid ${showPhonePopover ? '#44403c' : '#292524'}`, color: dotColor, borderRadius: 8, padding: '7px 10px', cursor: twilioStatus === 'initializing' ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, display: 'inline-block', animation: twilioStatus === 'initializing' ? 'chatBadgePulse 1.6s ease-in-out infinite' : 'none' }} />
+                  Phone
+                  {twilioStatus === 'registered' && <span style={{ fontSize: 10, color: '#44403c' }}>⌨</span>}
+                </button>
+                {/* Active video call pills */}
+                {activeCalls.map(call => (
+                  <button key={call.user_id} onClick={() => window.open(call.url, '_blank', 'noopener,noreferrer')}
+                    style={{ marginLeft: 4, background: '#15803d', color: '#fff', border: '1px solid #16a34a', borderRadius: 6, padding: '4px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                    📹 Join
+                  </button>
+                ))}
+                {/* ── Phone popover ── */}
+                {showPhonePopover && (
+                  <div style={{
+                    position: 'fixed', top: 56, right: 16, zIndex: 600,
+                    background: '#1c1917', border: '1px solid #44403c', borderRadius: 12,
+                    width: 300, boxShadow: '0 12px 32px rgba(0,0,0,0.7)',
+                    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                  }}>
+                    {/* Dismiss backdrop */}
+                    <div style={{ position: 'fixed', inset: 0, zIndex: -1 }} onClick={() => setShowPhonePopover(false)} />
+                    {/* Tabs */}
+                    <div style={{ display: 'flex', borderBottom: '1px solid #292524' }}>
+                      {['dial', 'recents'].map(tab => (
+                        <button key={tab} onClick={() => { setPhoneTab(tab); if (tab === 'recents') fetchRecentCalls(); }}
+                          style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: `2px solid ${phoneTab === tab ? '#d97706' : 'transparent'}`, color: phoneTab === tab ? '#fafaf9' : '#78716c', padding: '10px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize', marginBottom: -1 }}>
+                          {tab === 'dial' ? '⌨ Dial' : '🕐 Recents'}
+                        </button>
+                      ))}
+                    </div>
+                    {phoneTab === 'dial' && (
+                      <div style={{ padding: '14px 14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {/* Contact match display */}
+                        {dialpadContact && (
+                          <div style={{ background: '#292524', border: '1px solid #3d3a37', borderRadius: 8, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{dialpadContact.name}</span>
+                            {dialpadContact.dealName && (
+                              <span style={{ fontSize: 10, color: '#d97706' }}>
+                                Deal: <button onClick={() => { setActiveDealId(dialpadContact.dealId); setShowPhonePopover(false); }}
+                                  style={{ background: 'none', border: 'none', color: '#d97706', textDecoration: 'underline', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', padding: 0 }}>{dialpadContact.dealName}</button>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {/* Number input + backspace */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            value={dialpadNumber}
+                            onChange={e => setDialpadNumber(e.target.value.replace(/[^0-9+*#\s]/g, ''))}
+                            placeholder="Enter number…"
+                            style={{ flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', fontSize: 18, fontFamily: "'DM Mono', monospace", padding: '8px 10px', outline: 'none', letterSpacing: '0.05em' }}
+                          />
+                          <button onClick={() => setDialpadNumber(n => n.slice(0, -1))}
+                            style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 8, color: '#a8a29e', fontSize: 15, cursor: 'pointer', padding: '8px 12px', lineHeight: 1 }}>⌫</button>
+                        </div>
+                        {/* Keypad */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                          {keys.map(({ d, s }) => (
+                            <button key={d} onClick={() => setDialpadNumber(n => n + d)}
+                              style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', cursor: 'pointer', padding: '10px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, fontFamily: 'inherit' }}>
+                              <span style={{ fontSize: 16, fontWeight: 600, lineHeight: 1 }}>{d}</span>
+                              {s && <span style={{ fontSize: 7, color: '#78716c', letterSpacing: '0.12em' }}>{s}</span>}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Call button */}
+                        <button
+                          onClick={() => {
+                            if (!dialpadNumber) return;
+                            const raw = dialpadNumber.replace(/\s/g, '');
+                            const e164 = raw.startsWith('+') ? raw : raw.replace(/\D/g,'').length === 10 ? '+1' + raw.replace(/\D/g,'') : '+' + raw.replace(/\D/g,'');
+                            setShowPhonePopover(false);
+                            setDialpadNumber('');
+                            startCall(dialpadContact || { name: e164, phone: e164 });
+                          }}
+                          disabled={!dialpadNumber}
+                          style={{ background: dialpadNumber ? '#16a34a' : '#292524', border: 'none', color: dialpadNumber ? '#fff' : '#57534e', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: dialpadNumber ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                          📞 Call
+                        </button>
+                      </div>
+                    )}
+                    {phoneTab === 'recents' && (
+                      <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                        {recentCalls.length === 0 && <div style={{ padding: '20px 16px', fontSize: 12, color: '#57534e', textAlign: 'center' }}>No recent calls</div>}
+                        {recentCalls.map(c => {
+                          const isInbound = c.direction === 'inbound';
+                          const displayNum = fmtRecentNum(isInbound ? c.from_number : c.to_number);
+                          const contactName = c.contacts?.name || null;
+                          const dealName = c.deals?.name || null;
+                          const statusColor = c.status === 'completed' ? '#10b981' : c.status === 'missed' ? '#ef4444' : '#78716c';
+                          const dur = c.duration_seconds ? `${Math.floor(c.duration_seconds/60)}:${String(c.duration_seconds%60).padStart(2,'0')}` : null;
+                          return (
+                            <div key={c.id} style={{ padding: '10px 14px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+                              onClick={() => {
+                                const num = isInbound ? c.from_number : c.to_number;
+                                setDialpadNumber(num || '');
+                                setPhoneTab('dial');
+                              }}>
+                              <span style={{ fontSize: 14, flexShrink: 0, color: statusColor }}>{isInbound ? '↙' : '↗'}</span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{contactName || displayNum}</div>
+                                {contactName && <div style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{displayNum}</div>}
+                                {dealName && <div style={{ fontSize: 10, color: '#d97706' }}>{dealName}</div>}
+                              </div>
+                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                <div style={{ fontSize: 10, color: statusColor }}>{c.status}</div>
+                                {dur && <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{dur}</div>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <button onClick={() => { setActiveDealId(null); setView('calls'); setShowPhonePopover(false); }}
+                          style={{ width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', borderTop: '1px solid #292524', color: '#78716c', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          View full call history →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             );
-          })}
-          {/* Owner-only: in-DCC monitoring badge. Renders only when there
-              are unacked alerts. Click → modal showing every system_alerts
-              row with severity / source / message / context + Acknowledge. */}
-          {isOwner && systemAlertCount > 0 && (
-            <button onClick={() => setShowSystemAlerts(true)}
-              title={`${systemAlertCount} unacknowledged system alert${systemAlertCount === 1 ? '' : 's'} — EF errors, cron failures, etc.`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#7f1d1d', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
-              ⚠ <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{systemAlertCount > 99 ? '99+' : systemAlertCount}</span>
-            </button>
-          )}
-          {/* Owner-only: Lauren badge with flagged-count. The Team modal +
-              Lauren Control Center moved into Account Settings → Owner Tools
-              per Nathan's audit, but the flagged-count needs an at-a-glance
-              indicator since flagged Lauren convos are time-sensitive. The
-              badge itself opens Lauren CC. Hidden from non-owners. */}
-          {isOwner && laurenFlaggedCount > 0 && (
-            <button onClick={() => setShowLaurenCC(true)}
-              title={`Lauren Control Center — ${laurenFlaggedCount} flagged conversation${laurenFlaggedCount === 1 ? '' : 's'}`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#7f1d1d', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
-              🤖 <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{laurenFlaggedCount}</span>
-            </button>
-          )}
-          {/* More menu — collects infrequent surfaces (Library, Lead intake
-              form link, etc.). Hidden by default to keep the header clean. */}
-          {isTeam && (
-            <div style={{ position: 'relative' }}>
-              <button onClick={() => setShowMoreMenu(v => !v)} title="More" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>⋯</button>
-              {showMoreMenu && (
-                <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, minWidth: 240, boxShadow: '0 8px 20px rgba(0,0,0,0.5)', zIndex: 1000, overflow: 'hidden' }}>
-                  <button onClick={() => { setShowLibrary(true); setShowMoreMenu(false); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-                    📚 <span>Library</span>
-                    <span style={{ marginLeft: 'auto', fontSize: 10, color: '#57534e' }}>templates · SOPs · legal</span>
-                  </button>
-                  <button onClick={() => { setShowLeads(true); setShowMoreMenu(false); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', borderTop: '1px solid #1c1917' }}>
-                    📋 <span>Lead intake pipeline</span>
-                    {newLeadCount > 0 && <span style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700 }}>{newLeadCount}</span>}
-                  </button>
-                  <a href="https://app.refundlocators.com/lead-intake.html" target="_blank" rel="noopener noreferrer"
-                    onClick={() => setShowMoreMenu(false)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', borderTop: '1px solid #1c1917', textDecoration: 'none' }}>
-                    🌱 <span>Public intake form</span>
-                    <span style={{ marginLeft: 'auto', fontSize: 10, color: '#57534e' }}>↗ open</span>
-                  </a>
-                </div>
-              )}
-            </div>
-          )}
-          <button onClick={() => setShowAccount(true)} title="Account settings" style={{ ...btnGhost, fontSize: 11 }}>⚙ Account</button>
-          <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
+          })()}
+
+          <span style={{ width: 1, height: 18, background: '#292524', display: 'inline-block' }} />
+          <span style={{ fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap' }}>{userName}</span>
         </div>
       </div>
+      {/* ── end header ── */}
+      <div style={{ flex: 1, padding: '20px 24px', minWidth: 0, overflowY: 'auto' }}>
 
       {/* Welcome-back unread chat banner. Persistent indicator that
           messages are waiting — visible from EVERY view, not just the
@@ -1632,33 +1782,20 @@ function DealCommandCenter({ session, profile }) {
         <div
           onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); markAllChatRead(); }}
           style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
-            background: 'linear-gradient(90deg, rgba(220,38,38,0.18), rgba(220,38,38,0.08))',
-            border: '1px solid #b91c1c', borderRadius: 8,
-            padding: '10px 14px', marginBottom: 16, cursor: 'pointer',
-            animation: 'unreadBannerSlide 0.22s ease-out',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'rgba(220,38,38,0.12)',
+            borderLeft: '3px solid #dc2626',
+            padding: '7px 12px', marginBottom: 14, cursor: 'pointer',
+            animation: 'unreadBannerSlide 0.18s ease-out',
           }}
           title="Click to open chat"
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-            <span style={{
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-              width: 28, height: 28, borderRadius: '50%', background: '#dc2626', color: '#fff',
-              fontSize: 13, fontWeight: 800, flexShrink: 0,
-              animation: 'chatBadgePulse 1.6s ease-in-out infinite',
-            }}>💬</span>
-            <span style={{ fontSize: 13, fontWeight: 700, color: '#fecaca' }}>
-              You have {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'}
-            </span>
-            <span style={{ fontSize: 12, color: '#fca5a5' }}>— click to open</span>
-          </div>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#fca5a5' }}>
+            💬 {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'} — click to open
+          </span>
           <button
             onClick={(e) => { e.stopPropagation(); setChatBannerDismissedAt(unreadChatCount); }}
-            title="Dismiss (will reappear when a new message arrives)"
-            style={{
-              background: 'transparent', border: 'none', color: '#fca5a5',
-              cursor: 'pointer', fontSize: 18, padding: '0 4px', lineHeight: 1, flexShrink: 0,
-            }}
+            style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
           >×</button>
         </div>
       )}
@@ -1835,7 +1972,9 @@ function DealCommandCenter({ session, profile }) {
           }}
         />
       )}
-    </Shell>
+      </div>{/* ── end content area ── */}
+      </div>{/* ── end main column ── */}
+    </div>{/* ── end outer flex ── */}
 
     {/* ── Incoming call overlay — rendered at DCC level so it shows on every view ── */}
     {incomingCall && (
@@ -1897,85 +2036,7 @@ function DealCommandCenter({ session, profile }) {
       </>
     )}
 
-    {/* ── Dialpad overlay ── */}
-    {showDialpad && !callStatus && (
-      <div style={{
-        position: 'fixed', bottom: 24, right: 24, zIndex: 9998,
-        background: '#1c1917', border: '2px solid #44403c', borderRadius: 16,
-        padding: '18px 20px 20px', width: 280,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.7)',
-        display: 'flex', flexDirection: 'column', gap: 14,
-      }}>
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 11, color: '#a8a29e', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>☎ Dial</span>
-          <button onClick={() => { setShowDialpad(false); setDialpadNumber(''); }}
-            style={{ background: 'transparent', border: 'none', color: '#57534e', fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: 4 }}>✕</button>
-        </div>
-
-        {/* Number display */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <input
-            value={dialpadNumber}
-            onChange={e => setDialpadNumber(e.target.value.replace(/[^0-9+*#]/g, ''))}
-            placeholder="Enter number…"
-            style={{ flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8,
-              color: '#fafaf9', fontSize: 18, fontFamily: "'DM Mono', monospace",
-              padding: '10px 12px', outline: 'none', letterSpacing: '0.05em' }}
-          />
-          <button
-            onClick={() => setDialpadNumber(n => n.slice(0, -1))}
-            title="Backspace"
-            style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 8,
-              color: '#a8a29e', fontSize: 16, cursor: 'pointer', padding: '10px 13px', lineHeight: 1 }}>⌫</button>
-        </div>
-
-        {/* Keypad grid */}
-        {(() => {
-          const keys = [
-            { d: '1', s: '' }, { d: '2', s: 'ABC' }, { d: '3', s: 'DEF' },
-            { d: '4', s: 'GHI' }, { d: '5', s: 'JKL' }, { d: '6', s: 'MNO' },
-            { d: '7', s: 'PQRS' }, { d: '8', s: 'TUV' }, { d: '9', s: 'WXYZ' },
-            { d: '*', s: '' }, { d: '0', s: '+' }, { d: '#', s: '' },
-          ];
-          return (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-              {keys.map(({ d, s }) => (
-                <button key={d} onClick={() => setDialpadNumber(n => n + d)}
-                  style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 10,
-                    color: '#fafaf9', cursor: 'pointer', padding: '12px 0',
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
-                    fontFamily: 'inherit' }}>
-                  <span style={{ fontSize: 18, fontWeight: 600, lineHeight: 1 }}>{d}</span>
-                  {s && <span style={{ fontSize: 8, color: '#78716c', letterSpacing: '0.12em' }}>{s}</span>}
-                </button>
-              ))}
-            </div>
-          );
-        })()}
-
-        {/* Call button */}
-        <button
-          onClick={() => {
-            if (!dialpadNumber) return;
-            const raw = dialpadNumber.replace(/\s/g, '');
-            const e164 = raw.startsWith('+') ? raw
-              : raw.replace(/\D/g, '').length === 10 ? '+1' + raw.replace(/\D/g, '')
-              : '+' + raw.replace(/\D/g, '');
-            setShowDialpad(false);
-            setDialpadNumber('');
-            startCall({ name: e164, phone: e164 });
-          }}
-          disabled={!dialpadNumber}
-          style={{ background: dialpadNumber ? '#16a34a' : '#292524',
-            border: 'none', color: dialpadNumber ? '#fff' : '#57534e',
-            borderRadius: 10, padding: '14px 0', fontSize: 15, fontWeight: 700,
-            cursor: dialpadNumber ? 'pointer' : 'default', fontFamily: 'inherit',
-            transition: 'background 0.15s' }}>
-          📞 Call
-        </button>
-      </div>
-    )}
+    {/* ── Old standalone dialpad removed — dialpad now lives in the header Phone popover ── */}
 
     {/* ── Active call overlay — rendered at DCC level so it shows on every view ── */}
     {callStatus && callContact && (
@@ -2289,6 +2350,117 @@ function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMar
   );
 }
 
+// ─── Call History View ───────────────────────────────────────────────
+// Full call log table — inbound + outbound, contact/deal linked, filterable.
+function CallHistoryView({ onSelect }) {
+  const [calls, setCalls] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [filter, setFilter] = useState('all'); // 'all' | 'inbound' | 'outbound' | 'missed'
+
+  const loadCalls = async () => {
+    setLoaded(false);
+    const { data } = await sb.from('call_logs')
+      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, ended_at, deal_id, contact_id, contacts(name), deals(name)')
+      .order('started_at', { ascending: false })
+      .limit(100);
+    setCalls(data || []);
+    setLoaded(true);
+  };
+
+  React.useEffect(() => { loadCalls(); }, []);
+
+  const fmtNum = (num) => {
+    const d = (num || '').replace(/\D/g,'');
+    if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+    return num || '—';
+  };
+  const fmtDur = (s) => s ? `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}` : '—';
+  const fmtTime = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    if (diff < 7*86400) return `${Math.floor(diff/86400)}d ago`;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const filtered = calls.filter(c => {
+    if (filter === 'inbound') return c.direction === 'inbound';
+    if (filter === 'outbound') return c.direction === 'outbound';
+    if (filter === 'missed') return c.status === 'missed';
+    return true;
+  });
+
+  const statusColor = (s) => s === 'completed' ? '#10b981' : s === 'missed' ? '#ef4444' : s === 'ringing' ? '#f59e0b' : '#78716c';
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#d97706', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 4 }}>Phone</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', letterSpacing: '-0.02em' }}>Call History</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['all','inbound','outbound','missed'].map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ background: filter === f ? '#292524' : 'transparent', border: `1px solid ${filter === f ? '#44403c' : 'transparent'}`, color: filter === f ? '#fafaf9' : '#78716c', padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize' }}>
+              {f}
+            </button>
+          ))}
+          <button onClick={loadCalls} style={{ background: 'transparent', border: '1px solid #292524', color: '#78716c', padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>↻</button>
+        </div>
+      </div>
+
+      {!loaded && <div style={{ textAlign: 'center', padding: 40, color: '#57534e' }}>Loading…</div>}
+      {loaded && filtered.length === 0 && <div style={{ textAlign: 'center', padding: 40, color: '#57534e', border: '1px dashed #292524', borderRadius: 10 }}>No calls found</div>}
+      {loaded && filtered.length > 0 && (
+        <div style={{ background: '#111110', border: '1px solid #1c1917', borderRadius: 10, overflow: 'hidden' }}>
+          {filtered.map((c, i) => {
+            const isInbound = c.direction === 'inbound';
+            const displayNum = fmtNum(isInbound ? c.from_number : c.to_number);
+            const contactName = c.contacts?.name || null;
+            const dealName = c.deals?.name || null;
+            return (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderBottom: i < filtered.length-1 ? '1px solid #1c1917' : 'none', cursor: 'default' }}>
+                {/* Direction indicator */}
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#1c1917', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 14 }}>
+                  {isInbound ? '↙' : '↗'}
+                </div>
+                {/* Contact + deal */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {contactName || displayNum}
+                  </div>
+                  {contactName && <div style={{ fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{displayNum}</div>}
+                  {dealName && (
+                    <button onClick={() => onSelect(c.deal_id)} style={{ background: 'none', border: 'none', color: '#d97706', fontSize: 10, cursor: 'pointer', padding: 0, fontFamily: 'inherit', textDecoration: 'underline' }}>
+                      {dealName}
+                    </button>
+                  )}
+                </div>
+                {/* Status */}
+                <div style={{ textAlign: 'center', flexShrink: 0, minWidth: 64 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: statusColor(c.status), textTransform: 'uppercase', letterSpacing: '0.06em' }}>{c.status || '—'}</div>
+                  <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{fmtDur(c.duration_seconds)}</div>
+                </div>
+                {/* Time */}
+                <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 60 }}>
+                  <div style={{ fontSize: 11, color: '#57534e' }}>{fmtTime(c.started_at)}</div>
+                  <div style={{ fontSize: 10, color: '#44403c', textTransform: 'capitalize' }}>{c.direction}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Deal List ───────────────────────────────────────────────────────
 function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed }) {
   const [searchQ, setSearchQ] = useState("");
@@ -2399,35 +2571,29 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
   return (
     <div>
-      {/* Portfolio summary */}
-      <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
-        <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
-        <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
-        {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
-        <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
-      </div>
-
-      <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
-          {viewBtn("today", "📌 Today", 0)}
-          {viewBtn("attention", "🔔 Attention", 0)}
-          {groupBtn("outreach", "🎯 Outreach", ["outreach", "inbox", "leads", "forecast"], 0)}
-          {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
-          {viewBtn("tasks", "✓ Tasks", 0)}
-          {(isAdmin || userRole === 'va') && viewBtn("time", "⏱ Time", 0)}
-          {isAdmin && groupBtn("reports", "📊 Insights", ["reports", "analytics", "traffic"], 0)}
+      {/* Portfolio summary — Insights only */}
+      {["reports", "analytics", "traffic"].includes(view) && (
+        <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+          {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
+          <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
+          <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
+          {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
+          <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+      )}
+
+      {/* Action bar — Export CSV + New Deal. Only shown on deal-list views. */}
+      {["active","flagged","hygiene","archive","pipeline","leads-phase"].includes(view) && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
           <button className="desktop-new-deal" onClick={onNew} style={btnPrimary}>+ New Deal</button>
         </div>
-      </div>
+      )}
 
-      {/* Hub sub-chips — second-level nav inside the consolidated tabs.
-          Outreach hub:  drafts/replies · leads · forecast
-          Deals hub:     active · flagged · hygiene · closed · kanban
-          Insights hub:  reports · analytics · traffic */}
+      {/* Hub sub-chips — second-level nav inside sidebar sections.
+          Outreach:  Drafts & Replies · Inbox · Leads · Forecast
+          Deals:     New Leads · Active · Flagged · Hygiene · Closed · Kanban
+          Insights:  Reports · Analytics · Traffic */}
       {["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("outreach", "🤖 Drafts & Replies")}
@@ -2514,10 +2680,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
+          ) : view === "calls" ? (
+            <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "outreach" ? (
@@ -24223,10 +24391,125 @@ function TeamChatBubble() {
   );
 }
 
+// ─── CombinedFAB — single floating button for Chat + Lauren ─────────────
+// Replaces the separate Chat (bottom-left) and Lauren (bottom-right) FABs.
+// One amber pill sits bottom-right. Click it to expand a mini menu:
+//   💬 Chat   — dispatches dcc:open-team-chat → TeamChatBubble opens
+//   🤖 Lauren — dispatches dcc:open-lauren    → LaurenDCC opens
+// Hidden on mobile (≤640px) via .combined-fab-btn CSS class; mobile
+// users reach Chat + Lauren via the bottom-nav More sheet.
+function CombinedFAB() {
+  const [open, setOpen] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
+  const [laurenPending, setLaurenPending] = useState(0);
+
+  // Live unread + pending counts so the FAB badge stays current
+  React.useEffect(() => {
+    const refreshChat = async () => {
+      const { data: { user } } = await sb.auth.getUser().catch(() => ({ data: { user: null } }));
+      if (!user) return;
+      const { data } = await sb.rpc('team_unread_count', { p_user_id: user.id }).catch(() => ({ data: 0 }));
+      setChatUnread(Number(data) || 0);
+    };
+    const refreshLauren = async () => {
+      const { data } = await sb.rpc('lauren_flagged_count').catch(() => ({ data: 0 }));
+      setLaurenPending(Number(data) || 0);
+    };
+    refreshChat(); refreshLauren();
+    const iv = setInterval(() => { refreshChat(); refreshLauren(); }, 30_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const totalBadge = chatUnread + laurenPending;
+
+  const pick = (event) => {
+    window.dispatchEvent(new Event(event));
+    setOpen(false);
+  };
+
+  return React.createElement(React.Fragment, null,
+    // Backdrop to close menu on outside click
+    open && React.createElement('div', {
+      style: { position: 'fixed', inset: 0, zIndex: 8998 },
+      onClick: () => setOpen(false),
+    }),
+
+    // Mini menu (shown above the FAB when open)
+    open && React.createElement('div', {
+      style: {
+        position: 'fixed', bottom: 76, right: 24, zIndex: 8999,
+        background: '#1c1917', border: '1px solid #44403c',
+        borderRadius: 12, overflow: 'hidden',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        display: 'flex', flexDirection: 'column',
+        minWidth: 160,
+      }
+    },
+      React.createElement('button', {
+        onClick: () => pick('dcc:open-team-chat'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          borderBottom: '1px solid #292524',
+          color: '#fafaf9', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        }
+      },
+        React.createElement('span', { style: { fontSize: 16 } }, '💬'),
+        React.createElement('span', { style: { flex: 1 } }, 'Team Chat'),
+        chatUnread > 0 && React.createElement('span', {
+          style: { background: '#dc2626', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }
+        }, chatUnread > 99 ? '99+' : chatUnread),
+      ),
+      React.createElement('button', {
+        onClick: () => pick('dcc:open-lauren'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          color: '#fafaf9', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        }
+      },
+        React.createElement('span', { style: { fontSize: 16 } }, '🤖'),
+        React.createElement('span', { style: { flex: 1 } }, 'Lauren'),
+        laurenPending > 0 && React.createElement('span', {
+          style: { background: '#f59e0b', color: '#1c0a00', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }
+        }, laurenPending),
+      ),
+    ),
+
+    // Main FAB button
+    React.createElement('button', {
+      className: 'combined-fab-btn',
+      onClick: () => setOpen(o => !o),
+      title: 'Chat & Lauren',
+      style: {
+        position: 'fixed', bottom: 24, right: 24, zIndex: 9000,
+        background: '#d97706', color: '#1c0a00', border: 'none',
+        borderRadius: 24, padding: '0 18px', height: 44,
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        fontSize: 13, fontWeight: 700, cursor: 'pointer',
+        boxShadow: totalBadge > 0
+          ? '0 4px 24px rgba(217,119,6,.85), 0 0 0 3px rgba(217,119,6,.25)'
+          : '0 4px 16px rgba(217,119,6,.45)',
+        fontFamily: 'inherit',
+        transition: 'transform .1s, box-shadow .2s',
+      }
+    },
+      React.createElement('span', { style: { fontSize: 15 } }, open ? '✕' : '💬'),
+      open ? 'Close' : 'Chat',
+      totalBadge > 0 && !open && React.createElement('span', {
+        style: { background: '#dc2626', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700, marginLeft: 2 }
+      }, totalBadge > 99 ? '99+' : totalBadge),
+    ),
+  );
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   React.createElement(React.Fragment, null,
     React.createElement(Root),
     React.createElement(LaurenDCC),
-    React.createElement(TeamChatBubble)
+    React.createElement(TeamChatBubble),
+    React.createElement(CombinedFAB),
   )
 );
