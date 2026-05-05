@@ -1088,8 +1088,23 @@ function isJunkDocketEvent(e) {
   return false;
 }
 
+// Normalize a string for fuzzy-matching docket-event descriptions to
+// uploaded-document filenames. The court PDFs Castle uploads have names
+// truncated to ~80 chars; the docket descriptions are the full text.
+// Stripping whitespace + lowercasing + dropping extension lets us
+// prefix-match reliably even when the filename is truncated.
+function matchKey(s) {
+  return (s || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/[\s\n\r]+/g, ' ')
+    .replace(/[^a-z0-9 ]/gi, '')
+    .trim()
+    .toLowerCase();
+}
+
 function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
   const [events, setEvents] = React.useState({ live: [], history: [] });
+  const [courtDocs, setCourtDocs] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [prefsOpen, setPrefsOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -1109,11 +1124,22 @@ function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
       .eq('is_backfill', true)
       .order('event_date', { ascending: false })
       .limit(200);
+    // Pull court-source documents (uploaded_by IS NULL). Castle's PDF
+    // attach pipeline + the standalone Butler scraper both upload PDFs
+    // here without setting uploaded_by, so this is the discriminator
+    // for "court file" vs "client uploaded my driver's license".
+    const { data: docs } = await sb.from('documents')
+      .select('id, name, path, size, created_at')
+      .eq('deal_id', dealId)
+      .is('uploaded_by', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
     // Apply junk filter at load time so we never even render the noise
     setEvents({
       live: (live || []).filter(e => !isJunkDocketEvent(e)),
       history: (history || []).filter(e => !isJunkDocketEvent(e)),
     });
+    setCourtDocs(docs || []);
     setLoading(false);
   };
 
@@ -1122,9 +1148,47 @@ function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
   React.useEffect(() => {
     const ch = sb.channel('client-docket-' + dealId)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'documents', filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [dealId]);
+
+  // Build a lookup so each docket event can find its matching court PDF
+  // by description prefix. Docket description is usually longer than the
+  // doc filename (which gets truncated to ~80 chars at upload), so we
+  // index by normalized doc-name and check whether each event description
+  // STARTS WITH that key. First match wins; ties broken by recency.
+  const docByKey = React.useMemo(() => {
+    const index = {};
+    for (const d of courtDocs) {
+      const key = matchKey(d.name);
+      if (key && !index[key]) index[key] = d;
+    }
+    return index;
+  }, [courtDocs]);
+  const findDocForEvent = (e) => {
+    if (!e?.description) return null;
+    const evKey = matchKey(e.description);
+    if (!evKey) return null;
+    // Walk doc keys longest-first so the most-specific match wins
+    // (otherwise "AFFIDAVIT" might match a generic stub before the
+    // longer "AFFIDAVIT IN SUPPORT OF ..." key).
+    const keys = Object.keys(docByKey).sort((a, b) => b.length - a.length);
+    for (const k of keys) {
+      if (k.length >= 12 && evKey.startsWith(k)) return docByKey[k];
+    }
+    return null;
+  };
+  // Open via signed URL — same pattern openDocument() uses below.
+  const openCourtDoc = async (path) => {
+    if (!path) return;
+    const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(path, 300);
+    if (error || !data?.signedUrl) {
+      alert("We couldn't open that document. Please call Nathan at (513) 516-2306 and we'll send it over directly.");
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+  };
 
   // Team-posted activity entries that AREN'T just shadow copies of
   // docket events. The trigger that mirrors docket_events into activity
@@ -1217,7 +1281,23 @@ function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gold)', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid var(--gold)', borderRadius: 6, background: 'transparent' }}>
                           📄 View or download PDF →
                         </a>
-                      ) : (
+                      ) : (() => {
+                        // Fallback: if we have an uploaded court PDF that
+                        // matches this docket entry by name, link to that
+                        // instead. Per Nathan 2026-05-05 — Butler events
+                        // never carry document_url but the PDFs DO get
+                        // uploaded to deal-docs by the standalone scraper.
+                        const matched = findDocForEvent(e);
+                        if (matched) {
+                          return (
+                            <button type="button" onClick={() => openCourtDoc(matched.path)}
+                              title="Opens the court PDF — view or save"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gold)', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid var(--gold)', borderRadius: 6, background: 'transparent', cursor: 'pointer', fontFamily: 'inherit' }}>
+                              📄 View or download PDF →
+                            </button>
+                          );
+                        }
+                        return (
                         <span title="The court portal didn't expose a PDF for this entry"
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', fontWeight: 500, padding: '4px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-card-alt)', position: 'relative' }}>
                           <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
@@ -1227,7 +1307,8 @@ function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
                           </span>
                           No filing PDF available
                         </span>
-                      )}
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1305,11 +1386,23 @@ function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
                                 style={{ color: 'var(--gold)', textDecoration: 'none', fontWeight: 600 }}>
                                 · 📄 View or download PDF →
                               </a>
-                            ) : (
-                              <span title="No PDF for this entry" style={{ color: 'var(--text-subtle)', fontStyle: 'italic' }}>
-                                · no PDF
-                              </span>
-                            )}
+                            ) : (() => {
+                              const matched = findDocForEvent(e);
+                              if (matched) {
+                                return (
+                                  <button type="button" onClick={() => openCourtDoc(matched.path)}
+                                    title="Opens the court PDF — view or save"
+                                    style={{ background: 'transparent', border: 'none', padding: 0, color: 'var(--gold)', textDecoration: 'underline', fontWeight: 600, fontFamily: 'inherit', fontSize: 'inherit', cursor: 'pointer' }}>
+                                    · 📄 View or download PDF →
+                                  </button>
+                                );
+                              }
+                              return (
+                                <span title="No PDF for this entry" style={{ color: 'var(--text-subtle)', fontStyle: 'italic' }}>
+                                  · no PDF
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1335,62 +1428,67 @@ function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
 // would feel weird for John to read about himself.
 function CaseSnapshotCard({ deal }) {
   const m = deal?.meta || {};
-  const judgment    = m.judgmentAmount ?? null;
-  const salePrice   = m.salePrice ?? null;
-  const appraised   = m.courtAppraisalValue ?? null;
-  const minBid      = m.minimumBidAmount ?? null;
+  const judgment   = m.judgmentAmount ?? null;
+  const salePrice  = m.salePrice ?? null;
   // Prefer court-confirmed surplus when set, else manual estimate.
-  const surplus     = m.verifiedSurplus ?? m.estimatedSurplus ?? null;
-  const verified    = m.verifiedSurplus != null;
-  const buyerName   = m.buyerName || null;
-  const saleDate    = m.saleDate || null;
+  const surplus    = m.verifiedSurplus ?? m.estimatedSurplus ?? null;
+  const verified   = m.verifiedSurplus != null;
+  const saleDate   = m.saleDate || null;
 
-  const tiles = [];
-  if (judgment != null)  tiles.push({ label: 'Judgment debt',  value: judgment,  tone: 'red' });
-  if (appraised != null) tiles.push({ label: 'Court appraisal', value: appraised, tone: 'blue' });
-  if (minBid != null)    tiles.push({ label: 'Minimum bid',     value: minBid,     tone: 'amber' });
-  if (salePrice != null) tiles.push({ label: 'Sold for',        value: salePrice,  tone: 'green' });
-  if (surplus != null)   tiles.push({ label: verified ? 'Verified surplus' : 'Estimated surplus', value: surplus, tone: 'gold' });
+  // Render nothing if we don't have the two anchor numbers — judgment +
+  // sale price are the spine of the story. Surplus alone without those
+  // doesn't tell John much.
+  if (judgment == null && salePrice == null) return null;
 
-  if (tiles.length === 0) return null;
+  const fmt = (v) => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const saleLabel = saleDate
+    ? new Date(saleDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null;
 
-  const fmtCurrency = (v) => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
-  const tonePalette = {
-    red:   { fg: '#991b1b', bg: '#fef2f2', border: '#fca5a5' },
-    blue:  { fg: '#1e3a8a', bg: '#eff6ff', border: '#93c5fd' },
-    amber: { fg: '#92400e', bg: '#fffbeb', border: '#fcd34d' },
-    green: { fg: '#065f46', bg: '#f0fdf4', border: '#6ee7b7' },
-    gold:  { fg: '#78350f', bg: '#fffbeb', border: '#fbbf24' },
-  };
-
+  // Build the prose. Two short sentences lead. Surplus pull-quote below.
+  // Per Nathan 2026-05-05: "the judgment amount and sold-for is about
+  // the only two that are necessary. We need to figure out how to
+  // reword that." Tile grid was disgusting; this reads like a person.
   return (
     <div className="card" style={{ marginTop: 18 }}>
-      <p className="card-title" style={{ marginBottom: 4 }}>Court record</p>
-      <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-        The numbers from the court file. Pulled straight from the docket and verified against the recorded documents.
+      <p className="card-title" style={{ marginBottom: 10 }}>Court record</p>
+      <div style={{ fontSize: 15, color: 'var(--text)', lineHeight: 1.65, fontFamily: "'Fraunces', Georgia, serif", fontWeight: 400 }}>
+        {judgment != null && salePrice != null ? (
+          <>
+            The bank was owed <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(judgment)}</b> on the judgment.
+            {' '}The home sold for <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.
+          </>
+        ) : judgment != null ? (
+          <>The bank was owed <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(judgment)}</b> on the judgment.</>
+        ) : (
+          <>The home sold for <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.</>
+        )}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
-        {tiles.map(t => {
-          const c = tonePalette[t.tone];
-          return (
-            <div key={t.label} style={{
-              background: c.bg, border: `1px solid ${c.border}`, borderRadius: 8, padding: '10px 12px',
-            }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: c.fg, letterSpacing: '0.06em', textTransform: 'uppercase', opacity: 0.85 }}>
-                {t.label}
-              </div>
-              <div style={{ fontSize: 19, fontWeight: 600, color: c.fg, fontVariantNumeric: 'tabular-nums', marginTop: 4 }}>
-                {fmtCurrency(t.value)}
-              </div>
+
+      {surplus != null && (
+        <div style={{
+          marginTop: 16, padding: '14px 18px',
+          background: 'var(--gold-soft)', borderRadius: 10,
+          borderLeft: '4px solid var(--gold)',
+          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+        }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--amber)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+              {verified ? 'Verified surplus' : 'Estimated surplus'}
             </div>
-          );
-        })}
-      </div>
-      {(saleDate || buyerName) && (
-        <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
-          {saleDate && <>Sold {new Date(saleDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</>}
-          {saleDate && buyerName && ' · '}
-          {buyerName && <>to {buyerName}</>}
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              {verified
+                ? 'Court-confirmed — the funds we are now working to release to you.'
+                : 'After fees and costs come out of the sale, this is what is left for you to recover.'}
+            </div>
+          </div>
+          <div style={{
+            fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500,
+            fontSize: 32, color: 'var(--navy)', letterSpacing: '-0.015em',
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {fmt(surplus)}
+          </div>
         </div>
       )}
     </div>
@@ -1860,11 +1958,19 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
     window.open(data.signedUrl, '_blank');
   };
 
+  // Per Nathan 2026-05-05: this section is for THE CLIENT'S personal
+  // files only — signed agreements, IDs, death certs, retention forms,
+  // bank docs, etc. Court-source PDFs (uploaded_by IS NULL — populated
+  // by Castle's auto-attach pipeline) belong in the Court Activity card
+  // inline with their docket events, NOT here. Filter them out so the
+  // documents list stays focused on what the client is responsible for.
+  const personalDocs = (documents || []).filter(d => d.uploaded_by != null);
+
   return (
     <div className="card">
-      <p className="card-title">Documents</p>
+      <p className="card-title">Your documents</p>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-        Your signed agreement and court filings appear here as we receive them. You can also upload documents we've requested (ID, death certificate, prior correspondence, etc.) — Nathan's team is notified automatically.
+        Anything you've signed or sent us — agreements, ID, death certificates, prior correspondence, bank info. Court filings live above in <b>Court activity</b> with View-PDF buttons on each entry.
       </div>
       <div style={{ marginBottom: 14 }}>
         <label style={{
@@ -1880,13 +1986,13 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
       </div>
       {err && <div className="empathy-error">{err}</div>}
 
-      {documents.length === 0 && pins.length === 0 ? (
-        <div className="empty" style={{ padding: '12px 0' }}>No documents on file yet. Upload anything we've requested, or just save it here for your records.</div>
+      {personalDocs.length === 0 && pins.length === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>Nothing here yet. Upload anything we've asked for, or save documents you want to keep with your case.</div>
       ) : (() => {
         // Contain the list in a fixed-height scroller once it gets long, so the
         // overall page stays a reasonable length. Threshold picked to match
         // "about a viewport" worth of rows.
-        const totalRows = pins.length + documents.length;
+        const totalRows = pins.length + personalDocs.length;
         const scrollable = totalRows > 6;
         const listStyle = scrollable ? { maxHeight: 460, overflowY: 'auto', paddingRight: 6 } : {};
         return (
@@ -1916,7 +2022,7 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
                   </div>
                 );
               })}
-              {documents.map(d => (
+              {personalDocs.map(d => (
                 <div className="doc-row" key={d.id}>
                   <div className="doc-icon">📄</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
