@@ -43,7 +43,15 @@ jobs:
             | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
           sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client-17 awscli
+          sudo apt-get install -y postgresql-client-17
+
+          # AWS CLI v2 — apt's `awscli` package was dropped from Ubuntu 24.04
+          # (Noble). Install the official v2 zip directly. ~50MB download,
+          # one-time per run.
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
 
       - name: pg_dump → gzip
         env:
