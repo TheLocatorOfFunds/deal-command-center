@@ -39,6 +39,13 @@ const IMAGE_TYPES: Record<string, string> = {
   heif: "image/heif",
 };
 
+// Default model — matches what Castle's `utils/llm_processor.py` already uses
+// for surplus-event field extraction, so we stay on one model across the
+// org for consistent extraction quality. Override via OPENAI_MODEL env var
+// if you want gpt-4o-mini (≈30x cheaper, slightly less accurate on dense
+// legal text) or a future model.
+const DEFAULT_MODEL = "gpt-4o";
+
 const EXTRACTION_PROMPT = `You are analyzing a document uploaded to a surplus fund recovery case management system operated by FundLocators LLC, an Ohio-based company that recovers foreclosure surplus funds for former homeowners.
 
 Determine the document type and extract all key fields as structured JSON.
@@ -145,6 +152,27 @@ GENERAL LEGAL / IDENTITY DOCUMENTS
 - Output ONLY the JSON object. No commentary, no markdown fences.
 `;
 
+// Fetch the file behind a Supabase signed URL and return it as a base64
+// data URL. OpenAI's chat completions API accepts:
+//   - Images via { type: "image_url", image_url: { url } } — the URL can be
+//     either a public URL or a data: URL.
+//   - PDFs via { type: "file", file: { filename, file_data } } where
+//     file_data is a base64 data URL. PDFs do NOT support being passed by
+//     external URL; the bytes have to ship inline.
+async function fetchAsDataUrl(signedUrl: string, mimeType: string): Promise<string> {
+  const res = await fetch(signedUrl);
+  if (!res.ok) throw new Error(`Failed to download document: HTTP ${res.status}`);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  // Chunked btoa — atob/btoa argument string limit is ~64k on some runtimes.
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < buf.length; i += chunkSize) {
+    binary += String.fromCharCode(...buf.subarray(i, i + chunkSize));
+  }
+  const b64 = btoa(binary);
+  return `data:${mimeType};base64,${b64}`;
+}
+
 Deno.serve(async (req: Request) => {
   // CORS preflight — must come before any other check
   if (req.method === "OPTIONS") {
@@ -157,13 +185,14 @@ Deno.serve(async (req: Request) => {
   const authFail = requireAuth(req);
   if (authFail) return authFail;
 
-  const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY");
-  if (!anthropicKey) {
+  const openaiKey = Deno.env.get("OPENAI_API_KEY");
+  if (!openaiKey) {
     return json(
-      { error: "ANTHROPIC_API_KEY not configured in Supabase Edge Function secrets" },
+      { error: "OPENAI_API_KEY not configured in Supabase Edge Function secrets" },
       { status: 503 }
     );
   }
+  const model = Deno.env.get("OPENAI_MODEL") || DEFAULT_MODEL;
 
   let documentId: string;
   try {
@@ -221,22 +250,47 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Storage error" }, { status: 500 });
   }
 
-  const contentBlock = isImage
-    ? { type: "image", source: { type: "url", url: urlData.signedUrl } }
-    : { type: "document", source: { type: "url", url: urlData.signedUrl } };
+  // Build the OpenAI content block. Images can use the signed URL directly;
+  // PDFs have to ship inline as base64 because OpenAI's `file` content type
+  // doesn't support remote URLs.
+  let contentBlock: Record<string, unknown>;
+  try {
+    if (isImage) {
+      contentBlock = {
+        type: "image_url",
+        image_url: { url: urlData.signedUrl, detail: "high" },
+      };
+    } else {
+      const mime = "application/pdf";
+      const dataUrl = await fetchAsDataUrl(urlData.signedUrl, mime);
+      contentBlock = {
+        type: "file",
+        file: { filename: doc.name || "document.pdf", file_data: dataUrl },
+      };
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Unknown error preparing content";
+    await supabase
+      .from("documents")
+      .update({ extraction_status: "failed", extraction_error: msg.slice(0, 500) })
+      .eq("id", documentId);
+    return json({ error: msg }, { status: 500 });
+  }
 
   try {
-    const claudeResp = await fetch("https://api.anthropic.com/v1/messages", {
+    const openaiResp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-        "anthropic-beta": "pdfs-2024-09-25",
+        Authorization: `Bearer ${openaiKey}`,
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-5",
+        model,
         max_tokens: 2048,
+        // response_format guarantees parseable JSON. Pairs with the
+        // "Return ONLY valid JSON" instruction in the system prompt; even
+        // if the model adds prose, OpenAI strips it server-side.
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "user",
@@ -246,24 +300,26 @@ Deno.serve(async (req: Request) => {
       }),
     });
 
-    if (!claudeResp.ok) {
-      const errText = await claudeResp.text();
+    if (!openaiResp.ok) {
+      const errText = await openaiResp.text();
       await supabase
         .from("documents")
         .update({
           extraction_status: "failed",
-          extraction_error: `Claude API ${claudeResp.status}: ${errText.slice(0, 500)}`,
+          extraction_error: `OpenAI API ${openaiResp.status}: ${errText.slice(0, 500)}`,
         })
         .eq("id", documentId);
       return json(
-        { error: "Claude API error", status: claudeResp.status, detail: errText.slice(0, 500) },
+        { error: "OpenAI API error", status: openaiResp.status, detail: errText.slice(0, 500) },
         { status: 500 }
       );
     }
 
-    const result = await claudeResp.json();
-    const textContent: string = result.content?.[0]?.text || "";
+    const result = await openaiResp.json();
+    const textContent: string = result.choices?.[0]?.message?.content || "";
 
+    // response_format=json_object means the body is already pure JSON,
+    // but defensive cleaning costs nothing.
     const cleaned = textContent
       .trim()
       .replace(/^```(?:json)?\s*/i, "")
@@ -278,12 +334,12 @@ Deno.serve(async (req: Request) => {
         .from("documents")
         .update({
           extraction_status: "failed",
-          extraction_error: "Claude response was not valid JSON",
+          extraction_error: "OpenAI response was not valid JSON",
           extracted: { raw: textContent },
         })
         .eq("id", documentId);
       return json(
-        { error: "Invalid JSON from Claude", raw: textContent },
+        { error: "Invalid JSON from OpenAI", raw: textContent },
         { status: 500 }
       );
     }
@@ -298,7 +354,7 @@ Deno.serve(async (req: Request) => {
       })
       .eq("id", documentId);
 
-    return json({ success: true, extracted });
+    return json({ success: true, extracted, model });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     await supabase
