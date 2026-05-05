@@ -4213,7 +4213,7 @@ function GlobalTasksView({ deals, onJumpToDeal }) {
           <div key={t.id} style={{ marginBottom: 8, padding: "10px 14px", background: '#1c1917', border: '1px solid ' + (t.isOverdue ? '#7f1d1d' : '#292524'), borderLeft: '3px solid ' + (t.isOverdue ? '#ef4444' : d?.lead_tier === 'A' ? '#d8b560' : d?.is_30dts ? '#ef4444' : d?.lead_tier === 'B' ? '#8b5cf6' : '#44403c'), borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <input type="checkbox" checked={!!t.done} onChange={e => markDone(t, e.target.checked)} disabled={updating === t.id} style={{ flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontSize: 13, color: t.done ? '#78716c' : '#fafaf9', textDecoration: t.done ? 'line-through' : 'none', marginBottom: 2 }}>{t.title}</div>
+              <div style={{ fontSize: 13, color: t.done ? '#78716c' : '#fafaf9', textDecoration: t.done ? 'line-through' : 'none', marginBottom: 2 }}>{t.title || t.label || '(untitled task)'}</div>
               <div style={{ fontSize: 10, color: '#78716c', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
                 {d && <span style={{ color: '#d6d3d1', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => onJumpToDeal(d.id)}>{(d.name || '').split(' - ')[0]}</span>}
                 {d && d.lead_tier && <TierBadge deal={d} />}
@@ -13477,16 +13477,31 @@ function Expenses({ items, dealId, userId, logAct, reload }) {
 function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
+  // Inline edit state. editingId === task.id when editing one.
+  // Per Nathan 2026-05-05: needed to see + edit open tasks. Lauren's
+  // proposed tasks land via the `title` column (lauren_execute_action),
+  // while manual UI tasks use `label`. Without title-fallback rendering
+  // they showed blank.
+  const [editingId, setEditingId] = useState(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editDue, setEditDue] = useState("");
+  const [editPriority, setEditPriority] = useState("med");
 
   // Show the partner-visible toggle column only when this deal could have a
   // JV partner attached (flip or wholesale). Avoids cluttering the row for
   // surplus / rental / other deals where it'd never apply.
   const isJvCapable = deal && (deal.type === 'flip' || deal.type === 'wholesale');
 
+  // Read helper — task title can be in either `label` (manual UI) or
+  // `title` (Lauren / docket triggers / migration backfills).
+  const taskText = (t) => t.label || t.title || "(untitled task)";
+  // Same idea for due date — `due` (manual) or `due_date` (Lauren/SQL).
+  const taskDue = (t) => t.due || t.due_date || null;
+
   const toggle = async (id) => {
     const it = items.find(i => i.id === id);
     await sb.from('tasks').update({ done: !it.done }).eq('id', id);
-    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${it.label || it.title}`);
+    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${taskText(it)}`);
     reload();
   };
 
@@ -13506,7 +13521,34 @@ function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
   const del = async (id) => {
     const it = items.find(i => i.id === id);
     await sb.from('tasks').delete().eq('id', id);
-    await logAct(`Deleted task: ${it?.label}`);
+    await logAct(`Deleted task: ${taskText(it)}`);
+    reload();
+  };
+
+  const startEdit = (t) => {
+    setEditingId(t.id);
+    setEditLabel(taskText(t) === "(untitled task)" ? "" : taskText(t));
+    setEditDue(taskDue(t) || "");
+    setEditPriority(t.priority || "med");
+  };
+  const cancelEdit = () => { setEditingId(null); setEditLabel(""); setEditDue(""); setEditPriority("med"); };
+  const saveEdit = async () => {
+    if (!editingId) return;
+    const trimmed = editLabel.trim();
+    if (!trimmed) { alert('Task title cannot be empty.'); return; }
+    // Write to BOTH columns so future renders agree regardless of which
+    // path created the task. Update due_date too if column exists.
+    const patch = { label: trimmed, title: trimmed, due: editDue || null, priority: editPriority };
+    // Try with due_date first; if that column doesn't exist on this schema,
+    // PostgREST returns 400 — fall back to without it.
+    let { error } = await sb.from('tasks').update({ ...patch, due_date: editDue || null }).eq('id', editingId);
+    if (error) {
+      const r2 = await sb.from('tasks').update(patch).eq('id', editingId);
+      error = r2.error;
+    }
+    if (error) { alert('Could not save: ' + error.message); return; }
+    await logAct(`Edited task: ${trimmed}`);
+    cancelEdit();
     reload();
   };
 
@@ -13524,35 +13566,77 @@ function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {sorted.map(t => (
-          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: t.done ? "#0c0a09" : "#1c1917", border: `1px solid ${t.done ? "#1c1917" : "#292524"}`, borderRadius: 8, opacity: t.done ? 0.45 : 1 }}>
-            <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706" }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none" }}>{t.label}</div>
-              <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
-                <span>{t.owner}</span>{t.due && <span>· Due {t.due}</span>}
+        {sorted.map(t => {
+          const isEditing = editingId === t.id;
+          const due = taskDue(t);
+          return (
+            <div key={t.id} style={{ display: "flex", alignItems: isEditing ? "flex-start" : "center", gap: 12, padding: "10px 12px", background: t.done ? "#0c0a09" : "#1c1917", border: `1px solid ${isEditing ? '#d97706' : (t.done ? "#1c1917" : "#292524")}`, borderRadius: 8, opacity: t.done ? 0.45 : 1 }}>
+              {!isEditing && (
+                <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706", flexShrink: 0 }} />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {isEditing ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 110px", gap: 8, alignItems: "end" }}>
+                    <Field label="Task">
+                      <input value={editLabel} autoFocus onChange={e => setEditLabel(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                        style={inputStyle} placeholder="What needs done?" />
+                    </Field>
+                    <Field label="Due">
+                      <input type="date" value={editDue || ""} onChange={e => setEditDue(e.target.value)} style={inputStyle} />
+                    </Field>
+                    <Field label="Priority">
+                      <select value={editPriority} onChange={e => setEditPriority(e.target.value)} style={inputStyle}>
+                        <option value="high">High</option><option value="med">Med</option><option value="low">Low</option>
+                      </select>
+                    </Field>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none", color: taskText(t) === "(untitled task)" ? "#78716c" : "#fafaf9", fontStyle: taskText(t) === "(untitled task)" ? "italic" : "normal" }}>{taskText(t)}</div>
+                    <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
+                      {(t.owner || t.assigned_to) && <span>{t.owner || t.assigned_to}</span>}
+                      {due && <span>· Due {due}</span>}
+                    </div>
+                  </>
+                )}
               </div>
+              {!isEditing && <PriorityBadge p={t.priority} />}
+              {!isEditing && isJvCapable && (
+                <button
+                  onClick={() => togglePartner(t.id, !!t.partner_visible)}
+                  title={t.partner_visible ? "Visible to JV partner — click to hide" : "Hidden from JV partner — click to expose"}
+                  style={{
+                    ...btnGhost,
+                    fontSize: 10,
+                    padding: "3px 8px",
+                    color: t.partner_visible ? "#fbbf24" : "#57534e",
+                    borderColor: t.partner_visible ? "#92400e" : "#292524",
+                    background: t.partner_visible ? "#78350f22" : "transparent"
+                  }}
+                >
+                  🤝 JV
+                </button>
+              )}
+              {isEditing ? (
+                <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
+                  <button onClick={saveEdit} style={{ ...btnPrimary, padding: "6px 12px", fontSize: 12 }}>Save</button>
+                  <button onClick={cancelEdit} style={{ ...btnGhost, padding: "6px 12px", fontSize: 12 }}>Cancel</button>
+                </div>
+              ) : (
+                <>
+                  <button onClick={() => startEdit(t)} title="Edit task" style={{ ...btnGhost, padding: "3px 8px", fontSize: 13 }}>✏</button>
+                  <button onClick={() => del(t.id)} title="Delete task" style={btnGhost}>×</button>
+                </>
+              )}
             </div>
-            <PriorityBadge p={t.priority} />
-            {isJvCapable && (
-              <button
-                onClick={() => togglePartner(t.id, !!t.partner_visible)}
-                title={t.partner_visible ? "Visible to JV partner — click to hide" : "Hidden from JV partner — click to expose"}
-                style={{
-                  ...btnGhost,
-                  fontSize: 10,
-                  padding: "3px 8px",
-                  color: t.partner_visible ? "#fbbf24" : "#57534e",
-                  borderColor: t.partner_visible ? "#92400e" : "#292524",
-                  background: t.partner_visible ? "#78350f22" : "transparent"
-                }}
-              >
-                🤝 JV
-              </button>
-            )}
-            <button onClick={() => del(t.id)} style={btnGhost}>×</button>
+          );
+        })}
+        {sorted.length === 0 && (
+          <div style={{ fontSize: 12, color: "#78716c", padding: 18, textAlign: "center", border: "1px dashed #292524", borderRadius: 8 }}>
+            No tasks yet. Click + Add to create one.
           </div>
-        ))}
+        )}
       </div>
     </Card>
   );
@@ -23532,13 +23616,17 @@ function TeamChatBubble() {
   // Load threads + last message + participant maps + profile cache
   const loadThreads = React.useCallback(async () => {
     if (!me?.id) return;
-    const { data: t } = await sb.from('team_threads')
+    const { data: raw } = await sb.from('team_threads')
       .select('id, title, thread_type, created_at')
       .is('archived_at', null)
       .order('created_at', { ascending: true });
-    setThreads(t || []);
+    // Exclude Lauren threads — Lauren has her own dedicated FAB on the
+    // right. Per Nathan 2026-05-05: "i dont want lauren talking to me
+    // from 2 chats." This bubble is for human team chat only.
+    const t = (raw || []).filter(x => x.thread_type !== 'lauren_dm' && x.thread_type !== 'lauren_room');
+    setThreads(t);
 
-    if (!t || t.length === 0) return;
+    if (t.length === 0) return;
     const ids = t.map(x => x.id);
 
     // Last message per thread (one query, sort + de-dupe in JS)
