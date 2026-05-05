@@ -52,3 +52,17 @@ verify_jwt = false
 # Called by <audio src="..."> elements — browser can't send JWT on media requests.
 # The RE... recording SID is Twilio's own unguessable token (access control).
 verify_jwt = false
+
+[functions.lauren-chat]
+# Public widget for home sellers — no Supabase JWT. Rate-limited internally
+# by lauren_rate_limit table (visitor_id + IP buckets).
+verify_jwt = false
+
+[functions.lauren-event-router]
+# Called by pg_net.http_post trigger from lauren_event_dispatch — no JWT.
+verify_jwt = false
+
+[functions.lauren-daily-review]
+# Called by pg_cron via net.http_post — no JWT. Authenticated by
+# X-Lauren-Daily-Review-Secret header instead.
+verify_jwt = false
