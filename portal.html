@@ -985,30 +985,40 @@ function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJo
 
   return (
     <div className="case-hero">
-      {estimatedSurplus > 0 && (
-        <div className="case-hero-payout">
-          <div className="case-hero-label">
-            {isJointCase ? 'Estimated Share (All Claimants)' : 'Your Estimated Share'}
-          </div>
-          <div className="case-hero-amount">{fmt$2(clientShare)}</div>
-          <div className="case-hero-sub">
-            Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% contingency
-            {isJointCase && claimantCount > 1 && <> · ≈ {fmt$2(perClaimantShare)} per claimant</>}
-          </div>
-          {progressPct !== null && (
-            <div className="case-hero-progress">
-              <div className="case-hero-progress-track">
-                <div className="case-hero-progress-fill" style={{ width: progressPct + '%' }} />
-              </div>
-              <div className="case-hero-progress-marks">
-                <span>Filed</span>
-                <span>{windowLabel}</span>
-              </div>
-              <div className="case-hero-progress-label">{progressLabel}</div>
+      <div className="case-hero-payout">
+        {estimatedSurplus > 0 ? (
+          <>
+            <div className="case-hero-label">
+              {isJointCase ? 'Estimated Share (All Claimants)' : 'Your Estimated Share'}
             </div>
-          )}
-        </div>
-      )}
+            <div className="case-hero-amount">{fmt$2(clientShare)}</div>
+            <div className="case-hero-sub">
+              Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% contingency
+              {isJointCase && claimantCount > 1 && <> · ≈ {fmt$2(perClaimantShare)} per claimant</>}
+            </div>
+            {progressPct !== null && (
+              <div className="case-hero-progress">
+                <div className="case-hero-progress-track">
+                  <div className="case-hero-progress-fill" style={{ width: progressPct + '%' }} />
+                </div>
+                <div className="case-hero-progress-marks">
+                  <span>Filed</span>
+                  <span>{windowLabel}</span>
+                </div>
+                <div className="case-hero-progress-label">{progressLabel}</div>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="case-hero-label">Your Estimated Share</div>
+            <div className="case-hero-amount" style={{ fontSize: 28, opacity: 0.5, letterSpacing: 4 }}>— —</div>
+            <div className="case-hero-sub">
+              Our team is finalizing your surplus estimate. We'll update this as soon as the court records confirm the available funds — typically within a few days of filing.
+            </div>
+          </>
+        )}
+      </div>
 
       <div className={"case-hero-status case-hero-status-" + info.tone}>
         <div className="case-hero-status-icon">{info.icon}</div>
