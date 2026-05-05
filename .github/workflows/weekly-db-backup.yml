@@ -57,17 +57,27 @@ jobs:
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
           out="dcc-backup-${ts}.dump.gz"
           echo "Dumping to $out"
+          # Tee stderr to BOTH the runner log and dump.log so failures are
+          # debuggable from GitHub Actions output without SSH'ing in. Use
+          # PIPESTATUS to detect pg_dump failure (the gzip step on the right
+          # side of the pipe always succeeds even when pg_dump errors).
           pg_dump "$SUPABASE_DB_URL" \
             --format=custom \
             --no-owner \
             --no-privileges \
             --no-comments \
-            --verbose 2> dump.log \
+            --verbose 2> >(tee dump.log >&2) \
           | gzip -9 > "$out"
+          dump_rc=${PIPESTATUS[0]}
+          if [ "$dump_rc" -ne 0 ]; then
+            echo "::error::pg_dump exited $dump_rc"
+            tail -50 dump.log || true
+            exit "$dump_rc"
+          fi
           ls -lh "$out"
           echo "DUMP_FILE=$out" >> $GITHUB_ENV
           echo "DUMP_SIZE=$(stat -c%s "$out")" >> $GITHUB_ENV
