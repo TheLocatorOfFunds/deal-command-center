@@ -17889,9 +17889,15 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const [rvmTemplates, setRvmTemplates] = useState([]);
   const [rvmTemplateId, setRvmTemplateId] = useState('');
   const [rvmOverrideFirstName, setRvmOverrideFirstName] = useState('');
+  const [rvmCustomNote, setRvmCustomNote] = useState('');  // per-drop hint for AI mode
   const [rvmDryRun, setRvmDryRun] = useState(true);  // default ON until Slybroadcast delivery is wired
   const [rvmSending, setRvmSending] = useState(false);
-  const [rvmResult, setRvmResult] = useState(null);  // { type, text, mp3_url, rendered_script }
+  const [rvmResult, setRvmResult] = useState(null);  // { type, text, mp3_url, rendered_script, generation_mode, ... }
+  // Feedback state for the AI script (thumbs up/down + optional reason on down)
+  const [rvmFeedbackSaved, setRvmFeedbackSaved] = useState(null);  // 'up' | 'down' | null
+  const [rvmFeedbackNoteOpen, setRvmFeedbackNoteOpen] = useState(false);
+  const [rvmFeedbackNote, setRvmFeedbackNote] = useState('');
+  const [rvmFeedbackSaving, setRvmFeedbackSaving] = useState(false);
   // Load active RVM templates when the panel opens
   React.useEffect(() => {
     if (!rvmMode) return;
@@ -18014,6 +18020,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const dropRvm = async () => {
     if (!rvmTemplateId || rvmSending) return;
     setRvmSending(true); setRvmResult(null);
+    setRvmFeedbackSaved(null); setRvmFeedbackNoteOpen(false); setRvmFeedbackNote('');
     try {
       const { data, error } = await sb.functions.invoke('drop-rvm', {
         body: {
@@ -18022,6 +18029,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
           contact_id: activeContact?.contact_id || null,
           to_number: rvmPhone.trim() || undefined,
           override_first_name: rvmOverrideFirstName.trim() || undefined,
+          custom_note: rvmCustomNote.trim() || undefined,
           dry_run: rvmDryRun,
         }
       });
@@ -18036,11 +18044,37 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
         rendered_script: data?.rendered_script,
         generation_mode: data?.generation_mode,
         case_intel_used: data?.case_intel_used,
+        message_id: data?.message_id,
+        template_id: rvmTemplateId,
+        custom_note_used: data?.custom_note_used,
       });
     } catch (e) {
       setRvmResult({ type: 'error', text: 'Failed: ' + (e.message || 'unknown') });
     }
     setRvmSending(false);
+  };
+
+  // Save feedback on the AI-generated script. Direct INSERT — RLS gates to admin.
+  const saveRvmFeedback = async (rating, note) => {
+    if (rvmFeedbackSaving || !rvmResult || rvmResult.generation_mode !== 'ai_personalized') return;
+    setRvmFeedbackSaving(true);
+    try {
+      const { error } = await sb.from('rvm_ai_feedback').insert({
+        message_id: rvmResult.message_id || null,
+        template_id: rvmResult.template_id || null,
+        deal_id: dealId || null,
+        rating,
+        rendered_script: rvmResult.rendered_script,
+        custom_note_used: rvmResult.custom_note_used || null,
+        feedback_note: note?.trim() || null,
+      });
+      if (error) throw error;
+      setRvmFeedbackSaved(rating);
+      setRvmFeedbackNoteOpen(false);
+    } catch (e) {
+      alert('Could not save feedback: ' + (e.message || 'unknown'));
+    }
+    setRvmFeedbackSaving(false);
   };
 
   // Virtual "Everyone" contact — shows every message / call / note on the
@@ -18865,6 +18899,17 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               <input type="checkbox" checked={rvmDryRun} onChange={e => setRvmDryRun(e.target.checked)} />
               Dry run (generate audio + listen, no actual drop)
             </label>
+            {(() => {
+              const sel = rvmTemplates.find(t => t.id === rvmTemplateId);
+              if (sel?.generation_mode !== 'ai_personalized') return null;
+              return (<>
+                <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right', alignSelf: 'start', paddingTop: 6 }}>Custom note:</label>
+                <textarea value={rvmCustomNote} onChange={e => setRvmCustomNote(e.target.value)}
+                  placeholder="Anything specific to weave in (optional). e.g. 'mention the upcoming court date June 4th' or 'they have an attorney we can coordinate with'"
+                  rows={2}
+                  style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', minHeight: 44 }} />
+              </>);
+            })()}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
             <button onClick={() => { setRvmMode(false); setRvmResult(null); }}
@@ -18892,6 +18937,46 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               )}
               {rvmResult.mp3_url && (
                 <audio controls src={rvmResult.mp3_url} style={{ marginTop: 8, width: '100%' }} />
+              )}
+              {/* Feedback — AI mode only. Shapes the next AI script via few-shot. */}
+              {rvmResult.generation_mode === 'ai_personalized' && rvmResult.message_id && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                  {rvmFeedbackSaved ? (
+                    <div style={{ fontSize: 11, color: rvmFeedbackSaved === 'up' ? '#86efac' : '#fca5a5' }}>
+                      Saved {rvmFeedbackSaved === 'up' ? '👍' : '👎'} — Claude will use this on the next AI generation.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: '#a8a29e' }}>Train Claude on this script:</span>
+                      <button onClick={() => saveRvmFeedback('up', null)} disabled={rvmFeedbackSaving}
+                        style={{ background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.5)', color: '#86efac', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        👍 Sounds good
+                      </button>
+                      <button onClick={() => setRvmFeedbackNoteOpen(true)} disabled={rvmFeedbackSaving}
+                        style={{ background: 'rgba(220,38,38,0.15)', border: '1px solid rgba(220,38,38,0.5)', color: '#fca5a5', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        👎 Off — give feedback
+                      </button>
+                    </div>
+                  )}
+                  {rvmFeedbackNoteOpen && !rvmFeedbackSaved && (
+                    <div style={{ marginTop: 8 }}>
+                      <textarea value={rvmFeedbackNote} onChange={e => setRvmFeedbackNote(e.target.value)}
+                        placeholder="What was wrong? (e.g. 'too pushy', 'wrong angle — they care about the timeline more than the dollar amount', 'said the address weird')"
+                        rows={2}
+                        style={{ width: '100%', background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6 }}>
+                        <button onClick={() => { setRvmFeedbackNoteOpen(false); setRvmFeedbackNote(''); }}
+                          style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 5, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Cancel
+                        </button>
+                        <button onClick={() => saveRvmFeedback('down', rvmFeedbackNote)} disabled={rvmFeedbackSaving}
+                          style={{ background: '#dc2626', border: 'none', color: '#fafaf9', borderRadius: 5, padding: '4px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          {rvmFeedbackSaving ? 'Saving…' : 'Save 👎'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           )}
