@@ -9913,30 +9913,63 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
 // (comma-separates for multi-add). When adding, we surface the top-12
 // most-used tags as quick-add buttons so VAs converge on a vocabulary
 // instead of every deal getting a unique misspelling.
+// Tag color palette — six allowlisted values matching the
+// tag_library_color_check constraint. Each maps to a chip BG / text /
+// border. Order matters for the cycle button (next-color goes in this
+// order). Per Nathan 2026-05-04 — visual signal so "wait" stands out
+// red, "high-equity" is green, etc., instead of every tag being gold.
+const TAG_COLORS = {
+  gold:   { bg: '#78350f', fg: '#fbbf24', border: '#d97706' },
+  red:    { bg: '#7f1d1d', fg: '#fca5a5', border: '#dc2626' },
+  green:  { bg: '#065f46', fg: '#6ee7b7', border: '#10b981' },
+  blue:   { bg: '#1e3a8a', fg: '#93c5fd', border: '#3b82f6' },
+  purple: { bg: '#3b0764', fg: '#d8b4fe', border: '#7e22ce' },
+  gray:   { bg: '#292524', fg: '#a8a29e', border: '#57534e' },
+};
+const TAG_COLOR_ORDER = ['gold', 'red', 'green', 'blue', 'purple', 'gray'];
+
 function DealTagsBar({ deal, canEdit, onSave }) {
   const [adding, setAdding] = useState(false);
   const [input, setInput] = useState('');
-  const [libraryTags, setLibraryTags] = useState([]);
+  const [libraryTags, setLibraryTags] = useState([]);  // [{ name, color }]
   const tags = deal.tags || [];
 
-  // Load the persistent tag_library on add-mode open. Per Eric
-  // 2026-05-04: tags should survive even when no deal currently has
-  // them, and typing should suggest from the full vocabulary, not just
-  // tags currently in use somewhere. Realtime sub keeps it fresh in
-  // case another VA adds a new tag while this user is mid-typing.
+  // Load the persistent tag_library on every mount + on add-mode open.
+  // Per Eric 2026-05-04: tags should survive even when no deal currently
+  // has them. Now also loads `color` so chips render in their assigned
+  // visual category. Realtime sub keeps it fresh.
   const loadLibrary = async () => {
-    const { data } = await sb.from('tag_library').select('name').order('name');
-    setLibraryTags((data || []).map(r => r.name));
+    const { data } = await sb.from('tag_library').select('name, color').order('name');
+    setLibraryTags(data || []);
   };
-  useEffect(() => { if (adding) loadLibrary(); }, [adding]);
+  useEffect(() => { loadLibrary(); /* eslint-disable-next-line */ }, [deal.id]);
   useEffect(() => {
-    if (!adding) return;
     const ch = sb.channel('tag-library-' + deal.id)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tag_library' }, loadLibrary)
       .subscribe();
     return () => { sb.removeChannel(ch); };
     // eslint-disable-next-line
-  }, [adding, deal.id]);
+  }, [deal.id]);
+
+  // Map tag name → color. Defaults to 'gold' if the tag isn't in the
+  // library yet (e.g. just added on this client; trigger hasn't fired
+  // its sync yet).
+  const colorFor = (name) => {
+    const row = libraryTags.find(t => t.name === name);
+    return row?.color && TAG_COLORS[row.color] ? row.color : 'gold';
+  };
+
+  // Cycle a tag to the next color in TAG_COLOR_ORDER. Updates the
+  // tag_library row directly — that's the canonical color storage.
+  // Realtime sub will refresh libraryTags + every other mounted
+  // DealTagsBar's chips.
+  const cycleColor = async (name) => {
+    const current = colorFor(name);
+    const idx = TAG_COLOR_ORDER.indexOf(current);
+    const next = TAG_COLOR_ORDER[(idx + 1) % TAG_COLOR_ORDER.length];
+    const { error } = await sb.from('tag_library').update({ color: next }).eq('name', name);
+    if (error) alert('Could not change tag color: ' + error.message);
+  };
 
   const normalize = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '-');
 
@@ -9971,11 +10004,11 @@ function DealTagsBar({ deal, canEdit, onSave }) {
   // Excludes tags already on this deal.
   const inputNorm = normalize(input);
   const suggestions = (() => {
-    const candidates = libraryTags.filter(t => !tags.includes(t));
+    const candidates = libraryTags.filter(t => !tags.includes(t.name));
     if (!inputNorm) return candidates.slice(0, 12);
-    return candidates.filter(t => t.toLowerCase().includes(inputNorm)).slice(0, 30);
+    return candidates.filter(t => t.name.toLowerCase().includes(inputNorm)).slice(0, 30);
   })();
-  const exactMatch = inputNorm && libraryTags.includes(inputNorm);
+  const exactMatch = inputNorm && libraryTags.some(t => t.name === inputNorm);
 
   return (
     <div style={{
@@ -9984,23 +10017,33 @@ function DealTagsBar({ deal, canEdit, onSave }) {
       background: '#1c1917', border: '1px solid #292524', borderRadius: 8,
     }}>
       <span style={{ fontSize: 9, fontWeight: 800, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginRight: 4 }}>🏷 Tags</span>
-      {tags.map(t => (
-        <span key={t} style={{
-          display: 'inline-flex', alignItems: 'center', gap: 4,
-          background: '#78350f', color: '#fbbf24',
-          padding: '3px 8px', borderRadius: 4,
-          fontSize: 11, fontWeight: 700,
-        }}>
-          {t}
-          {canEdit && (
-            <button onClick={() => removeTag(t)} title="Remove tag"
-              style={{ background: 'transparent', border: 'none', color: '#fbbf24', cursor: 'pointer', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1, opacity: 0.7 }}
-              onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
-              onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
-            >×</button>
-          )}
-        </span>
-      ))}
+      {tags.map(t => {
+        const c = TAG_COLORS[colorFor(t)];
+        return (
+          <span key={t} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            background: c.bg, color: c.fg,
+            padding: '3px 8px', borderRadius: 4,
+            fontSize: 11, fontWeight: 700,
+          }}>
+            {t}
+            {canEdit && (
+              <>
+                <button onClick={() => cycleColor(t)} title={`Color: ${colorFor(t)} — click to cycle`}
+                  style={{ background: 'transparent', border: 'none', color: c.fg, cursor: 'pointer', fontSize: 10, padding: '0 0 0 4px', lineHeight: 1, opacity: 0.6 }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}
+                >🎨</button>
+                <button onClick={() => removeTag(t)} title="Remove tag"
+                  style={{ background: 'transparent', border: 'none', color: c.fg, cursor: 'pointer', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1, opacity: 0.7 }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
+                >×</button>
+              </>
+            )}
+          </span>
+        );
+      })}
       {tags.length === 0 && !adding && (
         <span style={{ fontSize: 11, color: '#57534e', fontStyle: 'italic' }}>
           none — add a tag to flag this deal
@@ -10030,13 +10073,16 @@ function DealTagsBar({ deal, canEdit, onSave }) {
                 <span style={{ fontSize: 9, color: '#57534e', marginRight: 4 }}>
                   {inputNorm ? `matches in library (${suggestions.length}):` : 'from library:'}
                 </span>
-                {suggestions.map(t => (
-                  <button key={t} onClick={() => addTag(t)}
-                    title={`Add "${t}" to this deal`}
-                    style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', padding: '2px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-                    + {t}
-                  </button>
-                ))}
+                {suggestions.map(t => {
+                  const c = TAG_COLORS[t.color || 'gold'] || TAG_COLORS.gold;
+                  return (
+                    <button key={t.name} onClick={() => addTag(t.name)}
+                      title={`Add "${t.name}" to this deal (color: ${t.color || 'gold'})`}
+                      style={{ background: 'transparent', border: '1px solid ' + c.border, color: c.fg, padding: '2px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                      + {t.name}
+                    </button>
+                  );
+                })}
               </>
             )}
             {inputNorm && !exactMatch && suggestions.length === 0 && (
