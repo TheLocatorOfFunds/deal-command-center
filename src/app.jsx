@@ -65,6 +65,52 @@ const btnGhostFallback = { background: 'transparent', color: '#a8a29e', border: 
 const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
+// Convert plain text containing http(s) URLs into a mixed array of
+// strings + <a> elements so chat / note / message bodies render
+// clickable links instead of inert text. Per Nathan 2026-05-05 — Eric
+// posted a Jitsi meet URL into team chat and Nathan couldn't click it.
+//
+// Trailing punctuation is stripped from the link target so
+// "https://example.com." links to https://example.com (the period
+// stays as plain text after).
+//
+// Returns the original string when there's no URL to linkify (so the
+// caller can keep using {body} unchanged in the common case).
+const URL_RE = /(https?:\/\/[^\s<>"']+)/g;
+const linkifyText = (text) => {
+  if (!text || typeof text !== 'string') return text;
+  if (!text.includes('http')) return text;
+  const out = [];
+  let last = 0;
+  let match;
+  let i = 0;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    if (match.index > last) out.push(text.slice(last, match.index));
+    let url = match[0];
+    let trailing = '';
+    while (url && /[.,;:!?)\]]/.test(url[url.length - 1])) {
+      trailing = url[url.length - 1] + trailing;
+      url = url.slice(0, -1);
+    }
+    out.push(
+      <a key={'lnk-' + i}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        style={{ color: '#60a5fa', textDecoration: 'underline', wordBreak: 'break-all' }}>
+        {url}
+      </a>
+    );
+    if (trailing) out.push(trailing);
+    last = match.index + match[0].length;
+    i++;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out.length === 0 ? text : out;
+};
+
 const daysSince = (dateStr) => {
   if (!dateStr) return null;
   const d = new Date(dateStr);
@@ -3685,7 +3731,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                       ) : (
                         m.body && (
                           <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {m.body}
+                            {linkifyText(m.body)}
                           </div>
                         )
                       )}
@@ -23852,6 +23898,12 @@ function TeamChatBubble() {
   const [messages, setMessages] = useState([]);
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
+  // Attachments staged in the composer before send. Per Nathan
+  // 2026-05-05: bubble needs an 📎 attach button so files/pictures
+  // can be sent without leaving the deal context.
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const fileInputRef = useRef(null);
   const composerRef = useRef(null);
   const msgsEndRef = useRef(null);
 
@@ -23998,9 +24050,49 @@ function TeamChatBubble() {
     }
   }, [open, activeThreadId]);
 
+  // Upload attachments — same flow + same bucket as TeamView. Each
+  // file gets a unique path: <thread_id>/<ts>-<rand>-<safename>.
+  // Returned metadata is what gets stored in team_messages.attachments.
+  const uploadFiles = async (files) => {
+    if (!files.length || !activeThreadId) return [];
+    setUploadingFiles(true);
+    const out = [];
+    for (const file of files) {
+      try {
+        const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+        const path = `${activeThreadId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safe}`;
+        const { error: upErr } = await sb.storage.from('team-chat').upload(path, file, {
+          upsert: false, contentType: file.type || 'application/octet-stream'
+        });
+        if (upErr) { alert(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
+        out.push({ path, name: file.name, size: file.size, type: file.type || 'application/octet-stream' });
+      } catch (ex) {
+        alert(`Upload failed: ${file.name} — ${ex.message || ex}`);
+      }
+    }
+    setUploadingFiles(false);
+    return out;
+  };
+
+  const onPickFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const uploaded = await uploadFiles(files);
+    setPendingAttachments(prev => [...prev, ...uploaded]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removePending = async (idx) => {
+    const att = pendingAttachments[idx];
+    if (att?.path) await sb.storage.from('team-chat').remove([att.path]).catch(() => {});
+    setPendingAttachments(prev => prev.filter((_, i) => i !== idx));
+  };
+
   const sendBody = async () => {
     const trimmed = body.trim();
-    if (!trimmed || !activeThreadId || !me?.id || sending) return;
+    // Allow a send when text is empty IF there are attachments — common
+    // case is "send this image" with no caption.
+    if ((!trimmed && pendingAttachments.length === 0) || !activeThreadId || !me?.id || sending) return;
     setSending(true);
     try {
       const { error } = await sb.from('team_messages').insert({
@@ -24010,9 +24102,11 @@ function TeamChatBubble() {
         // role to the right value or every send 23514s out.
         sender_kind: me.role === 'va' ? 'va' : 'admin',
         body: trimmed,
+        attachments: pendingAttachments,
       });
       if (error) { alert('Could not send: ' + error.message); return; }
       setBody('');
+      setPendingAttachments([]);
     } finally {
       setSending(false);
     }
@@ -24199,16 +24293,23 @@ function TeamChatBubble() {
                           {senderName(m)}
                         </div>
                       )}
-                      <div style={{
-                        maxWidth: '82%', padding: '8px 12px',
-                        background: isMe ? '#d97706' : (isLauren ? '#312e81' : '#292524'),
-                        color: isMe ? '#1c0a00' : '#fafaf9',
-                        borderRadius: 12,
-                        borderBottomRightRadius: isMe ? 3 : 12,
-                        borderBottomLeftRadius: !isMe ? 3 : 12,
-                        fontSize: 12.5, lineHeight: 1.5,
-                        whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                      }}>{m.body}</div>
+                      {m.body && (
+                        <div style={{
+                          maxWidth: '82%', padding: '8px 12px',
+                          background: isMe ? '#d97706' : (isLauren ? '#312e81' : '#292524'),
+                          color: isMe ? '#1c0a00' : '#fafaf9',
+                          borderRadius: 12,
+                          borderBottomRightRadius: isMe ? 3 : 12,
+                          borderBottomLeftRadius: !isMe ? 3 : 12,
+                          fontSize: 12.5, lineHeight: 1.5,
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        }}>{linkifyText(m.body)}</div>
+                      )}
+                      {Array.isArray(m.attachments) && m.attachments.length > 0 && (
+                        <div style={{ alignSelf: isMe ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
+                          <TeamAttachments attachments={m.attachments} onLightbox={(url) => window.open(url, '_blank', 'noopener,noreferrer')} />
+                        </div>
+                      )}
                       <div style={{ fontSize: 9, color: '#57534e', paddingLeft: isMe ? 0 : 6, paddingRight: isMe ? 6 : 0 }}>
                         {fmtAge(m.created_at)} ago
                       </div>
@@ -24217,7 +24318,43 @@ function TeamChatBubble() {
                 })}
                 <div ref={msgsEndRef} />
               </div>
-              <div style={{ padding: 10, background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', gap: 8, flexShrink: 0 }}>
+              {/* Pending attachments preview (above composer) */}
+              {(pendingAttachments.length > 0 || uploadingFiles) && (
+                <div style={{ padding: '6px 10px', background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {pendingAttachments.map((a, i) => (
+                    <div key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      background: '#1c1917', border: '1px solid #292524', borderRadius: 6,
+                      padding: '3px 8px', fontSize: 11, maxWidth: 200,
+                    }}>
+                      <span style={{ fontSize: 13 }}>{/^image\//.test(a.type) ? '🖼' : /^video\//.test(a.type) ? '🎬' : '📄'}</span>
+                      <span style={{ color: '#d6d3d1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                      <button onClick={() => removePending(i)} title="Remove"
+                        style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
+                    </div>
+                  ))}
+                  {uploadingFiles && (
+                    <div style={{ fontSize: 10, color: '#78716c', alignSelf: 'center' }}>uploading…</div>
+                  )}
+                </div>
+              )}
+              <div style={{ padding: 10, background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', gap: 6, flexShrink: 0, alignItems: 'flex-end' }}>
+                {/* Hidden file input — picker triggered by 📎 button */}
+                <input ref={fileInputRef} type="file" multiple onChange={onPickFiles}
+                  accept="image/*,video/*,application/pdf,.doc,.docx,.txt,.csv,.xlsx,.heic"
+                  style={{ display: 'none' }} />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingFiles}
+                  title="Attach files or pictures"
+                  style={{
+                    background: '#1c1917', border: '1px solid #44403c',
+                    color: uploadingFiles ? '#57534e' : '#a8a29e',
+                    borderRadius: 8, width: 36, height: 36,
+                    fontSize: 16, cursor: uploadingFiles ? 'wait' : 'pointer',
+                    fontFamily: 'inherit', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>📎</button>
                 <textarea
                   ref={composerRef}
                   value={body}
@@ -24236,12 +24373,13 @@ function TeamChatBubble() {
                     padding: '8px 10px', fontSize: 12.5, lineHeight: 1.45,
                     fontFamily: 'inherit', resize: 'none', outline: 'none',
                   }} />
-                <button onClick={sendBody} disabled={!body.trim() || sending}
+                <button onClick={sendBody} disabled={(!body.trim() && pendingAttachments.length === 0) || sending}
                   style={{
-                    background: body.trim() && !sending ? '#d97706' : '#44403c',
-                    color: body.trim() && !sending ? '#1c0a00' : '#78716c',
+                    background: (body.trim() || pendingAttachments.length > 0) && !sending ? '#d97706' : '#44403c',
+                    color: (body.trim() || pendingAttachments.length > 0) && !sending ? '#1c0a00' : '#78716c',
                     border: 'none', borderRadius: 8, padding: '0 14px',
-                    fontSize: 12, fontWeight: 700, cursor: body.trim() && !sending ? 'pointer' : 'not-allowed',
+                    fontSize: 12, fontWeight: 700,
+                    cursor: (body.trim() || pendingAttachments.length > 0) && !sending ? 'pointer' : 'not-allowed',
                     fontFamily: 'inherit', alignSelf: 'stretch', minHeight: 36,
                   }}>{sending ? '…' : 'Send'}</button>
               </div>
