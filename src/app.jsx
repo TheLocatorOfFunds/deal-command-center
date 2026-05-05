@@ -1646,13 +1646,6 @@ function DealCommandCenter({ session, profile }) {
                   Phone
                   {twilioStatus === 'registered' && <span style={{ fontSize: 10, color: '#44403c' }}>⌨</span>}
                 </button>
-                {/* Active video call pills */}
-                {activeCalls.map(call => (
-                  <button key={call.user_id} onClick={() => window.open(call.url, '_blank', 'noopener,noreferrer')}
-                    style={{ marginLeft: 4, background: '#15803d', color: '#fff', border: '1px solid #16a34a', borderRadius: 6, padding: '4px 8px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-                    📹 Join
-                  </button>
-                ))}
                 {/* ── Phone popover ── */}
                 {showPhonePopover && (
                   <div style={{
@@ -1835,7 +1828,7 @@ function DealCommandCenter({ session, profile }) {
             nextDeal: peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null,
             onNav: setActiveDealId,
           };
-          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} />;
+          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
         })()
       )}
 
@@ -10674,7 +10667,7 @@ function NotesDrawerTrigger({ count, onClick, isOpen }) {
   );
 }
 
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav }) {
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav, startCall, callStatus }) {
   const [tab, setTab] = useState(initialTab || "overview");
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
@@ -24230,6 +24223,33 @@ function TeamChatBubble() {
           {!activeThreadId ? (
             // ── Thread list mode ──
             <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              {/* ── Permanent video rooms — always visible at top of thread list ── */}
+              {/* Eric and Anam each have a fixed Jitsi room so Nathan/Justin can
+                  jump in without creating a new URL every time. No dynamic video
+                  call messages needed — just click Join. */}
+              <div style={{ padding: '8px 14px 4px', borderBottom: '1px solid #1c1917' }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: '#57534e', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>📹 Video Rooms</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {[
+                    { label: "Eric's Room", url: 'https://meet.jit.si/DCC-Eric-Room' },
+                    { label: "Anam's Room", url: 'https://meet.jit.si/DCC-Anam-Room' },
+                  ].map(room => (
+                    <button key={room.url}
+                      onClick={() => window.open(room.url, '_blank', 'noopener,noreferrer')}
+                      title={`Join ${room.label} on Jitsi`}
+                      style={{
+                        flex: 1, background: '#15803d', color: '#fff',
+                        border: '1px solid #16a34a', borderRadius: 8,
+                        padding: '7px 10px', fontSize: 11, fontWeight: 700,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                      }}>
+                      📹 {room.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {sortedThreads.length === 0 && (
                 <div style={{ fontSize: 12, color: '#78716c', padding: 24, textAlign: 'center' }}>
                   No threads yet. Open the full Team view to start one.
@@ -24403,17 +24423,23 @@ function CombinedFAB() {
   const [chatUnread, setChatUnread] = useState(0);
   const [laurenPending, setLaurenPending] = useState(0);
 
-  // Live unread + pending counts so the FAB badge stays current
+  // Live unread + pending counts so the FAB badge stays current.
+  // NOTE: sb.rpc() returns a PostgrestFilterBuilder — it has .then() but NOT .catch().
+  // Always use async/await with try-catch; never .catch() on an rpc result.
   React.useEffect(() => {
     const refreshChat = async () => {
-      const { data: { user } } = await sb.auth.getUser().catch(() => ({ data: { user: null } }));
-      if (!user) return;
-      const { data } = await sb.rpc('team_unread_count', { p_user_id: user.id }).catch(() => ({ data: 0 }));
-      setChatUnread(Number(data) || 0);
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const { data } = await sb.rpc('team_unread_count', { p_user_id: user.id });
+        setChatUnread(Number(data) || 0);
+      } catch (_) { /* non-fatal */ }
     };
     const refreshLauren = async () => {
-      const { data } = await sb.rpc('lauren_flagged_count').catch(() => ({ data: 0 }));
-      setLaurenPending(Number(data) || 0);
+      try {
+        const { data } = await sb.rpc('lauren_flagged_count');
+        setLaurenPending(Number(data) || 0);
+      } catch (_) { /* non-fatal */ }
     };
     refreshChat(); refreshLauren();
     const iv = setInterval(() => { refreshChat(); refreshLauren(); }, 30_000);
