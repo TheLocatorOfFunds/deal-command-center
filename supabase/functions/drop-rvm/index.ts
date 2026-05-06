@@ -21,7 +21,13 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
  *   - NATHAN_VOICE_ID           (default voice)
  *   - ANTHROPIC_API_KEY         (Claude for ai_personalized mode + case intel)
  *   - SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (auto)
- *   - SLYBROADCAST_*            (TODO when Slybroadcast API approval lands)
+ *   - SLYBROADCAST_USER         (account email — e.g. justin@fundlocators.com)
+ *   - SLYBROADCAST_API_PASSWORD (c_password from Slybroadcast → My Account → API access)
+ *   - SLYBROADCAST_CALLER_ID    (optional — defaults to CALLBACK_PHONE / +15139985440)
+ *
+ * If SLYBROADCAST_USER + SLYBROADCAST_API_PASSWORD are NOT set, this function
+ * still generates audio and uploads it to storage — it just skips delivery.
+ * That keeps the pipeline testable while we wait for Slybroadcast API approval.
  */
 
 const corsHeaders = {
@@ -508,6 +514,92 @@ async function uploadAudio(args: {
   return { path, publicUrl: urlData.publicUrl }
 }
 
+// ───── Slybroadcast delivery ─────────────────────────────────────────────────
+//
+// Slybroadcast API spec (https://www.slybroadcast.com/api):
+//   POST https://www.mobile-sphere.com/gateway/vmb.php
+//   Content-Type: application/x-www-form-urlencoded
+//
+//   Required params:
+//     c_uid       — account email (login)
+//     c_password  — API password (NOT the login password — generated under
+//                   "API access" in My Account)
+//     c_phone     — comma-separated E.164 or 10-digit US phone numbers (mobile only)
+//     c_url       — public URL to .mp3 (or .wav) audio file
+//     c_callerID  — caller ID phone number to display on the recipient's phone
+//     c_date      — 'now' for immediate delivery, or YYYY-MM-DD HH:MM:SS
+//     c_audio     — 'mp3' (we always send mp3)
+//
+//   Optional:
+//     mobile_only — '1' to skip landlines (recommended — landlines bounce)
+//     c_record_audio — '1' if uploading raw recording (we don't, we pass URL)
+//
+// Response is plain text, not JSON. Two formats:
+//   "OK\nsession_id"     on success (one session covers all numbers in batch)
+//   "ERROR\nerror text"  on failure
+//
+// Pricing (PAYG): ~$0.04-0.10/drop depending on plan tier.
+
+const SLYBROADCAST_URL = 'https://www.mobile-sphere.com/gateway/vmb.php'
+
+interface SlybroadcastResult {
+  ok: boolean
+  sessionId?: string
+  error?: string
+  rawResponse: string
+}
+
+async function slybroadcastDrop(args: {
+  user: string
+  password: string
+  phoneE164: string
+  audioUrl: string
+  callerId: string
+}): Promise<SlybroadcastResult> {
+  // Slybroadcast accepts US numbers as 10-digit or with +1 prefix; normalize to
+  // 10-digit form to match the format their docs show in examples.
+  const phoneDigits = args.phoneE164.replace(/\D/g, '')
+  const phone10 = phoneDigits.length === 11 && phoneDigits.startsWith('1')
+    ? phoneDigits.slice(1)
+    : phoneDigits
+  const callerDigits = args.callerId.replace(/\D/g, '')
+  const caller10 = callerDigits.length === 11 && callerDigits.startsWith('1')
+    ? callerDigits.slice(1)
+    : callerDigits
+
+  const form = new URLSearchParams()
+  form.set('c_uid', args.user)
+  form.set('c_password', args.password)
+  form.set('c_phone', phone10)
+  form.set('c_url', args.audioUrl)
+  form.set('c_callerID', caller10)
+  form.set('c_date', 'now')
+  form.set('c_audio', 'mp3')
+  form.set('mobile_only', '1')
+
+  const res = await fetch(SLYBROADCAST_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: form.toString(),
+  })
+
+  const raw = (await res.text()).trim()
+
+  // Slybroadcast returns 200 even for ERROR responses — we have to parse the body.
+  // Format: "OK\nsession_id" or "ERROR\nmessage". Some endpoints also use
+  // "OK<TAB>session_id" or single-line "OK session_id" — be liberal in parsing.
+  const firstLine = raw.split(/\r?\n/)[0].trim()
+  const rest = raw.slice(firstLine.length).trim()
+
+  if (/^OK\b/i.test(firstLine)) {
+    // Session id may be on the first line after "OK " or on the next line
+    const inlineId = firstLine.replace(/^OK\s*/i, '').trim()
+    const sessionId = inlineId || rest || undefined
+    return { ok: true, sessionId, rawResponse: raw }
+  }
+  return { ok: false, error: rest || raw, rawResponse: raw }
+}
+
 // ───── Main handler ──────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -693,20 +785,59 @@ Deno.serve(async (req) => {
       templateId: template_id ?? null,
     })
 
+    // ─── Slybroadcast delivery (when configured + not dry run) ────────────
+    const slyUser = Deno.env.get('SLYBROADCAST_USER')
+    const slyPassword = Deno.env.get('SLYBROADCAST_API_PASSWORD')
+    const slyCallerId = Deno.env.get('SLYBROADCAST_CALLER_ID') || callbackPhone()
+    const slyConfigured = !!(slyUser && slyPassword)
+
+    let dropResult: SlybroadcastResult | null = null
+    let dropAttempted = false
+    let dropError: string | null = null
+    let outboundStatus: string
+
+    if (dry_run) {
+      outboundStatus = 'dry_run'
+    } else if (!phoneE164) {
+      outboundStatus = 'no_phone'
+    } else if (!slyConfigured) {
+      // Audio is generated and stored, but we can't deliver yet — Slybroadcast
+      // creds are not set. This is the expected state until API approval lands.
+      outboundStatus = 'audio_generated'
+    } else {
+      dropAttempted = true
+      try {
+        dropResult = await slybroadcastDrop({
+          user: slyUser!,
+          password: slyPassword!,
+          phoneE164,
+          audioUrl: publicUrl,
+          callerId: slyCallerId,
+        })
+        outboundStatus = dropResult.ok ? 'rvm_sent' : 'rvm_failed'
+        if (!dropResult.ok) dropError = dropResult.error ?? 'Slybroadcast rejected the drop'
+      } catch (e) {
+        dropError = (e as Error).message
+        outboundStatus = 'rvm_failed'
+      }
+    }
+
     // ─── Insert messages_outbound record ──────────────────────────────────
     const { data: msgRow, error: msgErr } = await sb
       .from('messages_outbound')
       .insert({
         to_number:   phoneE164,
-        from_number: null,
+        from_number: slyConfigured ? slyCallerId : null,
         body:        renderedScript,
-        status:      dry_run ? 'dry_run' : 'audio_generated',
+        status:      outboundStatus,
         sent_by:     userId,
         deal_id:     deal_id ?? null,
         contact_id:  contact_id ?? null,
         channel:     'rvm',
         direction:   'outbound',
         media_url:   publicUrl,
+        provider_sid: dropResult?.sessionId ?? null,
+        error_message: dropError,
       })
       .select()
       .single()
@@ -729,7 +860,13 @@ Deno.serve(async (req) => {
       voice_id: voiceId,
       template_id: template_id ?? null,
       dry_run,
-      delivery_pending: 'Slybroadcast API approval — audio is generated and stored, manual drop possible until then',
+      // Delivery details
+      delivery_status: outboundStatus,           // dry_run | no_phone | audio_generated | rvm_sent | rvm_failed
+      delivery_attempted: dropAttempted,
+      delivery_session_id: dropResult?.sessionId ?? null,
+      delivery_error: dropError,
+      delivery_raw: dropResult?.rawResponse ?? null,  // for debugging Slybroadcast quirks
+      slybroadcast_configured: slyConfigured,
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
   } catch (err) {
