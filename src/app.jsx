@@ -19365,8 +19365,11 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
         </div>
       )}
 
-      {/* Thread header */}
-      {activeContact && (
+      {/* Thread header — hidden during RVM compose so the voicemail panel
+          doesn't get confused with a thread reply UI ("pick a tab to reply
+          individually" was reading as a duplicate of the tab strip per
+          Justin 2026-05-05) */}
+      {activeContact && !rvmMode && (
         <div className="thread-header" style={{ padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: '50%', background: activeContact._everyone ? '#d97706' : participantColor(activeContact.name), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0, color: '#fff', fontWeight: 700 }}>
             {activeContact._everyone ? '👨‍👩‍👧' : (activeContact.name || '?')[0].toUpperCase()}
