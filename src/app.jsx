@@ -197,6 +197,17 @@ const dealMetaPhone = (meta) => {
   return (v && String(v).trim()) ? String(v).trim() : null;
 };
 
+// Is the homeowner on this deal deceased? Tier-INDEPENDENT — Eric flagged
+// 2026-05-07 that C-tier deceased deals were visually indistinguishable
+// from living ones. Two truth sources we OR together:
+//   - deal.death_signal (column, fed by Castle scraper from docket signals)
+//   - deal.meta.deceased (jsonb, hand-set by Eric/Nathan via Case Details
+//     toggle when discovered manually)
+// Any reader that gates outreach behavior or renders a deceased indicator
+// should use this helper so the answer is consistent across cards,
+// kanban, detail header, compose flows, and the prep-queue gate.
+const isDeceased = (deal) => !!(deal?.death_signal || deal?.meta?.deceased);
+
 // What status to bump to when "converting" a lead → engaged deal.
 const POST_ENGAGEMENT_STATUS = { flip: "under-contract", surplus: "signed" };
 const STATUS_COLORS = {
@@ -1576,30 +1587,33 @@ function DealCommandCenter({ session, profile }) {
               const saveMeta = (patch) => updateDealMeta(activeDeal.id, { meta: { ...m, ...patch } });
               const saveAddress = (v) => updateDealMeta(activeDeal.id, { address: v || null });
               return (
-                <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  <InlineEditableText value={courtCase} label="case #" placeholder="e.g. CV-25-116796" canEdit={isTeam} onSave={(v) => saveMeta({ courtCase: v || null })} />
-                  {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
-                  <InlineEditableText
-                    value={county ? `${county} County` : ''}
-                    label="county"
-                    placeholder="e.g. Cuyahoga"
-                    canEdit={isTeam}
-                    onSave={(v) => saveMeta({ county: v ? v.replace(/\s*County\s*$/i, '').trim() || null : null })}
-                  />
-                  {!isRedundantAddress && (
-                    <>
-                      {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
-                      <InlineEditableText value={address} label="address" placeholder="e.g. 121 Main St, Cleveland, OH" canEdit={isTeam} onSave={saveAddress} />
-                    </>
-                  )}
-                  {isRedundantAddress && isTeam && (
-                    <button
-                      onClick={() => saveAddress('')}
-                      title="Clear the redundant address (it just says the county again)"
-                      style={{ background: "transparent", border: "1px dashed #78350f", color: "#a5731c", padding: "1px 7px", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}
-                    >⚠ clear duplicate address</button>
-                  )}
-                </div>
+                <>
+                  <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <InlineEditableText value={courtCase} label="case #" placeholder="e.g. CV-25-116796" canEdit={isTeam} onSave={(v) => saveMeta({ courtCase: v || null })} />
+                    {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
+                    <InlineEditableText
+                      value={county ? `${county} County` : ''}
+                      label="county"
+                      placeholder="e.g. Cuyahoga"
+                      canEdit={isTeam}
+                      onSave={(v) => saveMeta({ county: v ? v.replace(/\s*County\s*$/i, '').trim() || null : null })}
+                    />
+                    {!isRedundantAddress && (
+                      <>
+                        {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
+                        <InlineEditableText value={address} label="address" placeholder="e.g. 121 Main St, Cleveland, OH" canEdit={isTeam} onSave={saveAddress} />
+                      </>
+                    )}
+                    {isRedundantAddress && isTeam && (
+                      <button
+                        onClick={() => saveAddress('')}
+                        title="Clear the redundant address (it just says the county again)"
+                        style={{ background: "transparent", border: "1px dashed #78350f", color: "#a5731c", padding: "1px 7px", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}
+                      >⚠ clear duplicate address</button>
+                    )}
+                    <DeceasedBadge deal={activeDeal} size="sm" />
+                  </div>
+                </>
               );
             })()}
           </div>
@@ -2875,9 +2889,10 @@ const TIER_META = {
 function TierBadge({ deal }) {
   const t = deal.lead_tier;
   if (!t || !TIER_META[t]) return null;
-  // Override label for deceased B-leads OR any tier with a death signal
+  // Override label for deceased B-leads OR any tier where deceased is
+  // signaled (death_signal column OR meta.deceased hand-flag).
   const meta = TIER_META[t];
-  const finalLabel = (t !== 'B' && deal.death_signal) ? (meta.label + ' · estate') : meta.label;
+  const finalLabel = (t !== 'B' && isDeceased(deal)) ? (meta.label + ' · estate') : meta.label;
   return (
     <span
       title={meta.title}
@@ -2893,6 +2908,35 @@ function TierBadge({ deal }) {
         whiteSpace: 'nowrap',
       }}
     >{finalLabel}</span>
+  );
+}
+
+// Tier-INDEPENDENT deceased indicator. Renders a 🕊 pill on any deal
+// where isDeceased() returns true, regardless of A/B/C tier. Per Eric
+// 2026-05-07: the existing "B · estate" tier label is the only visual
+// cue today, so C-tier deceased homeowners look identical to living
+// ones — outreach risk. Surface this in every spot a deal renders.
+function DeceasedBadge({ deal, size = 'md' }) {
+  if (!isDeceased(deal)) return null;
+  const sm = size === 'sm';
+  return (
+    <span
+      title="Owner deceased — outreach goes to estate / heirs only, never the homeowner directly"
+      style={{
+        fontSize: sm ? 9 : 10,
+        fontWeight: 700,
+        padding: sm ? '2px 6px' : '3px 8px',
+        borderRadius: 3,
+        background: '#5b21b6',
+        color: '#fafaf9',
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+      }}
+    >🕊 deceased</span>
   );
 }
 
@@ -2978,8 +3022,13 @@ function DealStatusBadges({ deal }) {
   );
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
       <TierBadge tier={tier} />
+      {/* Tier-INDEPENDENT deceased indicator — shows on A/B/C alike when
+          isDeceased(deal) returns true. Per Eric 2026-05-07: C-tier
+          deceased homeowners were visually indistinguishable from
+          living ones, leading to incorrect outreach approach risk. */}
+      <DeceasedBadge deal={deal} size="sm" />
       {isPostAuction && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
       {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
       {verified && <Pill label="✓ CLEAN" title="Verified — Eric has cleaned this lead's data" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
@@ -2992,7 +3041,10 @@ function DealStatusBadges({ deal }) {
 // for deceased leads where the handoff wants heir-focused framing.
 function DealCardName({ deal }) {
   const first = (deal.name || '').split(' - ')[0] || deal.name || 'Unnamed';
-  const isEstate = deal.death_signal || deal.lead_tier === 'B';
+  // "Estate of …" prefix fires for ANY deceased deal (tier-independent
+  // per Eric 2026-05-07) plus tier B (which is deceased by definition
+  // even when meta hasn't caught up to that fact).
+  const isEstate = isDeceased(deal) || deal.lead_tier === 'B';
   return (
     <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, color: '#fafaf9' }}>
       {isEstate ? <span style={{ color: '#c4b5fd' }}>Estate of </span> : null}
@@ -4577,6 +4629,7 @@ function GlobalTasksView({ deals, onJumpToDeal }) {
               <div style={{ fontSize: 10, color: '#78716c', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
                 {d && <span style={{ color: '#d6d3d1', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => onJumpToDeal(d.id)}>{(d.name || '').split(' - ')[0]}</span>}
                 {d && d.lead_tier && <TierBadge deal={d} />}
+                {d && <DeceasedBadge deal={d} size="sm" />}
                 {d && d.is_30dts && <DTSCountdown days={d.days_to_sale} />}
                 {t.assigned_to && <span style={{ color: '#a8a29e' }}>· {t.assigned_to}</span>}
                 {t.due_date && <span style={{ color: t.isOverdue ? '#ef4444' : '#a8a29e', fontFamily: "'DM Mono', monospace", fontWeight: t.isOverdue ? 700 : 400 }}>· {t.isOverdue ? 'OVERDUE ' : ''}due {new Date(t.due_date + 'T00:00:00').toLocaleDateString()}</span>}
@@ -4629,6 +4682,7 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
   const url = `https://refundlocators.com/s/${token}`;
   const phone = dealMetaPhone(m) || '';
   const email = m.homeownerEmail || m.email || '';
+  const deceased = isDeceased(deal);
 
   const [smsBody, setSmsBody] = useState(`Hi ${firstName}, this is Nathan from RefundLocators. I put together a quick page on your case with the details: ${url}`);
   const [emailSubject, setEmailSubject] = useState(`Your RefundLocators case page`);
@@ -4675,6 +4729,11 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
 
   return (
     <Modal onClose={onClose} title="🔗 Send personalized link">
+      {deceased && (
+        <div style={{ marginBottom: 14, padding: '10px 14px', background: '#1a0e1f', border: '1px solid #5b21b6', borderRadius: 6, color: '#c4b5fd', fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>
+          🕊 <strong style={{ color: '#fafaf9' }}>Owner deceased.</strong> Send to estate / heirs only — never the homeowner directly. Confirm the recipient is a family member or representative before sending.
+        </div>
+      )}
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>The URL</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 12, color: '#fbbf24', overflow: 'hidden' }}>
@@ -4843,10 +4902,16 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
 
   return (
     <Modal onClose={onClose} title="💬 Send Intro Text" wide>
+      {isDeceased(deal) && (
+        <div style={{ marginBottom: 12, padding: '10px 14px', background: '#1a0e1f', border: '1px solid #5b21b6', borderRadius: 6, color: '#c4b5fd', fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>
+          🕊 <strong style={{ color: '#fafaf9' }}>Owner deceased.</strong> Outreach should go to estate / heirs only — never the homeowner directly. Confirm the recipient below is a family member or representative before sending.
+        </div>
+      )}
       <div style={{ marginBottom: 12, fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>
         Sending to <b style={{ color: '#fbbf24' }}>{ownerName || 'homeowner'}</b>
         {toNumber && <> at <span style={{ fontFamily: "'DM Mono', monospace", color: '#d6d3d1' }}>{toNumber}</span></>}
         {deal.lead_tier && <> · <TierBadge deal={deal} /></>}
+        <DeceasedBadge deal={deal} size="sm" />
         {deal.is_30dts && <> · <DTSCountdown days={deal.days_to_sale} /></>}
       </div>
 
@@ -5565,6 +5630,7 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
                           <DealCardName deal={d} />
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             {d.is_30dts && <DTSCountdown days={d.days_to_sale} />}
+                            <DeceasedBadge deal={d} size="sm" />
                             <TierBadge deal={d} />
                           </div>
                         </div>
@@ -14399,11 +14465,15 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
         <Card title="Case Details">
           {/* Lead classification — Eric grades A/B/C here. Tier and is_30dts
               live as columns on the deal (not meta), so use onUpdateDeal
-              directly. Deceased status comes from the homeowner contact
-              and is editable from the contact card; surfaced read-only here
-              for context. */}
+              directly. The Deceased toggle (added 2026-05-07 per Eric's
+              flag) writes meta.deceased — tier-INDEPENDENT so C-tier
+              deceased deals get the same visual treatment as B-tier
+              estate cases. Hand-flag here when discovered manually
+              (obituary, family text, etc.); the scraper-fed
+              death_signal column also feeds isDeceased() for
+              auto-detected cases. */}
           <SubLabel>Lead Classification</SubLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <Field label="Lead Tier">
               <select value={deal.lead_tier || ''} onChange={e => onUpdateDeal({ lead_tier: e.target.value || null })} style={{ ...inputStyle, padding: '8px 10px' }}>
                 <option value="">—</option>
@@ -14422,6 +14492,12 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, height: 22, cursor: 'pointer' }}>
                 <input type="checkbox" checked={!!m.verified} onChange={e => updateMeta({ verified: e.target.checked, verifiedAt: e.target.checked ? new Date().toISOString() : null })} style={{ accentColor: '#22c55e' }} />
                 <span style={{ fontSize: 12 }}>{m.verified ? '✓ verified' : 'not verified'}</span>
+              </label>
+            </Field>
+            <Field label="Deceased">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: m.deceased ? '#1a0e1f' : '#0c0a09', border: '1px solid ' + (m.deceased ? '#5b21b6' : '#44403c'), borderRadius: 6, height: 22, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!m.deceased} onChange={e => updateMeta({ deceased: e.target.checked, deceased_at: e.target.checked ? (m.deceased_at || new Date().toISOString()) : null })} style={{ accentColor: '#a855f7' }} />
+                <span style={{ fontSize: 12, color: m.deceased ? '#c4b5fd' : undefined }}>{m.deceased ? '🕊 deceased' : 'owner alive'}</span>
               </label>
             </Field>
           </div>
