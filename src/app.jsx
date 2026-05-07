@@ -24009,6 +24009,7 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
   const [emailSubject, setEmailSubject] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [sentResult, setSentResult] = useState(null); // non-null = show success screen
   const [dealContacts, setDealContacts] = useState([]); // [{name, email, phone}]
 
   // Load ONLY library docs that have a DocuSign template_id wired up.
@@ -24123,9 +24124,37 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
         setSending(false);
         return;
       }
-      const smsPart = data.sms_sent ? ' · SMS sent ✓' : '';
-      setMsg({ type: 'success', text: `✅ Envelope sent${smsPart}`, link: data.signing_link });
-      setTimeout(() => { onSent?.(); }, 800);
+      // If SMS was sent, log it to messages_outbound so it appears in the Comms thread
+      if (data.sms_sent && recipientPhone.trim()) {
+        const firstName = recipientName.trim().split(' ')[0];
+        const smsBody = `Hi ${firstName}, this is Nathan with RefundLocators. Your authorization letter is ready to sign — tap the link and sign right from your phone (takes 60 seconds):\n\n${data.signing_link || '(link)'}\n\nQuestions? Call/text (513) 998-5440.`;
+        const digitsOnly = recipientPhone.replace(/\D/g, '');
+        const toPhone = recipientPhone.startsWith('+') ? recipientPhone
+                      : digitsOnly.length === 11 ? `+${digitsOnly}`
+                      : `+1${digitsOnly}`;
+        const matchedContact = dealContacts.find(c => {
+          const d = (c.phone || '').replace(/\D/g, '');
+          return d === digitsOnly || d === digitsOnly.slice(-10);
+        });
+        await sb.from('messages_outbound').insert({
+          deal_id:      dealId,
+          to_number:    toPhone,
+          from_number:  '+15139985440',
+          body:         smsBody,
+          status:       'sent',
+          direction:    'outbound',
+          channel:      'sms',
+          contact_id:   matchedContact?.id || null,
+        });
+      }
+      setSentResult({
+        name: recipientName.trim(),
+        email: recipientEmail.trim(),
+        phone: data.sms_sent ? recipientPhone.trim() : null,
+        signing_link: data.signing_link,
+        sms_sent: data.sms_sent,
+      });
+      onSent?.();
     } catch (e) {
       setMsg({ type: 'error', text: e.message || 'Send failed' });
     } finally {
@@ -24135,6 +24164,34 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
 
   const mergeFieldKeys = selectedDoc ? Object.keys(selectedDoc.template_fields || {}) : [];
   const clientName = (deal.name || '').split(' - ')[0];
+
+  // ── Success screen ────────────────────────────────────────────────────────
+  if (sentResult) {
+    return (
+      <Modal onClose={onClose} title={`📝 Sent for signature → ${clientName}`} wide>
+        <div style={{ textAlign: 'center', padding: '12px 0 24px' }}>
+          <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>Envelope sent!</div>
+          <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 20 }}>
+            Sent to <strong style={{ color: '#fafaf9' }}>{sentResult.name}</strong> ({sentResult.email})
+          </div>
+          {sentResult.sms_sent && sentResult.phone && (
+            <div style={{ marginBottom: 16, padding: '10px 14px', background: '#064e3b', border: '1px solid #065f46', borderRadius: 8, fontSize: 13, color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: 8 }}>
+              📱 Signing link texted to {sentResult.phone}
+              <span style={{ fontSize: 11, color: '#34d399', marginLeft: 'auto' }}>Visible in Comms thread</span>
+            </div>
+          )}
+          {sentResult.signing_link && (
+            <div style={{ marginBottom: 20, padding: '10px 14px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, fontSize: 12, textAlign: 'left' }}>
+              <div style={{ color: '#78716c', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Signing Link</div>
+              <a href={sentResult.signing_link} target="_blank" rel="noreferrer" style={{ color: '#d97706', wordBreak: 'break-all', textDecoration: 'underline', fontSize: 12 }}>{sentResult.signing_link}</a>
+            </div>
+          )}
+          <button onClick={onClose} style={{ ...btnPrimary, fontSize: 13, padding: '10px 32px' }}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
 
   return (
     <Modal onClose={onClose} title={`📝 Send for signature → ${clientName}`} wide>
@@ -24315,15 +24372,9 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
                   <input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
                 </div>
 
-                {msg && (
-                  <div style={{ padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+                {msg && msg.type === 'error' && (
+                  <div style={{ padding: "8px 12px", borderRadius: 6, background: "#7f1d1d", color: "#fca5a5", fontSize: 12 }}>
                     {msg.text}
-                    {msg.link && (
-                      <div style={{ marginTop: 6, wordBreak: "break-all" }}>
-                        <span style={{ color: "#78716c" }}>Signing link: </span>
-                        <a href={msg.link} target="_blank" rel="noreferrer" style={{ color: "#34d399", textDecoration: "underline" }}>{msg.link}</a>
-                      </div>
-                    )}
                   </div>
                 )}
 
