@@ -70,24 +70,48 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
-**Status:** Active — 2026-04-30 (afternoon)
-**Branch:** `chore/session-state-system` (this PR)
-**Working on:** Standing up the live session-state convention — restructuring
-`WORKING_ON.md`, creating `session_archives/`, updating `CLAUDE.md` so Nathan's
-and Erik's sessions can see what each Claude is doing in real time.
+**Status:** Active — 2026-05-07 (evening)
+**Branch:** `chore/park-client-notify-migrations`
+**Working on:** Shipping RVM (Slybroadcast + Fish Audio + 2-step UI) and built
+a CI migration-drift check (PR #121, merged). Cleanup of pre-existing drift
+surfaced 2 customer-facing email triggers that were committed-but-unapplied.
+
+**🚨 HEADS-UP FOR NATHAN — your client-notify triggers** (from PR ~2026-05-05):
+- I applied them tonight as part of drift cleanup, then realized they fire
+  customer emails with no human-in-the-loop approval. Justin called it: "we
+  don't need to be sending out emails without someone approving them."
+- **Action taken:** dropped both triggers (`tg_notify_client_status_change`
+  on `deals`, `tg_notify_client_docket_event` on `docket_events`). The
+  underlying functions `notify_client_status_change()` and
+  `notify_client_docket_event()` remain installed in prod for reuse.
+- **Migration files moved** from `supabase/migrations/` to
+  `supabase/migrations/_pending_review/` (with a README explaining why).
+  This keeps them out of the drift CI check until you've designed an
+  approval flow.
+- **What you need to decide:** queue + approval UI vs different design.
+  Re-attaching the triggers is one CREATE TRIGGER per file (sql in the
+  README of `_pending_review/`).
+
 **Recent decisions:**
-- A2P 10DLC + Quo + iMessage architecture finalized — Mac bridge stays primary
-  SMS, Twilio Brand parked, Quo voice-only, GHL/HighLevel transfer dropped.
-  Full archive: `session_archives/2026-04-30-a2p-quo-imessage-architecture.md`.
-**Touching:** `WORKING_ON.md`, `CLAUDE.md`, `session_archives/*`
+- 2026-05-07: RVM stack live with two-step Generate → Drop flow (PRs #117,
+  #118, #119, #120 — all merged). Slybroadcast API approved + secrets set.
+- 2026-05-07: Migration drift CI check live (PR #121). All 101 committed
+  migrations now applied/registered to prod. SUPABASE_PAT secret in repo.
+- 2026-05-07: Soft-delete migration that broke deals query was missing —
+  applied; that was the root cause of the "deal pages render Today
+  dashboard" bug we hit during RVM testing.
+
+**Touching:** `supabase/migrations/_pending_review/*`, `WORKING_ON.md`
+
 **Open follow-ups:**
-- Twilio Brand approval (1-3 days, parked state — no action)
-- Decline Quo SMS A2P upsell email
-- Erik onboarding (separate task)
+- Justin tests RVM full-flow drop to +14797196859 (preview → drop → verify
+  voicemail arrives)
+- Nathan + Justin design approval flow for client-notify triggers
+- Twilio Brand approval still parked
 
 ---
 
-**Last updated (auto):** 2026-05-04 20:12 UTC
+**Last updated:** 2026-05-07 evening
 
 ## Nathan's session
 
