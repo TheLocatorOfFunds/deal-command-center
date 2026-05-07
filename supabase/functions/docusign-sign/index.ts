@@ -11,16 +11,22 @@
 //
 // Token is valid as long as the DocuSign envelope is open. Multiple taps fine.
 // Deploy with verify_jwt=false — homeowners have no Supabase auth.
+//
+// Required Supabase secrets (same as docusign-send-envelope):
+//   DOCUSIGN_INTEGRATION_KEY, DOCUSIGN_USER_ID, DOCUSIGN_ACCOUNT_ID,
+//   DOCUSIGN_PRIVATE_KEY (PKCS#8 DER base64, no headers/newlines),
+//   DOCUSIGN_BASE_URL
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-async function getAccessToken(integrationKey: string, userId: string, privateKeyPem: string): Promise<string> {
-  const pem = privateKeyPem.replace(/\\n/g, '\n');
-  const pemBody = pem
-    .replace(/-----BEGIN RSA PRIVATE KEY-----/, '').replace(/-----END RSA PRIVATE KEY-----/, '')
-    .replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '')
-    .replace(/\s/g, '');
-  const der = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+// authBase: 'https://account-d.docusign.com' for sandbox, 'https://account.docusign.com' for prod.
+// Derived from DOCUSIGN_BASE_URL — if it contains 'demo', we're on sandbox.
+async function getAccessToken(
+  integrationKey: string, userId: string, privateKeyPem: string, authBase: string
+): Promise<string> {
+  // DOCUSIGN_PRIVATE_KEY is stored as the raw base64 DER body of the PKCS#8 key
+  // (no PEM headers, no newlines — just the base64 content between BEGIN/END PRIVATE KEY lines).
+  const der = Uint8Array.from(atob(privateKeyPem.trim()), c => c.charCodeAt(0));
   const key = await crypto.subtle.importKey(
     'pkcs8', der.buffer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']
   );
@@ -28,14 +34,15 @@ async function getAccessToken(integrationKey: string, userId: string, privateKey
     const str = typeof s === 'string' ? s : String.fromCharCode(...(s as Uint8Array));
     return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   };
+  const aud = authBase.replace('https://', '');  // e.g. 'account-d.docusign.com'
   const now = Math.floor(Date.now() / 1000);
   const header  = { alg: 'RS256', typ: 'JWT' };
-  const payload = { iss: integrationKey, sub: userId, aud: 'account-d.docusign.com',
+  const payload = { iss: integrationKey, sub: userId, aud,
                     iat: now, exp: now + 3600, scope: 'signature impersonation' };
   const input   = `${b64u(JSON.stringify(header))}.${b64u(JSON.stringify(payload))}`;
   const sig     = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(input)));
   const jwt     = `${input}.${b64u(sig)}`;
-  const resp    = await fetch('https://account.docusign.com/oauth/token', {
+  const resp    = await fetch(`${authBase}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
@@ -90,6 +97,7 @@ Deno.serve(async (req: Request) => {
   const PRIVATE_KEY     = Deno.env.get('DOCUSIGN_PRIVATE_KEY');
   const ACCOUNT_ID      = Deno.env.get('DOCUSIGN_ACCOUNT_ID');
   const BASE_URL        = Deno.env.get('DOCUSIGN_BASE_URL') || 'https://na4.docusign.net';
+  const AUTH_BASE       = BASE_URL.includes('demo') ? 'https://account-d.docusign.com' : 'https://account.docusign.com';
 
   if (!INTEGRATION_KEY || !USER_ID || !PRIVATE_KEY || !ACCOUNT_ID) {
     return new Response(errorPage('Signing service temporarily unavailable. Please call (513) 998-5440.'),
@@ -98,7 +106,7 @@ Deno.serve(async (req: Request) => {
 
   let accessToken: string;
   try {
-    accessToken = await getAccessToken(INTEGRATION_KEY, USER_ID, PRIVATE_KEY);
+    accessToken = await getAccessToken(INTEGRATION_KEY, USER_ID, PRIVATE_KEY, AUTH_BASE);
   } catch (e: any) {
     console.error('[docusign-sign] JWT error:', e.message);
     return new Response(errorPage('Authentication error. Please call (513) 998-5440.'),

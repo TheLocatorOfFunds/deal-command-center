@@ -19550,7 +19550,15 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
 
       {/* RVM compose panel — Fish Audio TTS + Nathan's voice clone, Slybroadcast delivery */}
       {rvmMode && (
-        <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+        // maxHeight + overflowY so the panel itself scrolls when its content
+        // grows past the viewport (after Generate, the result banner adds
+        // rendered script + audio player + drop button + feedback UI; with
+        // feedback open the Save button was getting cut off below the fold
+        // and the parent flex container's overflow:hidden swallowed the
+        // scrollbar). Matches the email-compose panel's `maxHeight: 60%`
+        // convention so the visible thread is never fully eclipsed by the
+        // compose panel. Per Justin 2026-05-07 — caught in QA.
+        <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, maxHeight: '60%', overflowY: 'auto' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
             📣 Drop Ringless Voicemail
             <span style={{ fontWeight: 400, color: '#78716c', textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}>
