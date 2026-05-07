@@ -221,6 +221,22 @@ to work on. Per-user sections (Justin / Nathan / Erik) — edit only your own.
 4. Apply via Supabase SQL editor (not `supabase db push` — no local DB)
 5. Commit the `.sql` file in the same commit as the feature that needs it
 
+**Step 4 is the trap.** Skipping it ships UI that depends on schema that
+doesn't exist in prod yet — every fetch errors out and the app silently
+falls back to defaults. This is exactly how 2026-05-07 took the entire
+DCC down for ~30 minutes (soft-delete PR shipped `WHERE deleted_at IS NULL`
+without applying the column-add migration).
+
+**Guardrail:** the `.github/workflows/migrations-applied.yml` workflow runs
+on every PR + every push to main. It compares files in
+`supabase/migrations/` against migrations actually applied to prod (via
+the Supabase Management API) and fails the build with the list of missing
+files. Requires repo secret `SUPABASE_PAT` — Personal Access Token from
+https://supabase.com/dashboard/account/tokens. If the check fails:
+1. Open the SQL Editor link the workflow logs print
+2. Paste each missing file's contents and click Run
+3. Push a new commit (or re-trigger the workflow) to confirm green
+
 ### Live state — update WORKING_ON.md as you work
 Don't wait for session end. As you make decisions or shift focus,
 update YOUR section of `WORKING_ON.md` and push (small commits are

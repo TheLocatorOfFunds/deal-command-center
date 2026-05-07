@@ -1,0 +1,50 @@
+# Migrations drift check.
+#
+# Runs `node .github/scripts/check-migrations-applied.mjs` to verify every
+# .sql file in supabase/migrations/ has been applied to the prod project.
+# Fails the build if anything is committed but not applied — see
+# CLAUDE.md → Migration protocol for why.
+#
+# Triggers:
+#   - on pull_request: catch the problem BEFORE merge
+#   - on push to main: catch any drift introduced by direct pushes / merged PRs
+#
+# Required secret: SUPABASE_PAT
+#   - Personal Access Token from https://supabase.com/dashboard/account/tokens
+#   - Set in: Settings → Secrets and variables → Actions → SUPABASE_PAT
+
+name: Migrations applied
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - '.github/scripts/check-migrations-applied.mjs'
+      - '.github/workflows/migrations-applied.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/migrations/**'
+      - '.github/scripts/check-migrations-applied.mjs'
+      - '.github/workflows/migrations-applied.yml'
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: Verify committed migrations are applied to prod
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run drift check
+        env:
+          SUPABASE_PAT: ${{ secrets.SUPABASE_PAT }}
+          SUPABASE_PROJECT_REF: rcfaashkfpurkvtmsmeb
+        run: node .github/scripts/check-migrations-applied.mjs
