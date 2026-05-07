@@ -1289,7 +1289,13 @@ function DealCommandCenter({ session, profile }) {
   }, []);
 
   const loadDeals = async () => {
-    const { data } = await sb.from('deals').select('*').order('created_at', { ascending: false });
+    // Excludes soft-deleted deals — those are loaded separately by the
+    // admin "Deleted Leads" modal. Per Nathan 2026-05-07: deleted deals
+    // must vanish from kanban / funnel / auto-queue / dashboards but
+    // stay in DB (sent SMS history, court PDFs, AI summaries,
+    // personalized URLs, activity log). See migration
+    // 20260507180000_deals_soft_delete.sql.
+    const { data } = await sb.from('deals').select('*').is('deleted_at', null).order('created_at', { ascending: false });
     setDeals(data || []);
     setLoaded(true);
   };
@@ -2486,6 +2492,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // deals with no lead_tier set yet (the long tail of older imports).
   const [tierFilter, setTierFilter] = useState("all");
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
+  // Soft-delete admin recovery modal (added 2026-05-07).
+  const [showDeletedLeads, setShowDeletedLeads] = useState(false);
 
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
   // "Active" excludes both archived (closed/recovered/dead) AND lead-phase
@@ -2598,12 +2606,28 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      {/* Action bar — Export CSV + New Deal. Only shown on deal-list views. */}
+      {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads.
+          Only shown on deal-list views. */}
       {["active","flagged","hygiene","archive","pipeline","leads-phase"].includes(view) && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
+          {isAdmin && (
+            <button
+              onClick={() => setShowDeletedLeads(true)}
+              style={{ ...btnGhost, color: '#a8a29e' }}
+              title="View soft-deleted deals (admin only). Restore from here."
+            >
+              🗑 Deleted leads
+            </button>
+          )}
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
           <button className="desktop-new-deal" onClick={onNew} style={btnPrimary}>+ New Deal</button>
         </div>
+      )}
+      {showDeletedLeads && (
+        <DeletedLeadsModal
+          onClose={() => setShowDeletedLeads(false)}
+          onRestored={() => { /* realtime sub on `deals` will refresh the list */ }}
+        />
       )}
 
       {/* Hub sub-chips — second-level nav inside sidebar sections.
@@ -10500,6 +10524,224 @@ function Modal({ onClose, title, children, wide }) {
   );
 }
 
+// ─── Soft-delete: DeleteDealModal + DeletedLeadsModal ───────────────
+// Per Nathan 2026-05-07: deals that turn out not-real (sale unwound,
+// data error, judgment paid pre-sale, etc.) need to disappear from
+// kanban / funnel / dashboards without losing the artifacts attached
+// (sent SMS, court PDFs, AI summaries, personalized URLs, activity).
+//
+// Mechanism:
+//   - DeleteDealModal soft-deletes via deals.deleted_at + reason +
+//     deleted_by, cancels any pending outreach_queue rows for that
+//     deal so we don't text the homeowner after delete, logs activity.
+//   - DeletedLeadsModal (admin-only) lists soft-deleted deals, lets
+//     admin restore (UPDATE deals SET deleted_at=NULL, etc.).
+//
+// Status `dead` stays distinct: that's "we worked it, didn't pan out."
+// Soft-delete is "this lead shouldn't have entered the system at all."
+
+const DELETE_REASONS = [
+  { code: 'sale_unwound',           label: 'Sale unwound / set aside' },
+  { code: 'judgment_paid_pre_sale', label: 'Judgment paid before sale' },
+  { code: 'owner_reinstated',       label: 'Owner reinstated / cured' },
+  { code: 'duplicate',              label: 'Duplicate of another deal' },
+  { code: 'data_error',             label: 'Data error (not a foreclosure / bad import)' },
+  { code: 'bankruptcy_filed',       label: 'Bankruptcy filed by owner' },
+  { code: 'no_surplus',             label: 'No surplus after deeper review' },
+  { code: 'other',                  label: 'Other (specify)' },
+];
+
+function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
+  const [reason, setReason] = useState('sale_unwound');
+  const [detail, setDetail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const otherRequired = reason === 'other' && !detail.trim();
+
+  const submit = async () => {
+    if (busy || otherRequired) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      // 1. Mark the deal soft-deleted. Done first so anything that races
+      //    on the realtime update sees the tombstone.
+      const { error: dErr } = await sb.from('deals').update({
+        deleted_at: new Date().toISOString(),
+        deleted_reason: reason,
+        deleted_by: userId,
+      }).eq('id', deal.id);
+      if (dErr) throw dErr;
+
+      // 2. Cancel any pending outreach_queue rows. We must NOT text the
+      //    homeowner on a deal we just removed from active work. Leaves
+      //    already-sent rows alone — those are history.
+      await sb.from('outreach_queue')
+        .update({ status: 'cancelled' })
+        .eq('deal_id', deal.id)
+        .in('status', ['queued', 'pending', 'generating']);
+
+      // 3. Log to the deal's activity feed. Even though the deal is
+      //    deleted, the audit trail is still readable from the
+      //    Deleted Leads view if anyone restores it.
+      const reasonLabel = DELETE_REASONS.find(r => r.code === reason)?.label || reason;
+      const detailSuffix = detail.trim() ? ` — ${detail.trim()}` : '';
+      await sb.from('activity').insert({
+        deal_id: deal.id,
+        user_id: userId,
+        action: `Deal soft-deleted · reason: ${reasonLabel}${detailSuffix}`,
+        visibility: ['team'],
+      });
+
+      onDeleted?.();
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={busy ? () => {} : onClose} title="Delete this deal">
+      <div style={{ fontSize: 13, color: '#d6d3d1', lineHeight: 1.55, marginBottom: 16 }}>
+        <strong style={{ color: '#fafaf9' }}>{deal.name || deal.id}</strong>
+        <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+          {deal.address || '—'}
+          {deal.meta?.courtCase ? ` · ${deal.meta.courtCase}` : ''}
+        </div>
+      </div>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: 12, marginBottom: 16, fontSize: 12, color: '#a8a29e', lineHeight: 1.55 }}>
+        This <strong style={{ color: '#fafaf9' }}>does not destroy</strong> sent SMS history,
+        uploaded court PDFs, AI case summaries, personalized URLs, or the activity log.
+        The deal disappears from kanban / funnel / dashboards and any pending outreach
+        is cancelled. Admin can restore from the Deleted Leads view.
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Reason</label>
+        <select value={reason} onChange={e => setReason(e.target.value)} disabled={busy} style={{ ...inputStyle, padding: '8px 10px' }}>
+          {DELETE_REASONS.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+        </select>
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Detail {reason === 'other' ? <span style={{ color: '#fca5a5' }}>(required)</span> : <span style={{ color: '#57534e' }}>(optional)</span>}
+        </label>
+        <textarea
+          value={detail}
+          onChange={e => setDetail(e.target.value)}
+          disabled={busy}
+          placeholder={reason === 'other' ? 'Why is this deal being deleted?' : 'Anything else worth knowing for the audit log…'}
+          rows={3}
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </div>
+      {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
+        <button
+          onClick={submit}
+          disabled={busy || otherRequired}
+          style={{ ...btnPrimary, background: busy || otherRequired ? '#44403c' : '#dc2626', color: '#fafaf9', cursor: busy || otherRequired ? 'not-allowed' : 'pointer' }}
+        >
+          {busy ? 'Deleting…' : '🗑 Delete deal'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeletedLeadsModal({ onClose, onRestored }) {
+  const [rows, setRows] = useState(null);  // null = loading, [] = empty, [...] = data
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    const { data, error } = await sb.from('deals')
+      .select('id, name, address, type, status, lead_tier, deleted_at, deleted_reason, deleted_by, meta')
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false });
+    if (error) { setErr(error.message); setRows([]); return; }
+    setRows(data || []);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const restore = async (row) => {
+    if (busyId) return;
+    if (!confirm(`Restore "${row.name}"?\n\nIt will reappear in the active list at status: ${row.status}.`)) return;
+    setBusyId(row.id);
+    const { error } = await sb.from('deals').update({
+      deleted_at: null,
+      deleted_reason: null,
+      deleted_by: null,
+    }).eq('id', row.id);
+    setBusyId(null);
+    if (error) { alert('Restore failed: ' + error.message); return; }
+    // Log restore on the deal's activity feed for audit.
+    const { data: { user } } = await sb.auth.getUser();
+    if (user) {
+      await sb.from('activity').insert({
+        deal_id: row.id,
+        user_id: user.id,
+        action: `Deal restored from soft-delete (was: ${row.deleted_reason || 'unknown reason'})`,
+        visibility: ['team'],
+      });
+    }
+    await load();
+    onRestored?.();
+  };
+
+  const reasonLabel = (code) => DELETE_REASONS.find(r => r.code === code)?.label || code || '—';
+  const fmtDate = (ts) => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+  return (
+    <Modal onClose={onClose} title="🗑 Deleted Leads" wide>
+      {rows === null && <div style={{ color: '#78716c', fontSize: 13, padding: 20, textAlign: 'center' }}>Loading…</div>}
+      {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
+      {rows && rows.length === 0 && (
+        <div style={{ color: '#78716c', fontSize: 13, padding: 30, textAlign: 'center', fontStyle: 'italic' }}>
+          No deleted leads. Nothing to restore.
+        </div>
+      )}
+      {rows && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 11, color: '#78716c', marginBottom: 4 }}>
+            {rows.length} deleted {rows.length === 1 ? 'lead' : 'leads'}. Children (contacts, documents, activity, sent SMS) are preserved.
+          </div>
+          {rows.map(r => (
+            <div key={r.id} style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.name || r.id}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a8a29e', marginBottom: 6 }}>
+                    {r.address || '—'}
+                    {r.meta?.courtCase ? ` · ${r.meta.courtCase}` : ''}
+                    {r.meta?.county ? ` · ${r.meta.county}` : ''}
+                    {r.lead_tier ? ` · Tier ${r.lead_tier}` : ''}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#fbbf24' }}>
+                    {reasonLabel(r.deleted_reason)} · {fmtDate(r.deleted_at)}
+                  </div>
+                </div>
+                <button
+                  onClick={() => restore(r)}
+                  disabled={busyId === r.id}
+                  style={{ ...btnPrimary, background: busyId === r.id ? '#44403c' : '#10b981', color: '#0c0a09', cursor: busyId === r.id ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  {busyId === r.id ? 'Restoring…' : '↩ Restore'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // ─── Personalized URL control (deal detail header) ─────────────────
 // Renders next to the status select. For lead-phase deals without a
 // refundlocators_token: shows a "🔗 Generate personalized URL" button.
@@ -11127,6 +11369,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   const [showPostUpdate, setShowPostUpdate] = useState(false);
   const [showSendIntro, setShowSendIntro] = useState(false);
   const [showOverflow, setShowOverflow] = useState(false);
+  const [showDeleteDeal, setShowDeleteDeal] = useState(false);
 
   const loadAll = async () => {
     setLoaded(false);
@@ -11344,6 +11587,18 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
                     >
                       $ {deal.meta?.bonus_due ? "Clear bonus due" : "Mark bonus due"}
                     </button>
+                    {/* Soft-delete — separated visually so it's harder to mis-click. */}
+                    <div style={{ borderTop: "1px solid #292524", marginTop: 4, paddingTop: 4 }}>
+                      <button
+                        onClick={() => { setShowOverflow(false); setShowDeleteDeal(true); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: "#fca5a5", padding: "8px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", borderRadius: 4, fontFamily: "inherit" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#7f1d1d"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                        title="Soft-delete this deal — keeps everything in DB so it can be restored from Deleted Leads"
+                      >
+                        🗑 Delete deal…
+                      </button>
+                    </div>
                   </div>
                 </>
               )}
@@ -11351,6 +11606,14 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           </>
         )}
       </div>
+      {showDeleteDeal && (
+        <DeleteDealModal
+          deal={deal}
+          userId={userId}
+          onClose={() => setShowDeleteDeal(false)}
+          onDeleted={() => setShowDeleteDeal(false)}
+        />
+      )}
 
       {isAdmin ? (
         <div className={isFlip ? "metric-grid-4" : "metric-grid-3"} style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
