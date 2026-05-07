@@ -18366,14 +18366,31 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
     if (error) alert('Could not delete: ' + error.message);
   };
 
-  // Drop a personalized RVM. New flow (2026-05-05): drop-rvm renders a
-  // template's script with merge fields, generates audio via Fish Audio
-  // using Nathan's voice clone, uploads to Supabase Storage, returns the
-  // public mp3 URL. Slybroadcast delivery is wired separately once their
-  // API approval lands. Until then, dry_run=true is the default and the
-  // user listens to the generated audio in the embedded player.
+  // Drop a personalized RVM. drop-rvm renders the template's script with
+  // merge fields (or asks Claude for an AI-personalized script), generates
+  // audio via Fish Audio using Nathan's voice clone, uploads the mp3 to
+  // Supabase Storage, and — when dry_run=false and Slybroadcast secrets
+  // are configured — POSTs the audio URL to Slybroadcast for delivery.
+  //
+  // The response carries `delivery_status`:
+  //   dry_run         — preview only, no drop attempted
+  //   no_phone        — couldn't resolve a recipient phone number
+  //   audio_generated — Slybroadcast secrets not configured (audio is in storage but not delivered)
+  //   rvm_sent        — Slybroadcast accepted the drop, will deliver shortly
+  //   rvm_failed      — Slybroadcast rejected the drop (see delivery_error)
   const dropRvm = async () => {
     if (!rvmTemplateId || rvmSending) return;
+    // Hard confirmation before sending a real RVM — voicemails are irreversible
+    // and cost money. Keep this even when the user knows what they're doing.
+    if (!rvmDryRun) {
+      const phone = rvmPhone.trim() || activeContact?.phone || '(deal/contact phone on file)';
+      const tplName = rvmTemplates.find(t => t.id === rvmTemplateId)?.name || 'this template';
+      if (!window.confirm(
+        `Drop a real ringless voicemail using "${tplName}"?\n\n` +
+        `Recipient: ${phone}\n\n` +
+        `This will generate audio with Nathan's cloned voice and POST it to Slybroadcast for delivery. Cannot be undone.`
+      )) return;
+    }
     setRvmSending(true); setRvmResult(null);
     setRvmFeedbackSaved(null); setRvmFeedbackNoteOpen(false); setRvmFeedbackNote('');
     try {
@@ -18390,11 +18407,32 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.details || data.error);
+      // Map server-side delivery_status → UI banner type + text. Errors from
+      // Slybroadcast surface as "warning" (yellow) so the user sees the audio
+      // was generated but delivery failed — they can retry without regenerating.
+      const status = data?.delivery_status;
+      let bannerType = 'success';
+      let bannerText;
+      if (status === 'dry_run') {
+        bannerText = '🎧 Audio generated (dry-run, no drop sent). Preview below.';
+      } else if (status === 'rvm_sent') {
+        bannerType = 'success';
+        bannerText = `✅ Voicemail dropped to ${data.to_number}. Slybroadcast accepted — typical delivery in 60-120s.${data.delivery_session_id ? ` Session: ${data.delivery_session_id}` : ''}`;
+      } else if (status === 'rvm_failed') {
+        bannerType = 'warning';
+        bannerText = `⚠ Audio generated but Slybroadcast rejected the drop: ${data.delivery_error || 'unknown error'}`;
+      } else if (status === 'no_phone') {
+        bannerType = 'warning';
+        bannerText = '⚠ Audio generated but no recipient phone was resolved. Set the contact phone or use the "To" override.';
+      } else if (status === 'audio_generated') {
+        bannerType = 'warning';
+        bannerText = '⚠ Audio generated but Slybroadcast secrets are not configured on the server. Set SLYBROADCAST_USER + SLYBROADCAST_API_PASSWORD secrets on the drop-rvm Edge Function.';
+      } else {
+        bannerText = 'Done — preview below.';
+      }
       setRvmResult({
-        type: 'success',
-        text: rvmDryRun
-          ? 'Audio generated (dry-run, no drop sent). Preview below.'
-          : 'Audio generated. Slybroadcast delivery still pending API approval — preview below.',
+        type: bannerType,
+        text: bannerText,
         mp3_url: data?.mp3_url,
         rendered_script: data?.rendered_script,
         generation_mode: data?.generation_mode,
@@ -18402,6 +18440,10 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
         message_id: data?.message_id,
         template_id: rvmTemplateId,
         custom_note_used: data?.custom_note_used,
+        delivery_status: status,
+        delivery_session_id: data?.delivery_session_id,
+        delivery_error: data?.delivery_error,
+        to_number: data?.to_number,
       });
     } catch (e) {
       setRvmResult({ type: 'error', text: 'Failed: ' + (e.message || 'unknown') });
@@ -19219,7 +19261,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
           <div style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
             📣 Drop Ringless Voicemail
             <span style={{ fontWeight: 400, color: '#78716c', textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}>
-              · Nathan's voice (Fish Audio) · Slybroadcast delivery pending API approval
+              · Nathan's voice (Fish Audio) · Slybroadcast delivery
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 10px', alignItems: 'center', marginBottom: 10 }}>
@@ -19253,9 +19295,11 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               placeholder="Leave blank to use contact/deal name"
               style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
             <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Mode:</label>
-            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#a8a29e', cursor: 'pointer' }}>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: rvmDryRun ? '#a8a29e' : '#fb923c', cursor: 'pointer', fontWeight: rvmDryRun ? 400 : 600 }}>
               <input type="checkbox" checked={rvmDryRun} onChange={e => setRvmDryRun(e.target.checked)} />
-              Dry run (generate audio + listen, no actual drop)
+              {rvmDryRun
+                ? 'Dry run — generate + preview only, no drop sent'
+                : '🚨 LIVE — will actually drop the voicemail to the recipient'}
             </label>
             {(() => {
               const sel = rvmTemplates.find(t => t.id === rvmTemplateId);
@@ -19278,7 +19322,17 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
             </button>
           </div>
           {rvmResult && (
-            <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 6, fontSize: 12, background: rvmResult.type === 'success' ? '#064e3b' : '#7f1d1d', color: rvmResult.type === 'success' ? '#6ee7b7' : '#fca5a5' }}>
+            <div style={{
+              marginTop: 10, padding: '10px 12px', borderRadius: 6, fontSize: 12,
+              background:
+                rvmResult.type === 'success' ? '#064e3b' :
+                rvmResult.type === 'warning' ? '#78350f' :
+                '#7f1d1d',
+              color:
+                rvmResult.type === 'success' ? '#6ee7b7' :
+                rvmResult.type === 'warning' ? '#fcd34d' :
+                '#fca5a5',
+            }}>
               <div>{rvmResult.text}</div>
               {rvmResult.rendered_script && (
                 <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: '#a8a29e', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 6 }}>
