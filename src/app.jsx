@@ -16298,6 +16298,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [pins, setPins] = useState([]);
   const [envelopes, setEnvelopes] = useState([]);
   const [showDocuSign, setShowDocuSign] = useState(false);
+  const [resendEnv, setResendEnv] = useState(null); // envelope to pre-populate on resend
   const fileRef = useRef(null);
 
   // Drag-drop upload state. dragDepth tracks nested dragenter/dragleave so
@@ -16383,7 +16384,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
 
   const loadEnvelopes = async () => {
     const { data } = await sb.from('docusign_envelopes')
-      .select('*, library_documents(title)')
+      .select('*, library_documents(title), signing_tokens(signer_phone)')
       .eq('deal_id', dealId)
       .order('created_at', { ascending: false });
     setEnvelopes(data || []);
@@ -16863,8 +16864,9 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         <DocuSignSendModal
           deal={deal}
           dealId={dealId}
-          onClose={() => setShowDocuSign(false)}
-          onSent={async () => { await loadEnvelopes(); setShowDocuSign(false); }}
+          resendFrom={resendEnv}
+          onClose={() => { setShowDocuSign(false); setResendEnv(null); }}
+          onSent={async () => { await loadEnvelopes(); setShowDocuSign(false); setResendEnv(null); }}
         />
       )}
 
@@ -16906,6 +16908,15 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 3, background: statusColor + '22', color: statusColor, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                     {statusLabel}
                   </span>
+                  <button
+                    onClick={() => {
+                      const phone = env.signing_tokens?.[0]?.signer_phone || env.signing_tokens?.signer_phone || null;
+                      setResendEnv({ library_document_id: env.library_document_id, recipient_name: env.recipient_name, recipient_email: env.recipient_email, recipient_phone: phone });
+                      setShowDocuSign(true);
+                    }}
+                    title="Send this document again to the same or a different recipient"
+                    style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#a8a29e", flexShrink: 0 }}
+                  >↩ Resend</button>
                 </div>
                 {env.ds_error && (
                   <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{env.ds_error}</div>
@@ -23985,7 +23996,7 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, mode = 'attach', o
 // to deal.meta. Edge Function `docusign-send-envelope` handles the JWT Grant
 // + API call. Status card back on the deal auto-updates via realtime when
 // the webhook receives DocuSign Connect events.
-function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
+function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedDoc, setSelectedDoc] = useState(null);
@@ -23999,23 +24010,35 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
   const [msg, setMsg] = useState(null);
   const [dealContacts, setDealContacts] = useState([]); // [{name, email, phone}]
 
-  // Load ONLY library docs that have a DocuSign template_id wired up
+  // Load ONLY library docs that have a DocuSign template_id wired up.
+  // If resendFrom is provided, auto-select the matching template.
   useEffect(() => {
     (async () => {
       const { data } = await sb.from('library_documents')
         .select('id, title, kind, template_fields, docusign_template_id, description')
         .not('docusign_template_id', 'is', null)
         .order('created_at', { ascending: false });
-      setTemplates(data || []);
+      const list = data || [];
+      setTemplates(list);
       setLoading(false);
+      if (resendFrom?.library_document_id) {
+        const match = list.find(t => t.id === resendFrom.library_document_id);
+        if (match) setSelectedDoc(match);
+      }
     })();
   }, []);
 
-  // Load deal contacts for email/phone dropdowns + pre-fill recipient
+  // Load deal contacts for email/phone dropdowns + pre-fill recipient.
+  // If resendFrom is set, use its values as the starting point.
   useEffect(() => {
+    if (resendFrom) {
+      if (resendFrom.recipient_name)  setRecipientName(resendFrom.recipient_name);
+      if (resendFrom.recipient_email) setRecipientEmail(resendFrom.recipient_email);
+      if (resendFrom.recipient_phone) setRecipientPhone(resendFrom.recipient_phone);
+    }
     (async () => {
       const clientName = (deal.name || '').split(' - ')[0];
-      setRecipientName(clientName);
+      if (!resendFrom) setRecipientName(clientName);
 
       // Contacts linked to this deal via contact_deals
       const { data: cdRows } = await sb
@@ -24028,24 +24051,26 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
         .filter(c => c.email || c.phone);
       setDealContacts(linked);
 
-      // Pre-fill: first contact with email, or fall back to client_access / deal.meta
-      const firstWithEmail = linked.find(c => c.email);
-      const firstWithPhone = linked.find(c => c.phone);
-      if (firstWithEmail) {
-        setRecipientName(firstWithEmail.name || clientName);
-        setRecipientEmail(firstWithEmail.email);
-      } else {
-        const { data: ca } = await sb.from('client_access')
-          .select('email, prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
-        if (ca?.email) setRecipientEmail(ca.email);
-        else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
-      }
-      if (firstWithPhone) setRecipientPhone(firstWithPhone.phone);
-      else {
-        const { data: ca } = await sb.from('client_access')
-          .select('prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
-        if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
-        else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+      // Pre-fill recipient only if not already populated by resendFrom
+      if (!resendFrom) {
+        const firstWithEmail = linked.find(c => c.email);
+        const firstWithPhone = linked.find(c => c.phone);
+        if (firstWithEmail) {
+          setRecipientName(firstWithEmail.name || clientName);
+          setRecipientEmail(firstWithEmail.email);
+        } else {
+          const { data: ca } = await sb.from('client_access')
+            .select('email, prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.email) setRecipientEmail(ca.email);
+          else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
+        }
+        if (firstWithPhone) setRecipientPhone(firstWithPhone.phone);
+        else {
+          const { data: ca } = await sb.from('client_access')
+            .select('prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
+          else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+        }
       }
     })();
   }, [dealId]);
@@ -24112,6 +24137,11 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
 
   return (
     <Modal onClose={onClose} title={`📝 Send for signature → ${clientName}`} wide>
+      {resendFrom && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "#1c0a00", border: "1px solid #92400e", borderRadius: 6, fontSize: 12, color: "#fbbf24", display: "flex", alignItems: "center", gap: 6 }}>
+          ↩ <strong>Resending</strong> — template and recipient pre-filled from the previous send. Adjust anything before hitting Send.
+        </div>
+      )}
       {loading ? (
         <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading templates…</div>
       ) : templates.length === 0 ? (
