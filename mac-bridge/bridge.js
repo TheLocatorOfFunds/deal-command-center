@@ -731,11 +731,99 @@ async function syncFromChatDb() {
   saveWatermark(maxRowid);
 }
 
+// ─── Delivery receipt polling ───────────────────────────────────────────────
+//
+// Once we mark a message 'sent' (= Apple servers accepted), iMessage delivers
+// asynchronously and updates the SAME chat.db row in place — `is_delivered`
+// flips from 0→1 when the recipient's device confirms receipt, and `is_read`
+// flips when they open it. We never re-read those flags, so the row stayed
+// at 'sent' forever even after real delivery.
+//
+// Per CLAUDE.md → "Action confirmation — close the loop on every external
+// side effect." Mirror of the Twilio StatusCallback wiring (PR #126) and
+// the Slybroadcast callback (PR #124) — same status semantics:
+//   sent       = handed off, awaiting confirmation
+//   delivered  = recipient's device confirmed receipt
+//   failed     = Apple rejected (sometimes flips after initial accept)
+//
+// Strategy: each tick, look at recent `messages_outbound` rows in 'sent'
+// state via this bridge (channel='imessage', from_number=NATHAN_NUMBER), and
+// re-query chat.db by guid (stored in twilio_sid as 'imsg_<guid>') for
+// fresh is_delivered / error state. Cap to last 24h to keep the workload
+// bounded — older sends that never reported delivery aren't going to.
+async function pollDeliveryReceiptsFromChatDb() {
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: recent, error } = await sb
+    .from('messages_outbound')
+    .select('id, to_number, twilio_sid, created_at, status')
+    .eq('status', 'sent')
+    .eq('channel', 'imessage')
+    .eq('from_number', NATHAN_NUMBER)
+    .gte('created_at', sinceIso)
+    .limit(100);
+
+  if (error) {
+    console.error('⚠️  delivery-receipt sweep query error:', error.message);
+    return;
+  }
+  if (!recent || recent.length === 0) return;
+
+  let db;
+  try {
+    db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
+  } catch (err) {
+    console.error('⚠️  delivery sweep cannot open chat.db:', err.message);
+    return;
+  }
+
+  try {
+    const stmt = db.prepare(`
+      SELECT m.is_delivered, m.is_read, m.error, m.date_delivered, m.date_read
+      FROM message m
+      WHERE m.guid = ?
+      LIMIT 1
+    `);
+
+    for (const row of recent) {
+      const sid = row.twilio_sid || '';
+      if (!sid.startsWith('imsg_')) continue;
+      const guid = sid.slice(5);
+
+      const dbRow = stmt.get(guid);
+      if (!dbRow) continue; // chat.db hasn't seen the row yet (shouldn't happen post-sent)
+
+      // Apple sometimes flips error from 0 to non-zero AFTER initial accept
+      // (e.g. recipient blocked us, network failure mid-flight). Catch that.
+      if (dbRow.error && dbRow.error !== 0) {
+        const errMsg = `iMessage delivery error ${dbRow.error} (post-send)`;
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: errMsg })
+          .eq('id', row.id);
+        console.error(`❌ POST-SEND FAIL  ${row.to_number}  apple_error=${dbRow.error}`);
+        continue;
+      }
+
+      if (dbRow.is_delivered === 1) {
+        await sb.from('messages_outbound')
+          .update({ status: 'delivered', error_message: null })
+          .eq('id', row.id);
+        console.log(`✓✓ DELIVERED  ${row.to_number}`);
+        // (We don't currently surface 'read' as a separate status — that's
+        // an engagement signal, not delivery. delivered is the canonical
+        // success state for now.)
+      }
+    }
+  } finally {
+    db.close();
+  }
+}
+
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
 async function tick() {
-  await processPendingOutbound(); // send any queued DCC → Messages.app
-  await syncFromChatDb();         // pull new messages from Messages.app → DCC
+  await processPendingOutbound();           // send any queued DCC → Messages.app
+  await syncFromChatDb();                    // pull new messages from Messages.app → DCC
+  await pollDeliveryReceiptsFromChatDb();   // flip 'sent' → 'delivered' / 'failed' as iMessage confirms
 }
 
 (async () => {
