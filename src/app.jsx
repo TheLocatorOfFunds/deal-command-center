@@ -16384,7 +16384,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
 
   const loadEnvelopes = async () => {
     const { data } = await sb.from('docusign_envelopes')
-      .select('*, library_documents(title), signing_tokens(signer_phone)')
+      .select('*, library_documents(title)')
       .eq('deal_id', dealId)
       .order('created_at', { ascending: false });
     setEnvelopes(data || []);
@@ -16910,8 +16910,7 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                   </span>
                   <button
                     onClick={() => {
-                      const phone = env.signing_tokens?.[0]?.signer_phone || env.signing_tokens?.signer_phone || null;
-                      setResendEnv({ library_document_id: env.library_document_id, recipient_name: env.recipient_name, recipient_email: env.recipient_email, recipient_phone: phone });
+                      setResendEnv({ library_document_id: env.library_document_id, recipient_name: env.recipient_name, recipient_email: env.recipient_email, recipient_phone: env.recipient_phone || null });
                       setShowDocuSign(true);
                     }}
                     title="Send this document again to the same or a different recipient"

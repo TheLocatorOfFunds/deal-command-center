@@ -150,6 +150,7 @@ Deno.serve(async (req: Request) => {
     deal_id, envelope_id: envelopeId,
     library_document_id,
     recipient_name, recipient_email,
+    recipient_phone: recipient_phone || null,
     status, sent_at: now, updated_at: now,
   }, { onConflict: 'envelope_id' });
 
