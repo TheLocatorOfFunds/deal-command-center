@@ -148,10 +148,10 @@ Deno.serve(async (req: Request) => {
   // Persist envelope
   await db.from('docusign_envelopes').upsert({
     deal_id, envelope_id: envelopeId,
-    template_id: libDoc.docusign_template_id,
-    signer_name: recipient_name, signer_email: recipient_email,
+    library_document_id,
+    recipient_name, recipient_email,
     status, sent_at: now, updated_at: now,
-  });
+  }, { onConflict: 'envelope_id' });
 
   // Create persistent signing token for SMS link
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -180,6 +180,11 @@ Deno.serve(async (req: Request) => {
     if (twilioSid && twilioToken) {
       const firstName = recipient_name.split(' ')[0];
       const smsBody   = `Hi ${firstName}, this is Nathan with RefundLocators. Your authorization letter is ready to sign — tap the link and sign right from your phone (takes 60 seconds):\n\n${signingLink}\n\nQuestions? Call/text (513) 998-5440.`;
+      // Normalize to E.164 — strip non-digits, prepend +1 if no country code
+      const digitsOnly = recipient_phone.replace(/\D/g, '');
+      const toPhone = recipient_phone.startsWith('+') ? recipient_phone
+                    : digitsOnly.length === 11 ? `+${digitsOnly}`
+                    : `+1${digitsOnly}`;
       try {
         const smsResp = await fetch(
           `https://api.twilio.com/2010-04-01/Accounts/${twilioSid}/Messages.json`,
@@ -189,7 +194,7 @@ Deno.serve(async (req: Request) => {
               'Authorization': 'Basic ' + btoa(`${twilioSid}:${twilioToken}`),
               'Content-Type':  'application/x-www-form-urlencoded',
             },
-            body: new URLSearchParams({ To: recipient_phone, From: fromNumber, Body: smsBody }).toString(),
+            body: new URLSearchParams({ To: toPhone, From: fromNumber, Body: smsBody }).toString(),
           }
         );
         smsSent = smsResp.ok;
