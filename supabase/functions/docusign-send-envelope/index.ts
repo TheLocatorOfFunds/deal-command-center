@@ -9,7 +9,8 @@
 //   DOCUSIGN_INTEGRATION_KEY   — Integration Key UUID from DocuSign Admin
 //   DOCUSIGN_USER_ID           — Nathan's DocuSign user ID UUID
 //   DOCUSIGN_ACCOUNT_ID        — Account ID (001b848d-cd84-4b78-ada2-cff112350a2c)
-//   DOCUSIGN_PRIVATE_KEY       — RSA private key PEM, newlines as \n
+//   DOCUSIGN_PRIVATE_KEY       — PKCS#8 RSA key DER body (base64, no headers/newlines).
+//                                 Generate: openssl pkcs8 -topk8 -nocrypt -in key.pem | grep -v 'PRIVATE KEY' | tr -d '\n'
 //   DOCUSIGN_BASE_URL          — https://na4.docusign.net (default)
 //   TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER (optional for SMS)
 
@@ -22,13 +23,17 @@ const cors = {
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-async function getAccessToken(integrationKey: string, userId: string, privateKeyPem: string): Promise<string> {
-  const pem = privateKeyPem.replace(/\\n/g, '\n');
-  const pemBody = pem
-    .replace(/-----BEGIN RSA PRIVATE KEY-----/, '').replace(/-----END RSA PRIVATE KEY-----/, '')
-    .replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '')
-    .replace(/\s/g, '');
-  const der = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+// authBase: 'https://account-d.docusign.com' for sandbox, 'https://account.docusign.com' for prod.
+// Derived from DOCUSIGN_BASE_URL — if it contains 'demo', we're on sandbox.
+async function getAccessToken(
+  integrationKey: string, userId: string, privateKeyPem: string, authBase: string
+): Promise<string> {
+  // DOCUSIGN_PRIVATE_KEY is stored as base64(PEM) to avoid newline encoding issues.
+  // Decode it to get the actual PEM text, then strip headers and whitespace to get the DER body.
+  // DOCUSIGN_PRIVATE_KEY is stored as the raw base64 DER body of the PKCS#8 key
+  // (no PEM headers, no newlines — just the base64 content between BEGIN/END PRIVATE KEY lines).
+  // This format works reliably with Deno's atob() without any newline/encoding issues.
+  const der = Uint8Array.from(atob(privateKeyPem.trim()), c => c.charCodeAt(0));
   const key = await crypto.subtle.importKey(
     'pkcs8', der.buffer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']
   );
@@ -36,14 +41,15 @@ async function getAccessToken(integrationKey: string, userId: string, privateKey
     const str = typeof s === 'string' ? s : String.fromCharCode(...(s as Uint8Array));
     return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   };
+  const aud = authBase.replace('https://', '');  // e.g. 'account-d.docusign.com'
   const now = Math.floor(Date.now() / 1000);
   const header  = { alg: 'RS256', typ: 'JWT' };
-  const payload = { iss: integrationKey, sub: userId, aud: 'account-d.docusign.com',
+  const payload = { iss: integrationKey, sub: userId, aud,
                     iat: now, exp: now + 3600, scope: 'signature impersonation' };
   const sigInput = `${b64u(JSON.stringify(header))}.${b64u(JSON.stringify(payload))}`;
   const sig = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(sigInput)));
   const jwt = `${sigInput}.${b64u(sig)}`;
-  const resp = await fetch('https://account.docusign.com/oauth/token', {
+  const resp = await fetch(`${authBase}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
@@ -62,6 +68,8 @@ Deno.serve(async (req: Request) => {
   const ACCOUNT_ID      = Deno.env.get('DOCUSIGN_ACCOUNT_ID');
   const PRIVATE_KEY     = Deno.env.get('DOCUSIGN_PRIVATE_KEY');
   const BASE_URL        = Deno.env.get('DOCUSIGN_BASE_URL') || 'https://na4.docusign.net';
+  // Derive auth base from eSign base URL: demo → sandbox OAuth, anything else → production OAuth
+  const AUTH_BASE       = BASE_URL.includes('demo') ? 'https://account-d.docusign.com' : 'https://account.docusign.com';
 
   if (!INTEGRATION_KEY || !USER_ID || !ACCOUNT_ID || !PRIVATE_KEY) {
     return json({ error: 'docusign_not_configured',
@@ -92,7 +100,7 @@ Deno.serve(async (req: Request) => {
 
   let accessToken: string;
   try {
-    accessToken = await getAccessToken(INTEGRATION_KEY, USER_ID, PRIVATE_KEY);
+    accessToken = await getAccessToken(INTEGRATION_KEY, USER_ID, PRIVATE_KEY, AUTH_BASE);
   } catch (e: any) {
     console.error('[docusign-send-envelope] JWT Grant error:', e.message);
     return json({ error: 'auth_failed', message: e.message }, 500);
