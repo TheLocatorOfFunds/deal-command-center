@@ -18728,6 +18728,20 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
         delivery_error: data?.delivery_error,
         stage: status === 'rvm_sent' ? 'sent' : 'drop_failed',
       }));
+      // On success, auto-close the compose panel after a brief moment so the
+      // user can read the success banner — then return them to the thread
+      // (where the dropped voicemail now appears as its own entry). Per
+      // Justin 2026-05-07: a stuck-open compose panel after the drop ate
+      // most of the thread height.
+      if (status === 'rvm_sent') {
+        setTimeout(() => {
+          setRvmMode(false);
+          setRvmResult(null);
+          setRvmCustomNote('');
+          setRvmOverrideFirstName('');
+          setRvmPhone('');
+        }, 2500);
+      }
     } catch (e) {
       setRvmResult(r => ({
         ...r,
@@ -18862,13 +18876,15 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
     // by showing any message whose to_number matched a contact, regardless
     // of which deal it was routed to.
     const [msgsRes, callsRes, emailsRes, notesRes] = await Promise.all([
-      // Exclude RVM rows from the SMS/iMessage thread — RVMs share the
-      // messages_outbound table but their `body` is the spoken script, not
-      // a text the recipient sees, so they shouldn't render as message
-      // bubbles. RVMs surface in the dedicated RVM compose panel + history.
+      // Show successfully-sent RVMs in the comms thread alongside SMS/calls,
+      // but hide preview/dry-run rows — those are intermediate state from the
+      // compose panel, the recipient never received them. The renderer treats
+      // sent RVMs as a distinct entry type (audio player + "voicemail" label),
+      // not a text bubble (the body is the spoken script, not text the
+      // recipient sees).
       sb.from('messages_outbound')
         .select('*').eq('deal_id', dealId)
-        .neq('channel', 'rvm')
+        .or('channel.neq.rvm,and(channel.eq.rvm,status.eq.rvm_sent)')
         .order('created_at', { ascending: true }).limit(200),
       sb.from('call_logs')
         .select('*').eq('deal_id', dealId)
@@ -19093,8 +19109,15 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   // context about the whole case, not one conversation.
   const threadItems = React.useMemo(() => {
     const items = [];
-    // Messages
-    threadMsgs.forEach(m => items.push({ _kind: 'message', _ts: m.created_at, ...m }));
+    // Messages — split by channel: SMS/iMessage become 'message'; RVM rows
+    // (only the successfully-sent ones survive the deal-load filter) become
+    // 'rvm' with their own render path (audio player + voicemail label
+    // instead of a text bubble — the body is the spoken script).
+    threadMsgs.forEach(m => items.push({
+      _kind: m.channel === 'rvm' ? 'rvm' : 'message',
+      _ts: m.created_at,
+      ...m,
+    }));
     // Calls — Everyone view shows all, otherwise just for the active contact
     if (activeContact?._everyone) {
       calls.forEach(c => items.push({ _kind: 'call', _ts: c.started_at || c.created_at, ...c }));
@@ -20005,6 +20028,40 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                       ) : m.body ? (
                         <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
                       ) : null}
+                    </div>
+                  </div>
+                );
+              }
+
+              // ─── Voicemail entry ─────────────────────────────────────
+              // Successfully-dropped RVMs show as a distinct bubble with the
+              // mp3 player + a collapsed transcript (script is the spoken
+              // text — long-form, would be noisy as a default render). The
+              // deal loader filters out preview/dry_run rows, so anything
+              // arriving here was actually delivered to Slybroadcast.
+              if (m._kind === 'rvm') {
+                const sessionLabel = m.provider_sid ? ` · session ${m.provider_sid}` : '';
+                return (
+                  <div key={'v-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ maxWidth: '90%', background: '#1c1917', border: '1px solid #f9731633', borderLeft: '3px solid #f97316', borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.04em' }}>📣 VOICEMAIL DROPPED</span>
+                          <span style={{ fontSize: 10, color: '#78716c', marginLeft: 8, fontFamily: "'DM Mono', monospace" }}>→ {m.to_number}</span>
+                        </div>
+                        <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}{sessionLabel}</span>
+                      </div>
+                      {m.media_url && (
+                        <audio controls src={m.media_url} style={{ width: '100%', height: 36, marginBottom: 6 }}>
+                          Your browser does not support audio playback.
+                        </audio>
+                      )}
+                      {m.body && (
+                        <details style={{ fontSize: 11, color: '#a8a29e' }}>
+                          <summary style={{ cursor: 'pointer', color: '#78716c', fontSize: 10, letterSpacing: '0.05em' }}>SHOW TRANSCRIPT</summary>
+                          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, marginTop: 6, paddingTop: 6, borderTop: '1px solid #292524', fontFamily: "'DM Mono', monospace" }}>{m.body}</div>
+                        </details>
+                      )}
                     </div>
                   </div>
                 );
