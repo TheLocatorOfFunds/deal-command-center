@@ -24828,32 +24828,51 @@ function TeamChatBubble() {
   }, [activeThreadId, me?.id]);
 
   // Auto-scroll to bottom — two distinct intents in one effect:
-  //   1. Switching threads → INSTANT jump to bottom. No animation,
-  //      no "scroll through the whole history" experience. Per Nathan
-  //      2026-05-07: "When I click into a chat, I just want it to start
-  //      at the very bottom for the most recent conversation."
-  //   2. New message arriving in the active thread → smooth slide so
-  //      the user sees it appear (only fires if they were already
-  //      anchored at the bottom; if they're scrolled up reading
-  //      history, we still scroll, matching previous behavior — that
-  //      can be tightened later if it bothers anyone).
+  //   1. First time we land on a thread (or thread changes, or
+  //      messages reload from 0) → INSTANT jump to bottom. No
+  //      animation. Per Nathan 2026-05-07: "When I click into a chat,
+  //      I just want it to start at the very bottom for the most
+  //      recent conversation."
+  //   2. New message arriving in a thread we're already anchored in →
+  //      smooth slide so the user sees it appear.
   //
-  // The "scroll lands short of the real bottom" symptom Nathan also
-  // described comes from measuring scrollHeight before React has
-  // committed the new messages. Double-rAF guarantees layout has
-  // settled before we scroll.
+  // The race v1 of this fix missed: when activeThreadId changes,
+  // `messages` is still the OLD thread's messages until loadMessages
+  // completes. So this effect fires twice — once with threadChanged
+  // (instant) and a second time when messages.length goes 0 → N
+  // (same thread now, would have been smooth → still scrolled). The
+  // `initialScrollDoneRef` flag suppresses the smooth-scroll branch
+  // until we've completed the first scroll for this thread WITH
+  // non-empty messages. Only AFTER that do new arrivals get smooth.
+  //
+  // The "scroll lands short of the real bottom" symptom comes from
+  // measuring scrollHeight before React has committed the new rows.
+  // Double-rAF guarantees layout has settled before we scroll.
   const lastThreadIdRef = useRef(null);
+  const initialScrollDoneRef = useRef(false);
   useEffect(() => {
     if (!msgsEndRef.current) return;
     const threadChanged = lastThreadIdRef.current !== activeThreadId;
-    lastThreadIdRef.current = activeThreadId;
-
     if (threadChanged) {
+      lastThreadIdRef.current = activeThreadId;
+      initialScrollDoneRef.current = false;
+    }
+
+    if (!initialScrollDoneRef.current) {
+      // Instant jump — covers thread switch AND the messages 0→N load
+      // that follows. Repeats are harmless (we just re-snap to bottom).
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           msgsEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
         });
       });
+      // Only flip the "initial scroll done" flag once we've actually
+      // landed at the bottom of a populated thread. Empty thread stays
+      // in instant-mode until the first message arrives (which is fine —
+      // first message in an empty thread snapping into place is correct).
+      if (messages.length > 0) {
+        initialScrollDoneRef.current = true;
+      }
     } else {
       msgsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
