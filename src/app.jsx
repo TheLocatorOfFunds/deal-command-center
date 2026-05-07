@@ -18599,8 +18599,13 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
     // by showing any message whose to_number matched a contact, regardless
     // of which deal it was routed to.
     const [msgsRes, callsRes, emailsRes, notesRes] = await Promise.all([
+      // Exclude RVM rows from the SMS/iMessage thread — RVMs share the
+      // messages_outbound table but their `body` is the spoken script, not
+      // a text the recipient sees, so they shouldn't render as message
+      // bubbles. RVMs surface in the dedicated RVM compose panel + history.
       sb.from('messages_outbound')
         .select('*').eq('deal_id', dealId)
+        .neq('channel', 'rvm')
         .order('created_at', { ascending: true }).limit(200),
       sb.from('call_logs')
         .select('*').eq('deal_id', dealId)
