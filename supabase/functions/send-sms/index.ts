@@ -201,6 +201,13 @@ Deno.serve(async (req) => {
 
     // ── Twilio path: send each segment sequentially ───────────────────────────
     const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${twilioAccountSid}/Messages.json`
+    // StatusCallback URL — Twilio hits this as the message moves through
+    // queued → sent → delivered/undelivered/failed. Without it, our row
+    // stays at 'sent' forever and we can't tell delivery from acceptance.
+    // Per CLAUDE.md → "Action confirmation — close the loop." Wired
+    // 2026-05-07. The handler (`twilio-sms-status` Edge Function) verifies
+    // the X-Twilio-Signature so forged callbacks can't lie about delivery.
+    const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-sms-status`
     let lastStatus = 'sent'
 
     for (let i = 0; i < segments.length; i++) {
@@ -214,6 +221,7 @@ Deno.serve(async (req) => {
             To: to,
             From: resolvedFrom,
             Body: segments[i] || '',
+            StatusCallback: statusCallbackUrl,
             ...(media_url && i === 0 ? { MediaUrl: media_url } : {}),
           }).toString(),
       })

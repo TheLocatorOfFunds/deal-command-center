@@ -19104,10 +19104,17 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
 
   useEffect(() => { loadUnmatched(); }, [contacts.length]);
 
-  // Default to the Everyone view so Nathan sees the merged thread on open.
+  // Restore persisted contact tab, or default to Everyone.
+  // Stored as the contact's phone number (or '_everyone') in localStorage.
   useEffect(() => {
-    if (!activeContact) setActiveContact(EVERYONE_CONTACT);
-  }, []);
+    if (activeContact) return; // already set (e.g. deep-link)
+    const stored = localStorage.getItem(`comms_contact_${dealId}`);
+    if (stored && stored !== '_everyone' && contacts.length > 0) {
+      const match = contacts.find(c => c.phone === stored);
+      if (match) { setActiveContact(match); return; }
+    }
+    setActiveContact(EVERYONE_CONTACT);
+  }, [contacts.length]); // re-run once contacts load so we can match by phone
 
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
@@ -19460,9 +19467,35 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const visibleContacts = contacts.filter(c => !hiddenThreads.has(normalizePhone(c.phone)));
   const msgCount = c => msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(c.phone) || normalizePhone(m.from_number) === normalizePhone(c.phone)).length;
 
-  const bubbleBg = s => s === 'failed' ? '#2d0a0a' : s === 'queued' ? '#292524' : '#92400e';
-  const statusIcon = s => s === 'sent' ? '✓' : s === 'failed' ? '✗' : '···';
-  const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
+  // SMS status visual treatment. Twilio statuses flow:
+  //   queued → sending → sent → delivered (or undelivered/failed)
+  // The twilio-sms-status Edge Function flips us from 'sent' to the real
+  // outcome via Twilio's StatusCallback. Until that callback fires (~10s
+  // typical, up to a few minutes for unreachable carriers), we sit at
+  // 'sent' = "carrier accepted" — which is real but NOT the same as
+  // delivered. UI distinguishes:
+  //   delivered          → brighter orange + ✓✓ green (carrier confirmed)
+  //   sent               → default orange + ✓ grey (acceptance, awaiting)
+  //   undelivered/failed → dark red + ✗ + reason ribbon below
+  //   queued/sending     → grey + ···
+  const bubbleBg = s => {
+    if (s === 'failed' || s === 'undelivered') return '#2d0a0a';
+    if (s === 'queued' || s === 'sending') return '#292524';
+    if (s === 'delivered') return '#b45309';
+    return '#92400e';
+  };
+  const statusIcon = s => {
+    if (s === 'delivered') return '✓✓';
+    if (s === 'sent') return '✓';
+    if (s === 'undelivered' || s === 'failed') return '✗';
+    return '···';
+  };
+  const statusColor = s => {
+    if (s === 'delivered') return '#22c55e';
+    if (s === 'sent') return '#a8a29e';
+    if (s === 'undelivered' || s === 'failed') return '#ef4444';
+    return '#78716c';
+  };
 
   return (
     <>
@@ -19495,7 +19528,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
           const active = activeContact?._everyone;
           const total  = msgs.length + calls.length + dealNotes.length;
           return (
-            <button key="_everyone" onClick={() => { setActiveContact(EVERYONE_CONTACT); setNewMode(false); setGroupMode(false); }}
+            <button key="_everyone" onClick={() => { setActiveContact(EVERYONE_CONTACT); setNewMode(false); setGroupMode(false); localStorage.setItem(`comms_contact_${dealId}`, '_everyone'); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: active ? 'rgba(217, 119, 6, 0.08)' : 'transparent', border: 'none', borderBottom: active ? '2px solid #d97706' : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 110, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 <span style={{ fontSize: 11, marginRight: 1 }}>👨‍👩‍👧</span>
@@ -19523,7 +19556,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
             return { bg: '#44403c', title: 'Probe result unknown' };
           })();
           return (
-            <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); }}
+            <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); localStorage.setItem(`comms_contact_${dealId}`, c.phone || '_everyone'); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? `2px solid ${color}` : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 {c.deceased && <span title="Deceased — outreach disabled" style={{ fontSize: 11, flexShrink: 0 }}>🕊️</span>}
@@ -23960,10 +23993,11 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
   const [recipientEmail, setRecipientEmail] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPhone, setRecipientPhone] = useState('');
-  const [sendSms, setSendSms] = useState(false);
+  const [sendSms, setSendSms] = useState(true);  // default ON — SMS is the primary delivery
   const [emailSubject, setEmailSubject] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [dealContacts, setDealContacts] = useState([]); // [{name, email, phone}]
 
   // Load ONLY library docs that have a DocuSign template_id wired up
   useEffect(() => {
@@ -23977,21 +24011,42 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
     })();
   }, []);
 
-  // Pre-fill recipient defaults once (from client_access or deal.meta)
+  // Load deal contacts for email/phone dropdowns + pre-fill recipient
   useEffect(() => {
     (async () => {
       const clientName = (deal.name || '').split(' - ')[0];
       setRecipientName(clientName);
-      // try client_access for the canonical contact email + notification phone
-      const { data: ca } = await sb.from('client_access')
-        .select('email, prefs')
-        .eq('deal_id', dealId)
-        .eq('enabled', true)
-        .maybeSingle();
-      if (ca?.email) setRecipientEmail(ca.email);
-      else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
-      if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
-      else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+
+      // Contacts linked to this deal via contact_deals
+      const { data: cdRows } = await sb
+        .from('contact_deals')
+        .select('contacts(id, name, email, phone)')
+        .eq('deal_id', dealId);
+      const linked = (cdRows || [])
+        .map(r => r.contacts)
+        .filter(Boolean)
+        .filter(c => c.email || c.phone);
+      setDealContacts(linked);
+
+      // Pre-fill: first contact with email, or fall back to client_access / deal.meta
+      const firstWithEmail = linked.find(c => c.email);
+      const firstWithPhone = linked.find(c => c.phone);
+      if (firstWithEmail) {
+        setRecipientName(firstWithEmail.name || clientName);
+        setRecipientEmail(firstWithEmail.email);
+      } else {
+        const { data: ca } = await sb.from('client_access')
+          .select('email, prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+        if (ca?.email) setRecipientEmail(ca.email);
+        else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
+      }
+      if (firstWithPhone) setRecipientPhone(firstWithPhone.phone);
+      else {
+        const { data: ca } = await sb.from('client_access')
+          .select('prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+        if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
+        else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+      }
     })();
   }, [dealId]);
 
@@ -24118,6 +24173,29 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                   <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
                     Recipient
                   </div>
+                  {/* Contact quick-select — pick from deal contacts to auto-fill all fields */}
+                  {dealContacts.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Quick-select contact</div>
+                      <select
+                        onChange={e => {
+                          const c = dealContacts.find(x => x.id === e.target.value);
+                          if (c) {
+                            if (c.name) setRecipientName(c.name);
+                            if (c.email) setRecipientEmail(c.email);
+                            if (c.phone) setRecipientPhone(c.phone);
+                          }
+                        }}
+                        defaultValue=""
+                        style={{ ...inputStyle, fontSize: 13 }}
+                      >
+                        <option value="" disabled>— pick a contact —</option>
+                        {dealContacts.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}{c.email ? ` · ${c.email}` : ''}{c.phone ? ` · ${c.phone}` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                     <div>
                       <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Name</div>
@@ -24136,9 +24214,20 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                     </div>
                   </label>
                   {sendSms && (
-                    <div>
-                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone (US; +1 assumed)</div>
-                      <input type="tel" value={recipientPhone} onChange={e => setRecipientPhone(e.target.value)} placeholder="(614) 555-1234" style={{ ...inputStyle, fontSize: 13 }} />
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone</div>
+                      {dealContacts.filter(c => c.phone).length > 0 ? (
+                        <select value={recipientPhone} onChange={e => setRecipientPhone(e.target.value)} style={{ ...inputStyle, fontSize: 13, marginBottom: 4 }}>
+                          <option value="">— pick a number —</option>
+                          {dealContacts.filter(c => c.phone).map(c => (
+                            <option key={c.id} value={c.phone}>{c.name ? `${c.name} · ` : ''}{c.phone}</option>
+                          ))}
+                          <option value="__custom__">Enter manually…</option>
+                        </select>
+                      ) : null}
+                      {(recipientPhone === '__custom__' || dealContacts.filter(c => c.phone).length === 0) && (
+                        <input type="tel" value={recipientPhone === '__custom__' ? '' : recipientPhone} onChange={e => setRecipientPhone(e.target.value)} placeholder="(614) 555-1234" style={{ ...inputStyle, fontSize: 13 }} />
+                      )}
                     </div>
                   )}
                 </div>
