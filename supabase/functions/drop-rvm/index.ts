@@ -549,12 +549,22 @@ interface SlybroadcastResult {
   rawResponse: string
 }
 
+/** Build the public callback URL Slybroadcast hits with delivery outcomes.
+ *  Returns undefined when SLYBROADCAST_CALLBACK_SECRET isn't configured —
+ *  in that case we still drop, just without delivery confirmation. */
+function buildDispoUrl(supabaseUrl: string): string | undefined {
+  const secret = Deno.env.get('SLYBROADCAST_CALLBACK_SECRET')
+  if (!secret) return undefined
+  return `${supabaseUrl}/functions/v1/slybroadcast-callback?secret=${encodeURIComponent(secret)}`
+}
+
 async function slybroadcastDrop(args: {
   user: string
   password: string
   phoneE164: string
   audioUrl: string
   callerId: string
+  dispoUrl?: string  // optional Slybroadcast delivery callback URL
 }): Promise<SlybroadcastResult> {
   // Slybroadcast accepts US numbers as 10-digit or with +1 prefix; normalize to
   // 10-digit form to match the format their docs show in examples.
@@ -576,6 +586,14 @@ async function slybroadcastDrop(args: {
   form.set('c_date', 'now')
   form.set('c_audio', 'mp3')
   form.set('mobile_only', '1')
+  // c_dispo_url — Slybroadcast hits this URL with the actual delivery
+  // outcome (delivered / unable_to_detect_voicemail / etc.) once the call
+  // attempt completes. Without this, the 200 response from the initial
+  // POST just means "Slybroadcast accepted the request" — not "voicemail
+  // was actually deposited." Per Justin 2026-05-07 ("we always want
+  // confirmation and feedback on any action"), this is mandatory wiring
+  // for any provider that supports delivery callbacks.
+  if (args.dispoUrl) form.set('c_dispo_url', args.dispoUrl)
 
   const res = await fetch(SLYBROADCAST_URL, {
     method: 'POST',
@@ -713,6 +731,7 @@ Deno.serve(async (req) => {
           phoneE164: existingRow.to_number,
           audioUrl: existingRow.media_url,
           callerId: slyCallerId,
+          dispoUrl: buildDispoUrl(supabaseUrl),
         })
         outboundStatus = dropResult.ok ? 'rvm_sent' : 'rvm_failed'
         if (!dropResult.ok) dropError = dropResult.error ?? 'Slybroadcast rejected the drop'
@@ -905,6 +924,7 @@ Deno.serve(async (req) => {
           phoneE164,
           audioUrl: publicUrl,
           callerId: slyCallerId,
+          dispoUrl: buildDispoUrl(supabaseUrl),
         })
         outboundStatus = dropResult.ok ? 'rvm_sent' : 'rvm_failed'
         if (!dropResult.ok) dropError = dropResult.error ?? 'Slybroadcast rejected the drop'

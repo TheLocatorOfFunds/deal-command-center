@@ -366,6 +366,64 @@ SSH key: `~/.ssh/defender_mini` (ed25519, already authorized on Mac Mini)
 Plist: `com.refundlocators.bridge`
 Bridge repo path: `/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
 
+## Action confirmation — close the loop on every external side effect
+
+Per Justin 2026-05-07: **every user-driven action with an external side
+effect must surface real delivery confirmation, not just "we sent the
+request."** Optimistic-success UI hides real-world failures and erodes
+trust in the system.
+
+The 2026-05-07 RVM testing made this painful: Slybroadcast accepted every
+drop with a 200 OK, our UI claimed "✅ Voicemail dropped" — but the actual
+delivery succeeded only when the recipient's carrier supported direct VM
+deposit. For most major US carriers post-2022 FCC ruling, deposit fails
+and the call falls through as a regular ring. We were lying to the user.
+
+### Required pattern
+
+When building any feature that talks to a provider that supports delivery
+callbacks (Slybroadcast, Twilio, Resend, Stripe, DocuSign, etc.):
+
+1. **Initial action** records optimistic status (e.g. `sms_queued`,
+   `rvm_sent`, `email_queued`). This means "we handed it to the provider"
+   — NOT "the recipient got it."
+2. **Wire the provider's webhook / callback** on the same PR. Don't
+   defer it. If we ship the action without the callback, we ship a lie.
+   - Slybroadcast: `c_dispo_url` parameter → `slybroadcast-callback` EF
+   - Twilio SMS: `StatusCallback` URL → `twilio-status` EF
+   - Twilio Voice: `StatusCallback` URL → `twilio-voice-status` EF
+   - Resend: webhook events (`email.delivered`, `email.bounced`)
+   - DocuSign: Connect / EventNotification → `docusign-status` EF
+3. **Update the row** to a terminal status: `delivered` / `undeliverable`
+   / `bounced` / `failed`. Surface a `error_message` / `status_reason`
+   that explains the outcome in plain English.
+4. **The UI shows the real state** — never just "we tried." Each
+   terminal status gets distinct visual treatment (color, icon, label):
+   - delivered → green, "✓ delivered"
+   - awaiting → orange, "awaiting confirmation"
+   - undeliverable → amber, "undeliverable" + reason
+   - failed → red, "failed" + retry path
+5. **Auth the webhook**. Provider callbacks hit a public URL. Verify a
+   shared secret (query param) or HMAC signature before trusting the
+   payload — otherwise anyone can forge "delivered."
+
+### Existing implementations to copy from
+
+- `supabase/functions/slybroadcast-callback/` — query-param shared-secret
+  auth, GET-or-POST tolerant, classifies provider disposition strings
+  into our canonical status. Updates `messages_outbound` in place.
+- `supabase/functions/twilio-status/` — Twilio status callback handler.
+- `supabase/functions/twilio-voice-status/` — Voice call status.
+- `supabase/functions/docusign-status/` — DocuSign Connect events.
+
+### Anti-patterns
+
+- Showing "✅ Sent" when the provider only ACK'd the request → users
+  trust this as ground truth, then get burned when delivery silently fails
+- Storing only the immediate response — losing the actual outcome means
+  the audit trail is wrong + the dashboard is wrong forever
+- Accepting webhooks without auth → trivial to forge "delivered" status
+
 ## QA protocol — mandatory before declaring work done
 
 **Before saying a feature is ready, always browser-test the core user flows end to end.**
