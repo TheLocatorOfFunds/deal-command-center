@@ -18884,7 +18884,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
       // recipient sees).
       sb.from('messages_outbound')
         .select('*').eq('deal_id', dealId)
-        .or('channel.neq.rvm,and(channel.eq.rvm,status.eq.rvm_sent)')
+        .or('channel.neq.rvm,and(channel.eq.rvm,status.in.(rvm_sent,rvm_delivered,rvm_undeliverable))')
         .order('created_at', { ascending: true }).limit(200),
       sb.from('call_logs')
         .select('*').eq('deal_id', dealId)
@@ -20034,23 +20034,52 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               }
 
               // ─── Voicemail entry ─────────────────────────────────────
-              // Successfully-dropped RVMs show as a distinct bubble with the
-              // mp3 player + a collapsed transcript (script is the spoken
-              // text — long-form, would be noisy as a default render). The
-              // deal loader filters out preview/dry_run rows, so anything
-              // arriving here was actually delivered to Slybroadcast.
+              // Status flow:
+              //   rvm_sent          → handed to Slybroadcast, awaiting their callback
+              //   rvm_delivered     → Slybroadcast confirmed VM deposited (green)
+              //   rvm_undeliverable → Slybroadcast tried + failed (yellow + reason)
+              //   rvm_failed        → Slybroadcast rejected the request itself
+              //
+              // The actual delivery state arrives via the slybroadcast-callback
+              // Edge Function (Slybroadcast hits it with c_dispo_url). Per
+              // Justin 2026-05-07: "we always want confirmation and feedback
+              // on any action we take in DCC" — so we surface the real
+              // outcome, not optimistic "we tried" messaging.
               if (m._kind === 'rvm') {
                 const sessionLabel = m.provider_sid ? ` · session ${m.provider_sid}` : '';
+                let label, accent, icon;
+                if (m.status === 'rvm_delivered') {
+                  label = 'VOICEMAIL DELIVERED';
+                  accent = '#22c55e';
+                  icon = '🎙';
+                } else if (m.status === 'rvm_undeliverable') {
+                  label = 'VOICEMAIL UNDELIVERABLE';
+                  accent = '#fbbf24';
+                  icon = '⚠️';
+                } else if (m.status === 'rvm_sent') {
+                  label = 'VOICEMAIL · awaiting confirmation';
+                  accent = '#f97316';
+                  icon = '📣';
+                } else {
+                  label = `VOICEMAIL · ${m.status || 'unknown'}`;
+                  accent = '#78716c';
+                  icon = '📣';
+                }
                 return (
                   <div key={'v-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
-                    <div style={{ maxWidth: '90%', background: '#1c1917', border: '1px solid #f9731633', borderLeft: '3px solid #f97316', borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                    <div style={{ maxWidth: '90%', background: '#1c1917', border: `1px solid ${accent}33`, borderLeft: `3px solid ${accent}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                         <div>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.04em' }}>📣 VOICEMAIL DROPPED</span>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: accent, letterSpacing: '0.04em' }}>{icon} {label}</span>
                           <span style={{ fontSize: 10, color: '#78716c', marginLeft: 8, fontFamily: "'DM Mono', monospace" }}>→ {m.to_number}</span>
                         </div>
                         <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}{sessionLabel}</span>
                       </div>
+                      {m.status === 'rvm_undeliverable' && m.error_message && (
+                        <div style={{ fontSize: 11, color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 5, padding: '6px 8px', marginBottom: 6, lineHeight: 1.45 }}>
+                          {m.error_message}
+                        </div>
+                      )}
                       {m.media_url && (
                         <audio controls src={m.media_url} style={{ width: '100%', height: 36, marginBottom: 6 }}>
                           Your browser does not support audio playback.
