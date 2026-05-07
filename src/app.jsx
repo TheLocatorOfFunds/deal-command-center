@@ -20040,13 +20040,39 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                 const isInbound = m.direction === 'inbound';
                 const toLabel   = (m.to_emails || []).join(', ');
                 const ccLabel   = (m.cc_emails || []).filter(e => e && !e.includes('fundlocators.com')).join(', ');
+                // Per-status visual treatment for outbound emails. Inbound
+                // emails just show the default blue (we received them, no
+                // delivery state matters from our side). Resend's webhook
+                // (resend-webhook EF) flips the status from 'sent' →
+                // delivered / bounced / complained / delivery_delayed /
+                // failed once the actual outcome is known.
+                let emailAccent = '#3b82f6';     // default blue
+                let emailBadge = null;            // text + style for sub-badge
+                if (!isInbound && m.status === 'delivered') {
+                  emailAccent = '#22c55e';
+                  emailBadge = { text: '· DELIVERED', color: '#22c55e' };
+                } else if (!isInbound && m.status === 'bounced') {
+                  emailAccent = '#ef4444';
+                  emailBadge = { text: '· BOUNCED', color: '#ef4444' };
+                } else if (!isInbound && m.status === 'complained') {
+                  emailAccent = '#ef4444';
+                  emailBadge = { text: '· SPAM COMPLAINT', color: '#ef4444' };
+                } else if (!isInbound && m.status === 'delivery_delayed') {
+                  emailAccent = '#fbbf24';
+                  emailBadge = { text: '· DELAYED', color: '#fbbf24' };
+                } else if (!isInbound && m.status === 'failed') {
+                  emailAccent = '#ef4444';
+                  emailBadge = { text: '· FAILED', color: '#ef4444' };
+                } else if (!isInbound && m.status === 'sent') {
+                  emailBadge = { text: '· awaiting confirmation', color: '#78716c' };
+                }
                 return (
                   <div key={'e-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
-                    <div style={{ maxWidth: '90%', background: '#1c1917', border: '1px solid #1e3a8a33', borderLeft: '3px solid #3b82f6', borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                    <div style={{ maxWidth: '90%', background: '#1c1917', border: `1px solid ${emailAccent}33`, borderLeft: `3px solid ${emailAccent}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                         <div>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', letterSpacing: '0.04em' }}>📧 {isInbound ? 'EMAIL RECEIVED' : 'EMAIL SENT'}</span>
-                          {m.status === 'failed' && <span style={{ fontSize: 10, fontWeight: 700, color: '#ef4444', marginLeft: 8 }}>· FAILED</span>}
+                          <span style={{ fontSize: 11, fontWeight: 700, color: emailAccent, letterSpacing: '0.04em' }}>📧 {isInbound ? 'EMAIL RECEIVED' : 'EMAIL SENT'}</span>
+                          {emailBadge && <span style={{ fontSize: 10, fontWeight: 700, color: emailBadge.color, marginLeft: 8 }}>{emailBadge.text}</span>}
                         </div>
                         <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}</span>
                       </div>
