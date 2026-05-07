@@ -177,6 +177,26 @@ const LEAD_STATUSES = {
 };
 const ALL_LEAD_STATUSES = [...LEAD_STATUSES.flip, ...LEAD_STATUSES.surplus];
 const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes(deal.status);
+
+// Read a homeowner phone out of deal.meta — accepts the four key variants
+// the codebase has accumulated. The personalized-URL minter (~line 10532)
+// is the most permissive reader; this helper matches it so every gate
+// (prep-missing warning, hygiene check, bulk-queue eligibility, kanban
+// has_phone filter, auto-queue gate) reaches the same answer.
+//   - homeownerPhone  — canonical (DCC Case Details writes this)
+//   - phone           — legacy alias still on some older rows
+//   - contactPhone    — produced by certain intake paths
+//   - homeowner_phone — snake_case path (some imports / DB-shaped writes)
+// 2026-05-07: Eric flagged Charlotte Morrow showing "missing: phone" with
+// all 5 SOP criteria met — root cause was prepMissing checking only the
+// first two keys while the URL minter accepted all four. Centralizing
+// here so the same drift can't happen again.
+const dealMetaPhone = (meta) => {
+  const m = meta || {};
+  const v = m.homeownerPhone || m.phone || m.contactPhone || m.homeowner_phone;
+  return (v && String(v).trim()) ? String(v).trim() : null;
+};
+
 // What status to bump to when "converting" a lead → engaged deal.
 const POST_ENGAGEMENT_STATUS = { flip: "under-contract", surplus: "signed" };
 const STATUS_COLORS = {
@@ -4583,7 +4603,7 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
   const firstName = ((m.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there';
   const token = deal.refundlocators_token;
   const url = `https://refundlocators.com/s/${token}`;
-  const phone = m.homeownerPhone || m.phone || '';
+  const phone = dealMetaPhone(m) || '';
   const email = m.homeownerEmail || m.email || '';
 
   const [smsBody, setSmsBody] = useState(`Hi ${firstName}, this is Nathan from RefundLocators. I put together a quick page on your case with the details: ${url}`);
@@ -4716,7 +4736,7 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
   const [phoneNumbers, setPhoneNumbers] = useState([]);
 
   const m = deal.meta || {};
-  const toNumber = m.homeownerPhone;
+  const toNumber = dealMetaPhone(m);
   const firstName = ((m.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there';
   const ownerName = (m.homeownerName || deal.name || '').split(' - ')[0];
   const county = m.county || '';
@@ -4875,7 +4895,7 @@ function BulkOutreachButton({ candidates }) {
   const alive = useAliveRef();
 
   const eligible = candidates.filter(d => (d.lead_tier === 'A' || d.lead_tier === 'B'));
-  const eligibleWithPhone = eligible.filter(d => d.meta?.homeownerPhone || d.meta?.phone);
+  const eligibleWithPhone = eligible.filter(d => dealMetaPhone(d.meta));
 
   const handleClick = async () => {
     if (busy) return;
@@ -4890,7 +4910,7 @@ function BulkOutreachButton({ candidates }) {
     const reasons = { no_phone: 0, already_active: 0, dnd: 0, error: 0 };
 
     for (const d of eligible) {
-      const phone = d.meta?.homeownerPhone || d.meta?.phone;
+      const phone = dealMetaPhone(d.meta);
       if (!phone) { skipped++; reasons.no_phone++; continue; }
 
       try {
@@ -5088,7 +5108,7 @@ function applyAdvancedFilters(d, f) {
     return want === 'yes' ? !!v : !v;
   };
   if (!matchBool(d.is_30dts, f.is_30dts)) return false;
-  if (!matchBool(m.homeownerPhone || m.phone, f.has_phone)) return false;
+  if (!matchBool(dealMetaPhone(m), f.has_phone)) return false;
   if (!matchBool(d.refundlocators_token, f.has_url)) return false;
   if (!matchBool(m.attorney, f.has_attorney)) return false;
   if (!matchBool(d.death_signal || m.deceased, f.deceased)) return false;
@@ -9707,7 +9727,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   const prepMissing = (d) => {
     const m = d.meta || {};
     const missing = [];
-    if (!(m.homeownerPhone || m.phone)) missing.push('phone');
+    if (!dealMetaPhone(m)) missing.push('phone');
     if (!d.lead_tier) missing.push('tier');
     if (!d.refundlocators_token) missing.push('URL');
     if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
@@ -9740,7 +9760,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       const tier = deal.lead_tier;
       if (tier !== 'A' && tier !== 'B') return;
       if (['closed', 'dead', 'recovered'].includes(deal.status)) return;
-      const phone = deal.meta?.homeownerPhone || deal.meta?.phone;
+      const phone = dealMetaPhone(deal.meta);
       if (!phone) return;
       const { data: dnc } = await sb.from('contacts')
         .select('id').eq('phone', phone).eq('do_not_text', true).limit(1).maybeSingle();
@@ -9995,7 +10015,7 @@ function HygieneDashboard({ deals, onSelect }) {
     const attorneyNamed = !!(m.attorney && String(m.attorney).trim());
 
     const checks = [
-      { key: 'phone',    label: HYGIENE_LABELS.phone,    passed: !!(m.homeownerPhone && String(m.homeownerPhone).trim()),  severity: 'high' },
+      { key: 'phone',    label: HYGIENE_LABELS.phone,    passed: !!dealMetaPhone(m),  severity: 'high' },
       { key: 'email',    label: HYGIENE_LABELS.email,    passed: !!(m.homeownerEmail && String(m.homeownerEmail).trim()),  severity: 'high' },
       { key: 'portal',   label: HYGIENE_LABELS.portal,   passed: ca.some(r => r.enabled),                                  severity: 'high' },
       { key: 'case',     label: HYGIENE_LABELS.case,     passed: !!(m.courtCase && String(m.courtCase).trim()),            severity: 'high' },
@@ -10661,12 +10681,40 @@ function DealTagsBar({ deal, canEdit, onSave }) {
   // tag_library row directly — that's the canonical color storage.
   // Realtime sub will refresh libraryTags + every other mounted
   // DealTagsBar's chips.
+  //
+  // Two failure modes this guards against:
+  //   1. RLS blocks the update → PostgREST returns 0 rows, no error.
+  //      Without `.select()` we'd never see it. Eric hit this 2026-05-07
+  //      because the original migration shipped without an UPDATE policy
+  //      (fix: 20260507120000_tag_library_update_policy.sql).
+  //   2. The library row doesn't exist yet (rare race: tag was just
+  //      added on this client; tg_sync_tag_library hasn't fired). In
+  //      that case the UPDATE silently affects 0 rows; we INSERT it
+  //      with the next color so the click feels like it did something.
   const cycleColor = async (name) => {
     const current = colorFor(name);
     const idx = TAG_COLOR_ORDER.indexOf(current);
     const next = TAG_COLOR_ORDER[(idx + 1) % TAG_COLOR_ORDER.length];
-    const { error } = await sb.from('tag_library').update({ color: next }).eq('name', name);
-    if (error) alert('Could not change tag color: ' + error.message);
+    const { data, error } = await sb
+      .from('tag_library')
+      .update({ color: next })
+      .eq('name', name)
+      .select('name, color');
+    if (error) { alert('Could not change tag color: ' + error.message); return; }
+    if (!data || data.length === 0) {
+      // No row matched — try inserting the library row at the next color.
+      // (Covers the "tag exists on the deal but not in tag_library yet" case.)
+      const { error: insErr } = await sb
+        .from('tag_library')
+        .insert({ name, color: next });
+      if (insErr) {
+        alert(
+          "Tag color didn't update. If you just signed in, refresh and " +
+          "try again. If it keeps happening, the tag_library UPDATE policy " +
+          "may be missing — apply migration 20260507120000_tag_library_update_policy.sql."
+        );
+      }
+    }
   };
 
   const normalize = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '-');
@@ -18428,8 +18476,11 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
         return { ...entry, phone: p, _phoneShort: idx === 0 ? null : last4 || p };
       });
     };
-    if (deal?.meta?.homeownerPhone)
-      expandPhones({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: deal.meta.homeownerPhone, _homeowner: true }).forEach(add);
+    {
+      const homeownerPh = dealMetaPhone(deal?.meta);
+      if (homeownerPh)
+        expandPhones({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: homeownerPh, _homeowner: true }).forEach(add);
+    }
     (vendors || []).filter(v => v.phone).forEach(v =>
       expandPhones({ name: v.name, role: v.role || 'Vendor', phone: v.phone }).forEach(add));
     dcContacts.filter(c => c.phone).forEach(c =>
@@ -19091,7 +19142,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: rvmMode ? '2px solid #f97316' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: rvmMode ? '#f97316' : '#57534e', fontSize: 11, fontWeight: 600 }}>
           📣 Drop VM
         </button>
-        {deal.meta?.homeownerPhone && (
+        {dealMetaPhone(deal.meta) && (
           <button onClick={() => setShowIntroModal(true)}
             title="Send a pre-filled intro text to the homeowner"
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: '#6ee7b7', fontSize: 11, fontWeight: 600 }}>
@@ -22154,7 +22205,7 @@ async function findDuplicates(mapped) {
         const m = d.meta || {};
         const cc = m.courtCase ? String(m.courtCase).toLowerCase().replace(/\s+/g, '') : null;
         const addrNorm = (d.address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const ph = (m.homeownerPhone || '').replace(/\D/g, '');
+        const ph = (dealMetaPhone(m) || '').replace(/\D/g, '');
         if (cc) dupes.set('case:' + cc, { dealId: d.id, reason: 'case#' });
         if (addrNorm) dupes.set('addr:' + addrNorm, { dealId: d.id, reason: 'address' });
         if (ph) dupes.set('phone:' + ph, { dealId: d.id, reason: 'phone' });
