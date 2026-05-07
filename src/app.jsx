@@ -23922,8 +23922,7 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
           library_document_id: selectedDoc.id,
           recipient_email: recipientEmail.trim(),
           recipient_name: recipientName.trim(),
-          recipient_phone: recipientPhone.trim() || null,
-          send_sms: sendSms,
+          recipient_phone: sendSms ? (recipientPhone.trim() || null) : null,
           email_subject_override: emailSubject.trim() || null,
           merge_overrides: mergeOverrides,
         },
@@ -23941,7 +23940,8 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
         setSending(false);
         return;
       }
-      setMsg({ type: 'success', text: `Envelope sent. DocuSign ID: ${data.envelope_id}` });
+      const smsPart = data.sms_sent ? ' · SMS sent ✓' : '';
+      setMsg({ type: 'success', text: `✅ Envelope sent${smsPart}`, link: data.signing_link });
       setTimeout(() => { onSent?.(); }, 800);
     } catch (e) {
       setMsg({ type: 'error', text: e.message || 'Send failed' });
@@ -24029,8 +24029,8 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                   <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: sendSms ? "#064e3b" : "#1c1917", border: "1px solid " + (sendSms ? "#10b981" : "#292524"), borderRadius: 5, cursor: "pointer", marginBottom: sendSms ? 8 : 0 }}>
                     <input type="checkbox" checked={sendSms} onChange={e => setSendSms(e.target.checked)} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send via SMS (Business DocuSign)</div>
-                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a text with a one-tap signing link. Requires phone + template configured for SMS delivery in DocuSign.</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send signing link via SMS</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a Twilio text with a one-tap link — signs right from their phone, no DocuSign account needed.</div>
                     </div>
                   </label>
                   {sendSms && (
@@ -24072,6 +24072,12 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                 {msg && (
                   <div style={{ padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
                     {msg.text}
+                    {msg.link && (
+                      <div style={{ marginTop: 6, wordBreak: "break-all" }}>
+                        <span style={{ color: "#78716c" }}>Signing link: </span>
+                        <a href={msg.link} target="_blank" rel="noreferrer" style={{ color: "#34d399", textDecoration: "underline" }}>{msg.link}</a>
+                      </div>
+                    )}
                   </div>
                 )}
 
