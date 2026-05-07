@@ -16865,8 +16865,8 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
           deal={deal}
           dealId={dealId}
           resendFrom={resendEnv}
-          onClose={() => { setShowDocuSign(false); setResendEnv(null); }}
-          onSent={async () => { await loadEnvelopes(); setShowDocuSign(false); setResendEnv(null); }}
+          onClose={() => { setShowDocuSign(false); setResendEnv(null); loadEnvelopes(); }}
+          onSent={loadEnvelopes}
         />
       )}
 
