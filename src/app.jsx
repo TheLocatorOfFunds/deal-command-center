@@ -24827,9 +24827,36 @@ function TeamChatBubble() {
     return () => { cancelled = true; sb.removeChannel(ch); };
   }, [activeThreadId, me?.id]);
 
-  // Auto-scroll to bottom on new message
+  // Auto-scroll to bottom — two distinct intents in one effect:
+  //   1. Switching threads → INSTANT jump to bottom. No animation,
+  //      no "scroll through the whole history" experience. Per Nathan
+  //      2026-05-07: "When I click into a chat, I just want it to start
+  //      at the very bottom for the most recent conversation."
+  //   2. New message arriving in the active thread → smooth slide so
+  //      the user sees it appear (only fires if they were already
+  //      anchored at the bottom; if they're scrolled up reading
+  //      history, we still scroll, matching previous behavior — that
+  //      can be tightened later if it bothers anyone).
+  //
+  // The "scroll lands short of the real bottom" symptom Nathan also
+  // described comes from measuring scrollHeight before React has
+  // committed the new messages. Double-rAF guarantees layout has
+  // settled before we scroll.
+  const lastThreadIdRef = useRef(null);
   useEffect(() => {
-    if (msgsEndRef.current) msgsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (!msgsEndRef.current) return;
+    const threadChanged = lastThreadIdRef.current !== activeThreadId;
+    lastThreadIdRef.current = activeThreadId;
+
+    if (threadChanged) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          msgsEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+        });
+      });
+    } else {
+      msgsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
   }, [messages.length, activeThreadId]);
 
   // Auto-focus composer when entering a thread
