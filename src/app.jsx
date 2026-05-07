@@ -24004,6 +24004,7 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
   const [recipientEmail, setRecipientEmail] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPhone, setRecipientPhone] = useState('');
+  const [phoneManualMode, setPhoneManualMode] = useState(false); // true = show free-text input instead of dropdown
   const [sendSms, setSendSms] = useState(true);  // default ON — SMS is the primary delivery
   const [emailSubject, setEmailSubject] = useState('');
   const [sending, setSending] = useState(false);
@@ -24034,7 +24035,7 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
     if (resendFrom) {
       if (resendFrom.recipient_name)  setRecipientName(resendFrom.recipient_name);
       if (resendFrom.recipient_email) setRecipientEmail(resendFrom.recipient_email);
-      if (resendFrom.recipient_phone) setRecipientPhone(resendFrom.recipient_phone);
+      if (resendFrom.recipient_phone) { setRecipientPhone(resendFrom.recipient_phone); setPhoneManualMode(false); }
     }
     (async () => {
       const clientName = (deal.name || '').split(' - ')[0];
@@ -24246,17 +24247,41 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
                   {sendSms && (
                     <div style={{ marginTop: 8 }}>
                       <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone</div>
-                      {dealContacts.filter(c => c.phone).length > 0 ? (
-                        <select value={recipientPhone} onChange={e => setRecipientPhone(e.target.value)} style={{ ...inputStyle, fontSize: 13, marginBottom: 4 }}>
-                          <option value="">— pick a number —</option>
-                          {dealContacts.filter(c => c.phone).map(c => (
-                            <option key={c.id} value={c.phone}>{c.name ? `${c.name} · ` : ''}{c.phone}</option>
-                          ))}
-                          <option value="__custom__">Enter manually…</option>
-                        </select>
-                      ) : null}
-                      {(recipientPhone === '__custom__' || dealContacts.filter(c => c.phone).length === 0) && (
-                        <input type="tel" value={recipientPhone === '__custom__' ? '' : recipientPhone} onChange={e => setRecipientPhone(e.target.value)} placeholder="(614) 555-1234" style={{ ...inputStyle, fontSize: 13 }} />
+                      {dealContacts.filter(c => c.phone).length > 0 && !phoneManualMode ? (
+                        <>
+                          <select
+                            value={recipientPhone}
+                            onChange={e => {
+                              if (e.target.value === '__custom__') {
+                                setPhoneManualMode(true);
+                                setRecipientPhone('');
+                              } else {
+                                setRecipientPhone(e.target.value);
+                              }
+                            }}
+                            style={{ ...inputStyle, fontSize: 13 }}
+                          >
+                            <option value="">— pick a number —</option>
+                            {dealContacts.filter(c => c.phone).map(c => (
+                              <option key={c.id} value={c.phone}>{c.name ? `${c.name} · ` : ''}{c.phone}</option>
+                            ))}
+                            <option value="__custom__">Enter manually…</option>
+                          </select>
+                        </>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="tel"
+                            value={recipientPhone}
+                            onChange={e => setRecipientPhone(e.target.value)}
+                            placeholder="(614) 555-1234"
+                            style={{ ...inputStyle, fontSize: 13, flex: 1 }}
+                            autoFocus={phoneManualMode}
+                          />
+                          {phoneManualMode && dealContacts.filter(c => c.phone).length > 0 && (
+                            <button onClick={() => { setPhoneManualMode(false); setRecipientPhone(''); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 8px", flexShrink: 0 }}>← Pick</button>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
