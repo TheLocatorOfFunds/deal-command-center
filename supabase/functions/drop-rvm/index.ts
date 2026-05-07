@@ -652,7 +652,99 @@ Deno.serve(async (req) => {
       to_number,
       dry_run = false,
       custom_note,  // optional per-drop hint for AI mode (e.g. "mention the upcoming court date")
+      existing_message_id,  // when set, skip generation — just drop the audio referenced by this row
     } = body
+
+    // ─── Drop-only mode (skip generation, deliver an already-generated audio) ─
+    //
+    // When the UI uses the two-step flow (Generate → preview → Drop), the second
+    // call passes the message_id from the first call's response. We look up the
+    // row, validate it's a valid RVM with audio, and POST it to Slybroadcast.
+    // No TTS, no Storage upload, no new messages_outbound row — we update the
+    // existing row in place.
+    if (existing_message_id) {
+      const slyUser = Deno.env.get('SLYBROADCAST_USER')
+      const slyPassword = Deno.env.get('SLYBROADCAST_API_PASSWORD')
+      const slyCallerId = Deno.env.get('SLYBROADCAST_CALLER_ID') || callbackPhone()
+      if (!slyUser || !slyPassword) {
+        return new Response(JSON.stringify({ error: 'Slybroadcast secrets not configured (SLYBROADCAST_USER + SLYBROADCAST_API_PASSWORD)' }), {
+          status: 503,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      const { data: existingRow, error: lookupErr } = await sb
+        .from('messages_outbound')
+        .select('id, channel, status, to_number, media_url, body, deal_id, contact_id')
+        .eq('id', existing_message_id)
+        .maybeSingle()
+      if (lookupErr || !existingRow) {
+        return new Response(JSON.stringify({ error: `Message not found: ${existing_message_id}` }), {
+          status: 404,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      if (existingRow.channel !== 'rvm') {
+        return new Response(JSON.stringify({ error: 'Message is not an RVM (channel != rvm)' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      if (!existingRow.media_url || !existingRow.to_number) {
+        return new Response(JSON.stringify({ error: 'Message is missing media_url or to_number — cannot drop' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+      if (existingRow.status === 'rvm_sent') {
+        return new Response(JSON.stringify({ error: 'Message has already been dropped (status=rvm_sent). Generate a new one if you want to send again.' }), {
+          status: 409,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      }
+
+      let dropResult: SlybroadcastResult | null = null
+      let dropError: string | null = null
+      let outboundStatus: string
+      try {
+        dropResult = await slybroadcastDrop({
+          user: slyUser,
+          password: slyPassword,
+          phoneE164: existingRow.to_number,
+          audioUrl: existingRow.media_url,
+          callerId: slyCallerId,
+        })
+        outboundStatus = dropResult.ok ? 'rvm_sent' : 'rvm_failed'
+        if (!dropResult.ok) dropError = dropResult.error ?? 'Slybroadcast rejected the drop'
+      } catch (e) {
+        dropError = (e as Error).message
+        outboundStatus = 'rvm_failed'
+      }
+
+      const { error: updateErr } = await sb
+        .from('messages_outbound')
+        .update({
+          status: outboundStatus,
+          from_number: slyCallerId,
+          provider_sid: dropResult?.sessionId ?? null,
+          error_message: dropError,
+        })
+        .eq('id', existing_message_id)
+      if (updateErr) console.error('messages_outbound update failed:', updateErr.message)
+
+      return new Response(JSON.stringify({
+        ok: outboundStatus === 'rvm_sent',
+        message_id: existing_message_id,
+        delivery_status: outboundStatus,
+        delivery_attempted: true,
+        delivery_session_id: dropResult?.sessionId ?? null,
+        delivery_error: dropError,
+        delivery_raw: dropResult?.rawResponse ?? null,
+        to_number: existingRow.to_number,
+        from_number: slyCallerId,
+        mp3_url: existingRow.media_url,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
 
     // ─── Resolve template ─────────────────────────────────────────────────
     let template: any = null
