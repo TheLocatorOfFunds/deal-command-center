@@ -5,10 +5,15 @@
 //   GET  — on-demand poll (?deal_id=xxx or ?envelope_id=xxx) from DCC UI
 //
 // DocuSign Connect setup (do once in DocuSign Admin → Connect):
-//   URL: https://<project>.supabase.co/functions/v1/docusign-status
+//   URL: https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/docusign-status
 //   Events: Envelope Sent, Delivered, Completed, Declined, Voided
 //
 // Deploy with verify_jwt=false — DocuSign webhooks carry no Supabase JWT.
+//
+// Required Supabase secrets (same as docusign-send-envelope):
+//   DOCUSIGN_INTEGRATION_KEY, DOCUSIGN_USER_ID, DOCUSIGN_ACCOUNT_ID,
+//   DOCUSIGN_PRIVATE_KEY (PKCS#8 DER base64, no headers/newlines),
+//   DOCUSIGN_BASE_URL
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
@@ -17,13 +22,14 @@ const STATUS_MAP: Record<string, string> = {
   declined: 'declined', voided: 'voided', created: 'created',
 };
 
-async function getAccessToken(integrationKey: string, userId: string, privateKeyPem: string): Promise<string> {
-  const pem = privateKeyPem.replace(/\\n/g, '\n');
-  const pemBody = pem
-    .replace(/-----BEGIN RSA PRIVATE KEY-----/, '').replace(/-----END RSA PRIVATE KEY-----/, '')
-    .replace(/-----BEGIN PRIVATE KEY-----/, '').replace(/-----END PRIVATE KEY-----/, '')
-    .replace(/\s/g, '');
-  const der = Uint8Array.from(atob(pemBody), c => c.charCodeAt(0));
+// authBase: 'https://account-d.docusign.com' for sandbox, 'https://account.docusign.com' for prod.
+// Derived from DOCUSIGN_BASE_URL — if it contains 'demo', we're on sandbox.
+async function getAccessToken(
+  integrationKey: string, userId: string, privateKeyPem: string, authBase: string
+): Promise<string> {
+  // DOCUSIGN_PRIVATE_KEY is stored as the raw base64 DER body of the PKCS#8 key
+  // (no PEM headers, no newlines — just the base64 content between BEGIN/END PRIVATE KEY lines).
+  const der = Uint8Array.from(atob(privateKeyPem.trim()), c => c.charCodeAt(0));
   const key = await crypto.subtle.importKey(
     'pkcs8', der.buffer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['sign']
   );
@@ -31,18 +37,20 @@ async function getAccessToken(integrationKey: string, userId: string, privateKey
     const str = typeof s === 'string' ? s : String.fromCharCode(...(s as Uint8Array));
     return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
   };
+  const aud = authBase.replace('https://', '');  // e.g. 'account-d.docusign.com'
   const now = Math.floor(Date.now() / 1000);
   const header  = { alg: 'RS256', typ: 'JWT' };
-  const payload = { iss: integrationKey, sub: userId, aud: 'account-d.docusign.com',
+  const payload = { iss: integrationKey, sub: userId, aud,
                     iat: now, exp: now + 3600, scope: 'signature impersonation' };
   const input   = `${b64u(JSON.stringify(header))}.${b64u(JSON.stringify(payload))}`;
   const sig     = new Uint8Array(await crypto.subtle.sign('RSASSA-PKCS1-v1_5', key, new TextEncoder().encode(input)));
   const jwt     = `${input}.${b64u(sig)}`;
-  const resp    = await fetch('https://account.docusign.com/oauth/token', {
+  const resp    = await fetch(`${authBase}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: jwt }),
   });
+  if (!resp.ok) throw new Error(`JWT Grant failed: ${resp.status} ${await resp.text()}`);
   const { access_token } = await resp.json();
   return access_token;
 }
@@ -105,12 +113,13 @@ Deno.serve(async (req: Request) => {
     const PRIVATE_KEY     = Deno.env.get('DOCUSIGN_PRIVATE_KEY');
     const ACCOUNT_ID      = Deno.env.get('DOCUSIGN_ACCOUNT_ID');
     const BASE_URL        = Deno.env.get('DOCUSIGN_BASE_URL') || 'https://na4.docusign.net';
+    const AUTH_BASE       = BASE_URL.includes('demo') ? 'https://account-d.docusign.com' : 'https://account.docusign.com';
 
     const terminal = new Set(['completed', 'declined', 'voided']);
     const toRefresh = (rows || []).filter(r => !terminal.has(r.status));
 
     if (toRefresh.length > 0 && INTEGRATION_KEY && USER_ID && PRIVATE_KEY) {
-      const token = await getAccessToken(INTEGRATION_KEY, USER_ID, PRIVATE_KEY);
+      const token = await getAccessToken(INTEGRATION_KEY, USER_ID, PRIVATE_KEY, AUTH_BASE);
       for (const row of toRefresh) {
         const r = await fetch(
           `${BASE_URL}/restapi/v2.1/accounts/${ACCOUNT_ID}/envelopes/${row.envelope_id}`,

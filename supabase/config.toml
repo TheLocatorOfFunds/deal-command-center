@@ -66,3 +66,11 @@ verify_jwt = false
 # Called by pg_cron via net.http_post — no JWT. Authenticated by
 # X-Lauren-Daily-Review-Secret header instead.
 verify_jwt = false
+
+[functions.docusign-status]
+# Called by DocuSign Connect webhook — no Supabase JWT.
+verify_jwt = false
+
+[functions.docusign-sign]
+# Public tap-to-sign link sent via SMS — no Supabase JWT.
+verify_jwt = false
