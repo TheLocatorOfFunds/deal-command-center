@@ -4978,21 +4978,26 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
 // AutomationsQueue on Today / Outreach view, Nathan reviews + clicks
 // Send for each. After the first send, the cadence engine takes over
 // (Day 1 → Day 3 → Day 5 → weekly through Day 90).
-function BulkOutreachButton({ candidates }) {
+function BulkOutreachButton({ candidates, tiers = ['A', 'B'], tierLabel = 'A/B', requirePrepped = false }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const alive = useAliveRef();
 
-  const eligible = candidates.filter(d => (d.lead_tier === 'A' || d.lead_tier === 'B'));
+  const eligible = candidates.filter(d => {
+    if (!tiers.includes(d.lead_tier)) return false;
+    if (requirePrepped && !d.prepped_at) return false;
+    return true;
+  });
   const eligibleWithPhone = eligible.filter(d => dealMetaPhone(d.meta));
 
   const handleClick = async () => {
     if (busy) return;
     if (eligibleWithPhone.length === 0) {
-      setResult({ type: 'info', text: 'No A/B-tier deals with a phone number in current view.' });
+      setResult({ type: 'info', text: `No ${tierLabel}-tier deals with a phone number in current view.` });
       return;
     }
-    if (!window.confirm(`Queue first-text outreach for ${eligibleWithPhone.length} A/B-tier deal${eligibleWithPhone.length === 1 ? '' : 's'}?\n\nEach gets one cadence_day=0 draft. You'll review + send each from the Outreach view. After you send, the cadence engine handles Day 1/3/5 + weekly drip automatically.`)) return;
+    const preppedNote = requirePrepped ? ' prepped' : '';
+    if (!window.confirm(`Queue first-text outreach for ${eligibleWithPhone.length}${preppedNote} ${tierLabel}-tier deal${eligibleWithPhone.length === 1 ? '' : 's'}?\n\nEach gets one cadence_day=0 draft. You'll review + send each from the Outreach view. After you send, the cadence engine handles Day 1/3/5 + weekly drip automatically.`)) return;
 
     setBusy(true); setResult(null);
     let queued = 0, skipped = 0, failed = 0;
@@ -5058,7 +5063,7 @@ function BulkOutreachButton({ candidates }) {
       <button
         onClick={handleClick}
         disabled={busy}
-        title={`Queue first-text outreach for ${eligibleWithPhone.length} A/B-tier deal${eligibleWithPhone.length === 1 ? '' : 's'} with a phone number in current view`}
+        title={`Queue first-text outreach for ${eligibleWithPhone.length} ${tierLabel}-tier deal${eligibleWithPhone.length === 1 ? '' : 's'} with a phone number in current view`}
         style={{
           fontSize: 11, fontWeight: 700, padding: '6px 14px', borderRadius: 5,
           background: busy ? '#1c1917' : '#78350f',
@@ -5069,7 +5074,7 @@ function BulkOutreachButton({ candidates }) {
           fontFamily: 'inherit',
           whiteSpace: 'nowrap',
         }}>
-        {busy ? '⏳ Queuing…' : `🚀 Queue outreach · ${eligibleWithPhone.length} A/B`}
+        {busy ? '⏳ Queuing…' : `🚀 Queue outreach · ${eligibleWithPhone.length} ${tierLabel}`}
       </button>
     </div>
   );
@@ -5565,6 +5570,15 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
               style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', color: '#78716c' }}>↺</button>
           )}
           <BulkOutreachButton candidates={filtered} />
+          {/* Admin-only C-tier batch — closes the "27 prepped C-tier sit
+              in Ready forever" gap surfaced by the 2026-05-08 audit.
+              Mark Prepped doesn't auto-queue C-tier (capacity rule), so
+              this lets admin batch-fire prepped C-tier when there's
+              capacity. requirePrepped=true so we never queue an
+              un-prepped C-tier by accident. */}
+          {isAdmin && (
+            <BulkOutreachButton candidates={filtered} tiers={['C']} tierLabel="C" requirePrepped={true} />
+          )}
         </div>
       </div>
 
