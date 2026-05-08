@@ -17,10 +17,11 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
  * (often a minute later). Justin caught this 2026-05-07 when Nathan got
  * the rings but no voicemail.
  *
- * Auth: Slybroadcast doesn't sign callbacks, so we use a shared secret
- * appended as a query string. Anyone hitting this URL without the secret
- * gets 401. The secret is rotatable — set/rotate via:
- *   supabase secrets set SLYBROADCAST_CALLBACK_SECRET=<random> --project-ref ...
+ * Auth: Slybroadcast doesn't sign callbacks. verify_jwt is disabled so
+ * Supabase's gateway doesn't block the unauthenticated POST from Slybroadcast.
+ * Security is handled inside the function by matching c_session against a real
+ * row in messages_outbound - a forged callback without a valid session ID
+ * can't match any row and does nothing.
  *
  * Slybroadcast callback format (from their docs + observed behavior):
  *   c_session — session ID we generated when calling vmb.php
@@ -32,7 +33,6 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
  *
  * Edge Function secrets:
  *   - SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY (auto)
- *   - SLYBROADCAST_CALLBACK_SECRET (shared with drop-rvm; appended to c_dispo_url)
  */
 
 const corsHeaders = {
@@ -88,27 +88,8 @@ Deno.serve(async (req) => {
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-  const expectedSecret = Deno.env.get('SLYBROADCAST_CALLBACK_SECRET')
-
-  // Auth: Slybroadcast doesn't sign callbacks, so we use a shared secret
-  // appended as ?secret=XXX. If the function doesn't have a secret configured,
-  // refuse all callbacks — better to drop legitimate ones than accept forged.
-  if (!expectedSecret) {
-    console.error('SLYBROADCAST_CALLBACK_SECRET not configured — refusing callback')
-    return new Response(JSON.stringify({ error: 'callback handler not configured' }), {
-      status: 503,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
-  }
 
   const url = new URL(req.url)
-  const presented = url.searchParams.get('secret') || ''
-  if (presented !== expectedSecret) {
-    return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    })
-  }
 
   // Accept GET (query params) or POST (form-encoded or JSON). Slybroadcast's
   // c_dispo_url historically uses GET; we accept POST too for forward-compat.
@@ -134,18 +115,36 @@ Deno.serve(async (req) => {
     }
     // Query-string params still apply on POST too
     for (const [k, v] of url.searchParams) {
-      if (k !== 'secret' && !payload[k]) payload[k] = v
+      if (!payload[k]) payload[k] = v
     }
   }
 
-  const session = payload.c_session || payload.session_id || payload.session
+  // Log every callback payload so we can see exactly what Slybroadcast sends.
+  console.log('[slybroadcast-callback] raw payload:', JSON.stringify(payload))
+
   const dispoRaw = payload.c_dispo || payload.dispo || payload.c_disposition || payload.status
   const phone = payload.c_phone || payload.phone
 
+  // Try every plausible session field name. Slybroadcast's own API response
+  // comes back as "session_id=NNNN\nnumber of phone=N" — the bare numeric ID
+  // is what they'll echo back in the callback, under some key we need to discover.
+  const session =
+    payload.c_session ||
+    payload.session_id ||
+    payload.session ||
+    payload.sessionId ||
+    payload.c_session_id ||
+    payload.id ||
+    payload.call_id ||
+    // fallback: scan all values for something that looks like a Slybroadcast numeric session
+    (Object.values(payload).find(v => /^\d{8,}$/.test(String(v || ''))) as string | undefined)
+
   if (!session) {
-    console.warn('Callback missing c_session', payload)
-    return new Response(JSON.stringify({ error: 'c_session required' }), {
-      status: 400,
+    console.warn('[slybroadcast-callback] session not found in payload keys:', Object.keys(payload))
+    // Return 200 so Slybroadcast stops retrying — we logged everything needed
+    // to add the correct field name on the next deploy.
+    return new Response(JSON.stringify({ ok: false, error: 'session_not_found', payload_keys: Object.keys(payload) }), {
+      status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
   }

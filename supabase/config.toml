@@ -74,3 +74,9 @@ verify_jwt = false
 [functions.docusign-sign]
 # Public tap-to-sign link sent via SMS — no Supabase JWT.
 verify_jwt = false
+
+[functions.slybroadcast-callback]
+# Called by Slybroadcast as a delivery outcome webhook — no Supabase JWT.
+# Slybroadcast POSTs to c_dispo_url with no Authorization header.
+# Auth is handled inside the function by matching c_session against a real DB row.
+verify_jwt = false
