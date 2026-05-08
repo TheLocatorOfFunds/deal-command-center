@@ -22611,8 +22611,9 @@ function ContactsTab({ dealId, userId, isAdmin }) {
 //   1 homeowner contacts row (kind='homeowner', deceased flag, all phones
 //      comma-joined into the phone field — DCC's Comms tab splits them
 //      into per-phone tabs automatically)
-//   N family contacts rows (one per "Family X Phone" present), kind='other',
-//      linked to the deal via contact_deals with relationship='other'
+//   N family contacts rows (one per "Family X Phone" or "Family X Name"
+//      present), kind='other', linked to the deal via contact_deals with
+//      relationship='family' (Eric refines to spouse/child/parent/sibling later)
 //   1 contact_deals row for the homeowner (relationship='homeowner')
 //   1 deal_notes row if "General Notes" is non-empty (so the rich GHL note
 //      shows up in the deal's Notes panel, not buried in contact.notes)
@@ -22758,24 +22759,36 @@ function mapGhlRowToDcc(row, headers) {
   const emailsJoined = Array.from(emailSet).join(', ');
 
   // Family contacts (Family 1..10) — each becomes a separate contact, kind='other'.
+  // Per Nathan 2026-05-08:
+  //   • Read 'Family N Name' from the CSV when present and use it as the
+  //     contact name. Fall back to the homeowner-derived placeholder only
+  //     when the Name column is empty / absent.
+  //   • Default relationship='family' (was 'other'). 'family' is more
+  //     useful in the UI than 'other'; Eric still refines to spouse /
+  //     child / parent / sibling later, but the default reads correctly
+  //     instead of requiring relabeling on every import.
   const familyContacts = [];
   for (let i = 1; i <= 10; i++) {
+    const fName = (get('Family ' + i + ' Name') || '').trim();
     const fPhonesRaw = [get('Family ' + i + ' Phone'), get('Family ' + i + ' Additional phones')].filter(Boolean).join(', ');
     const fEmail = get('Family ' + i + ' Email');
-    if (!fPhonesRaw && !fEmail) continue;
+    if (!fPhonesRaw && !fEmail && !fName) continue;
     const fPhoneSet = new Set();
     fPhonesRaw.split(/[,;]/).forEach(p => {
       const n = normalizeE164(p);
       if (n) fPhoneSet.add(n);
     });
     const fPhones = Array.from(fPhoneSet);
+    // Skip rows that have nothing useful — neither a name nor a contact method.
+    // (A row with only a phone is still useful; a row with only a name without
+    // any way to contact them is probably a data-entry artifact.)
     if (!fPhones.length && !fEmail) continue;
     familyContacts.push({
-      name: `${fullName} — Family ${i}`, // placeholder name; Eric/Nathan refines later
+      name: fName || `${fullName} — Family ${i}`,
       phone: fPhones.join(', ') || null,
       email: fEmail || null,
       kind: 'other',
-      relationship: 'other', // unknown; refined manually after import
+      relationship: 'family', // Eric refines to spouse/child/parent/sibling later.
       tags: ['ghl-import', 'family-contact', 'unlabeled-relationship'],
     });
   }
@@ -23279,7 +23292,7 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
               <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 14, lineHeight: 1.6 }}>
                 Drop a GoHighLevel CSV export. The importer expects the <strong>rich</strong> export
                 (with columns like <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Case Number</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Full Address</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Estimated Surplus</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Family 1 Phone</code>…).
-                Each row becomes one <strong>deal</strong> + one <strong>homeowner contact</strong> + N family contacts (relationship='other').
+                Each row becomes one <strong>deal</strong> + one <strong>homeowner contact</strong> + N family contacts (relationship='family' — Eric refines to spouse/child/parent/sibling later).
               </div>
               <label style={{ display: 'block', border: '2px dashed #44403c', borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: '#0c0a09' }}>
                 <input type="file" accept=".csv,text/csv" onChange={e => handleFile(e.target.files[0])} style={{ display: 'none' }} />
