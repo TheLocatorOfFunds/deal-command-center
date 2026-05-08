@@ -45,6 +45,73 @@ agreed on the rollout plan.
 - **State in prod:** Function `notify_client_docket_event()` is INSTALLED
   (we applied it once, then dropped the trigger). Function body remains.
 
+### `20260505120000_client_edit_requests.sql`
+- **Author:** Nathan, 2026-05-05 (parked here 2026-05-08)
+- **Effect if applied:** Creates `public.client_edit_requests` table —
+  a queue for clients to propose changes to their email/phone via the
+  portal. Each request lands as `pending`; admin approves/rejects from
+  DCC's ClientPortalCard, and approval applies the value back to
+  `client_access`. RLS: clients insert + read their own; admin full
+  access; VA read-only.
+- **Why parked:** Schema-only — no UI built. Neither the portal-side
+  "Request a correction" surface nor the DCC reviewer queue exists.
+  Schema-without-UI is dead weight; either build the UI in the same
+  release this ships, or delete the file.
+- **State in prod:** Table does NOT exist. Nothing references it.
+
+### `20260505210000_research_shadow_log.sql`
+- **Author:** Nathan (research-agent project), 2026-05-05 — parked here
+  2026-05-08
+- **Effect if applied:** Creates `public.research_shadow_log` —
+  Phase-1 persistence for the FundLocators Research Agent
+  (`~/Documents/Claude/fundlocators-research-agent/`). Each row is
+  one decision the agent WOULD have made on an Ohio-intel lead in
+  shadow mode (no DCC writes). RLS: service-role write (agent),
+  admin read. Unique on `(case_number, county)` for idempotency.
+- **Why parked:** The research agent is scaffolded (54 tests passing,
+  HMAC-verified webhook ready) but has not been pointed at real
+  Ohio-intel traffic in production. Applying this table before the
+  agent is live just adds an empty table.
+- **State in prod:** Table does NOT exist.
+- **Apply when:** The day the research agent is wired to receive real
+  Ohio-intel leads in shadow mode. Apply this + `..._research_rejections`
+  together (same release).
+
+### `20260505210001_research_rejections.sql`
+- **Author:** Nathan (research-agent project), 2026-05-05 — parked here
+  2026-05-08
+- **Effect if applied:** Creates `public.research_rejections` — durable
+  audit log of every lead the research agent rejects, with structured
+  reason codes (`already_claimed` / `medicaid_lien_drains_surplus` /
+  `bankruptcy_filed` / etc.) and what tier the agent vs Ohio-intel
+  thought it was. Unique on `(case_number, county)`. RLS: service-role
+  write, admin read.
+- **Why parked:** Pairs with `..._research_shadow_log`. Same situation:
+  the agent code that writes here isn't pointed at production traffic
+  yet.
+- **State in prod:** Table does NOT exist.
+- **Apply when:** Same release as `..._research_shadow_log`.
+
+### `20260505210002_agent_room_actions.sql`
+- **Author:** Nathan (agent-room project), 2026-05-05 — parked here
+  2026-05-08
+- **Effect if applied:** Creates `public.agent_room_actions` — audit
+  log for the ops_agent daemon at `~/Documents/Claude/agent-room/`.
+  Each row is one dispatch decision (action_type ∈ `db_read` /
+  `db_write` / `edge_fn` / `shell` / `reply` / `defer` /
+  `awaiting_confirm`) keyed off the team_messages row that triggered
+  it. Phase-1 logs status=`shadow` only (no real actions). RLS:
+  service-role write (daemon), admin read.
+- **Why parked:** ops_agent daemon isn't running yet. The bigger
+  blocker is Lauren's unified memory (memory file
+  `project_lauren_unified_memory.md`) — until Lauren can remember the
+  same conversation across `lauren_dm` / `lauren_room` / agent-room
+  threads, she can't reliably orchestrate workers, so dispatching
+  through her doesn't yet make sense.
+- **State in prod:** Table does NOT exist.
+- **Apply when:** Lauren unified memory ships AND the ops_agent
+  daemon is deployed on defender-mini.
+
 ## Re-attaching the triggers (if/when ready)
 
 The functions are already in the database. To re-enable, just run:
