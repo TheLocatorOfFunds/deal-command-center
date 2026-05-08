@@ -1834,7 +1834,7 @@ function DealCommandCenter({ session, profile }) {
       )}
 
       {showWalkthroughs && <WalkthroughRequestsModal onClose={() => setShowWalkthroughs(false)} userId={session.user.id} onJumpToDeal={(id) => { setActiveDealId(id); setShowWalkthroughs(false); }} />}
-      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
+      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} deals={deals} onOpenDeal={(id) => setActiveDealId(id)} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
       {showAccount && <AccountSettingsModal onClose={() => setShowAccount(false)} userId={session.user.id} userEmail={session.user.email} onOpenLaurenCC={() => { setShowAccount(false); setShowLaurenCC(true); }} />}
@@ -10508,7 +10508,7 @@ function MiniStat({ label, value }) {
 }
 
 // ─── New Deal Modal ──────────────────────────────────────────────────
-function NewDealModal({ onAdd, onClose, teamMembers }) {
+function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
   const [type, setType] = useState("flip");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -10516,6 +10516,50 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
   const [deadline, setDeadline] = useState("");
   const [filedAt, setFiledAt] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
+  // Possible-duplicate matches against existing deals — recomputed on
+  // every name/address change with a 250ms debounce. Closes the gap
+  // Nathan flagged 2026-05-08: CSV import already runs sophisticated
+  // dup-detection, but the manual + New Deal modal had none, so a
+  // typo'd re-create of an existing deal would silently double up.
+  const [dupHits, setDupHits] = useState([]);
+
+  // Match against the parent's already-loaded `deals` array — that's
+  // the active list (loadDeals filters out soft-deleted). No DB
+  // roundtrip per keystroke. Soft-deleted dups aren't surfaced here;
+  // admin can check the Deleted Leads modal separately if uncertain.
+  useEffect(() => {
+    const nameNorm = (name || '').trim().toLowerCase();
+    const addrNorm = (address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (nameNorm.length < 4 && addrNorm.length < 4) { setDupHits([]); return; }
+    const t = setTimeout(() => {
+      const hits = [];
+      const seen = new Set();
+      for (const d of (deals || [])) {
+        if (seen.has(d.id)) continue;
+        const dAddrNorm = (d.address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const dNameNorm = (d.name || '').trim().toLowerCase();
+        let reason = null;
+        // Address normalized exact match — strongest signal. Same logic
+        // the CSV importer's findDuplicates uses.
+        if (addrNorm.length >= 4 && dAddrNorm && dAddrNorm === addrNorm) {
+          reason = 'address match';
+        } else if (nameNorm.length >= 6 && dNameNorm) {
+          // Name substring (either direction) catches "Joseph Mondello"
+          // typing matching "Estate of Joseph Mondello" in the DB.
+          // 6-char floor avoids "John" matching every John.
+          if (dNameNorm === nameNorm) reason = 'name exact match';
+          else if (dNameNorm.includes(nameNorm) || nameNorm.includes(dNameNorm)) reason = 'name partial match';
+        }
+        if (reason) {
+          hits.push({ deal: d, reason });
+          seen.add(d.id);
+        }
+        if (hits.length >= 5) break;
+      }
+      setDupHits(hits);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [name, address, deals]);
 
   const create = () => {
     if (!name) return;
@@ -10562,9 +10606,48 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
           {(teamMembers || []).map(m => <option key={m} value={m}>{m}</option>)}
         </select>
       </Field>
-      <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+      {dupHits.length > 0 && (
+        <div style={{ marginTop: 14, padding: '10px 14px', background: '#1f1408', border: '1px solid #78350f', borderRadius: 6 }}>
+          <div style={{ fontSize: 12, color: '#fbbf24', fontWeight: 700, marginBottom: 8, letterSpacing: '0.04em' }}>
+            ⚠ Possible duplicate{dupHits.length > 1 ? `s (${dupHits.length})` : ''} — review before creating
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {dupHits.map(({ deal: d, reason }, i) => (
+              <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i === 0 ? 'none' : '1px solid #44403c' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {d.name || d.id}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a8a29e' }}>
+                    {d.address || '—'}
+                    {d.meta?.courtCase ? ` · ${d.meta.courtCase}` : ''}
+                    {d.meta?.county ? ` · ${d.meta.county}` : ''}
+                    {' · '}<span style={{ color: '#fbbf24' }}>{reason}</span>
+                  </div>
+                </div>
+                {onOpenDeal && (
+                  <button
+                    onClick={() => { onOpenDeal(d.id); onClose(); }}
+                    style={{ background: '#0c0a09', border: '1px solid #44403c', color: '#fbbf24', padding: '6px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}
+                  >
+                    Open existing →
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end", alignItems: 'center' }}>
+        {dupHits.some(h => h.reason === 'address match') && (
+          <span style={{ fontSize: 11, color: '#fbbf24', flex: 1 }}>
+            Address matches an existing deal — confirm you want a separate row.
+          </span>
+        )}
         <button onClick={onClose} style={btnGhost}>Cancel</button>
-        <button onClick={create} style={btnPrimary}>Create Deal</button>
+        <button onClick={create} style={btnPrimary}>
+          {dupHits.length > 0 ? 'Create anyway' : 'Create Deal'}
+        </button>
       </div>
     </Modal>
   );
