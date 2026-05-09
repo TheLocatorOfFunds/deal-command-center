@@ -7322,6 +7322,7 @@ function CommsAnalyticsView() {
       linkViewsDistinctVisitors,
       laurenConvs30,
       laurenConvsClaimed,
+      laurenConvsBySurface,
     ] = await Promise.all([
       sb.from("messages_outbound").select("id", { count: "exact", head: true })
         .eq("direction", "outbound").gte("created_at", since30),
@@ -7339,16 +7340,26 @@ function CommsAnalyticsView() {
       // distinct visitor_ids isn't a head:exact-friendly query; fetch + dedupe client-side
       sb.from("personalized_link_views").select("visitor_id")
         .eq("is_team_view", false).gte("viewed_at", since30).limit(2000),
-      sb.from("lauren_conversations").select("id", { count: "exact", head: true })
+      sb.from("v_lauren_all_conversations").select("source_id", { count: "exact", head: true })
         .gte("started_at", since30),
-      sb.from("lauren_conversations").select("id", { count: "exact", head: true })
+      sb.from("v_lauren_all_conversations").select("source_id", { count: "exact", head: true })
         .eq("submitted_claim", true).gte("started_at", since30),
+      // Break down conversations by surface for the tile sub-line.
+      sb.from("v_lauren_all_conversations")
+        .select("surface")
+        .gte("started_at", since30),
     ]);
 
     const distinctVisitors = (linkViewsDistinctVisitors.data || [])
       .map((r) => r.visitor_id)
       .filter(Boolean);
     const distinctVisitorCount = new Set(distinctVisitors).size;
+
+    // Per-surface counts from v_lauren_all_conversations (unified view).
+    const surfaceCounts = (laurenConvsBySurface.data || []).reduce((acc, r) => {
+      acc[r.surface] = (acc[r.surface] || 0) + 1;
+      return acc;
+    }, {});
 
     if (!alive.current) return;
     setStats({
@@ -7362,6 +7373,7 @@ function CommsAnalyticsView() {
       link_views_distinct_30d: distinctVisitorCount,
       lauren_convs_30d: laurenConvs30.count || 0,
       lauren_convs_claimed_30d: laurenConvsClaimed.count || 0,
+      lauren_convs_by_surface: surfaceCounts,
     });
 
     // Per-deal digest — for each deal with any outreach activity in the
@@ -7484,8 +7496,17 @@ function CommsAnalyticsView() {
             {tile("Pending drafts", fmtCount(stats.pending_drafts),
               `awaiting your review on Today`,
               stats.pending_drafts > 0 ? "#fcd34d" : null)}
-            {tile("Lauren web chats · 30d", fmtCount(stats.lauren_convs_30d),
-              `${fmtCount(stats.lauren_convs_claimed_30d)} converted to claim`)}
+            {tile("Lauren conversations · 30d", fmtCount(stats.lauren_convs_30d),
+              (() => {
+                const s = stats.lauren_convs_by_surface || {};
+                const parts = [
+                  s.website_homeowner ? `${s.website_homeowner} site` : null,
+                  s.edge_homeowner ? `${s.edge_homeowner} edge-home` : null,
+                  s.edge_internal ? `${s.edge_internal} internal` : null,
+                  s.team_thread ? `${s.team_thread} team` : null,
+                ].filter(Boolean);
+                return parts.length ? parts.join(" · ") : "across all surfaces";
+              })())}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
