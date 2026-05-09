@@ -1914,6 +1914,7 @@ function DealCommandCenter({ session, profile }) {
               ...(isAdmin ? [
                 { label: '📈 Reports',   onClick: () => setView('reports'),   count: 0 },
                 { label: '📊 Analytics', onClick: () => setView('analytics'), count: 0 },
+                { label: '💬 Comms',     onClick: () => setView('comms'),     count: 0 },
               ] : []),
               { sep: 'Quick access' },
               { label: '🤖 Chat with Lauren', onClick: () => window.dispatchEvent(new Event('dcc:open-lauren')), count: 0 },
@@ -2666,11 +2667,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("pipeline", "🧭 Kanban")}
         </div>
       )}
-      {isAdmin && ["reports", "analytics", "traffic"].includes(view) && (
+      {isAdmin && ["reports", "analytics", "traffic", "comms"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("reports", "📈 Reports")}
           {chipBtn("analytics", "📊 Analytics")}
           {chipBtn("traffic", "🌐 Traffic")}
+          {chipBtn("comms", "💬 Comms")}
         </div>
       )}
 
@@ -2705,7 +2707,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "va-queue" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "va-queue" && view !== "comms" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -2734,7 +2736,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -2768,6 +2770,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
           ) : view === "va-queue" ? (
             isAdmin ? <VaQueueView userId={userId} /> : null
+          ) : view === "comms" ? (
+            isAdmin ? <CommsAnalyticsView /> : null
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -2810,7 +2814,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && view !== "comms" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -7267,6 +7271,318 @@ async function mintPersonalizedLinkSlug(firstName, lastName) {
     candidate = base + (suffix + 1);
   }
   return randomNanoid();
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Comms / Conversation Analytics — admin-only
+//
+// Pulls from messages_outbound (SMS in/out), outreach_queue (drafts +
+// scheduled), personalized_link_views (engagement on /s/<token> pages),
+// personalized_links (link metadata + claim_submitted_at), and
+// lauren_conversations (web chat — usually empty until refundlocators.com
+// chat starts driving traffic).
+//
+// Two ways to read this view:
+//   1. KPI tiles — last 30d snapshot of activity + response + conversion
+//   2. Per-deal digest — which deals need follow-up vs are progressing
+// ─────────────────────────────────────────────────────────────────────
+function CommsAnalyticsView() {
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({});
+  const [perDeal, setPerDeal] = useState([]);
+  const [filter, setFilter] = useState("all"); // all | needs_followup | engaged | converted
+  const alive = useAliveRef();
+
+  const fmtCount = (n) => Number(n || 0).toLocaleString("en-US");
+  const fmtPct = (n, d) => d > 0 ? `${Math.round((n / d) * 100)}%` : "—";
+  const fmtRel = (iso) => {
+    if (!iso) return "—";
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.round(sec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const since30 = new Date(Date.now() - 30 * 86400_000).toISOString();
+    const since7  = new Date(Date.now() - 7  * 86400_000).toISOString();
+
+    // Run reads in parallel.
+    const [
+      outbound30,
+      inbound30,
+      pendingDrafts,
+      sent30,
+      linksTotal,
+      linksClaimed,
+      linkViewsExternal,
+      linkViewsDistinctVisitors,
+      laurenConvs30,
+      laurenConvsClaimed,
+    ] = await Promise.all([
+      sb.from("messages_outbound").select("id", { count: "exact", head: true })
+        .eq("direction", "outbound").gte("created_at", since30),
+      sb.from("messages_outbound").select("id", { count: "exact", head: true })
+        .eq("direction", "inbound").gte("created_at", since30),
+      sb.from("outreach_queue").select("id", { count: "exact", head: true })
+        .eq("status", "pending"),
+      sb.from("outreach_queue").select("id", { count: "exact", head: true })
+        .eq("status", "sent").gte("sent_at", since30),
+      sb.from("personalized_links").select("token", { count: "exact", head: true }),
+      sb.from("personalized_links").select("token", { count: "exact", head: true })
+        .not("claim_submitted_at", "is", null),
+      sb.from("personalized_link_views").select("id", { count: "exact", head: true })
+        .eq("is_team_view", false).gte("viewed_at", since30),
+      // distinct visitor_ids isn't a head:exact-friendly query; fetch + dedupe client-side
+      sb.from("personalized_link_views").select("visitor_id")
+        .eq("is_team_view", false).gte("viewed_at", since30).limit(2000),
+      sb.from("lauren_conversations").select("id", { count: "exact", head: true })
+        .gte("started_at", since30),
+      sb.from("lauren_conversations").select("id", { count: "exact", head: true })
+        .eq("submitted_claim", true).gte("started_at", since30),
+    ]);
+
+    const distinctVisitors = (linkViewsDistinctVisitors.data || [])
+      .map((r) => r.visitor_id)
+      .filter(Boolean);
+    const distinctVisitorCount = new Set(distinctVisitors).size;
+
+    if (!alive.current) return;
+    setStats({
+      outbound_30d: outbound30.count || 0,
+      inbound_30d: inbound30.count || 0,
+      pending_drafts: pendingDrafts.count || 0,
+      sent_30d: sent30.count || 0,
+      links_total: linksTotal.count || 0,
+      links_claimed: linksClaimed.count || 0,
+      link_views_external_30d: linkViewsExternal.count || 0,
+      link_views_distinct_30d: distinctVisitorCount,
+      lauren_convs_30d: laurenConvs30.count || 0,
+      lauren_convs_claimed_30d: laurenConvsClaimed.count || 0,
+    });
+
+    // Per-deal digest — for each deal with any outreach activity in the
+    // last 30 days, surface: last outbound, last inbound, sent count,
+    // pending draft? signed engagement?
+    const { data: dealRollup } = await sb.rpc("comms_per_deal_30d_rollup").maybeSingle();
+    // Fallback if the RPC doesn't exist: roll up client-side from raw rows.
+    let rolled = [];
+    if (dealRollup) {
+      rolled = Array.isArray(dealRollup) ? dealRollup : [];
+    } else {
+      // Client-side rollup. Pull last 30d of messages + queue rows + deal info.
+      const [{ data: msgs }, { data: queue }, { data: deals }] = await Promise.all([
+        sb.from("messages_outbound").select("deal_id, direction, body, created_at")
+          .gte("created_at", since30).limit(2000),
+        sb.from("outreach_queue").select("deal_id, status, sent_at, created_at, draft_body, channel")
+          .gte("created_at", since30).limit(2000),
+        sb.from("deals").select("id, name, status, type, meta").in("type", ["surplus","flip"]).limit(1000),
+      ]);
+      const dealMap = new Map((deals || []).map((d) => [d.id, d]));
+      const rollMap = new Map();
+      const upsert = (id) => {
+        if (!rollMap.has(id)) {
+          rollMap.set(id, {
+            deal_id: id,
+            outbound_count: 0,
+            inbound_count: 0,
+            last_outbound_at: null,
+            last_inbound_at: null,
+            pending_drafts: 0,
+            sent_count: 0,
+          });
+        }
+        return rollMap.get(id);
+      };
+      for (const m of msgs || []) {
+        if (!m.deal_id) continue;
+        const r = upsert(m.deal_id);
+        if (m.direction === "outbound") {
+          r.outbound_count += 1;
+          if (!r.last_outbound_at || m.created_at > r.last_outbound_at) r.last_outbound_at = m.created_at;
+        } else {
+          r.inbound_count += 1;
+          if (!r.last_inbound_at || m.created_at > r.last_inbound_at) r.last_inbound_at = m.created_at;
+        }
+      }
+      for (const q of queue || []) {
+        if (!q.deal_id) continue;
+        const r = upsert(q.deal_id);
+        if (q.status === "pending") r.pending_drafts += 1;
+        if (q.status === "sent") r.sent_count += 1;
+      }
+      rolled = Array.from(rollMap.values()).map((r) => {
+        const d = dealMap.get(r.deal_id);
+        return {
+          ...r,
+          deal_name: d?.name || r.deal_id,
+          deal_status: d?.status || "—",
+          deal_type: d?.type || "—",
+          county: d?.meta?.county || null,
+          surplus_estimated: d?.meta?.estimatedSurplus || null,
+          deceased: !!d?.meta?.deceased,
+          do_not_contact: !!d?.meta?.do_not_contact,
+        };
+      });
+    }
+    // Sort: pending drafts first (need attention), then deals with no
+    // recent inbound after outbound (need follow-up), then engaged.
+    rolled.sort((a, b) => {
+      const aFollow = a.last_outbound_at && (!a.last_inbound_at || a.last_inbound_at < a.last_outbound_at);
+      const bFollow = b.last_outbound_at && (!b.last_inbound_at || b.last_inbound_at < b.last_outbound_at);
+      if ((b.pending_drafts > 0) !== (a.pending_drafts > 0)) return b.pending_drafts - a.pending_drafts;
+      if (aFollow !== bFollow) return aFollow ? -1 : 1;
+      return (b.last_outbound_at || "").localeCompare(a.last_outbound_at || "");
+    });
+    setPerDeal(rolled);
+    setLoading(false);
+  }, [alive]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filteredDeals = perDeal.filter((d) => {
+    if (filter === "all") return true;
+    if (filter === "needs_followup") {
+      return d.last_outbound_at && (!d.last_inbound_at || d.last_inbound_at < d.last_outbound_at) && d.inbound_count === 0;
+    }
+    if (filter === "engaged") return d.inbound_count > 0;
+    if (filter === "pending_draft") return d.pending_drafts > 0;
+    return true;
+  });
+
+  const tile = (label, value, sub, color) => (
+    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: color || "#fafaf9", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fafaf9", margin: 0 }}>Comms analytics</h2>
+        <p style={{ marginTop: 4, marginBottom: 0, color: "#a8a29e", fontSize: 13 }}>
+          Last 30 days of outreach throughput, response funnel, link engagement, and per-deal status. Use the filter to surface deals needing follow-up.
+        </p>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#78716c" }}>Loading…</div>
+      ) : (
+        <>
+          {/* KPI tiles */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+            {tile("Outbound sent · 30d", fmtCount(stats.outbound_30d),
+              `${fmtCount(stats.sent_30d)} via outreach queue`)}
+            {tile("Inbound replies · 30d", fmtCount(stats.inbound_30d),
+              `${fmtPct(stats.inbound_30d, stats.outbound_30d)} response rate`,
+              stats.inbound_30d > 0 ? "#86efac" : null)}
+            {tile("Pending drafts", fmtCount(stats.pending_drafts),
+              `awaiting your review on Today`,
+              stats.pending_drafts > 0 ? "#fcd34d" : null)}
+            {tile("Lauren web chats · 30d", fmtCount(stats.lauren_convs_30d),
+              `${fmtCount(stats.lauren_convs_claimed_30d)} converted to claim`)}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+            {tile("Personalized links", fmtCount(stats.links_total),
+              `${fmtCount(stats.links_claimed)} claimed lifetime · ${fmtPct(stats.links_claimed, stats.links_total)} conversion`)}
+            {tile("Link views · 30d (external)", fmtCount(stats.link_views_external_30d),
+              `${fmtCount(stats.link_views_distinct_30d)} distinct visitors`)}
+            {tile("Conversion rate", fmtPct(stats.lauren_convs_claimed_30d, stats.lauren_convs_30d),
+              `Lauren chats → claim, last 30d`)}
+            {tile("Echo ratio", fmtPct(stats.inbound_30d, stats.outbound_30d),
+              `inbound ÷ outbound (lower = colder)`,
+              stats.inbound_30d / Math.max(stats.outbound_30d, 1) >= 0.1 ? "#86efac" : "#fcd34d")}
+          </div>
+
+          {/* Per-deal digest */}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", margin: 0, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Per-deal digest · {filteredDeals.length}
+            </h3>
+            <div style={{ display: "flex", gap: 4, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, padding: 3 }}>
+              {[
+                ["all", "All"],
+                ["needs_followup", "Needs follow-up"],
+                ["engaged", "Engaged"],
+                ["pending_draft", "Has draft pending"],
+              ].map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setFilter(k)}
+                  style={{
+                    background: filter === k ? "#1c1917" : "transparent",
+                    color: filter === k ? "#fafaf9" : "#78716c",
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "5px 10px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ overflow: "hidden", borderRadius: 10, border: "1px solid #292524" }}>
+            <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+              <thead style={{ background: "#0c0a09", color: "#78716c", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Deal</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Status</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>Out</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>In</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Last out</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Last in</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>Drafts</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>Surplus</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredDeals.length === 0 ? (
+                  <tr><td colSpan={9} style={{ padding: 30, textAlign: "center", color: "#78716c" }}>No deals match this filter.</td></tr>
+                ) : filteredDeals.slice(0, 200).map((d) => {
+                  const followNeeded = d.last_outbound_at && (!d.last_inbound_at || d.last_inbound_at < d.last_outbound_at) && d.inbound_count === 0;
+                  return (
+                    <tr key={d.deal_id} style={{ borderTop: "1px solid #1c1917" }}>
+                      <td style={{ padding: "8px 12px", color: "#fafaf9", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+                        {d.deal_name}
+                        <div style={{ color: "#78716c", fontSize: 10 }}>{d.county || "—"}</div>
+                      </td>
+                      <td style={{ padding: "8px 12px", color: "#a8a29e", fontSize: 12 }}>{d.deal_status}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: "#d6d3d1", fontVariantNumeric: "tabular-nums" }}>{d.outbound_count}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: d.inbound_count > 0 ? "#86efac" : "#78716c", fontVariantNumeric: "tabular-nums" }}>{d.inbound_count}</td>
+                      <td style={{ padding: "8px 12px", color: "#a8a29e", fontSize: 12 }}>{fmtRel(d.last_outbound_at)}</td>
+                      <td style={{ padding: "8px 12px", color: d.inbound_count > 0 ? "#86efac" : "#78716c", fontSize: 12 }}>{fmtRel(d.last_inbound_at)}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: d.pending_drafts > 0 ? "#fcd34d" : "#78716c" }}>{d.pending_drafts || "—"}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: "#d6d3d1", fontVariantNumeric: "tabular-nums" }}>
+                        {d.surplus_estimated ? `$${Math.round(Number(d.surplus_estimated) / 1000)}k` : "—"}
+                      </td>
+                      <td style={{ padding: "8px 12px", display: "flex", gap: 4, fontSize: 10 }}>
+                        {followNeeded && <span style={{ background: "#78350f30", color: "#fcd34d", padding: "2px 6px", borderRadius: 4 }}>follow-up</span>}
+                        {d.deceased && <span style={{ background: "#7f1d1d30", color: "#fca5a5", padding: "2px 6px", borderRadius: 4 }}>🕊️</span>}
+                        {d.do_not_contact && <span style={{ background: "#7f1d1d30", color: "#fca5a5", padding: "2px 6px", borderRadius: 4 }}>DNC</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────
