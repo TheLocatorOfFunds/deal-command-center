@@ -115,57 +115,61 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-05-01 (afternoon) — three PRs merged today + surplus pipeline scaffolding live.
-**Branch:** main (no in-flight branch)
-**Working on:** (1) Audited all 110 active deals (75 GHL imports + 35 other recent), bulk-minted 72 homeowner personalized URLs, briefed Eric in his DCC DM thread. (2) Fixed Eric-misses-DMs gap with persistent banner + animated badge + clear-all-on-engage (PRs #35, #37). (3) Made the 2026-05-01 architecture call on surplus pipeline (extends DCC, doesn't get its own Supabase) + scaffolded `surplus_docket_events` table + `surplus-pdfs` bucket (PR #38 merged, migration applied). Removed redundant Estimated Loan Balance field along the way.
+**Status:** Active — 2026-05-08 evening — full-day audit + 8 migrations + system alert hardening
+**Branch:** main (all work merged)
 
-**Audit findings (75 GHL imports)**:
-- 70 of 75 had no personalized URL minted (93%) — biggest blocker, now fixed for 72
-- 17 untiered (bulk-queue gate skips them) — Eric's lane to set A/B/C
-- 14 have `meta.homeownerPhone` but no synced textable contact row
-- 36 missing sale_price; 65 missing surplus estimate; 12 missing sale_date
-- 75 of 75 missing mailing_address — system-wide gap
-- 285 contacts still labeled `other` (Eric labeling); only 1 GHL import has fully unlabeled contacts (his work is showing)
+**Tonight (2026-05-08) — what shipped**
 
-**Just shipped (data, not code)**:
-- 72 homeowner `personalized_links` rows minted via DCC tab JS injection. URL nickname = `firstname+lastname`. All 72 sync'd back to `deals.refundlocators_token` via the existing trigger. PL row count went from ~37 → 109. Source field `dcc-bulk-mint-2026-05-01` for traceability.
-- Skipped: 285 "other"-relationship contacts (need Eric to label first → second bulk-mint round) + 42 "homeowner"-labeled contacts (duplicates of deal-level URL).
-- Eric briefing sent (team_messages row `91222175-…`) covering the vision, the per-lead checklist, the priority punchlist, and the going-forward QA flow. Edited later to swap "slug" → "URL nickname" + follow-up note.
+Bug-fix marathon driven by Eric flagging multiple silent failures. Pattern that emerged: **contact data ↔ deal data drift** — facts on `contacts` that need to bridge to `deal.meta` for the auto-queue gate to see them. Hit it 4 times today, fixed each instance + the architectural pattern.
 
-**Just shipped (code, all merged to main today)**:
-- **PR #35** — Persistent unread-chat banner: full-width red banner under the header on every view when `unreadChatCount > 0` and not dismissed. Click → opens chat. × dismisses (local). Reappears on next new message. Header 💬 Chat badge now pulses (`chatBadgePulse` keyframe) when unread > 0. Also removed the Estimated Loan Balance field (Judgment + Total Debt cover the math).
-- **PR #37** — Unified notification clearing: `markAllChatRead()` at App level upserts `last_read_at = now` across all team threads. Wired into all 4 chat-notification entry points (banner click, header chat button, toast Reply, OS notification). Engage one surface → all surfaces clear.
-- **PR #38** — Surplus pipeline scaffolding: new `public.surplus_docket_events` table + `surplus-pdfs` storage bucket. Per the architecture call: Castle / Ohio Intel surplus pipeline extends DCC's Supabase (separate bucket + table), no new project. PDFs land at `surplus-pdfs/<castle_case_id>/<filename>` via Castle's service-role uploads during scrape session. RLS admin-only. Migration `20260501100000_surplus_docket_events.sql`.
-- Cache buster `app.js?v=20260430m` → `20260501a` → `20260501b`.
+**Migrations applied** (8 today, all via SQL editor):
+1. `20260508130000_team_threads_dm_privacy_fix.sql` — Eric was reading my DMs with Justin (pre-Phase-3 DMs defaulted to thread_type='channel'). New RLS: if a thread has any `team_thread_participants` rows, only those participants read it. 247 contact_deals.relationship NULLs backfilled from contacts.kind in same pass.
+2. `20260508140000_backfill_ghl_family_relationship.sql` — historical GHL family-contacts from 4-29 + 5-1 imports were `relationship='other'`; backfilled to `'family'` (today's importer fix already changed the default).
+3. `20260508150000_homeowner_phone_sync.sql` — Charlotte Morrow / Richard Mikol / Trevor Mccain were silently skipped from outreach because their phones lived only on `contacts.phone`, not `deal.meta.homeownerPhone`. 6 deals affected; 3 prepped A-tier retroactively queued. Added 2 sync triggers: contact phone update → meta; contact_deals link → meta. Going forward this can't recur.
+4. `20260508160000_audit_remediation.sql` — fired 3 things in one paste: cancelled 2 deceased-homeowner outreach rows that would have texted dead people (Lindon Phillips, Leroy Turner Jr); cancelled 1 zombie pending row stuck 9 days; backfilled `meta.deceased=true` on 24 deals where the contact-level flag wasn't propagating; deceased-contact → meta sync triggers; `sweep_stale_outreach_queue()` function + pg_cron daily 09:00 UTC; deleted 20 orphan personalized_links (incl my own manual-test claim row).
+5. `20260508170000_personalized_link_views.sql` — per-view audit table because Eric's pushback caught me overclaiming engagement on Richard. Old `view_count` was just a counter — couldn't distinguish 1 person × 39 refreshes from 39 distinct viewers from team testing. New `personalized_link_views` table captures IP + user-agent + referer per page hit. Plus `v_personalized_link_engagement` view that exposes `distinct_external_fingerprints` and `external_views_*` (excludes is_team_view=true).
+6. `20260508180000_post_alerts_to_ops_chat.sql` — claim submissions and Lauren chat alerts now post to # Ops thread as `team_messages` with new `sender_kind='system'`. Third notification leg alongside Twilio SMS + Resend email. The chat post is the one we KNOW reaches the team because we're already in DCC.
 
-**Just landed (apr 30 batch — git log 634c2ce → f16ce1a, all on main)**:
-chat black-screen fix (isOwner threading) · Lauren EOD-polish (`lauren-eod-polish` EF) · per-deal screen recordings + Lauren auto-summary (`lauren-recording-summary` EF, `screen_recordings` table) · chat unread badge + per-thread badges + Mark-all-read · top-right team-message toasts · PDFs on every docket-event UI + root-cause `attach-docket-pdf` (vault secret never set; EF refactored to drop check) · glass-box scraper health drill-in + 88+ `realsheriff_*` agents seeded · DealStatusBadges cluster on every card · `phone_intel` + `queue_phone_probe` RPC + Comms-tab UI · App-level RecordingContext + minimizable pill · active-call header pills (from chat 📹 markers, last 30 min) · editable per-contact URL relationship + Tier filter on kanban · team-chat paste + `tg_auto_queue_phone_probe` (124 backfilled) + EodReportsToday widget on Today · removed 88+-pill CASTLE SCRAPER ALERTS wall from Attention · honest probe states (queued/probing/stuck) + Reset + drag-and-drop + paste screenshots in Comms composer · in-DCC monitoring: `system_alerts` + `report_system_alert()` + pg_cron sweeper + ⚠ owner-only header badge + modal viewer (wired into `attach-docket-pdf` + `intel-sync`).
+**Code shipped (commits dfd9d57 → 4463343, all on main)**:
+- GHL importer fix — read `Family N Name` from CSV; default `relationship='family'`
+- DCC `dealMetaPhone()` helper centralized — accepts 4 phone-key variants (`homeownerPhone | phone | contactPhone | homeowner_phone`)
+- Soft-delete on deals (admin-only, reason codes, restore view) — already shipped 5/7, used today on Joseph Mondello + Matthew Thomas
+- Tier-independent 🕊 deceased badge — appears on cards / detail header / Send Intro / Send Personalized Link
+- Dup-check on + New Deal modal (debounced live match against existing deals)
+- Bulk-queue C-tier admin button on Pipeline → Kanban (closes the "27 prepped C-tier sit in Ready forever" gap)
+- Engagement strip on every deal Overview (post-tonight) — reads v_personalized_link_engagement, color-codes signal (gray = no audited views, amber = 1-2 distinct, green = 3+ distinct = real interest)
+- 4 SOPs / docs to Eric in # Ops chat: SOP v2 written + delivered (audit miss on the 7 deceased-homeowner deals caught + retracted publicly)
 
-Cache-buster live: `app.js?v=20260501b`.
+**Eric's pushback caught 2 of my misclaims today**:
+- "Add a homeowner contact via Comms tab on the 7 prepped-no-homeowner deals" — would have texted 6 dead people. Eric correctly added heirs/relatives instead.
+- "Richard Mikol HOT lead — submitted claim, viewed today" — the "claim" was MY manual portal test on 4/28 (same fake AR phone 4794595671 as the deleted Nathan-Johnson orphan). Reset his fake `claim_submitted_at` + cancelled the bad Day-0 draft tonight.
 
-**Credential leak (action item for Nathan)**: the `supabase projects api-keys` CLI command printed the legacy `service_role` JWT into my transcript. Recommend rotating it in Project Settings → API → JWT-based API keys (legacy) → Disable. Coordinate with Castle first — their `config/.env` uses the legacy JWT today; move them to the new `sb_secret_*` key before disabling the legacy JWT or Castle's writes will fail.
+**Live state metrics (verified 2026-05-08)**:
+- 130 active deals, 132 total (2 soft-deleted)
+- 73 prepped, 22 outreach drafts queued
+- **4 outbound messages sent in 7 days** ← the launch bottleneck. Whole funnel points at a Send button that hasn't been clicked at scale.
+- 20 A-tier · 25 B-tier · 53 C-tier · 32 untiered
+- 147 personalized URLs minted (23 with any views — but real distinct visitors unknown until per-view audit fills)
+- 4 signed / 5 filed / 3 recovered
 
-**Uncommitted (in repo per previous-session note)**: `.github/workflows/weekly-db-backup.yml` + `docs/BACKUP_SETUP.md`. Weekly `pg_dump` → Cloudflare R2. Workflow committed but inert until Nathan populates 6 GitHub secrets — ask if he finished the SETUP doc.
+**Open follow-ups (mostly unblocked, Nathan's choice when to fire)**:
+- Send the first real outbound on a queued A-tier draft to verify the mac-bridge end-to-end (the actual launch — 0 messages sent in 7 days while 22 drafts are waiting)
+- Cherry-pick portal commit `97c4747` from `nathan/lauren-returning-visitor-memory` to main (per-view tracking only kicks in once that branch deploys; migration already in prod)
+- Set `TEAM_VIEW_IPS` env var in Vercel (CSV of team IPs) — without this, all team views land in the audit table without is_team_view flag
+- 118 GHL family-contact orphans from 4-29 + 5-1 imports — re-link by name pattern OR wipe + re-import (re-link saves $177 in IDI Core spend)
+- Castle scraper health: butler + montgomery chronic 3 days; alert email_sent=false 5 days. Chronic alert path is dead. SSH defender-mini → restart launchctl daemons + investigate `castle-health-daily` EF Resend call.
+- Smoke-test the # Ops claim alert chain (submit fake claim on inactive token, watch chat) — verifies tonight's wiring
+- 4 _pending_review/ migrations (client_edit_requests, research_shadow_log, research_rejections, agent_room_actions) — apply when their consumers go live
 
-**Cross-session blocked**:
-- Justin lane (`JUSTIN_PHONE_INTEL_PROBE_SPEC.md`) — Mac bridge needs AppleScript probe + `send-sms` routing on `phone_intel.imessage_capable`. Until shipped, every probe sits `status='queued'`. UI is honest about it.
-- Ohio Intel + Castle — scrapers must upload PDFs DURING scrape session (county portals are session-protected; `attach-docket-pdf` can't fetch-later). Per `project_docket_pdf_requirement.md` memory.
+**Cross-session state**:
+- Justin: shipped RVM pipeline + DocuSign signing + delivery-callback wiring (Twilio + Resend + Slybroadcast) this week. Migration drift CI live. Parked 2 client-notify triggers under `_pending_review/` pending approval-flow design.
+- Ohio Intel: massive coverage push — 33 CV3 counties + 14 records-request snapshots + Tyler Cloud (Lucas/Licking/Medina) + Henschen (8 counties) + BenchmarkWeb (3) + Stark + ProWare Razor (Montgomery). Cuyahoga 720/720 cases enriched. Three-tab home rebuild. Auction status audit log. Address normalization via usaddress lib. Surplus floor 1K → 5K. Grade D added for underwater. Embedded Lauren panel.
+- Eric: 73 leads prepped through the workflow. Caught 3 audit misses (Charlotte phone, deceased-7 list, Richard "engagement"). Wrote prep-queue SOP for Inaam (now in Library v2 form).
+- Inaam: been doing NOD/30DTS work + categorization. Needs admin role bump (SQL ready in 2026-05-08 transcript) before he can see surplus fields and start the prep flow per the SOP.
 
-**Other state**:
-- PITR parked ($115/mo); R2 backup ($5/mo) is the chosen path. PITR available at Supabase dashboard → Database → Backups → PITR if Nathan reverses.
-- Eric hand-cleaning first-22 GHL imports (off-by-one TZ pre-5c762d7) + labeling family-contact relationships. Don't stack new imports on top.
-- Cloudflare audit + Obsidian vault v0 — still pending.
+**Touching tonight**: `src/app.jsx` (engagement strip + earlier today's helpers), `WORKING_ON.md` (this update), 8 supabase migrations under `supabase/migrations/`, refundlocators-next portal page (per-view IP/UA capture, on `nathan/lauren-returning-visitor-memory` branch awaiting merge).
 
-**Touching**: `personalized_links` (72 INSERT), `deals.refundlocators_token` (72 sync via trigger), `team_messages` (2 INSERT in Eric's DM thread — briefing + notification-permission walkthrough), `src/app.jsx` + `index.html` (banner + animations + clear-all wiring), `supabase/migrations/20260501100000_surplus_docket_events.sql` (new table + bucket).
-
-**Open for follow-up** (after Eric's QA pass):
-- Round 2 bulk-mint for family-contact URLs once Eric labels relationships (285 contacts pending)
-- Tier the 17 untiered GHL imports (Eric's call)
-- Address the 14 "phone-in-meta-but-no-contact-row" deals
-- Backfill sale_price on 36 deals
-- Decide mailing_address strategy (skip-trace vs. soften copy)
-
-**Last updated:** 2026-05-01 (after audit + bulk-mint + Eric briefing).
+**Last updated:** 2026-05-08 evening (post-audit, post-engagement-strip).
 
 ---
 

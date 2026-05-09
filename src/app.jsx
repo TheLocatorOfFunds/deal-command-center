@@ -14547,12 +14547,144 @@ function SubLabel({ children }) {
   );
 }
 
+// Engagement strip — distinct browser fingerprints + external view counts
+// from the personalized_link_views audit table (added 2026-05-08). Reads
+// v_personalized_link_engagement which excludes is_team_view=true rows.
+//
+// Why this exists: prior to per-view tracking, view_count was just a
+// counter incremented on every page hit. 39 views could be 1 person ×
+// 39 refreshes, 39 people × 1 visit, or — as Eric's audit pushback
+// caught — a mix of team testing and homeowner curiosity. This strip
+// shows the metric that actually distinguishes real homeowner
+// engagement from team noise: distinct external fingerprints.
+//
+// Empty state: deals minted before 2026-05-08 won't have audit data
+// until somebody hits their URL again. Pre-existing view_count is
+// preserved on personalized_links.view_count and shown as fallback.
+function EngagementStrip({ deal }) {
+  const [engagement, setEngagement] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const token = deal?.refundlocators_token;
+
+  useEffect(() => {
+    if (!token) { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('v_personalized_link_engagement')
+        .select('*').eq('token', token).maybeSingle();
+      // Also grab the legacy view_count for fallback display on pre-audit deals.
+      const { data: pl } = await sb.from('personalized_links')
+        .select('view_count, first_viewed_at, last_viewed_at')
+        .eq('token', token).maybeSingle();
+      if (cancelled) return;
+      setEngagement({ ...(data || {}), legacy_view_count: pl?.view_count || 0,
+                      legacy_last_viewed: pl?.last_viewed_at,
+                      legacy_first_viewed: pl?.first_viewed_at });
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  if (!token) return null; // No URL minted → nothing to track
+  if (loading) return null;
+
+  const e = engagement || {};
+  const externalDistinct = e.distinct_external_fingerprints || 0;
+  const externalViews = e.external_views || 0;
+  const externalLast = e.last_external_viewed_at;
+  const external24h = e.external_views_last_24h || 0;
+  const external7d = e.external_views_last_7d || 0;
+  const totalAudited = e.total_views || 0;
+  const legacyCount = e.legacy_view_count || 0;
+  const legacyLast = e.legacy_last_viewed;
+  const auditCoversAll = totalAudited >= legacyCount && totalAudited > 0;
+
+  // Engagement signal color (real homeowner attention, not team).
+  // Honest framing: team views can't be definitively excluded until
+  // TEAM_VIEW_IPS env var is set on the portal Vercel. For now,
+  // distinct_external_fingerprints is the best proxy.
+  let signalColor = '#78716c'; // gray
+  let signalLabel = 'no audited engagement yet';
+  if (externalDistinct >= 3) {
+    signalColor = '#10b981'; // green
+    signalLabel = `${externalDistinct} distinct browsers · likely real interest`;
+  } else if (externalDistinct === 2) {
+    signalColor = '#fbbf24'; // amber
+    signalLabel = `2 distinct browsers · could be homeowner + family`;
+  } else if (externalDistinct === 1) {
+    signalColor = '#fbbf24';
+    signalLabel = `1 distinct browser · single viewer (could be team)`;
+  } else if (legacyCount > 0 && totalAudited === 0) {
+    signalColor = '#78716c';
+    signalLabel = `${legacyCount} legacy views · audit started 2026-05-08, awaiting new traffic`;
+  }
+
+  const fmtTime = (iso) => {
+    if (!iso) return null;
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return 'just now';
+    if (ms < 3600000) return Math.round(ms/60000) + 'm ago';
+    if (ms < 86400000) return Math.round(ms/3600000) + 'h ago';
+    return Math.round(ms/86400000) + 'd ago';
+  };
+  const lastViewLabel = fmtTime(externalLast || legacyLast);
+
+  return (
+    <div style={{
+      margin: '12px 0 16px',
+      padding: '10px 14px',
+      background: '#0c0a09',
+      border: '1px solid #1c1917',
+      borderLeft: `3px solid ${signalColor}`,
+      borderRadius: 6,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexWrap: 'wrap',
+      fontSize: 11,
+    }}>
+      <span style={{ fontSize: 9, fontWeight: 800, color: '#a8a29e', letterSpacing: '0.12em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+        👁 Engagement
+      </span>
+      <span style={{ color: signalColor, fontWeight: 600 }}>{signalLabel}</span>
+      <span style={{ color: '#57534e' }}>·</span>
+      <span style={{ color: '#a8a29e' }}>
+        Views: <b style={{ color: '#d6d3d1' }}>{externalViews}</b> external
+        {totalAudited > externalViews && <span style={{ color: '#78716c' }}> ({totalAudited} total inc. team)</span>}
+      </span>
+      {(external24h > 0 || external7d > 0) && (
+        <>
+          <span style={{ color: '#57534e' }}>·</span>
+          <span style={{ color: '#a8a29e' }}>
+            <b style={{ color: '#d6d3d1' }}>{external24h}</b>/24h · <b style={{ color: '#d6d3d1' }}>{external7d}</b>/7d
+          </span>
+        </>
+      )}
+      {!auditCoversAll && legacyCount > 0 && (
+        <>
+          <span style={{ color: '#57534e' }}>·</span>
+          <span style={{ color: '#78716c', fontStyle: 'italic' }}>
+            {legacyCount} legacy views (pre-audit, source unknown)
+          </span>
+        </>
+      )}
+      {lastViewLabel && (
+        <>
+          <span style={{ color: '#57534e' }}>·</span>
+          <span style={{ color: '#a8a29e' }}>last view: <b style={{ color: '#d6d3d1' }}>{lastViewLabel}</b></span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
     <div>
       <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
+      <EngagementStrip deal={deal} />
       {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
           NotesDrawer rendered at the DealDetail level. The drawer
           handles all reads + writes; this overview no longer plasters
