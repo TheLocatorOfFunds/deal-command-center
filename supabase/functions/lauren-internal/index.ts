@@ -51,6 +51,7 @@ const SYSTEM = [
   "- Ohio Intel surplus events (~11k rows): Castle-verified post-sale orders with PDFs (disbursement orders, distribution orders, satisfactions). Use intel_get_surplus_events to filter by case / county / amount / recency / keyword.",
   "- Ohio Intel homeowner info: skip-traced phones, emails, relatives, addresses, employer per case. Use intel_get_homeowner_info — but always announce when you're sharing PII, especially with VAs.",
   "- Ohio Intel full docket: intel_get_full_docket gives the entire docket history for a case without truncation, paginated. Use this when intel_get_case's last-20-truncated-to-200 isn't enough.",
+  "- Outbound composition: when the owner asks for a draft outreach (SMS / email / voice script) for a specific deal, call compose_outbound_brief(deal_id, channel) FIRST to gather everything (DCC deal + linked Intel case + verified surplus events + homeowner summary + recent outreach history + channel rules + voice guide). Then compose the message inline in chat. Once the owner approves wording, call queue_outbound_message to insert into outreach_queue with status='pending'. NEVER skip the brief — it grounds your draft in real numbers + voice rules.",
   "",
   "How to respond:",
   "- Short answers unless detail is explicitly needed",
@@ -182,6 +183,47 @@ const TOOLS = [
         limit: { type: "number", description: "Max results per page (default 50, max 200)" },
       },
       required: ["case_number", "county"],
+    } },
+
+  // ─── Outbound Lauren (compose + queue) ────────────────────────────
+  // Outbound Lauren = the owner asks Lauren in chat to draft a
+  // personalized outreach message for a specific deal. Lauren:
+  //   1. Calls compose_outbound_brief(deal_id, channel) to gather all
+  //      relevant context (DCC deal, linked Ohio Intel case, verified
+  //      surplus events, homeowner info, recent outreach history,
+  //      channel-specific voice rules).
+  //   2. Drafts the message inline in the chat using that context.
+  //   3. When the owner says "ship it", calls queue_outbound_message
+  //      to insert into outreach_queue with status='pending'. The
+  //      existing DCC outreach UI handles the actual review + send.
+  //
+  // Lauren's draft beats generate-outreach's because she has the full
+  // Ohio Intel knowledge graph (verified surplus, plaintiff, full
+  // docket) — generate-outreach only sees DCC's deal row.
+
+  { name: "compose_outbound_brief",
+    description: "Gather everything needed to write an outbound message for a specific deal — the DCC deal data, linked Ohio Intel case (if any), verified surplus events, homeowner contact, recent outreach history, and channel-specific voice rules. Use this BEFORE drafting an outbound message so the draft is grounded in real context. Returns structured data; YOU compose the message in your reply.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string", description: "DCC deal id (e.g. 'sf-creech', 'flip-2533')" },
+        channel: { type: "string", description: "'sms' (default) | 'email' | 'voice'" },
+      },
+      required: ["deal_id"],
+    } },
+
+  { name: "queue_outbound_message",
+    description: "After you've drafted an outbound message and the owner has approved the wording, queue it for sending. Inserts into outreach_queue with status='pending' so the existing DCC outreach UI picks it up for the actual send. Doesn't send directly — that's a separate manual approval step in the UI.",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string", description: "DCC deal id" },
+        channel: { type: "string", description: "'sms' | 'email' | 'voice' — must match what was drafted" },
+        draft_body: { type: "string", description: "The message text Lauren composed" },
+        reasoning: { type: "string", description: "One sentence on why this draft fits this deal — populates outreach_queue.agent_reasoning" },
+        cadence_day: { type: "number", description: "Cadence position. 0 = intro (default), 1/3/5 = early follow-ups, 7+ = drips. Use 0 for fresh Lauren-composed openers." },
+      },
+      required: ["deal_id", "channel", "draft_body"],
     } },
 
   // ─── VA work queue (Phase 3 of Lauren-on-top) ─────────────────────
@@ -611,6 +653,241 @@ async function intelGetFullDocket(
   };
 }
 
+// ─── Outbound Lauren — compose + queue ─────────────────────────────
+
+const CHANNEL_RULES: Record<string, string> = {
+  sms: [
+    "SMS — strict format:",
+    "  • Single message, target ≤160 chars, hard cap 300.",
+    "  • Sounds like Nathan personally texting from his phone — warm, direct, lower-case is fine.",
+    "  • 1–3 sentences max. Lead with empathy or curiosity, not a sales pitch.",
+    "  • Mention the surplus context if it's specific (county, $ range) — vague otherwise.",
+    "  • Include the personalized portal link if available — refundlocators.com/s/<token>.",
+    "  • NEVER use: em dashes (— or --), exclamation points, emojis, 'I hope this finds you well',",
+    "    'amazing opportunity', any of the FORBIDDEN PHRASES from the public Lauren prompt.",
+    "  • Plain punctuation only: periods, commas, question marks. No dashes as connectors.",
+  ].join("\n"),
+  email: [
+    "Email — format:",
+    "  • Subject line ≤60 chars; specific to their case (county or address).",
+    "  • Body 2–4 short paragraphs. First paragraph: warm, name them, what we found.",
+    "  • Second paragraph: brief plain-English context (sale outcome, surplus estimate range).",
+    "  • Third paragraph: low-pressure invitation — link to portal, our number to text/call.",
+    "  • Sign off as 'Nathan' — not 'Nathan Johnson' or any title.",
+    "  • Same forbidden phrases as SMS.",
+  ].join("\n"),
+  voice: [
+    "Voice script (for TTS-driven RVM) — format:",
+    "  • 30–50 words, ~10–15 seconds when read aloud.",
+    "  • Conversational rhythm with natural pauses (use commas + periods to space).",
+    "  • Identify Nathan, identify their county, mention surplus, give a callback number or portal URL.",
+    "  • No abbreviations TTS will mangle ('OH' → 'Ohio'; '$' → 'dollars'; etc.).",
+    "  • Same forbidden phrases as SMS.",
+  ].join("\n"),
+};
+
+const VOICE_GUIDE_EXCERPT = [
+  "Nathan's voice (verbatim phrases that are ON-brand):",
+  "  • 'I came across your case and wanted to reach out personally.'",
+  "  • 'There may be money the county is holding from your sale.'",
+  "  • 'Either way, no pressure — happy to walk you through it.'",
+  "  • 'You already lost the house — we're trying to help you recover what's left.'",
+  "OFF-brand: anything that sounds like a marketing email, mass-text shop, or pressure tactic.",
+].join("\n");
+
+async function composeOutboundBrief(dealId: string, channel?: string) {
+  const ch = String(channel || "sms").toLowerCase();
+  if (!CHANNEL_RULES[ch]) {
+    return { error: `Unknown channel '${channel}'. Use 'sms' | 'email' | 'voice'.` };
+  }
+  const db = sb();
+
+  // 1. Pull the DCC deal.
+  const { data: deal, error: dealErr } = await db
+    .from("deals")
+    .select("id, name, address, type, status, meta, created_at")
+    .eq("id", dealId)
+    .single();
+  if (dealErr || !deal) {
+    return { error: `Deal not found: ${dealId}` };
+  }
+  const m = (deal.meta || {}) as Record<string, unknown>;
+
+  // 2. Recent outreach history (last 10 items on this deal).
+  const { data: recentOutreach } = await db
+    .from("outreach_queue")
+    .select("cadence_day, status, channel, draft_body, sent_at, created_at, scheduled_for")
+    .eq("deal_id", dealId)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  // 3. Recent inbound/outbound messages on this deal (Twilio side).
+  const { data: recentMessages } = await db
+    .from("messages_outbound")
+    .select("direction, channel, body, created_at, read_by_team_at")
+    .eq("deal_id", dealId)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  // 4. Linked Ohio Intel case (if dealId matches a dcc_deal_id over there).
+  const intel = intelSb();
+  let intelCase: any = null;
+  let surplusEvents: any[] = [];
+  let homeownerSummary: any = null;
+  if (intel) {
+    const { data: caseRow } = await intel
+      .from("ohio_case")
+      .select(
+        "case_number, county, defendant_primary, plaintiff, sale_at, sale_price, opening_bid, judgment_amount, total_debt_on_deed, surplus_estimate, grade, auction_status, property:property_id(street, city, state, zip)",
+      )
+      .eq("dcc_deal_id", dealId)
+      .maybeSingle();
+    if (caseRow) {
+      intelCase = formatIntelCase(caseRow);
+
+      // Verified surplus events for this case.
+      const { data: events } = await intel
+        .from("surplus_docket_event")
+        .select("entry_date, description, amount, has_image, pdf_storage_path")
+        .eq("case_number", caseRow.case_number)
+        .eq("county", caseRow.county)
+        .order("entry_date", { ascending: false })
+        .limit(5);
+      surplusEvents = events || [];
+
+      // Homeowner skip-trace summary (counts only — actual phones/emails
+      // surfaced via intel_get_homeowner_info if owner explicitly asks).
+      const { data: caseFull } = await intel
+        .from("ohio_case")
+        .select("property_id")
+        .eq("case_number", caseRow.case_number)
+        .eq("county", caseRow.county)
+        .maybeSingle();
+      if (caseFull?.property_id) {
+        const { data: links } = await intel
+          .from("person_property")
+          .select("ohio_person:person_id(phones, emails, relatives)")
+          .eq("property_id", caseFull.property_id);
+        const people = (links || []).map((l: any) => l.ohio_person).filter(Boolean);
+        homeownerSummary = {
+          person_count: people.length,
+          total_phones: people.reduce((n: number, p: any) => n + (Array.isArray(p.phones) ? p.phones.length : 0), 0),
+          total_emails: people.reduce((n: number, p: any) => n + (Array.isArray(p.emails) ? p.emails.length : 0), 0),
+          relatives_known: people.some((p: any) => Array.isArray(p.relatives) && p.relatives.length > 0),
+        };
+      }
+    }
+  }
+
+  // 5. Personalized portal link (if the deal has a token).
+  const portalLink = m.refundlocators_token || m.token
+    ? `https://refundlocators.com/s/${m.refundlocators_token || m.token}`
+    : null;
+
+  return {
+    deal: {
+      id: deal.id,
+      name: deal.name,
+      address: deal.address,
+      county: m.county || intelCase?.county || null,
+      status: deal.status,
+      type: deal.type,
+      sale_date:        m.saleDate     || intelCase?.sale_at      || null,
+      sale_price:       m.salePrice    || intelCase?.sale_price   || null,
+      judgment_amount:  m.judgment     || intelCase?.judgment_amount || null,
+      surplus_estimated: m.estimatedSurplus || intelCase?.surplus_estimate || null,
+      fee_pct: m.feePct || 25,
+      attorney: m.attorney || null,
+      homeowner_phone: m.homeownerPhone || null,
+      homeowner_email: m.homeownerEmail || null,
+      contact_preference: m.contact_preference || null,
+      portal_link: portalLink,
+      deceased: !!m.deceased,
+      do_not_contact: !!m.do_not_contact,
+    },
+    intel_case: intelCase,
+    verified_surplus_events: surplusEvents.map((e: any) => ({
+      entry_date: e.entry_date,
+      description: e.description,
+      amount: e.amount,
+      has_pdf: !!e.pdf_storage_path,
+    })),
+    homeowner_data_summary: homeownerSummary,
+    recent_outreach_history: (recentOutreach || []).slice(0, 5).map((r: any) => ({
+      channel: r.channel,
+      cadence_day: r.cadence_day,
+      status: r.status,
+      sent_at: r.sent_at,
+      created_at: r.created_at,
+      draft_excerpt: r.draft_body ? String(r.draft_body).slice(0, 120) : null,
+    })),
+    recent_inbound_outbound: (recentMessages || []).slice(0, 5).map((m: any) => ({
+      direction: m.direction,
+      channel: m.channel,
+      body_excerpt: m.body ? String(m.body).slice(0, 120) : null,
+      created_at: m.created_at,
+    })),
+    channel: ch,
+    channel_rules: CHANNEL_RULES[ch],
+    voice_guide: VOICE_GUIDE_EXCERPT,
+    instructions_for_lauren:
+      "You now have everything needed to draft an outbound message. Compose it in your reply per the channel_rules. Stay grounded in the deal data above — don't invent figures. If a key field is null, omit that detail rather than fabricate. After the owner approves the wording, call queue_outbound_message with the final draft.",
+  };
+}
+
+async function queueOutboundMessage(input: {
+  deal_id: string;
+  channel: string;
+  draft_body: string;
+  reasoning?: string;
+  cadence_day?: number;
+}, requestedById: string) {
+  const dealId = String(input.deal_id || "").trim();
+  const channel = String(input.channel || "sms").toLowerCase();
+  const draft = String(input.draft_body || "").trim();
+  const cadence = Number.isFinite(input.cadence_day) ? Number(input.cadence_day) : 0;
+  if (!dealId) return { error: "deal_id required" };
+  if (!CHANNEL_RULES[channel]) return { error: `Unknown channel '${channel}'` };
+  if (!draft) return { error: "draft_body required" };
+
+  const db = sb();
+  // Pull the deal's contact phone for SMS routing (the existing
+  // outreach pipeline expects contact_phone populated).
+  const { data: deal } = await db
+    .from("deals")
+    .select("id, meta")
+    .eq("id", dealId)
+    .single();
+  if (!deal) return { error: `Deal ${dealId} not found` };
+  const phone = (deal.meta as any)?.homeownerPhone || null;
+
+  const { data, error } = await db
+    .from("outreach_queue")
+    .insert({
+      deal_id: dealId,
+      contact_phone: phone,
+      cadence_day: cadence,
+      draft_body: draft,
+      agent_reasoning: input.reasoning ?? "Drafted by owner-audience Lauren via compose_outbound_brief.",
+      status: "pending",
+      channel,
+      scheduled_for: new Date().toISOString(),
+    })
+    .select("id")
+    .single();
+  if (error) return { error: `Couldn't queue: ${error.message}` };
+
+  return {
+    queued: true,
+    queue_id: data?.id,
+    deal_id: dealId,
+    channel,
+    cadence_day: cadence,
+    message:
+      "Queued. The DCC outreach UI now shows it as a pending draft for review — owner clicks Send to actually fire it.",
+  };
+}
+
 // ─── VA work queue helpers (Phase 3) ────────────────────────────────
 //
 // Generic insert-into-queue helper. Used by all three queue_* tools.
@@ -817,6 +1094,9 @@ async function runTool(
   if (name === "intel_get_surplus_events") return intelGetSurplusEvents(input || {});
   if (name === "intel_get_homeowner_info") return intelGetHomeownerInfo(input.case_number, input.county);
   if (name === "intel_get_full_docket") return intelGetFullDocket(input.case_number, input.county, input.offset, input.limit);
+  // Outbound Lauren — compose + queue
+  if (name === "compose_outbound_brief") return composeOutboundBrief(input.deal_id, input.channel);
+  if (name === "queue_outbound_message") return queueOutboundMessage(input || {}, ctx.userId);
   // VA work queue tools (Phase 3) — always enqueue. Owner audience
   // asking for these means Lauren misjudged; queue is harmless +
   // visible so it's safer than executing.
