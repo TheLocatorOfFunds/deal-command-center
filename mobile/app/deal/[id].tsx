@@ -67,6 +67,15 @@ type ActivityRow = {
   created_at: string | null
 }
 
+type Note = {
+  id: string
+  title: string | null
+  body: string | null
+  author_id: string | null
+  author_name?: string | null
+  created_at: string | null
+}
+
 type CommsItem = {
   kind: 'sms' | 'call'
   id: string
@@ -86,6 +95,7 @@ export default function DealDetailScreen() {
   const [contactLinks, setContactLinks] = useState<ContactLink[]>([])
   const [activity, setActivity] = useState<ActivityRow[]>([])
   const [comms, setComms] = useState<CommsItem[]>([])
+  const [notes, setNotes] = useState<Note[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -93,7 +103,7 @@ export default function DealDetailScreen() {
   const load = useCallback(async () => {
     if (!id) return
     setError(null)
-    const [d, v, c, a, msgs, calls] = await Promise.all([
+    const [d, v, c, a, msgs, calls, n] = await Promise.all([
       supabase
         .from('deals')
         .select('id, type, status, name, address, meta, updated_at')
@@ -132,9 +142,22 @@ export default function DealDetailScreen() {
         .eq('deal_id', id)
         .order('started_at', { ascending: false })
         .limit(10),
+      // Notes on this deal
+      supabase
+        .from('deal_notes')
+        .select('id, title, body, author_id, created_at')
+        .eq('deal_id', id)
+        .order('created_at', { ascending: false })
+        .limit(20),
     ])
     const firstErr =
-      d.error || v.error || c.error || a.error || msgs.error || calls.error
+      d.error ||
+      v.error ||
+      c.error ||
+      a.error ||
+      msgs.error ||
+      calls.error ||
+      n.error
     if (firstErr) {
       setError(firstErr.message)
     } else {
@@ -186,6 +209,35 @@ export default function DealDetailScreen() {
         (x, y) => new Date(y.at).getTime() - new Date(x.at).getTime(),
       )
       setComms(merged.slice(0, 15))
+
+      // Hydrate note authors
+      const rawNotes = (n.data ?? []) as Note[]
+      const authorIds = Array.from(
+        new Set(
+          rawNotes
+            .map((nn) => nn.author_id)
+            .filter((x): x is string => !!x),
+        ),
+      )
+      const authorMap = new Map<string, string>()
+      if (authorIds.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, name, display_name')
+          .in('id', authorIds)
+        for (const p of profs ?? []) {
+          authorMap.set(
+            p.id as string,
+            (p.display_name as string) || (p.name as string) || 'team',
+          )
+        }
+      }
+      setNotes(
+        rawNotes.map((nn) => ({
+          ...nn,
+          author_name: nn.author_id ? authorMap.get(nn.author_id) : null,
+        })),
+      )
     }
     setLoading(false)
     setRefreshing(false)
@@ -360,6 +412,37 @@ export default function DealDetailScreen() {
                 onDial={dial}
               />
             ) : null,
+          )}
+        </View>
+
+        {/* Notes */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>Notes · {notes.length}</Text>
+          <TouchableOpacity
+            onPress={() => router.push('/quick/note')}
+            style={styles.addButton}
+          >
+            <Text style={styles.addButtonText}>+ Add</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.section}>
+          {notes.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No notes yet. Tap "+ Add" to drop one.
+            </Text>
+          ) : (
+            notes.map((nn) => (
+              <View key={nn.id} style={styles.noteRow}>
+                {nn.title && (
+                  <Text style={styles.noteTitle}>{nn.title}</Text>
+                )}
+                <Text style={styles.noteBody}>{nn.body ?? ''}</Text>
+                <Text style={styles.noteMeta}>
+                  {nn.author_name ?? 'team'} ·{' '}
+                  {nn.created_at ? formatRelative(nn.created_at) : ''}
+                </Text>
+              </View>
+            ))
           )}
         </View>
 
@@ -565,6 +648,33 @@ const styles = StyleSheet.create({
   },
   activityAction: { color: '#d6d3d1', fontSize: 13, lineHeight: 18 },
   activityTime: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+  },
+  addButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: '#292524',
+    borderRadius: 999,
+    marginBottom: 6,
+  },
+  addButtonText: { color: '#d97706', fontSize: 11, fontWeight: '700' },
+  noteRow: {
+    paddingVertical: 10,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  noteTitle: {
+    color: '#fafaf9',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
+  noteBody: { color: '#d6d3d1', fontSize: 14, lineHeight: 20 },
+  noteMeta: { color: '#78716c', fontSize: 11, marginTop: 4 },
   commsRow: {
     flexDirection: 'row',
     alignItems: 'center',
