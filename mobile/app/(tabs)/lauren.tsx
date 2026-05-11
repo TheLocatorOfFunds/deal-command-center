@@ -33,6 +33,7 @@ import {
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useLocalSearchParams } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
@@ -52,6 +53,7 @@ export default function LaurenScreen() {
   const { session } = useAuth()
   const userId = session?.user?.id ?? null
   const listRef = useRef<FlatList<Msg>>(null)
+  const params = useLocalSearchParams<{ seed?: string }>()
 
   const [threadId, setThreadId] = useState<string | null>(null)
   const [msgs, setMsgs] = useState<Msg[]>([])
@@ -127,6 +129,16 @@ export default function LaurenScreen() {
   useEffect(() => {
     load()
   }, [load])
+
+  // When the user navigates here with a ?seed= param (e.g. from
+  // Deal Detail's "Ask Lauren about this deal"), pre-fill the
+  // composer so they can just tap Send (or edit first).
+  useEffect(() => {
+    if (params.seed && !draft) {
+      setDraft(String(params.seed))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.seed])
 
   // ── Realtime — new messages on this thread ─────────────────────────
   useEffect(() => {

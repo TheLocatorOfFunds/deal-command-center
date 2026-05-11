@@ -506,7 +506,72 @@ export default function DealDetailScreen() {
               </View>
             )}
           </View>
+
+          {/* Ask Lauren about this deal — seeds the Lauren tab with a
+              prompt that includes this deal's id, letting her pull
+              context via get_deal / get_deal_documents tools. */}
+          <TouchableOpacity
+            style={styles.laurenLink}
+            activeOpacity={0.7}
+            onPress={() => {
+              const prompt = `Tell me everything I should know about deal ${deal.id}${
+                deal.name ? ` (${deal.name})` : ''
+              } before I call them.`
+              router.push({
+                pathname: '/(tabs)/lauren',
+                params: { seed: prompt },
+              })
+            }}
+          >
+            <Ionicons name="sparkles" size={16} color="#7c3aed" />
+            <Text style={styles.laurenLinkText}>
+              Ask Lauren about this deal
+            </Text>
+          </TouchableOpacity>
         </View>
+
+        {/* Welcome video — if Nathan recorded one for this client */}
+        {(() => {
+          const wv = (meta.welcome_video ?? {}) as {
+            path?: string
+            recorded_at?: string
+          }
+          if (!wv.path) return null
+          return (
+            <>
+              <Text style={styles.sectionLabel}>Welcome video</Text>
+              <TouchableOpacity
+                style={[styles.section, styles.videoCard]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  const { data, error: e } = await supabase.storage
+                    .from('deal-docs')
+                    .createSignedUrl(wv.path!, 60 * 10)
+                  if (e || !data?.signedUrl) {
+                    Alert.alert(
+                      'Could not load',
+                      e?.message ?? 'Video missing',
+                    )
+                    return
+                  }
+                  Linking.openURL(data.signedUrl).catch(() => {})
+                }}
+              >
+                <View style={styles.playIcon}>
+                  <Ionicons name="play" size={28} color="#0c0a09" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={styles.videoTitle}>Watch welcome video</Text>
+                  <Text style={styles.videoSub}>
+                    {wv.recorded_at
+                      ? `Recorded ${formatRelative(wv.recorded_at)}`
+                      : 'Recorded for this case'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )
+        })()}
 
         {/* Case Intel — Claude's case briefing if generated */}
         {caseIntel?.text && (
@@ -1103,6 +1168,30 @@ const styles = StyleSheet.create({
   activityAction: { color: '#d6d3d1', fontSize: 13, lineHeight: 18 },
   activityTime: { color: '#78716c', fontSize: 11, marginTop: 2 },
   addressHint: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  videoCard: { flexDirection: 'row', alignItems: 'center' },
+  playIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#d97706',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoTitle: { color: '#fafaf9', fontSize: 16, fontWeight: '700' },
+  videoSub: { color: '#a8a29e', fontSize: 12, marginTop: 2 },
+  laurenLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#0c0a09',
+    borderRadius: 10,
+    borderColor: '#7c3aed44',
+    borderWidth: 1,
+  },
+  laurenLinkText: { color: '#d6d3d1', fontSize: 13, fontWeight: '600' },
   docRow: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -54,6 +54,7 @@ export default function SettingsScreen() {
   const email = session?.user?.email ?? ''
 
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [nameDraft, setNameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -74,6 +75,9 @@ export default function SettingsScreen() {
     } else if (data) {
       setProfile(data as Profile)
       setPhoneDraft((data.phone as string) ?? '')
+      setNameDraft(
+        (data.display_name as string) || (data.name as string) || '',
+      )
     }
   }
 
@@ -132,6 +136,29 @@ export default function SettingsScreen() {
     }
   }
 
+  const saveName = async () => {
+    if (!userId || saving) return
+    const trimmed = nameDraft.trim()
+    if (!trimmed) return
+    setSaving(true)
+    try {
+      const { error: err } = await supabase
+        .from('profiles')
+        .update({ display_name: trimmed })
+        .eq('id', userId)
+      if (err) throw err
+      setProfile((p) => (p ? { ...p, display_name: trimmed } : p))
+      Alert.alert('Saved', 'Display name updated.')
+    } catch (e) {
+      Alert.alert(
+        'Could not save',
+        e instanceof Error ? e.message : 'Unknown error',
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const savePhone = async () => {
     if (!userId || saving) return
     const trimmed = phoneDraft.trim()
@@ -183,12 +210,28 @@ export default function SettingsScreen() {
             <>
               <Text style={styles.sectionLabel}>Profile</Text>
               <View style={styles.section}>
-                <ReadOnlyField
-                  label="Name"
-                  value={
-                    profile?.display_name || profile?.name || '(not set)'
-                  }
-                />
+                <Text style={styles.fieldLabel}>Display name</Text>
+                <View style={styles.inlineInputRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    value={nameDraft}
+                    onChangeText={setNameDraft}
+                    placeholder="Justin"
+                    placeholderTextColor="#78716c"
+                    editable={!saving}
+                  />
+                  {(profile?.display_name ?? profile?.name ?? '') !==
+                    nameDraft.trim() &&
+                    !!nameDraft.trim() && (
+                      <TouchableOpacity
+                        onPress={saveName}
+                        style={styles.inlineSave}
+                        disabled={saving}
+                      >
+                        <Text style={styles.inlineSaveText}>Save</Text>
+                      </TouchableOpacity>
+                    )}
+                </View>
                 <ReadOnlyField label="Email" value={email} />
                 <ReadOnlyField
                   label="Role"
@@ -424,6 +467,20 @@ const styles = StyleSheet.create({
   },
   prefLabel: { color: '#fafaf9', fontSize: 14, fontWeight: '600' },
   prefDetail: { color: '#78716c', fontSize: 12, marginTop: 2 },
+  inlineInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  inlineSave: {
+    backgroundColor: '#d97706',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  inlineSaveText: { color: '#0c0a09', fontWeight: '700' },
   signOutBtn: {
     backgroundColor: '#7f1d1d',
     paddingVertical: 14,
