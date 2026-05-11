@@ -329,6 +329,28 @@ export default function LaurenScreen() {
             }
           />
 
+          {/* Suggested prompts — show only when conversation is empty
+              and not currently sending. One-tap to seed common questions. */}
+          {msgs.length === 0 && !sending && (
+            <View style={styles.suggestRow}>
+              {[
+                'What deals need attention today?',
+                'Summarize my surplus pipeline',
+                'Which cases have upcoming hearings?',
+              ].map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  style={styles.suggestChip}
+                  onPress={() => setDraft(s)}
+                >
+                  <Text style={styles.suggestText} numberOfLines={1}>
+                    {s}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           <View style={styles.composer}>
             <TextInput
               style={styles.composerInput}
@@ -452,6 +474,22 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   thinkingText: { color: '#a8a29e', fontSize: 13, fontStyle: 'italic' },
+  suggestRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  suggestChip: {
+    backgroundColor: '#1c1917',
+    borderColor: '#7c3aed44',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  suggestText: { color: '#d6d3d1', fontSize: 12, fontWeight: '500' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',

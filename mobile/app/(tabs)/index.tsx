@@ -197,6 +197,13 @@ export default function InboxScreen() {
     [threads],
   )
 
+  type FilterKey = 'all' | 'unread'
+  const [filter, setFilter] = useState<FilterKey>('all')
+  const filtered = useMemo(() => {
+    if (filter === 'unread') return threads.filter((t) => t.unread)
+    return threads
+  }, [threads, filter])
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'top']}>
       <View style={styles.header}>
@@ -219,6 +226,33 @@ export default function InboxScreen() {
         </TouchableOpacity>
       </View>
 
+      {/* Filter chips */}
+      <View style={styles.filterRow}>
+        {(['all', 'unread'] as FilterKey[]).map((key) => {
+          const active = filter === key
+          const label =
+            key === 'all'
+              ? `All${threads.length ? ` · ${threads.length}` : ''}`
+              : `Unread${unreadCount ? ` · ${unreadCount}` : ''}`
+          return (
+            <TouchableOpacity
+              key={key}
+              style={[styles.filterChip, active && styles.filterChipActive]}
+              onPress={() => setFilter(key)}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  active && styles.filterChipTextActive,
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          )
+        })}
+      </View>
+
       {loading ? (
         <View style={styles.loading}>
           <ActivityIndicator color="#d97706" />
@@ -232,7 +266,7 @@ export default function InboxScreen() {
         </View>
       ) : (
         <FlatList
-          data={threads}
+          data={filtered}
           keyExtractor={(t) => t.threadKey}
           contentContainerStyle={{ padding: 14, paddingTop: 4 }}
           refreshControl={
@@ -325,6 +359,28 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   signOutText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 8,
+    borderBottomColor: '#1c1917',
+    borderBottomWidth: 1,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#1c1917',
+    borderColor: '#292524',
+    borderWidth: 1,
+  },
+  filterChipActive: {
+    backgroundColor: '#d97706',
+    borderColor: '#d97706',
+  },
+  filterChipText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  filterChipTextActive: { color: '#0c0a09' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorBox: {
     margin: 14,
