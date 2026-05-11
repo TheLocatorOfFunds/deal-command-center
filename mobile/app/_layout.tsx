@@ -92,6 +92,38 @@ function ProtectedRouter() {
           headerBackTitle: 'Team',
         }}
       />
+      <Stack.Screen
+        name="quick/call"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+        }}
+      />
+      <Stack.Screen
+        name="quick/sms"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+        }}
+      />
+      <Stack.Screen
+        name="quick/note"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+        }}
+      />
+      <Stack.Screen
+        name="settings"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+        }}
+      />
     </Stack>
   )
 }

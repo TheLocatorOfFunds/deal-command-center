@@ -16,6 +16,7 @@
 
 import { Tabs } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
+import { QuickFabButton } from '../../components/QuickFabButton'
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
@@ -35,6 +36,8 @@ export default function TabsLayout() {
           backgroundColor: '#0c0a09',
           borderTopColor: '#1c1917',
           borderTopWidth: 1,
+          height: 78,
+          paddingTop: 6,
         },
         tabBarActiveTintColor: '#d97706',
         tabBarInactiveTintColor: '#78716c',
@@ -55,6 +58,16 @@ export default function TabsLayout() {
           title: 'Deals',
           tabBarLabel: 'Deals',
           tabBarIcon: icon('briefcase'),
+        }}
+      />
+      {/* Center "⊕ Quick" — not a route, just a button that opens a sheet. */}
+      <Tabs.Screen
+        name="quick"
+        options={{
+          title: 'Quick',
+          tabBarLabel: () => null,
+          tabBarIcon: () => null,
+          tabBarButton: () => <QuickFabButton />,
         }}
       />
       <Tabs.Screen

@@ -30,6 +30,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
@@ -63,7 +64,7 @@ type Thread = {
 }
 
 export default function InboxScreen() {
-  const { session, signOut } = useAuth()
+  const { session } = useAuth()
   const router = useRouter()
   const [threads, setThreads] = useState<Thread[]>([])
   const [loading, setLoading] = useState(true)
@@ -156,6 +157,36 @@ export default function InboxScreen() {
     load()
   }, [load])
 
+  // Realtime — when a new SMS lands in messages_outbound (inbound OR
+  // outbound from another team member's phone), reload the inbox so
+  // the thread floats to the top. Throttled to one reload per inserts
+  // burst to avoid hammering the DB.
+  useEffect(() => {
+    let pending = false
+    const channel = supabase
+      .channel('inbox-messages-outbound')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages_outbound',
+        },
+        () => {
+          if (pending) return
+          pending = true
+          setTimeout(() => {
+            pending = false
+            load()
+          }, 800)
+        },
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [load])
+
   const onRefresh = () => {
     setRefreshing(true)
     load()
@@ -179,8 +210,12 @@ export default function InboxScreen() {
                 : `Signed in as ${session?.user?.email}`}
           </Text>
         </View>
-        <TouchableOpacity onPress={signOut} style={styles.signOut}>
-          <Text style={styles.signOutText}>Sign out</Text>
+        <TouchableOpacity
+          onPress={() => router.push('/settings')}
+          style={styles.signOut}
+          accessibilityLabel="Settings"
+        >
+          <Ionicons name="settings-outline" size={20} color="#a8a29e" />
         </TouchableOpacity>
       </View>
 
