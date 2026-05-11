@@ -28,7 +28,12 @@ export function QuickFabButton() {
   const router = useRouter()
 
   const go = (
-    path: '/quick/call' | '/quick/sms' | '/quick/note' | '/quick/new-deal',
+    path:
+      | '/quick/call'
+      | '/quick/sms'
+      | '/quick/note'
+      | '/quick/new-deal'
+      | '/quick/new-task',
   ) => {
     setOpen(false)
     // Tiny delay lets the modal close animation finish before pushing
@@ -90,6 +95,12 @@ export function QuickFabButton() {
               label="Note on a deal"
               detail="Drop a quick note — typeahead search to find the deal"
               onPress={() => go('/quick/note')}
+            />
+            <Action
+              icon="checkmark-circle"
+              label="New task"
+              detail="Drop a to-do on a deal — title, optional due date"
+              onPress={() => go('/quick/new-task')}
             />
             <Action
               icon="add-circle"

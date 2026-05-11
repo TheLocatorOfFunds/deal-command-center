@@ -102,6 +102,14 @@ type AttorneyAssignment = {
   enabled: boolean | null
 }
 
+type Task = {
+  id: number
+  title: string | null
+  done: boolean | null
+  due_date: string | null
+  assigned_to: string | null
+}
+
 type CommsItem = {
   kind: 'sms' | 'call'
   id: string
@@ -125,6 +133,7 @@ export default function DealDetailScreen() {
   const [documents, setDocuments] = useState<Document[]>([])
   const [docketEvents, setDocketEvents] = useState<DocketEvent[]>([])
   const [attorneys, setAttorneys] = useState<AttorneyAssignment[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -132,7 +141,7 @@ export default function DealDetailScreen() {
   const load = useCallback(async () => {
     if (!id) return
     setError(null)
-    const [d, v, c, a, msgs, calls, n, docs, dock, att] = await Promise.all([
+    const [d, v, c, a, msgs, calls, n, docs, dock, att, tk] = await Promise.all([
       supabase
         .from('deals')
         .select('id, type, status, name, address, meta, updated_at')
@@ -197,6 +206,14 @@ export default function DealDetailScreen() {
         .from('attorney_assignments')
         .select('user_id, email, enabled')
         .eq('deal_id', id),
+      // Tasks
+      supabase
+        .from('tasks')
+        .select('id, title, done, due_date, assigned_to')
+        .eq('deal_id', id)
+        .order('done', { ascending: true })
+        .order('due_date', { ascending: true, nullsFirst: false })
+        .limit(25),
     ])
     const firstErr =
       d.error ||
@@ -314,6 +331,8 @@ export default function DealDetailScreen() {
           attorney_name: r.user_id ? attMap.get(r.user_id) : null,
         })),
       )
+
+      setTasks((tk.data ?? []) as Task[])
     }
     setLoading(false)
     setRefreshing(false)
@@ -783,7 +802,91 @@ export default function DealDetailScreen() {
           </>
         )}
 
+        {/* Tasks */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>
+            Tasks ·{' '}
+            {tasks.length === 0
+              ? '0'
+              : `${tasks.filter((t) => !t.done).length} open`}
+          </Text>
+          <TouchableOpacity
+            onPress={() =>
+              router.push({
+                pathname: '/quick/new-task',
+                params: { deal_id: id, deal_name: deal.name ?? id },
+              })
+            }
+            style={styles.addButton}
+          >
+            <Text style={styles.addButtonText}>+ Add</Text>
+          </TouchableOpacity>
+        </View>
+        {tasks.length === 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.emptyText}>
+              No tasks yet. Tap "+ Add" to create one.
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.section}>
+              {tasks.map((t) => (
+                <TouchableOpacity
+                  key={t.id}
+                  style={styles.taskRow}
+                  activeOpacity={0.6}
+                  onPress={async () => {
+                    // Toggle done state
+                    const { error: e } = await supabase
+                      .from('tasks')
+                      .update({ done: !t.done })
+                      .eq('id', t.id)
+                    if (e) {
+                      Alert.alert('Could not update', e.message)
+                      return
+                    }
+                    setTasks((prev) =>
+                      prev.map((x) =>
+                        x.id === t.id ? { ...x, done: !x.done } : x,
+                      ),
+                    )
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.taskCheck,
+                      t.done && styles.taskCheckDone,
+                    ]}
+                  >
+                    {t.done && (
+                      <Ionicons name="checkmark" size={14} color="#0c0a09" />
+                    )}
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text
+                      style={[
+                        styles.taskTitle,
+                        t.done && styles.taskTitleDone,
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {t.title ?? '(untitled)'}
+                    </Text>
+                    {t.due_date && (
+                      <Text style={styles.taskDue}>
+                        Due {formatShortDate(t.due_date)}
+                      </Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+
         {/* Notes */}
+        {/* (anchor) */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionLabel}>Notes · {notes.length}</Text>
           <TouchableOpacity
@@ -1192,6 +1295,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   laurenLinkText: { color: '#d6d3d1', fontSize: 13, fontWeight: '600' },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  taskCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderColor: '#57534e',
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskCheckDone: { backgroundColor: '#d97706', borderColor: '#d97706' },
+  taskTitle: { color: '#fafaf9', fontSize: 14 },
+  taskTitleDone: {
+    color: '#78716c',
+    textDecorationLine: 'line-through',
+  },
+  taskDue: { color: '#d97706', fontSize: 11, marginTop: 2, fontWeight: '600' },
   docRow: {
     flexDirection: 'row',
     alignItems: 'center',
