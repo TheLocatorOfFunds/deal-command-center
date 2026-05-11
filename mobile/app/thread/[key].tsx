@@ -144,6 +144,38 @@ export default function ThreadScreen() {
     load()
   }, [load])
 
+  // Realtime: append new messages on this thread as they arrive. Pairs
+  // with push notifications — push pings you when backgrounded, this
+  // keeps the open thread fresh.
+  useEffect(() => {
+    if (!decoded) return
+    const channel = supabase
+      .channel(`sms-thread-${decoded}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages_outbound',
+          filter: `thread_key=eq.${decoded}`,
+        },
+        (payload) => {
+          const m = payload.new as Msg
+          setMsgs((prev) =>
+            prev.some((x) => x.id === m.id) ? prev : [...prev, m],
+          )
+          setTimeout(
+            () => listRef.current?.scrollToEnd({ animated: true }),
+            50,
+          )
+        },
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [decoded])
+
   // Resolve destination phone: prefer the contact's phone, fall back to
   // the most-recent inbound message's from_number, then the thread_key
   // phone segment.

@@ -156,6 +156,36 @@ export default function InboxScreen() {
     load()
   }, [load])
 
+  // Realtime — when a new SMS lands in messages_outbound (inbound OR
+  // outbound from another team member's phone), reload the inbox so
+  // the thread floats to the top. Throttled to one reload per inserts
+  // burst to avoid hammering the DB.
+  useEffect(() => {
+    let pending = false
+    const channel = supabase
+      .channel('inbox-messages-outbound')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages_outbound',
+        },
+        () => {
+          if (pending) return
+          pending = true
+          setTimeout(() => {
+            pending = false
+            load()
+          }, 800)
+        },
+      )
+      .subscribe()
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [load])
+
   const onRefresh = () => {
     setRefreshing(true)
     load()
