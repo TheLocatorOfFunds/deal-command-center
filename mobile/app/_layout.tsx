@@ -5,7 +5,7 @@
  */
 
 import { useEffect } from 'react'
-import { Slot, useRouter, useSegments } from 'expo-router'
+import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
@@ -25,7 +25,23 @@ function ProtectedRouter() {
     }
   }, [session, loading, segments, router])
 
-  return <Slot />
+  // Stack at root lets deal/[id] push on top of (tabs) with a back button.
+  // Each child route configures its own header (or hides it).
+  return (
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="(auth)/sign-in" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="deal/[id]"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+          headerBackTitle: 'Back',
+        }}
+      />
+    </Stack>
+  )
 }
 
 export default function RootLayout() {

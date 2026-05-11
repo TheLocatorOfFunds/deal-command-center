@@ -1,26 +1,31 @@
 /**
- * Today screen — first real DCC view on mobile.
+ * Today screen — recent deals + search.
  *
- * Read-only on purpose. Queries the same `deals` table the web app does,
- * filtered to active surplus and flip cases assigned to or owned by the
- * signed-in user. Lets us validate auth + Supabase wiring before adding
- * any write operations.
+ * Two modes:
+ *   1. Idle (empty search) — last 25 deals by updated_at, the "what's
+ *      hot" view.
+ *   2. Searching — filters the FULL deals table by name / address / id
+ *      via Supabase ILIKE. Returns up to 50 matches sorted by recency.
+ *      Debounced 250ms so we don't hammer Supabase on every keystroke.
  *
- * v2 will add: AutomationsQueue, Attention strip, push-notification badge.
- * Held back for now until Justin + Nathan finalize the v1 scope.
+ * Why search is non-negotiable in v1: Justin can't test the drill-in
+ * flow on active client deals without bothering them, so he needs a
+ * way to jump to a specific historical / archived / test deal by name.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
   RefreshControl,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
@@ -33,20 +38,62 @@ type DealRow = {
   updated_at: string | null
 }
 
+const SEARCH_DEBOUNCE_MS = 250
+
 export default function TodayScreen() {
   const { session, signOut } = useAuth()
+  const router = useRouter()
   const [deals, setDeals] = useState<DealRow[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Search state — `query` is what the user is typing (re-renders every
+  // keystroke), `activeTerm` is the debounced version that actually
+  // triggers a query.
+  const [query, setQuery] = useState('')
+  const [activeTerm, setActiveTerm] = useState('')
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      setActiveTerm(query.trim())
+    }, SEARCH_DEBOUNCE_MS)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [query])
+
+  const isSearching = activeTerm.length > 0
+
   const load = useCallback(async () => {
     setError(null)
-    const { data, error: err } = await supabase
+    let req = supabase
       .from('deals')
       .select('id, type, status, name, address, updated_at')
       .order('updated_at', { ascending: false })
-      .limit(25)
+
+    if (isSearching) {
+      // ILIKE with wildcards — case-insensitive substring match on the
+      // three fields Justin would actually search for. Escapes any
+      // commas / parens the user types so they don't break the or()
+      // grammar.
+      const safe = activeTerm.replace(/[,()]/g, ' ')
+      req = req
+        .or(
+          [
+            `name.ilike.%${safe}%`,
+            `address.ilike.%${safe}%`,
+            `id.ilike.%${safe}%`,
+          ].join(','),
+        )
+        .limit(50)
+    } else {
+      req = req.limit(25)
+    }
+
+    const { data, error: err } = await req
     if (err) {
       setError(err.message)
       setDeals([])
@@ -55,7 +102,7 @@ export default function TodayScreen() {
     }
     setLoading(false)
     setRefreshing(false)
-  }, [])
+  }, [activeTerm, isSearching])
 
   useEffect(() => {
     load()
@@ -66,10 +113,17 @@ export default function TodayScreen() {
     load()
   }
 
+  const emptyMessage = useMemo(() => {
+    if (isSearching) {
+      return `No deals match "${activeTerm}".`
+    }
+    return 'No recent deals. Pull to refresh.'
+  }, [isSearching, activeTerm])
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
       <View style={styles.header}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>📌 Today</Text>
           <Text style={styles.headerSubtitle}>
             Signed in as {session?.user?.email}
@@ -78,6 +132,25 @@ export default function TodayScreen() {
         <TouchableOpacity onPress={signOut} style={styles.signOut}>
           <Text style={styles.signOutText}>Sign out</Text>
         </TouchableOpacity>
+      </View>
+
+      <View style={styles.searchRow}>
+        <TextInput
+          style={styles.search}
+          placeholder="Search deals — name, address, or id"
+          placeholderTextColor="#78716c"
+          value={query}
+          onChangeText={setQuery}
+          autoCapitalize="none"
+          autoCorrect={false}
+          returnKeyType="search"
+          clearButtonMode="while-editing"
+        />
+        {isSearching && (
+          <Text style={styles.searchCount}>
+            {deals.length} {deals.length === 1 ? 'match' : 'matches'}
+          </Text>
+        )}
       </View>
 
       {loading ? (
@@ -103,13 +176,18 @@ export default function TodayScreen() {
               onRefresh={onRefresh}
             />
           }
+          keyboardShouldPersistTaps="handled"
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Text style={styles.emptyText}>No recent deals. Pull to refresh.</Text>
+              <Text style={styles.emptyText}>{emptyMessage}</Text>
             </View>
           }
           renderItem={({ item }) => (
-            <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.card}
+              activeOpacity={0.6}
+              onPress={() => router.push(`/deal/${item.id}`)}
+            >
               <Text style={styles.cardTitle} numberOfLines={1}>
                 {item.name ?? item.id}
               </Text>
@@ -118,7 +196,8 @@ export default function TodayScreen() {
                   .filter(Boolean)
                   .join(' · ')}
               </Text>
-            </View>
+              <Text style={styles.cardHint}>Tap to open →</Text>
+            </TouchableOpacity>
           )}
         />
       )}
@@ -146,6 +225,27 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   signOutText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  searchRow: {
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  search: {
+    backgroundColor: '#1c1917',
+    borderColor: '#292524',
+    borderWidth: 1,
+    color: '#fafaf9',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+  },
+  searchCount: {
+    color: '#78716c',
+    fontSize: 11,
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorBox: { margin: 14, padding: 14, backgroundColor: '#7f1d1d', borderRadius: 10 },
   errorText: { color: '#fca5a5', fontSize: 14 },
@@ -169,4 +269,5 @@ const styles = StyleSheet.create({
   },
   cardTitle: { color: '#fafaf9', fontSize: 15, fontWeight: '600', marginBottom: 4 },
   cardSub: { color: '#78716c', fontSize: 12 },
+  cardHint: { color: '#d97706', fontSize: 11, marginTop: 8, fontWeight: '600' },
 })
