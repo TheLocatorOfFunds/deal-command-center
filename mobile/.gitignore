@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# Expo / Metro
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Build artifacts
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+ios/
+android/
+
+# EAS / Apple
+.eas/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# macOS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp

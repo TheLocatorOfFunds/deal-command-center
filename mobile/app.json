@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "DCC",
+    "slug": "dcc-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "dcc",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.fundlocators.dcc"
+    },
+    "android": {
+      "package": "com.fundlocators.dcc"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

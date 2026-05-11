@@ -12,6 +12,10 @@ This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund ca
 - **Backend**: Supabase project `rcfaashkfpurkvtmsmeb` — Postgres + Auth + Realtime.
 - **Hosting**: GitHub Pages on `main` branch root. Any commit to `main` rebuilds in ~30s. URL: https://thelocatoroffunds.github.io/deal-command-center/ (custom domain: app.refundlocators.com).
 - **Auth**: Magic-link (`signInWithOtp`). Users auto-create on first sign-in. Profiles auto-populate via `handle_new_user` trigger.
+- **Mobile companion app**: `mobile/` directory — React Native + Expo (managed
+  workflow), TypeScript, expo-router. Same Supabase project. Distributed via
+  TestFlight for iOS internal alpha. See `mobile/README.md` for setup +
+  `memory/mobile_app_plan.md` for v1 scope decisions. Domain: Justin.
 
 ## Credentials
 
@@ -191,6 +195,7 @@ Nathan's column — leave it alone and ask. Same in reverse.
 | Lauren / pgvector AI chat | **Both (co-owned)** | `lauren_*` tables, pgvector embeddings — Nathan + Justin own equally; coordinate before substantive changes (per Nathan, 2026-05-05) |
 | Phase 3 Library | **Nathan** | Designed — not yet built |
 | Phase 4 Financials | **Nathan** | Not yet built |
+| **DCC Mobile companion app** | **Justin** | `mobile/` — Expo + React Native, TestFlight distribution. v1 scope still being decided with Nathan. See `memory/mobile_app_plan.md`. |
 | **Shared (either can touch)** | Both | `deals`, `vendors`, `tasks`, `expenses`, `activity`, `deal_notes`, `documents`, `contacts`, `contact_deals`, `index.html` shell + nav + shared components |
 
 **When in doubt**: don't write migrations or edit Edge Functions in another owner's domain.
