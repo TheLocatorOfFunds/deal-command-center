@@ -2515,6 +2515,15 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
   // Soft-delete admin recovery modal (added 2026-05-07).
   const [showDeletedLeads, setShowDeletedLeads] = useState(false);
+  // Advanced filters — same modal Pipeline uses. Per Eric 2026-05-11:
+  // Leads / Deal-list views need tag + money + date + boolean filters
+  // (he tried filtering by `nod` / `need-more-info` tags and the UI
+  // didn't exist on the leads-phase view). Reusing SalesPipeline's
+  // ADVANCED_FILTERS_DEFAULT + applyAdvancedFilters() + the same
+  // AdvancedFiltersModal — no duplication.
+  const [advancedFilters, setAdvancedFilters] = useState(ADVANCED_FILTERS_DEFAULT);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const advancedFilterCount = countActiveAdvancedFilters(advancedFilters);
 
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
   // "Active" excludes both archived (closed/recovered/dead) AND lead-phase
@@ -2551,6 +2560,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       const t = (d.lead_tier || '').toUpperCase();
       if (tierFilter === "untiered" ? ['A','B','C'].includes(t) : t !== tierFilter) return false;
     }
+    if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
@@ -2650,6 +2660,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           onRestored={() => { /* realtime sub on `deals` will refresh the list */ }}
         />
       )}
+      {showAdvancedFilters && (
+        <AdvancedFiltersModal
+          value={advancedFilters}
+          onApply={setAdvancedFilters}
+          onClose={() => setShowAdvancedFilters(false)}
+        />
+      )}
 
       {/* Hub sub-chips — second-level nav inside sidebar sections.
           Outreach:  Drafts & Replies · Inbox · Leads · Forecast
@@ -2735,6 +2752,24 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {DEAL_STATUSES.surplus.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
             </optgroup>
           </select>
+          <button
+            onClick={() => setShowAdvancedFilters(true)}
+            title={advancedFilterCount > 0 ? `${advancedFilterCount} advanced filter${advancedFilterCount === 1 ? '' : 's'} active — click to edit` : 'Filter by tags, status, money, dates, attorney, phone presence, and more'}
+            style={{
+              fontSize: 12, padding: '6px 12px', borderRadius: 6,
+              border: '1px solid ' + (advancedFilterCount > 0 ? '#d97706' : '#44403c'),
+              background: advancedFilterCount > 0 ? '#78350f' : '#1c1917',
+              color: advancedFilterCount > 0 ? '#fbbf24' : '#a8a29e',
+              fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}>
+            🎚 Filters{advancedFilterCount > 0 ? <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 10, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{advancedFilterCount}</span> : null}
+          </button>
+          {advancedFilterCount > 0 && (
+            <button onClick={() => setAdvancedFilters(ADVANCED_FILTERS_DEFAULT)}
+              title="Clear all advanced filters"
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', color: '#78716c' }}>↺ Clear</button>
+          )}
           <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#1c1917", borderRadius: 6, padding: 2, border: "1px solid #292524" }}>
             <button onClick={() => setLayoutMode("cards")} style={{ background: layoutMode === "cards" ? "#292524" : "transparent", color: layoutMode === "cards" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Cards</button>
             <button onClick={() => setLayoutMode("kanban")} style={{ background: layoutMode === "kanban" ? "#292524" : "transparent", color: layoutMode === "kanban" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Kanban</button>
@@ -26162,19 +26197,27 @@ function TeamChatBubble() {
     return () => { sb.removeChannel(ch); };
   }, [me?.id, loadThreads, loadUnread]);
 
-  // Load + subscribe to the active thread's messages
+  // Load + subscribe to the active thread's messages.
+  //
+  // Pre-fix (2026-05-11): query was `.order(asc).limit(80)` — for a
+  // thread with >80 messages (e.g. Ops which has 145+), this returned
+  // the OLDEST 80 and missed everything recent. Eric flagged: opening
+  // Ops via the bubble showed messages from 6 days ago, not current.
+  // Fix: load the NEWEST 80 via DESC + limit, then reverse for ascending
+  // display. Realtime INSERT subscription appends new arrivals on top.
   useEffect(() => {
     if (!activeThreadId || !me?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await sb.from('team_messages')
+      const { data: latest } = await sb.from('team_messages')
         .select('id, sender_id, sender_kind, body, created_at')
         .eq('thread_id', activeThreadId)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(80);
       if (cancelled) return;
-      setMessages(data || []);
+      const data = (latest || []).slice().reverse();
+      setMessages(data);
       // Mark this thread read for me
       await sb.from('team_message_reads').upsert({
         thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
