@@ -67,6 +67,17 @@ type ActivityRow = {
   created_at: string | null
 }
 
+type CommsItem = {
+  kind: 'sms' | 'call'
+  id: string
+  direction: string
+  body: string
+  status: string | null
+  duration_seconds?: number | null
+  thread_key?: string | null
+  at: string
+}
+
 export default function DealDetailScreen() {
   const router = useRouter()
   const { id } = useLocalSearchParams<{ id: string }>()
@@ -74,6 +85,7 @@ export default function DealDetailScreen() {
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [contactLinks, setContactLinks] = useState<ContactLink[]>([])
   const [activity, setActivity] = useState<ActivityRow[]>([])
+  const [comms, setComms] = useState<CommsItem[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -81,7 +93,7 @@ export default function DealDetailScreen() {
   const load = useCallback(async () => {
     if (!id) return
     setError(null)
-    const [d, v, c, a] = await Promise.all([
+    const [d, v, c, a, msgs, calls] = await Promise.all([
       supabase
         .from('deals')
         .select('id, type, status, name, address, meta, updated_at')
@@ -104,8 +116,25 @@ export default function DealDetailScreen() {
         .eq('deal_id', id)
         .order('created_at', { ascending: false })
         .limit(25),
+      // Last 10 SMS for this deal
+      supabase
+        .from('messages_outbound')
+        .select('id, direction, body, status, thread_key, created_at')
+        .eq('deal_id', id)
+        .order('created_at', { ascending: false })
+        .limit(10),
+      // Last 10 calls for this deal
+      supabase
+        .from('call_logs')
+        .select(
+          'id, direction, status, duration_seconds, thread_key, started_at, ended_at',
+        )
+        .eq('deal_id', id)
+        .order('started_at', { ascending: false })
+        .limit(10),
     ])
-    const firstErr = d.error || v.error || c.error || a.error
+    const firstErr =
+      d.error || v.error || c.error || a.error || msgs.error || calls.error
     if (firstErr) {
       setError(firstErr.message)
     } else {
@@ -113,6 +142,50 @@ export default function DealDetailScreen() {
       setVendors((v.data ?? []) as Vendor[])
       setContactLinks((c.data ?? []) as unknown as ContactLink[])
       setActivity((a.data ?? []) as ActivityRow[])
+
+      // Merge messages + calls into one chronological comms timeline.
+      const merged: CommsItem[] = []
+      for (const m of (msgs.data ?? []) as Array<{
+        id: string
+        direction: string | null
+        body: string | null
+        status: string | null
+        thread_key: string | null
+        created_at: string | null
+      }>) {
+        merged.push({
+          kind: 'sms',
+          id: m.id,
+          direction: m.direction ?? 'unknown',
+          body: m.body ?? '',
+          status: m.status,
+          thread_key: m.thread_key,
+          at: m.created_at ?? '',
+        })
+      }
+      for (const cl of (calls.data ?? []) as Array<{
+        id: string
+        direction: string | null
+        status: string | null
+        duration_seconds: number | null
+        thread_key: string | null
+        started_at: string | null
+      }>) {
+        merged.push({
+          kind: 'call',
+          id: cl.id,
+          direction: cl.direction ?? 'unknown',
+          body: cl.status ?? 'call',
+          status: cl.status,
+          duration_seconds: cl.duration_seconds,
+          thread_key: cl.thread_key,
+          at: cl.started_at ?? '',
+        })
+      }
+      merged.sort(
+        (x, y) => new Date(y.at).getTime() - new Date(x.at).getTime(),
+      )
+      setComms(merged.slice(0, 15))
     }
     setLoading(false)
     setRefreshing(false)
@@ -290,6 +363,57 @@ export default function DealDetailScreen() {
           )}
         </View>
 
+        {/* Comms timeline — calls + texts merged chronologically */}
+        <Text style={styles.sectionLabel}>Comms · last 15</Text>
+        <View style={styles.section}>
+          {comms.length === 0 ? (
+            <Text style={styles.emptyText}>
+              No calls or texts on this deal yet.
+            </Text>
+          ) : (
+            comms.map((item) => {
+              const outbound = item.direction === 'outbound'
+              const Icon = item.kind === 'call' ? '📞' : '💬'
+              const tappable = item.kind === 'sms' && !!item.thread_key
+              return (
+                <TouchableOpacity
+                  key={`${item.kind}-${item.id}`}
+                  style={styles.commsRow}
+                  disabled={!tappable}
+                  activeOpacity={tappable ? 0.6 : 1}
+                  onPress={() => {
+                    if (tappable && item.thread_key) {
+                      router.push({
+                        pathname: '/thread/[key]',
+                        params: { key: item.thread_key },
+                      })
+                    }
+                  }}
+                >
+                  <Text style={styles.commsIcon}>{Icon}</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.commsLine} numberOfLines={2}>
+                      <Text style={styles.commsDir}>
+                        {outbound ? '→ ' : '← '}
+                      </Text>
+                      {item.kind === 'call'
+                        ? formatCall(item)
+                        : item.body || '(empty)'}
+                    </Text>
+                    <Text style={styles.commsMeta}>
+                      {formatRelative(item.at)}
+                      {item.status && item.kind === 'sms' && outbound
+                        ? ` · ${item.status}`
+                        : ''}
+                    </Text>
+                  </View>
+                  {tappable && <Text style={styles.commsChev}>›</Text>}
+                </TouchableOpacity>
+              )
+            })
+          )}
+        </View>
+
         {/* Recent activity */}
         <Text style={styles.sectionLabel}>Recent activity</Text>
         <View style={styles.section}>
@@ -344,6 +468,19 @@ function ContactRow(props: {
       {callable && <Text style={styles.callIcon}>📞</Text>}
     </TouchableOpacity>
   )
+}
+
+function formatCall(item: CommsItem): string {
+  const dur = item.duration_seconds ?? 0
+  const status = item.status ?? 'call'
+  if (status === 'completed' && dur > 0) {
+    const min = Math.floor(dur / 60)
+    const sec = dur % 60
+    return min > 0 ? `${min}m ${sec}s call` : `${sec}s call`
+  }
+  if (status === 'no-answer' || status === 'busy') return 'missed call'
+  if (status === 'ringing') return 'call in progress'
+  return `${status} call`
 }
 
 function formatRelative(iso: string): string {
@@ -428,4 +565,17 @@ const styles = StyleSheet.create({
   },
   activityAction: { color: '#d6d3d1', fontSize: 13, lineHeight: 18 },
   activityTime: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  commsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+    gap: 10,
+  },
+  commsIcon: { fontSize: 18 },
+  commsLine: { color: '#d6d3d1', fontSize: 14, lineHeight: 20 },
+  commsDir: { color: '#a8a29e', fontWeight: '600' },
+  commsMeta: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  commsChev: { color: '#57534e', fontSize: 22 },
 })
