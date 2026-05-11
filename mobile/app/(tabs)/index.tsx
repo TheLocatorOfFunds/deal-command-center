@@ -30,6 +30,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
@@ -63,7 +64,7 @@ type Thread = {
 }
 
 export default function InboxScreen() {
-  const { session, signOut } = useAuth()
+  const { session } = useAuth()
   const router = useRouter()
   const [threads, setThreads] = useState<Thread[]>([])
   const [loading, setLoading] = useState(true)
@@ -209,8 +210,12 @@ export default function InboxScreen() {
                 : `Signed in as ${session?.user?.email}`}
           </Text>
         </View>
-        <TouchableOpacity onPress={signOut} style={styles.signOut}>
-          <Text style={styles.signOutText}>Sign out</Text>
+        <TouchableOpacity
+          onPress={() => router.push('/settings')}
+          style={styles.signOut}
+          accessibilityLabel="Settings"
+        >
+          <Ionicons name="settings-outline" size={20} color="#a8a29e" />
         </TouchableOpacity>
       </View>
 
