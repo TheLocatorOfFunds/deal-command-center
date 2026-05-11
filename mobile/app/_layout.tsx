@@ -40,6 +40,15 @@ function ProtectedRouter() {
           headerBackTitle: 'Back',
         }}
       />
+      <Stack.Screen
+        name="thread/[key]"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+          headerBackTitle: 'Inbox',
+        }}
+      />
     </Stack>
   )
 }
