@@ -26162,19 +26162,27 @@ function TeamChatBubble() {
     return () => { sb.removeChannel(ch); };
   }, [me?.id, loadThreads, loadUnread]);
 
-  // Load + subscribe to the active thread's messages
+  // Load + subscribe to the active thread's messages.
+  //
+  // Pre-fix (2026-05-11): query was `.order(asc).limit(80)` — for a
+  // thread with >80 messages (e.g. Ops which has 145+), this returned
+  // the OLDEST 80 and missed everything recent. Eric flagged: opening
+  // Ops via the bubble showed messages from 6 days ago, not current.
+  // Fix: load the NEWEST 80 via DESC + limit, then reverse for ascending
+  // display. Realtime INSERT subscription appends new arrivals on top.
   useEffect(() => {
     if (!activeThreadId || !me?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await sb.from('team_messages')
+      const { data: latest } = await sb.from('team_messages')
         .select('id, sender_id, sender_kind, body, created_at')
         .eq('thread_id', activeThreadId)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })
         .limit(80);
       if (cancelled) return;
-      setMessages(data || []);
+      const data = (latest || []).slice().reverse();
+      setMessages(data);
       // Mark this thread read for me
       await sb.from('team_message_reads').upsert({
         thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
