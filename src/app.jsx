@@ -12604,10 +12604,21 @@ function ClientPortalCard({ deal, logAct }) {
 
   const load = async () => {
     setLoading(true);
-    const [{ data: accessData }, { data: editData }] = await Promise.all([
-      sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true }),
-      sb.from('client_edit_requests').select('*').eq('deal_id', deal.id).eq('status', 'pending').order('requested_at', { ascending: true }),
-    ]);
+    // deal_claimants RPC: returns client_access rows with email resolved via
+    // coalesce(client_access.email, auth.users.email). Fixes the "row shows
+    // 'Client' instead of email" bug when client_access.email is NULL post-signup.
+    // Falls back to a direct table select if the RPC isn't deployed yet.
+    let accessData;
+    const rpcRes = await sb.rpc('deal_claimants', { p_deal_id: deal.id });
+    if (rpcRes.error) {
+      const direct = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true });
+      accessData = direct.data;
+    } else {
+      accessData = rpcRes.data;
+    }
+    const { data: editData } = await sb.from('client_edit_requests')
+      .select('*').eq('deal_id', deal.id).eq('status', 'pending')
+      .order('requested_at', { ascending: true });
     setAccessList(accessData || []);
     setEditRequests(editData || []);
     setLoading(false);
@@ -12767,9 +12778,16 @@ function ClientPortalCard({ deal, logAct }) {
                 <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                   {row.enabled && row.email && (
                     <>
-                      <button onClick={() => copyInviteLink(row)} disabled={busy} title="Copy a one-tap invite link for iMessage/SMS. Client taps it → portal auto-sends them the magic-link email." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy invite link</button>
-                      <button onClick={() => resend(row)} disabled={busy} title="Email the magic-link sign-in email to this claimant right now." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>📧 Email now</button>
+                      <button onClick={() => copyInviteLink(row)} disabled={busy} title="Copy a one-tap invite link. Pasting into iMessage/SMS or your own Gmail. Client taps it → portal auto-sends them the magic-link email." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy invite link</button>
+                      <button onClick={() => {
+                        navigator.clipboard.writeText(row.email);
+                        setMsg({ type: 'success', text: `Email copied: ${row.email}` });
+                      }} disabled={busy} title="Copy this claimant's email to paste into Gmail 'To:' field." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>✉️ Copy email</button>
+                      <button onClick={() => resend(row)} disabled={busy} title="Email the magic-link sign-in email to this claimant right now (uses Supabase Auth — may fail silently if Auth SMTP is broken)." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>📧 Send magic link</button>
                     </>
+                  )}
+                  {row.enabled && !row.email && (
+                    <button onClick={copyUrl} disabled={busy} title="No email on this row — copying the bare portal URL. Tell the claimant to sign in with their email at this link." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy portal URL</button>
                   )}
                   <button onClick={() => toggleEnabled(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{row.enabled ? 'Disable' : 'Enable'}</button>
                   <button onClick={() => remove(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#ef4444" }}>Remove</button>
