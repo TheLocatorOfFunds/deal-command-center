@@ -475,16 +475,29 @@ const fmt$2 = (n) => {
   if (n == null || isNaN(n)) return "—";
   return "$" + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+// Defensive: strip a trailing "County" so concatenating ` County` later
+// can't produce "Butler County County". Castle/scraper data sometimes
+// stores `county = 'Butler County'`, sometimes `'Butler'` — we treat
+// either as "Butler" for display purposes.
+const cleanCountyName = (s) => (s || '').replace(/\s*county\s*$/i, '').trim();
+
 const fmtDate = (s) => {
   if (!s) return "—";
   const d = new Date(s);
   if (isNaN(d)) return "—";
+  // Reject implausible dates (year < 1990 or > current+2) — same guard
+  // as isPlausibleFiledAt. Catches the John Dunn '0006-04-10' parsing
+  // bug that would otherwise render as "Apr 9, 6".
+  const y = d.getFullYear();
+  if (y < 1990 || y > new Date().getFullYear() + 2) return "—";
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 };
 const fmtDateShort = (s) => {
   if (!s) return "—";
   const d = new Date(s);
   if (isNaN(d)) return "—";
+  const y = d.getFullYear();
+  if (y < 1990 || y > new Date().getFullYear() + 2) return "—";
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 const statusLabel = (s) => (s || "").replace(/-/g, ' ').toUpperCase();
@@ -2610,7 +2623,7 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
 
       <h1 className="deal-name">{(deal.name || '').split(' - ')[0]}</h1>
       <div className="deal-sub">
-        {address || (county ? `${county} County, Ohio` : 'Your home')}
+        {address || (county ? `${cleanCountyName(county)} County, Ohio` : 'Your home')}
       </div>
 
       <WelcomeVideoBlock url={welcomeVideoUrl} />
@@ -2754,7 +2767,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       <h1 className="deal-name">{deal.name}</h1>
       <div className="deal-sub">
-        {county ? `${county} County, Ohio` : (deal.address || '')}
+        {county ? `${cleanCountyName(county)} County, Ohio` : (deal.address || '')}
         {isJointCase && (
           <span style={{ marginLeft: 8, padding: '2px 8px', fontSize: 11, background: 'var(--gold-soft)', color: 'var(--amber)', borderRadius: 10, fontWeight: 600 }}>
             Joint case · {claimantCount} claimants
