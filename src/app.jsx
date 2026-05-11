@@ -2761,7 +2761,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "hygiene" ? (
             <HygieneDashboard deals={deals} onSelect={onSelect} />
           ) : view === "pipeline" ? (
-            <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} />
+            <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "time" ? (
@@ -5376,7 +5376,7 @@ function AdvancedFiltersModal({ value, onApply, onClose }) {
   );
 }
 
-function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
+function SalesPipeline({ deals, onSelect, onUpdateDeal, isAdmin }) {
   const [track, setTrack] = useState('surplus'); // 'surplus' | '30dts'
   const [tierFilter, setTierFilter] = useState({ A: true, B: true, C: true, other: true });
   const [countyFilter, setCountyFilter] = useState('');
