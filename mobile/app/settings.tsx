@@ -136,6 +136,53 @@ export default function SettingsScreen() {
     }
   }
 
+  const pingSelf = async () => {
+    if (!userId) return
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) throw new Error('Not signed in')
+      // send-push-notification is verify_jwt=false (DB triggers call it)
+      // so anon-key auth is fine. Self-targeted ping for verification.
+      const res = await fetch(
+        'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/send-push-notification',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            // Anon key is fine for this; the function doesn't gate on JWT
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            title: 'DCC push test',
+            body: 'If you see this banner, push is wired end-to-end.',
+            data: { type: 'self_test' },
+          }),
+        },
+      )
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(payload.error || `HTTP ${res.status}`)
+      }
+      if (payload.delivered === 0) {
+        Alert.alert(
+          'Sent — but no token',
+          'The function ran but your push token is null. Tap "Enable notifications" above first.',
+        )
+      } else {
+        Alert.alert(
+          'Test push sent',
+          'You should see a banner within a few seconds. If nothing appears, check iOS Settings → DCC → Notifications.',
+        )
+      }
+    } catch (e) {
+      Alert.alert(
+        'Test failed',
+        e instanceof Error ? e.message : 'Unknown error',
+      )
+    }
+  }
+
   const saveName = async () => {
     if (!userId || saving) return
     const trimmed = nameDraft.trim()
@@ -294,22 +341,37 @@ export default function SettingsScreen() {
                   incoming calls. Tapping a banner deep-links you to the
                   relevant thread or deal.
                 </Text>
-                <TouchableOpacity
-                  style={[
-                    styles.saveBtn,
-                    registering && styles.saveBtnDisabled,
-                  ]}
-                  onPress={reRegisterPush}
-                  disabled={registering}
-                >
-                  <Text style={styles.saveBtnText}>
-                    {registering
-                      ? 'Registering…'
-                      : profile?.expo_push_token
-                        ? 'Re-register this device'
-                        : 'Enable notifications'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity
+                    style={[
+                      styles.saveBtn,
+                      { flex: 1 },
+                      registering && styles.saveBtnDisabled,
+                    ]}
+                    onPress={reRegisterPush}
+                    disabled={registering}
+                  >
+                    <Text style={styles.saveBtnText}>
+                      {registering
+                        ? 'Registering…'
+                        : profile?.expo_push_token
+                          ? 'Re-register'
+                          : 'Enable notifications'}
+                    </Text>
+                  </TouchableOpacity>
+                  {profile?.expo_push_token && (
+                    <TouchableOpacity
+                      style={[styles.saveBtn, { flex: 1, backgroundColor: '#1c1917', borderColor: '#d97706', borderWidth: 1 }]}
+                      onPress={pingSelf}
+                    >
+                      <Text
+                        style={[styles.saveBtnText, { color: '#d97706' }]}
+                      >
+                        Test push
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
 
               <Text style={styles.sectionLabel}>Notify me about</Text>
