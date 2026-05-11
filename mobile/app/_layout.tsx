@@ -9,6 +9,7 @@ import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
+import { registerForPushAsync, subscribeToNotificationTaps } from '../lib/push'
 
 function ProtectedRouter() {
   const { session, loading } = useAuth()
@@ -24,6 +25,37 @@ function ProtectedRouter() {
       router.replace('/(tabs)')
     }
   }, [session, loading, segments, router])
+
+  // Register for push notifications after sign-in. Idempotent — safe to
+  // re-run when the session changes. We silently swallow non-fatal errors
+  // (e.g. permission denied) so the app still works.
+  useEffect(() => {
+    if (loading || !session) return
+    registerForPushAsync().catch(() => {
+      // Already handled inside; nothing more to do.
+    })
+  }, [loading, session])
+
+  // Notification-tap routing. Different payloads land you in different
+  // places. Set on the server side when firing the push.
+  useEffect(() => {
+    const unsub = subscribeToNotificationTaps((data) => {
+      const type = data.type as string | undefined
+      if (type === 'sms' && data.thread_key) {
+        router.push({
+          pathname: '/thread/[key]',
+          params: { key: String(data.thread_key) },
+        })
+      } else if (type === 'call' && data.deal_id) {
+        router.push(`/deal/${String(data.deal_id)}`)
+      } else if (type === 'team') {
+        router.push('/(tabs)/team')
+      } else if (type === 'deal' && data.deal_id) {
+        router.push(`/deal/${String(data.deal_id)}`)
+      }
+    })
+    return unsub
+  }, [router])
 
   // Stack at root lets deal/[id] push on top of (tabs) with a back button.
   // Each child route configures its own header (or hides it).
