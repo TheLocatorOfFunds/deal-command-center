@@ -517,14 +517,19 @@ export default function DealDetailScreen() {
               </View>
             )}
             {deal.status && (
-              <View
-                style={[
-                  styles.pill,
-                  { backgroundColor: statusColor(deal.status) },
-                ]}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => openStatusPicker(deal, setDeal)}
               >
-                <Text style={styles.pillText}>{deal.status}</Text>
-              </View>
+                <View
+                  style={[
+                    styles.pill,
+                    { backgroundColor: statusColor(deal.status) },
+                  ]}
+                >
+                  <Text style={styles.pillText}>{deal.status} ▾</Text>
+                </View>
+              </TouchableOpacity>
             )}
           </View>
 
@@ -1191,6 +1196,73 @@ function ContactRow(props: {
         )}
       </View>
     </View>
+  )
+}
+
+// Status options per type, ordered roughly by pipeline progression.
+// Mirrors the web app's DEAL_STATUSES constant.
+const STATUSES_BY_TYPE: Record<string, string[]> = {
+  surplus: [
+    'new-lead',
+    'researching',
+    'contacted',
+    'fee-agreement',
+    'filed',
+    'served',
+    'hearing-set',
+    'hearing-passed',
+    'order-issued',
+    'paid',
+    'archived',
+    'cancelled',
+  ],
+  flip: [
+    'new-lead',
+    'researching',
+    'under-contract',
+    'rehab',
+    'listed',
+    'closed',
+    'archived',
+    'cancelled',
+  ],
+  wholesale: ['new-lead', 'under-contract', 'assigned', 'closed', 'archived'],
+  rental: ['new-lead', 'under-contract', 'rented', 'closed', 'archived'],
+  other: ['new-lead', 'in-progress', 'closed', 'archived'],
+}
+
+function openStatusPicker(
+  deal: Deal,
+  setDeal: React.Dispatch<React.SetStateAction<Deal | null>>,
+) {
+  const options =
+    STATUSES_BY_TYPE[deal.type ?? 'other'] ?? STATUSES_BY_TYPE.other
+  // iOS Alert.alert with N buttons. Cap at ~8 to avoid the system-
+  // imposed action-sheet height limit.
+  const trimmed = options.slice(0, 8)
+  Alert.alert(
+    'Change status',
+    `Current: ${deal.status ?? '(none)'}`,
+    [
+      { text: 'Cancel', style: 'cancel' as const },
+      ...trimmed
+        .filter((s) => s !== deal.status)
+        .slice(0, 7)
+        .map((s) => ({
+          text: s,
+          onPress: async () => {
+            const { error } = await supabase
+              .from('deals')
+              .update({ status: s })
+              .eq('id', deal.id)
+            if (error) {
+              Alert.alert('Could not update', error.message)
+              return
+            }
+            setDeal((p) => (p ? { ...p, status: s } : p))
+          },
+        })),
+    ],
   )
 }
 
