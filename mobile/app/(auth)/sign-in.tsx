@@ -89,7 +89,7 @@ export default function SignInScreen() {
         <Text style={styles.subtitle}>
           {step === 'email'
             ? 'Sign in with your work email'
-            : `Enter the 6-digit code we sent to ${email}`}
+            : `Enter the code we sent to ${email}`}
         </Text>
 
         {step === 'email' ? (
@@ -125,17 +125,17 @@ export default function SignInScreen() {
           <>
             <TextInput
               style={[styles.input, styles.codeInput]}
-              placeholder="123456"
+              placeholder="••••••"
               placeholderTextColor="#78716c"
               value={code}
-              onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, 6))}
+              onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, 10))}
               keyboardType="number-pad"
               autoComplete="one-time-code"
               textContentType="oneTimeCode"
               returnKeyType="go"
               onSubmitEditing={verifyCode}
               editable={!busy}
-              maxLength={6}
+              maxLength={10}
               autoFocus
             />
             <TouchableOpacity

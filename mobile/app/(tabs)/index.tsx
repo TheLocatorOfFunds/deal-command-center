@@ -21,6 +21,7 @@ import {
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
@@ -35,6 +36,7 @@ type DealRow = {
 
 export default function TodayScreen() {
   const { session, signOut } = useAuth()
+  const router = useRouter()
   const [deals, setDeals] = useState<DealRow[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -109,7 +111,11 @@ export default function TodayScreen() {
             </View>
           }
           renderItem={({ item }) => (
-            <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.card}
+              activeOpacity={0.6}
+              onPress={() => router.push(`/deal/${item.id}`)}
+            >
               <Text style={styles.cardTitle} numberOfLines={1}>
                 {item.name ?? item.id}
               </Text>
@@ -118,7 +124,8 @@ export default function TodayScreen() {
                   .filter(Boolean)
                   .join(' · ')}
               </Text>
-            </View>
+              <Text style={styles.cardHint}>Tap to open →</Text>
+            </TouchableOpacity>
           )}
         />
       )}
@@ -169,4 +176,5 @@ const styles = StyleSheet.create({
   },
   cardTitle: { color: '#fafaf9', fontSize: 15, fontWeight: '600', marginBottom: 4 },
   cardSub: { color: '#78716c', fontSize: 12 },
+  cardHint: { color: '#d97706', fontSize: 11, marginTop: 8, fontWeight: '600' },
 })
