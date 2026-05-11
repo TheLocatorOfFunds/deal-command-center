@@ -64,6 +64,12 @@ const btnGhostFallback = { background: 'transparent', color: '#a8a29e', border: 
 // ─── Helpers ────────────────────────────────────────────────────────
 const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// Defensive: strip a trailing "County" so concatenating ` County` later
+// can't produce "Butler County County". Source data is dirty for some
+// deals (Castle/ohio-intel saved `county = 'Butler County'`, others
+// saved `'Butler'`); we treat either as "Butler" for display purposes.
+// Mirror of the same helper in portal.html.
+const cleanCountyName = (s) => (s || '').replace(/\s*county\s*$/i, '').trim();
 
 // Convert plain text containing http(s) URLs into a mixed array of
 // strings + <a> elements so chat / note / message bodies render
@@ -1592,7 +1598,7 @@ function DealCommandCenter({ session, profile }) {
                     <InlineEditableText value={courtCase} label="case #" placeholder="e.g. CV-25-116796" canEdit={isTeam} onSave={(v) => saveMeta({ courtCase: v || null })} />
                     {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
                     <InlineEditableText
-                      value={county ? `${county} County` : ''}
+                      value={county ? `${cleanCountyName(county)} County` : ''}
                       label="county"
                       placeholder="e.g. Cuyahoga"
                       canEdit={isTeam}
@@ -5653,7 +5659,7 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal, isAdmin }) {
                           </div>
                         </div>
                         <div style={{ fontSize: 10, color: '#78716c', marginBottom: 6, lineHeight: 1.4 }}>
-                          {d.meta?.county && <>{d.meta.county} County</>}
+                          {d.meta?.county && <>{cleanCountyName(d.meta.county)} County</>}
                           {d.address && <> · <span title={d.address}>{(d.address.length > 40 ? d.address.slice(0, 40) + '…' : d.address)}</span></>}
                         </div>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -12123,7 +12129,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <Metric label={strategy === "wholesale" ? "Wholesale Price" : "List Price"} value={fmt(salePrice)} sub={strategy === "wholesale" ? "Assignment exit" : (deal.status === "listing" ? "Active listing" : "Target")} color="#3b82f6" />
             <Metric label="Projected Net" value={fmt(netProfit)} sub={strategy === "wholesale" ? "As wholesale" : (netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative")} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
           </>) : (<>
-            <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? m.county + " County" : "—"} color="#3b82f6" />
+            <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? cleanCountyName(m.county) + " County" : "—"} color="#3b82f6" />
             <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
             <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
           </>)}
@@ -14575,7 +14581,7 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
       {(caseNumber || county || judge) && (
         <div style={{ fontSize: 10, color: "#78716c", marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {caseNumber && <span>Case {caseNumber}</span>}
-          {county && <>{caseNumber && <span>·</span>}<span>{county} County</span></>}
+          {county && <>{caseNumber && <span>·</span>}<span>{cleanCountyName(county)} County</span></>}
           {judge && <><span>·</span><span>Judge {judge}</span></>}
         </div>
       )}
