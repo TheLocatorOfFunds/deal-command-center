@@ -29,6 +29,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack } from 'expo-router'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
+import { registerForPushAsync } from '../lib/push'
 
 type Profile = {
   id: string
@@ -36,6 +37,7 @@ type Profile = {
   display_name: string | null
   role: string | null
   phone: string | null
+  expo_push_token: string | null
 }
 
 export default function SettingsScreen() {
@@ -47,30 +49,55 @@ export default function SettingsScreen() {
   const [phoneDraft, setPhoneDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [registering, setRegistering] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const refreshProfile = async () => {
+    if (!userId) return
+    const { data, error: err } = await supabase
+      .from('profiles')
+      .select('id, name, display_name, role, phone, expo_push_token')
+      .eq('id', userId)
+      .maybeSingle()
+    if (err) {
+      setError(err.message)
+    } else if (data) {
+      setProfile(data as Profile)
+      setPhoneDraft((data.phone as string) ?? '')
+    }
+  }
 
   useEffect(() => {
     if (!userId) return
     let mounted = true
     ;(async () => {
-      const { data, error: err } = await supabase
-        .from('profiles')
-        .select('id, name, display_name, role, phone')
-        .eq('id', userId)
-        .maybeSingle()
-      if (!mounted) return
-      if (err) {
-        setError(err.message)
-      } else if (data) {
-        setProfile(data as Profile)
-        setPhoneDraft((data.phone as string) ?? '')
-      }
-      setLoading(false)
+      await refreshProfile()
+      if (mounted) setLoading(false)
     })()
     return () => {
       mounted = false
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId])
+
+  const reRegisterPush = async () => {
+    if (registering) return
+    setRegistering(true)
+    try {
+      const result = await registerForPushAsync()
+      if (result.ok) {
+        await refreshProfile()
+        Alert.alert(
+          'Notifications enabled',
+          'Your device is registered. You should now get banners for inbound SMS, team chat, and incoming calls.',
+        )
+      } else {
+        Alert.alert('Could not register', result.message)
+      }
+    } finally {
+      setRegistering(false)
+    }
+  }
 
   const savePhone = async () => {
     if (!userId || saving) return
@@ -165,6 +192,46 @@ export default function SettingsScreen() {
                 >
                   <Text style={styles.saveBtnText}>
                     {saving ? 'Saving…' : 'Save cell'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.sectionLabel}>Notifications</Text>
+              <View style={styles.section}>
+                <View style={styles.field}>
+                  <Text style={styles.fieldLabel}>Status</Text>
+                  <Text
+                    style={[
+                      styles.fieldValue,
+                      profile?.expo_push_token
+                        ? styles.statusOk
+                        : styles.statusWarn,
+                    ]}
+                  >
+                    {profile?.expo_push_token
+                      ? '✓ Registered for push'
+                      : '⚠ Not registered — tap below to fix'}
+                  </Text>
+                </View>
+                <Text style={styles.hint}>
+                  Push notifications fire on inbound SMS, team chat, and
+                  incoming calls. Tapping a banner deep-links you to the
+                  relevant thread or deal.
+                </Text>
+                <TouchableOpacity
+                  style={[
+                    styles.saveBtn,
+                    registering && styles.saveBtnDisabled,
+                  ]}
+                  onPress={reRegisterPush}
+                  disabled={registering}
+                >
+                  <Text style={styles.saveBtnText}>
+                    {registering
+                      ? 'Registering…'
+                      : profile?.expo_push_token
+                        ? 'Re-register this device'
+                        : 'Enable notifications'}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -267,6 +334,8 @@ const styles = StyleSheet.create({
   },
   saveBtnDisabled: { backgroundColor: '#292524' },
   saveBtnText: { color: '#0c0a09', fontWeight: '700', fontSize: 14 },
+  statusOk: { color: '#34d399' },
+  statusWarn: { color: '#fbbf24' },
   signOutBtn: {
     backgroundColor: '#7f1d1d',
     paddingVertical: 14,

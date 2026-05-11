@@ -338,6 +338,46 @@ export default function DealDetailScreen() {
 
   const hasContacts = vendors.length > 0 || contactLinks.length > 0
 
+  // Pull common case-context fields out of meta. Meta is a grab-bag so
+  // every field is optional — render only what's actually there.
+  const meta = (deal.meta ?? {}) as Record<string, unknown>
+  const caseIntel = (meta.case_intel_summary as
+    | { text?: string; generated_at?: string }
+    | undefined)
+  const facts: Array<{ label: string; value: string }> = []
+  const pushFact = (label: string, raw: unknown, formatter?: (v: unknown) => string) => {
+    if (raw === null || raw === undefined || raw === '') return
+    facts.push({ label, value: formatter ? formatter(raw) : String(raw) })
+  }
+  const fmtMoney = (v: unknown) => {
+    const n = typeof v === 'number' ? v : parseFloat(String(v))
+    if (!Number.isFinite(n)) return String(v)
+    return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 })
+  }
+  const fmtDate = (v: unknown) => {
+    const s = String(v)
+    if (/^\d{4}-\d{2}-\d{2}/.test(s))
+      return new Date(s).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    return s
+  }
+  pushFact('County', meta.county)
+  pushFact('Case #', meta.courtCase)
+  pushFact('Sale date', meta.saleDate, fmtDate)
+  pushFact('Sale price', meta.salePrice, fmtMoney)
+  pushFact('Judgment', meta.judgmentAmount ?? meta.totalDebt, fmtMoney)
+  pushFact(
+    'Est. surplus',
+    meta.verifiedSurplus ?? meta.estimatedSurplus,
+    fmtMoney,
+  )
+  pushFact('Court appraisal', meta.courtAppraisalValue, fmtMoney)
+  pushFact('Min bid', meta.minimumBidAmount, fmtMoney)
+  pushFact('Foreclosure filed', meta.foreclosureFileDate, fmtDate)
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right']}>
       <Stack.Screen
@@ -376,6 +416,38 @@ export default function DealDetailScreen() {
             )}
           </View>
         </View>
+
+        {/* Case Intel — Claude's case briefing if generated */}
+        {caseIntel?.text && (
+          <>
+            <Text style={styles.sectionLabel}>Case intelligence</Text>
+            <View style={styles.section}>
+              <CaseIntelBody text={caseIntel.text} />
+              {caseIntel.generated_at && (
+                <Text style={styles.intelMeta}>
+                  Generated {formatRelative(caseIntel.generated_at)}
+                </Text>
+              )}
+            </View>
+          </>
+        )}
+
+        {/* Case facts — only renders if any meta fields are present */}
+        {facts.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>Case facts</Text>
+            <View style={styles.section}>
+              <View style={styles.factsGrid}>
+                {facts.map((f) => (
+                  <View key={f.label} style={styles.factCell}>
+                    <Text style={styles.factLabel}>{f.label}</Text>
+                    <Text style={styles.factValue}>{f.value}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          </>
+        )}
 
         {/* Contacts — vendors (per-deal) + contacts (company-wide) */}
         <Text style={styles.sectionLabel}>People · tap to call</Text>
@@ -525,6 +597,74 @@ export default function DealDetailScreen() {
   )
 }
 
+// Tiny markdown renderer for the Claude-generated case intel text.
+// Handles three things and nothing else: bold (**text**), bullet lines
+// starting with "- ", and paragraph breaks. Anything fancier (links,
+// nested lists, code) just renders as plain text.
+function CaseIntelBody({ text }: { text: string }) {
+  const blocks: React.ReactNode[] = []
+  const lines = text.split(/\n+/)
+  let bulletBuffer: string[] = []
+
+  const flushBullets = (keyHint: string) => {
+    if (bulletBuffer.length === 0) return
+    blocks.push(
+      <View key={`bul-${keyHint}`} style={{ marginTop: 6, marginBottom: 6 }}>
+        {bulletBuffer.map((b, i) => (
+          <View
+            key={`bul-${keyHint}-${i}`}
+            style={{ flexDirection: 'row', marginBottom: 6 }}
+          >
+            <Text style={styles.intelBullet}>•</Text>
+            <View style={{ flex: 1 }}>{renderInline(b, `bul-${keyHint}-${i}`)}</View>
+          </View>
+        ))}
+      </View>,
+    )
+    bulletBuffer = []
+  }
+
+  lines.forEach((raw, idx) => {
+    const line = raw.trim()
+    if (!line) return
+    if (line.startsWith('- ')) {
+      bulletBuffer.push(line.slice(2))
+      return
+    }
+    flushBullets(`f-${idx}`)
+    blocks.push(
+      <View
+        key={`p-${idx}`}
+        style={{ marginBottom: 8 }}
+      >
+        {renderInline(line, `p-${idx}`)}
+      </View>,
+    )
+  })
+  flushBullets('end')
+
+  return <>{blocks}</>
+}
+
+// Splits a line on **bold** markers and returns inline text spans.
+function renderInline(line: string, keyPrefix: string) {
+  const parts: React.ReactNode[] = []
+  const segments = line.split(/(\*\*[^*]+\*\*)/g)
+  segments.forEach((seg, i) => {
+    if (!seg) return
+    if (seg.startsWith('**') && seg.endsWith('**')) {
+      parts.push(
+        <Text key={`${keyPrefix}-${i}`} style={styles.intelBold}>
+          {seg.slice(2, -2)}
+        </Text>,
+      )
+    } else {
+      parts.push(<Text key={`${keyPrefix}-${i}`}>{seg}</Text>)
+    }
+  })
+  return <Text style={styles.intelText}>{parts}</Text>
+}
+
 function ContactRow(props: {
   name: string
   subtitle: string
@@ -653,6 +793,40 @@ const styles = StyleSheet.create({
   },
   activityAction: { color: '#d6d3d1', fontSize: 13, lineHeight: 18 },
   activityTime: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  intelText: { color: '#d6d3d1', fontSize: 14, lineHeight: 21 },
+  intelBold: { color: '#fafaf9', fontWeight: '700' },
+  intelBullet: {
+    color: '#d97706',
+    fontSize: 16,
+    marginRight: 8,
+    marginTop: -1,
+    width: 12,
+  },
+  intelMeta: {
+    color: '#57534e',
+    fontSize: 11,
+    marginTop: 8,
+    fontStyle: 'italic',
+  },
+  factsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    margin: -6,
+  },
+  factCell: {
+    width: '50%',
+    paddingHorizontal: 6,
+    paddingVertical: 8,
+  },
+  factLabel: {
+    color: '#78716c',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  factValue: { color: '#fafaf9', fontSize: 14, fontWeight: '600' },
   sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',

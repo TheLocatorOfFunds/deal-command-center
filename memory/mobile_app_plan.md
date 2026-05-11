@@ -69,8 +69,26 @@ Goal: prove the daily-driver flow works on Justin's actual iPhone.
 - 🔲 Deal detail (tap card → drill in)
 - 🔲 Phone-tap → `tel:` deep-link to native dialer (placeholder for Twilio Voice)
 
-### Phase 2 — EAS dev build (after Apple Developer enrollment approved, ≤48hr)
+### Phase 2 — EAS dev build (Apple Developer APPROVED 2026-05-11)
 Goal: replace the `tel:` placeholder with Twilio Voice + add inbound calls.
+
+Apple Developer Program enrollment is live as of May 11, 2026:
+- Apple ID: `racin2701@yahoo.com` (Justin's personal — NOT his FundLocators email)
+- Team ID: `8RJDH7L35Q`
+- Enrolled as Individual (no D-U-N-S needed)
+- Renews May 11, 2027 ($99/yr, auto-renew ON)
+
+Justin runs from his terminal (one-time EAS CLI auth required):
+```bash
+cd mobile
+npx eas-cli login         # use the Expo account tied to justin@fundlocators.com
+npx eas-cli init          # creates EAS projectId; writes it to app.json extra.eas.projectId
+npx eas-cli build --platform ios --profile development
+```
+~10-15 min build time. EAS sends a download link; install on iPhone. After
+that, the standalone "DCC" app icon talks to Metro on the Mac just like Expo
+Go did — same JS hot-reload, but with native code (Twilio Voice SDK, real
+APNs push tokens, the `dcc://` deep-link scheme).
 
 - 🔲 First `eas build --platform ios --profile development`
 - 🔲 Install dev build on Justin's iPhone (via download link)

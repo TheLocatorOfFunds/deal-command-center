@@ -9,17 +9,37 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.fundlocators.dcc"
+      "bundleIdentifier": "com.fundlocators.dcc",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "DCC uses the microphone for in-app Twilio voice calls with homeowners and contacts.",
+        "NSUserNotificationsUsageDescription": "DCC sends you push notifications when new SMS, calls, or team chat messages arrive."
+      },
+      "entitlements": {
+        "aps-environment": "production"
+      }
     },
     "android": {
       "package": "com.fundlocators.dcc"
     },
     "plugins": [
       "expo-router",
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "color": "#d97706",
+          "sounds": []
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "owner": "fundlocators",
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_AFTER_EAS_INIT"
+      }
     }
   }
 }
