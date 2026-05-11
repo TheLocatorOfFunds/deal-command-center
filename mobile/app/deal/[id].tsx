@@ -419,7 +419,12 @@ export default function DealDetailScreen() {
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionLabel}>Notes · {notes.length}</Text>
           <TouchableOpacity
-            onPress={() => router.push('/quick/note')}
+            onPress={() =>
+              router.push({
+                pathname: '/quick/note',
+                params: { deal_id: id, deal_name: deal.name ?? id },
+              })
+            }
             style={styles.addButton}
           >
             <Text style={styles.addButtonText}>+ Add</Text>

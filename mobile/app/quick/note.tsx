@@ -27,7 +27,7 @@ import {
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Stack, useRouter } from 'expo-router'
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 
 type DealHit = {
@@ -39,10 +39,25 @@ type DealHit = {
 
 export default function QuickNoteScreen() {
   const router = useRouter()
+  // If we arrived from a Deal Detail's "+ Add" button, we already know
+  // which deal — skip the search step entirely.
+  const params = useLocalSearchParams<{
+    deal_id?: string
+    deal_name?: string
+  }>()
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<DealHit[]>([])
   const [searching, setSearching] = useState(false)
-  const [selected, setSelected] = useState<DealHit | null>(null)
+  const [selected, setSelected] = useState<DealHit | null>(
+    params.deal_id
+      ? {
+          id: params.deal_id,
+          name: params.deal_name ?? params.deal_id,
+          address: null,
+          status: null,
+        }
+      : null,
+  )
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
