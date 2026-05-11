@@ -15,6 +15,16 @@
  */
 
 import { Tabs } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
+
+type IoniconName = React.ComponentProps<typeof Ionicons>['name']
+
+// Icon renderer factory — keeps the tab declarations readable.
+const icon =
+  (name: IoniconName) =>
+  ({ color, size }: { color: string; size: number }) => (
+    <Ionicons name={name} color={color} size={size} />
+  )
 
 export default function TabsLayout() {
   return (
@@ -36,6 +46,7 @@ export default function TabsLayout() {
         options={{
           title: 'Inbox',
           tabBarLabel: 'Inbox',
+          tabBarIcon: icon('chatbubbles'),
         }}
       />
       <Tabs.Screen
@@ -43,6 +54,7 @@ export default function TabsLayout() {
         options={{
           title: 'Deals',
           tabBarLabel: 'Deals',
+          tabBarIcon: icon('briefcase'),
         }}
       />
       <Tabs.Screen
@@ -50,6 +62,7 @@ export default function TabsLayout() {
         options={{
           title: 'Lauren',
           tabBarLabel: 'Lauren',
+          tabBarIcon: icon('sparkles'),
         }}
       />
       <Tabs.Screen
@@ -57,6 +70,7 @@ export default function TabsLayout() {
         options={{
           title: 'Team',
           tabBarLabel: 'Team',
+          tabBarIcon: icon('people'),
         }}
       />
     </Tabs>
