@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
-  Linking,
+  Alert,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -28,6 +28,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
+import { placeCall, saveUserCellPhone } from '../../lib/dial'
 
 type Deal = {
   id: string
@@ -126,15 +127,62 @@ export default function DealDetailScreen() {
     load()
   }
 
-  const dial = (phone: string | null | undefined) => {
-    if (!phone) return
-    const digits = phone.replace(/[^\d+]/g, '')
-    if (!digits) return
-    Linking.openURL(`tel:${digits}`).catch(() => {
-      // Native dialer not available (e.g. iPad without cellular).
-      // In Phase 2 this fallback becomes "open Twilio Voice in-app call".
-    })
-  }
+  const dial = useCallback(
+    async (phone: string | null | undefined) => {
+      if (!phone) return
+      const result = await placeCall(phone, { dealId: id })
+
+      if (result.ok) {
+        Alert.alert(
+          'Calling…',
+          'Your phone will ring shortly. Answer to connect to the other party. Outgoing caller ID is the FundLocators business number.',
+        )
+        return
+      }
+
+      if (result.error === 'cell_phone_required') {
+        // First-time setup. Prompt for the user's cell, save to
+        // profiles.phone, then retry the call automatically.
+        Alert.prompt(
+          'Set your cell phone',
+          'We need your cell to bridge calls through Twilio. Enter the number you want to ring when you tap to call.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            {
+              text: 'Save & call',
+              onPress: async (entered?: string) => {
+                if (!entered) return
+                const saved = await saveUserCellPhone(entered)
+                if (!saved.ok) {
+                  Alert.alert('Could not save', saved.message ?? '')
+                  return
+                }
+                // retry
+                const retry = await placeCall(phone, { dealId: id })
+                if (retry.ok) {
+                  Alert.alert('Calling…', retry.message)
+                } else {
+                  Alert.alert('Call failed', retry.message)
+                }
+              },
+            },
+          ],
+          'plain-text',
+          '',
+          'phone-pad',
+        )
+        return
+      }
+
+      if (result.error === 'recipient_on_dnd') {
+        Alert.alert('Do not call', result.message)
+        return
+      }
+
+      Alert.alert('Call failed', result.message)
+    },
+    [id],
+  )
 
   if (loading) {
     return (
