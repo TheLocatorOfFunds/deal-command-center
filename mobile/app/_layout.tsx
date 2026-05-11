@@ -48,6 +48,8 @@ function ProtectedRouter() {
         })
       } else if (type === 'call' && data.deal_id) {
         router.push(`/deal/${String(data.deal_id)}`)
+      } else if (type === 'team' && data.thread_id) {
+        router.push(`/team-thread/${String(data.thread_id)}`)
       } else if (type === 'team') {
         router.push('/(tabs)/team')
       } else if (type === 'deal' && data.deal_id) {
@@ -79,6 +81,15 @@ function ProtectedRouter() {
           headerStyle: { backgroundColor: '#0c0a09' },
           headerTintColor: '#fafaf9',
           headerBackTitle: 'Inbox',
+        }}
+      />
+      <Stack.Screen
+        name="team-thread/[id]"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+          headerBackTitle: 'Team',
         }}
       />
     </Stack>
