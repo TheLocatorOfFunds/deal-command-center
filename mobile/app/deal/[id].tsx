@@ -30,6 +30,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../lib/auth'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
 
 type Deal = {
@@ -123,6 +124,7 @@ type CommsItem = {
 
 export default function DealDetailScreen() {
   const router = useRouter()
+  const { session } = useAuth()
   const { id } = useLocalSearchParams<{ id: string }>()
   const [deal, setDeal] = useState<Deal | null>(null)
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -908,7 +910,76 @@ export default function DealDetailScreen() {
             </Text>
           ) : (
             notes.map((nn) => (
-              <View key={nn.id} style={styles.noteRow}>
+              <TouchableOpacity
+                key={nn.id}
+                activeOpacity={0.8}
+                onLongPress={() => {
+                  // Only the author can edit / delete. RLS would block
+                  // others anyway, but show the right affordance.
+                  const isMine = nn.author_id === session?.user?.id
+                  if (!isMine) return
+                  Alert.alert(
+                    'Note',
+                    'Edit or delete this note?',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Edit',
+                        onPress: () => {
+                          Alert.prompt(
+                            'Edit note',
+                            'Update the note body.',
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Save',
+                                onPress: async (next?: string) => {
+                                  if (!next) return
+                                  const trimmed = next.trim()
+                                  if (!trimmed) return
+                                  const { error: e } = await supabase
+                                    .from('deal_notes')
+                                    .update({ body: trimmed })
+                                    .eq('id', nn.id)
+                                  if (e) {
+                                    Alert.alert('Could not save', e.message)
+                                    return
+                                  }
+                                  setNotes((prev) =>
+                                    prev.map((x) =>
+                                      x.id === nn.id ? { ...x, body: trimmed } : x,
+                                    ),
+                                  )
+                                },
+                              },
+                            ],
+                            'plain-text',
+                            nn.body ?? '',
+                          )
+                        },
+                      },
+                      {
+                        text: 'Delete',
+                        style: 'destructive',
+                        onPress: async () => {
+                          const { error: e } = await supabase
+                            .from('deal_notes')
+                            .delete()
+                            .eq('id', nn.id)
+                          if (e) {
+                            Alert.alert('Could not delete', e.message)
+                            return
+                          }
+                          setNotes((prev) =>
+                            prev.filter((x) => x.id !== nn.id),
+                          )
+                        },
+                      },
+                    ],
+                  )
+                }}
+                style={styles.noteRow}
+              >
                 {nn.title && (
                   <Text style={styles.noteTitle}>{nn.title}</Text>
                 )}
@@ -916,8 +987,11 @@ export default function DealDetailScreen() {
                 <Text style={styles.noteMeta}>
                   {nn.author_name ?? 'team'} ·{' '}
                   {nn.created_at ? formatRelative(nn.created_at) : ''}
+                  {nn.author_id === session?.user?.id
+                    ? ' · long-press to edit'
+                    : ''}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))
           )}
         </View>
