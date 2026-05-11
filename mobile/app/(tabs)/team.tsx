@@ -46,7 +46,6 @@ export default function TeamScreen() {
 
   const load = useCallback(async () => {
     setError(null)
-    // Threads visible to the user — RLS does the participant scoping.
     const { data: ts, error: terr } = await supabase
       .from('team_threads')
       .select('id, title, thread_type, lauren_enabled, archived_at, created_at')
@@ -61,10 +60,11 @@ export default function TeamScreen() {
       return
     }
     const threadIds = (ts ?? []).map((t) => t.id as string)
-    let lastByThread = new Map<string, { body: string; created_at: string }>()
+    const lastByThread = new Map<
+      string,
+      { body: string; created_at: string }
+    >()
     if (threadIds.length > 0) {
-      // Pull the most-recent message per thread (single batched query,
-      // then group client-side — same trick as the Inbox).
       const { data: msgs } = await supabase
         .from('team_messages')
         .select('thread_id, body, created_at, deleted_at')
@@ -93,8 +93,6 @@ export default function TeamScreen() {
         lastAt: last?.created_at ?? null,
       }
     })
-    // Sort: threads with messages first (by most recent), then unmsgd
-    // threads by created_at desc.
     out.sort((a, b) => {
       if (a.lastAt && b.lastAt)
         return new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime()
@@ -107,7 +105,6 @@ export default function TeamScreen() {
     setRefreshing(false)
   }, [])
 
-  // Reload on tab focus so new messages from realtime / push show fresh
   useFocusEffect(
     useCallback(() => {
       load()
@@ -132,9 +129,7 @@ export default function TeamScreen() {
     <SafeAreaView style={styles.container} edges={['left', 'right', 'top']}>
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Team</Text>
-        <Text style={styles.headerSubtitle}>
-          Internal channels + DMs
-        </Text>
+        <Text style={styles.headerSubtitle}>Internal channels + DMs</Text>
       </View>
 
       {loading ? (
