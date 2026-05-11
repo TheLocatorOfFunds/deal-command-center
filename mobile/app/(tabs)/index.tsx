@@ -293,6 +293,13 @@ export default function InboxScreen() {
           </Text>
         </View>
         <TouchableOpacity
+          onPress={() => router.push('/forecast')}
+          style={[styles.signOut, { marginRight: 8 }]}
+          accessibilityLabel="Forecast"
+        >
+          <Ionicons name="calendar-outline" size={20} color="#a8a29e" />
+        </TouchableOpacity>
+        <TouchableOpacity
           onPress={() => router.push('/settings')}
           style={styles.signOut}
           accessibilityLabel="Settings"
