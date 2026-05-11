@@ -20,6 +20,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -31,6 +32,12 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { registerForPushAsync } from '../lib/push'
 
+type NotificationPrefs = {
+  sms: boolean
+  calls: boolean
+  team: boolean
+}
+
 type Profile = {
   id: string
   name: string | null
@@ -38,6 +45,7 @@ type Profile = {
   role: string | null
   phone: string | null
   expo_push_token: string | null
+  notification_prefs: NotificationPrefs | null
 }
 
 export default function SettingsScreen() {
@@ -56,7 +64,9 @@ export default function SettingsScreen() {
     if (!userId) return
     const { data, error: err } = await supabase
       .from('profiles')
-      .select('id, name, display_name, role, phone, expo_push_token')
+      .select(
+        'id, name, display_name, role, phone, expo_push_token, notification_prefs',
+      )
       .eq('id', userId)
       .maybeSingle()
     if (err) {
@@ -64,6 +74,29 @@ export default function SettingsScreen() {
     } else if (data) {
       setProfile(data as Profile)
       setPhoneDraft((data.phone as string) ?? '')
+    }
+  }
+
+  const togglePref = async (
+    key: keyof NotificationPrefs,
+    nextValue: boolean,
+  ) => {
+    if (!userId) return
+    const current: NotificationPrefs = profile?.notification_prefs ?? {
+      sms: true,
+      calls: true,
+      team: true,
+    }
+    const next = { ...current, [key]: nextValue }
+    // Optimistic update so the switch animates instantly
+    setProfile((p) => (p ? { ...p, notification_prefs: next } : p))
+    const { error: err } = await supabase
+      .from('profiles')
+      .update({ notification_prefs: next })
+      .eq('id', userId)
+    if (err) {
+      Alert.alert('Could not save', err.message)
+      await refreshProfile()
     }
   }
 
@@ -236,6 +269,29 @@ export default function SettingsScreen() {
                 </TouchableOpacity>
               </View>
 
+              <Text style={styles.sectionLabel}>Notify me about</Text>
+              <View style={styles.section}>
+                <PrefRow
+                  label="Inbound SMS"
+                  detail="When a homeowner texts the Twilio number"
+                  value={profile?.notification_prefs?.sms ?? true}
+                  onChange={(v) => togglePref('sms', v)}
+                />
+                <PrefRow
+                  label="Incoming calls"
+                  detail="When someone calls the Twilio number"
+                  value={profile?.notification_prefs?.calls ?? true}
+                  onChange={(v) => togglePref('calls', v)}
+                />
+                <PrefRow
+                  label="Team chat"
+                  detail="When a teammate posts in channels or DMs"
+                  value={profile?.notification_prefs?.team ?? true}
+                  onChange={(v) => togglePref('team', v)}
+                  last
+                />
+              </View>
+
               <TouchableOpacity
                 style={styles.signOutBtn}
                 onPress={() =>
@@ -262,6 +318,29 @@ export default function SettingsScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  )
+}
+
+function PrefRow(props: {
+  label: string
+  detail: string
+  value: boolean
+  onChange: (v: boolean) => void
+  last?: boolean
+}) {
+  return (
+    <View style={[styles.prefRow, props.last && { borderBottomWidth: 0 }]}>
+      <View style={{ flex: 1, paddingRight: 12 }}>
+        <Text style={styles.prefLabel}>{props.label}</Text>
+        <Text style={styles.prefDetail}>{props.detail}</Text>
+      </View>
+      <Switch
+        value={props.value}
+        onValueChange={props.onChange}
+        trackColor={{ false: '#292524', true: '#d97706' }}
+        thumbColor="#fafaf9"
+      />
+    </View>
   )
 }
 
@@ -336,6 +415,15 @@ const styles = StyleSheet.create({
   saveBtnText: { color: '#0c0a09', fontWeight: '700', fontSize: 14 },
   statusOk: { color: '#34d399' },
   statusWarn: { color: '#fbbf24' },
+  prefRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  prefLabel: { color: '#fafaf9', fontSize: 14, fontWeight: '600' },
+  prefDetail: { color: '#78716c', fontSize: 12, marginTop: 2 },
   signOutBtn: {
     backgroundColor: '#7f1d1d',
     paddingVertical: 14,
