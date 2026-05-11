@@ -23,6 +23,16 @@ of DCC web — phone-sized, opinionated, does 3-5 jobs really well.
      "Incoming: {claimant name} · {deal id}" → answer →
      auto-navigate to deal detail
 5. **Sign in** — magic-link / 6-or-8-digit OTP code (already shipped)
+6. **Push notifications** — fire on three events:
+   - **Inbound SMS** lands in `messages_outbound` (`direction='inbound'`)
+   - **Incoming call** to the Twilio business number (via Twilio
+     StatusCallback hitting an Edge Function)
+   - **Team chat message** posted by another member (Justin/Nathan/Eric)
+   Phase 1 (Expo Go) uses Expo Push Service (token via
+   `expo-notifications`, server-side push via Expo's HTTP API).
+   Phase 2 (EAS dev build) can switch to direct APNs if/when the
+   reliability of Expo Push becomes a problem. Tokens stored on
+   `profiles.expo_push_token` (new column).
 
 ## Explicitly deferred (NOT in v1)
 
