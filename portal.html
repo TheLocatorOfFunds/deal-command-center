@@ -859,15 +859,33 @@ function PortalBody({ session }) {
 
   const isAdminPreview = profile && (profile.role === 'admin' || profile.role === 'user' || profile.role === 'va');
 
-  // 2a. Admin preview path: load all deals, pick one
+  // 2a. Admin preview path: load all deals, pick one.
+  //
+  // Pick order:
+  //   1. ?preview= or ?deal= URL param (explicit admin override)
+  //   2. ?email= URL param → look up the claimant's deal via the
+  //      deal_id_for_claimant_email RPC. This is what makes the
+  //      invite link `?email=X&invite=1` show the CLIENT'S deal in
+  //      admin preview, not deals[0]. Pre-fix, opening a client's
+  //      invite link as admin loaded whatever deal was last edited
+  //      in DCC, which looked like a data leak (it wasn't —
+  //      RLS-scoped client view is fine; admin preview was wrong).
+  //   3. deals[0] (most-recently-updated) — the original default.
   useEffect(() => {
     if (!profile || !isAdminPreview) return;
     (async () => {
       const { data: deals } = await sb.from('deals').select('*').order('updated_at', { ascending: false });
       setAllDeals(deals || []);
       const params = new URLSearchParams(window.location.search);
-      const fromUrl = params.get('preview') || params.get('deal');
-      const pickId = fromUrl || (deals && deals[0] && deals[0].id);
+      let pickId = params.get('preview') || params.get('deal');
+      if (!pickId) {
+        const emailParam = params.get('email');
+        if (emailParam) {
+          const { data: emailDealId } = await sb.rpc('deal_id_for_claimant_email', { p_email: emailParam });
+          if (emailDealId) pickId = emailDealId;
+        }
+      }
+      if (!pickId) pickId = deals && deals[0] && deals[0].id;
       if (pickId) setPreviewDealId(pickId);
       else setState({ loading: false, error: 'deal_missing' });
     })();
