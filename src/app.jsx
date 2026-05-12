@@ -6927,6 +6927,126 @@ function ForecastLoading() {
   return <div style={{ fontSize: 11, color: '#78716c', padding: 14 }}>Loading…</div>;
 }
 
+// ─── Relay Deal Detail Panel ─────────────────────────────────────
+// Slide-over panel shown when reviewing a lead before approving.
+// touch is the outreach_queue row (null when opened from enrollments table).
+function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
+  if (!deal) return null
+
+  const surplus = deal.surplus_estimate
+    ? parseFloat(deal.surplus_estimate).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+    : deal.meta?.estimatedSurplus
+      ? '$' + parseInt(deal.meta.estimatedSurplus).toLocaleString()
+      : null
+
+  const saleDate = deal.meta?.saleDate
+    ? new Date(deal.meta.saleDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null
+
+  const phone = deal.meta?.homeownerPhone || ''
+  const county = deal.meta?.county || ''
+  const caseNum = deal.meta?.courtCase || ''
+  const attorney = deal.meta?.attorney || ''
+  const deceased = deal.meta?.deceased === 'true' || deal.meta?.deceased === true
+  const tierColors = { A: '#16a34a', B: '#d97706', C: '#64748b' }
+  const tierColor = tierColors[deal.lead_tier] || '#64748b'
+
+  const Row = ({ label, value, accent }) => value ? (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid #1e293b' }}>
+      <span style={{ fontSize: 12, color: '#64748b', minWidth: 120 }}>{label}</span>
+      <span style={{ fontSize: 13, color: accent || '#e2e8f0', textAlign: 'right', fontWeight: accent ? 700 : 400 }}>{value}</span>
+    </div>
+  ) : null
+
+  return (
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 420, background: '#0f172a', borderLeft: '1px solid #1e293b', zIndex: 1000, display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 32px rgba(0,0,0,0.5)' }}>
+      {/* Header */}
+      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            {deal.lead_tier && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: tierColor, background: tierColor + '22', padding: '2px 7px', borderRadius: 4 }}>
+                Tier {deal.lead_tier}
+              </span>
+            )}
+            {deceased && (
+              <span style={{ fontSize: 11, color: '#94a3b8', background: '#1e293b', padding: '2px 7px', borderRadius: 4 }}>Deceased</span>
+            )}
+            <span style={{ fontSize: 11, color: '#475569', background: '#1e293b', padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' }}>
+              {deal.status}
+            </span>
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 600, color: '#f1f5f9', lineHeight: 1.3 }}>
+            {deal.meta?.homeownerName || deal.name}
+          </div>
+          <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>{deal.address}</div>
+        </div>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '0 0 0 12px', flexShrink: 0 }}>x</button>
+      </div>
+
+      {/* Deal fields */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 20px 20px' }}>
+        <div style={{ paddingTop: 4 }}>
+          <Row label="Estimated Surplus" value={surplus} accent="#16a34a" />
+          <Row label="Sale Date" value={saleDate} />
+          <Row label="County" value={county} />
+          <Row label="Case Number" value={caseNum} />
+          <Row label="Phone" value={phone} accent="#93c5fd" />
+          <Row label="Attorney" value={attorney} />
+          {deal.meta?.verifiedSurplus && (
+            <Row label="Verified Surplus" value={deal.meta.verifiedSurplus === 'true' ? 'Yes' : deal.meta.verifiedSurplus} />
+          )}
+          {deal.meta?.judgmentAmount && (
+            <Row label="Judgment Amount" value={'$' + parseInt(deal.meta.judgmentAmount).toLocaleString()} />
+          )}
+          {deal.meta?.minimumBidAmount && (
+            <Row label="Min Bid" value={'$' + parseInt(deal.meta.minimumBidAmount).toLocaleString()} />
+          )}
+          {deal.meta?.totalDebt && (
+            <Row label="Total Debt" value={'$' + parseInt(deal.meta.totalDebt).toLocaleString()} />
+          )}
+          {deal.days_to_sale !== null && deal.days_to_sale !== undefined && (
+            <Row label="Days to Sale" value={deal.days_to_sale < 0 ? `${Math.abs(deal.days_to_sale)} days ago` : `${deal.days_to_sale} days away`} />
+          )}
+        </div>
+
+        {/* Pending message */}
+        {touch && (
+          <div style={{ marginTop: 20 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+              Step {touch.relay_step_number} - Pending Message
+            </div>
+            <div style={{ background: '#162032', border: '1px solid #1e4080', borderRadius: 8, padding: '12px 14px', fontSize: 14, color: '#e2e8f0', lineHeight: 1.6, fontFamily: 'inherit' }}>
+              {touch.draft_body}
+            </div>
+            <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>
+              Sending to: <span style={{ color: '#93c5fd' }}>{touch.contact_phone}</span>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      {touch && (
+        <div style={{ padding: '16px 20px', borderTop: '1px solid #1e293b', display: 'flex', gap: 10 }}>
+          <button
+            onClick={() => { onApprove(touch.id); onClose(); }}
+            style={{ flex: 1, padding: '10px 0', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
+          >
+            Approve
+          </button>
+          <button
+            onClick={() => { onSkip(touch.id); onClose(); }}
+            style={{ padding: '10px 20px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+          >
+            Skip
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Relay View ──────────────────────────────────────────────────
 function RelayView({ supabase }) {
   const [enrollments, setEnrollments] = React.useState([])
@@ -6936,6 +7056,7 @@ function RelayView({ supabase }) {
   const [loading, setLoading] = React.useState(true)
   const [scanning, setScanning] = React.useState(false)
   const [scanResult, setScanResult] = React.useState(null)
+  const [reviewPanel, setReviewPanel] = React.useState(null) // { deal, touch|null }
 
   React.useEffect(() => {
     loadData()
@@ -6988,6 +7109,16 @@ function RelayView({ supabase }) {
   async function handleSkip(queueId) {
     await supabase.from('outreach_queue').update({ status: 'cancelled', skipped_reason: 'manually skipped in Relay view', updated_at: new Date().toISOString() }).eq('id', queueId)
     setPendingTouches(prev => prev.filter(t => t.id !== queueId))
+  }
+
+  async function openReview(dealId, touch = null) {
+    // If we already have basic deal data, enrich it with full meta
+    const { data: fullDeal } = await supabase
+      .from('deals')
+      .select('id, name, address, status, lead_tier, type, surplus_estimate, days_to_sale, meta')
+      .eq('id', dealId)
+      .single()
+    if (fullDeal) setReviewPanel({ deal: fullDeal, touch })
   }
 
   async function handleScanNow() {
@@ -7091,9 +7222,12 @@ function RelayView({ supabase }) {
                         Step {touch.relay_step_number}
                       </span>
                       {deal && (
-                        <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
+                        <button
+                          onClick={() => touch.deal_id && openReview(touch.deal_id, touch)}
+                          style={{ background: 'none', border: 'none', padding: '0 0 0 8px', fontSize: 12, color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline' }}
+                        >
                           {deal.address || deal.name || touch.deal_id}
-                        </span>
+                        </button>
                       )}
                     </div>
                     <span style={{ fontSize: 11, color: '#475569' }}>Scheduled {scheduledDate}</span>
@@ -7102,6 +7236,12 @@ function RelayView({ supabase }) {
                     {touch.draft_body}
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => touch.deal_id ? openReview(touch.deal_id, touch) : handleApprove(touch.id)}
+                      style={{ padding: '6px 16px', background: '#0f3460', color: '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                    >
+                      Review
+                    </button>
                     <button
                       onClick={() => handleApprove(touch.id)}
                       style={{ padding: '6px 16px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
@@ -7136,7 +7276,7 @@ function RelayView({ supabase }) {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #1e293b' }}>
-                  {['Phone', 'Deal', 'Sequence', 'Step', 'Status', 'Enrolled'].map(h => (
+                  {['Phone', 'Deal', 'Sequence', 'Step', 'Status', 'Enrolled', ''].map(h => (
                     <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#64748b', fontWeight: 500 }}>{h}</th>
                   ))}
                 </tr>
@@ -7147,9 +7287,13 @@ function RelayView({ supabase }) {
                   const phone = e.contact_phone ? '****' + e.contact_phone.replace(/\D/g, '').slice(-4) : 'unknown'
                   const enrolledDate = e.enrolled_at ? new Date(e.enrolled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
                   return (
-                    <tr key={e.id} style={{ borderBottom: i < enrollments.length - 1 ? '1px solid #1e293b' : 'none' }}>
+                    <tr
+                      key={e.id}
+                      style={{ borderBottom: i < enrollments.length - 1 ? '1px solid #1e293b' : 'none', cursor: e.deal_id ? 'pointer' : 'default' }}
+                      onClick={() => e.deal_id && openReview(e.deal_id)}
+                    >
                       <td style={{ padding: '10px 14px', color: '#e2e8f0', fontFamily: 'monospace' }}>{phone}</td>
-                      <td style={{ padding: '10px 14px', color: '#94a3b8', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <td style={{ padding: '10px 14px', color: '#93c5fd', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {deal ? (deal.address || deal.name || e.deal_id) : (e.deal_id || 'manual')}
                       </td>
                       <td style={{ padding: '10px 14px', color: '#94a3b8' }}>{sequences[e.sequence_id] || e.sequence_id}</td>
@@ -7160,6 +7304,11 @@ function RelayView({ supabase }) {
                         </span>
                       </td>
                       <td style={{ padding: '10px 14px', color: '#475569' }}>{enrolledDate}</td>
+                      <td style={{ padding: '10px 14px' }}>
+                        {e.deal_id && (
+                          <span style={{ fontSize: 11, color: '#475569' }}>View</span>
+                        )}
+                      </td>
                     </tr>
                   )
                 })}
@@ -7168,6 +7317,23 @@ function RelayView({ supabase }) {
           </div>
         )}
       </div>
+
+      {/* Deal review panel */}
+      {reviewPanel && (
+        <>
+          <div
+            onClick={() => setReviewPanel(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999 }}
+          />
+          <RelayDealPanel
+            deal={reviewPanel.deal}
+            touch={reviewPanel.touch}
+            onApprove={handleApprove}
+            onSkip={handleSkip}
+            onClose={() => setReviewPanel(null)}
+          />
+        </>
+      )}
     </div>
   )
 }
