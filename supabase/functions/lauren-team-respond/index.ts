@@ -42,6 +42,50 @@ const json = (body, status = 200) =>
     headers: { ...CORS, "Content-Type": "application/json" },
   });
 
+// Auth check — added 2026-05-12 after Tier 1C audit found this function
+// was reachable by anyone with the URL. Now requires EITHER:
+//   1. X-Lauren-Team-Respond-Secret header matching env (pg trigger path)
+//   2. Authorization: Bearer <JWT> from an admin/user/va user (frontend
+//      deal-card surface — supabase-js sends this automatically)
+// Anything else → 401.
+async function authorize(req: Request): Promise<{ ok: boolean; reason?: string }> {
+  // Path 1: shared secret (used by tg_lauren_team_respond trigger)
+  const expectedSecret = Deno.env.get("LAUREN_TEAM_RESPOND_SECRET");
+  const providedSecret = req.headers.get("X-Lauren-Team-Respond-Secret");
+  if (providedSecret && expectedSecret && providedSecret === expectedSecret) {
+    return { ok: true };
+  }
+
+  // Path 2: admin/va JWT (frontend deal_card surface)
+  const authHeader = req.headers.get("Authorization");
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const jwt = authHeader.slice(7);
+    try {
+      const url = Deno.env.get("SUPABASE_URL")!;
+      const anonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+      const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const userClient = createClient(url, anonKey);
+      const { data: { user }, error } = await userClient.auth.getUser(jwt);
+      if (error || !user) return { ok: false, reason: "invalid jwt" };
+
+      const adminClient = createClient(url, serviceKey);
+      const { data: profile } = await adminClient
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+      if (!profile || !["admin", "user", "va"].includes(profile.role)) {
+        return { ok: false, reason: "role not admin/va" };
+      }
+      return { ok: true };
+    } catch (_) {
+      return { ok: false, reason: "jwt validation failed" };
+    }
+  }
+
+  return { ok: false, reason: "no auth" };
+}
+
 const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-5";
 const MAX_TOKENS = 1024;
@@ -526,6 +570,13 @@ async function handleDealCardSurface(req: Request, body: any, apiKey: string, db
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
+
+  // Auth gate (added 2026-05-12 — see authorize() comment above).
+  const authResult = await authorize(req);
+  if (!authResult.ok) {
+    console.warn(`[lauren-team-respond] unauthorized: ${authResult.reason}`);
+    return json({ error: "unauthorized" }, 401);
+  }
 
   let body;
   try { body = await req.json(); } catch { return json({ error: "bad JSON" }, 400); }

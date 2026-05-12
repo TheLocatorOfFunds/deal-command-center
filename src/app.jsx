@@ -1883,7 +1883,24 @@ function DealCommandCenter({ session, profile }) {
           // Pre-compute peer navigation (cycle through deals in the same
           // status). Lives at the parent so DealDetail can stay agnostic
           // about how peers are determined.
-          const peers = deals.filter(d => d.status === activeDeal.status);
+          //
+          // Per Eric 2026-05-12: navigating with the prev/next arrows
+          // from inside a Prep Queue deal walked through ALL new-leads
+          // (105 of them) instead of just the unprepped ones (the
+          // queue's actual scope). Fix: for lead-status deals, narrow
+          // the peer set by the prepped_at flag — so an unprepped deal
+          // peers with other unprepped leads (Prep Queue), and a
+          // prepped lead peers with other prepped leads (Ready).
+          // Non-lead deals continue to peer by status only.
+          const isLeadDeal = isLeadStatus(activeDeal);
+          const peers = deals.filter(d => {
+            if (d.status !== activeDeal.status) return false;
+            if (isLeadDeal) {
+              // Same prepped-state as the active deal:
+              return !!d.prepped_at === !!activeDeal.prepped_at;
+            }
+            return true;
+          });
           const peerIndex = peers.findIndex(d => d.id === activeDeal.id);
           const peerNav = {
             peerIndex,
