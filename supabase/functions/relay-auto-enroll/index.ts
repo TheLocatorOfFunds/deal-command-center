@@ -1,19 +1,24 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2'
 
 /**
- * relay-auto-enroll — Scans deals and enrolls eligible ones into FL Relay sequences.
+ * relay-auto-enroll -- Scans deals and enrolls eligible ones into FL Relay sequences.
  *
  * Called by pg_cron every 15 minutes. Handles two sequences:
  *
  *   ohio-preauction-v1:
  *     Trigger: deal.is_30dts = true (auction within 30 days)
- *     Eligibility: lead_tier='A', death_signal=false, phone present,
- *                  not already enrolled, not deleted
+ *     Eligibility: lead_tier IN ('A','B'), death_signal=false, phone present,
+ *                  not already enrolled, not deleted, not in a terminal status
  *
  *   ohio-surplus-v1:
- *     Trigger: deal.days_to_sale < 0 (auction already happened)
- *     Eligibility: lead_tier='A', death_signal=false, surplus_estimate > 0,
- *                  phone present, not already enrolled, not deleted
+ *     Trigger: deal.days_to_sale < 0 OR (days_to_sale IS NULL AND meta.saleDate is in the past)
+ *     Eligibility: lead_tier IN ('A','B'), death_signal=false,
+ *                  phone present, not already enrolled, not deleted,
+ *                  not in a terminal status, no prior sent outreach (old cadence)
+ *
+ * Terminal statuses excluded from both sequences:
+ *   signed, filed, probate, awaiting-distribution, recovered,
+ *   under-contract, closed, listing, claim-filed
  *
  * Note on the Ohio Intel grading agent: the agent-side grade (A/B/C/drop)
  * in meta.grade is not yet populated because the BatchData valuation pipeline
@@ -22,16 +27,19 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
  * can layer that in as an additional filter here.
  *
  * Contact data mapping from deals:
- *   first_name       <- first word of meta.homeownerName
- *   last_name        <- rest of meta.homeownerName
- *   county           <- meta.county (stripped of " County" suffix)
- *   street_address   <- deals.address (street portion only, before first comma)
- *   case_number      <- meta.courtCase
- *   auction_date     <- meta.saleDate formatted as "Month D, YYYY"
+ *   first_name         <- first word of meta.homeownerName
+ *   last_name          <- rest of meta.homeownerName
+ *   county             <- meta.county (stripped of " County" suffix)
+ *   street_address     <- deals.address (street portion only, before first comma)
+ *   case_number        <- meta.courtCase
+ *   auction_date       <- meta.saleDate formatted as "Month D, YYYY"
  *   days_until_auction <- deals.days_to_sale
- *   case_month       <- month name from meta.saleDate (for surplus sequence)
- *   case_year        <- year from meta.saleDate
- *   agent_first_name <- 'Nathan' (default)
+ *   case_month         <- month name from meta.saleDate (for surplus sequence)
+ *   case_year          <- year from meta.saleDate
+ *   agent_first_name   <- 'Nathan' (default)
+ *
+ * Phone fallback: if meta.homeownerPhone is absent, the most recent
+ * outreach_queue row for that deal is checked for contact_phone.
  *
  * Auth: RELAY_SECRET header.
  */
@@ -97,6 +105,28 @@ function normalizePhone(raw: string): string {
   return `+${digits}`
 }
 
+// Returns true if saleDate string (YYYY-MM-DD) represents a date strictly before today.
+function saleDateIsInPast(dateStr: string | null): boolean {
+  if (!dateStr) return false
+  const today = new Date()
+  const todayStr = today.toISOString().slice(0, 10) // "YYYY-MM-DD"
+  return dateStr < todayStr
+}
+
+// Statuses that indicate the deal is already in a contracted or closed phase.
+// Deals in these statuses should not receive automated relay outreach.
+const EXCLUDED_STATUSES = new Set([
+  'signed',
+  'filed',
+  'probate',
+  'awaiting-distribution',
+  'recovered',
+  'under-contract',
+  'closed',
+  'listing',
+  'claim-filed',
+])
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -107,19 +137,21 @@ Deno.serve(async (req) => {
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   const relaySecret    = Deno.env.get('RELAY_SECRET')
 
+  // Auth: accept relay secret header (from pg_cron) OR a Bearer JWT (from the DCC browser client)
   const headerSecret = req.headers.get('x-relay-secret') || ''
-  if (relaySecret && headerSecret !== relaySecret) {
+  const hasRelaySecret = relaySecret && headerSecret === relaySecret
+  const hasBearer = req.headers.get('authorization')?.startsWith('Bearer ')
+  if (!hasRelaySecret && !hasBearer) {
     return json({ error: 'unauthorized' }, 401)
   }
 
   const sb = createClient(supabaseUrl, serviceRoleKey)
 
-  // ── Fetch already-enrolled deal IDs per sequence ──────────────────────────
-  // Used to skip deals we've already enrolled so we don't call relay-enroll
+  // ── 1. Fetch already-enrolled deal IDs per sequence ──────────────────────
+  // Used to skip deals we have already enrolled so we don't call relay-enroll
   // unnecessarily (relay-enroll would return 409, but better to skip upfront).
   const { data: existingEnrollments } = await sb
-    .schema('relay')
-    .from('enrollments')
+    .from('relay_enrollments')
     .select('deal_id, sequence_id')
     .in('sequence_id', ['ohio-preauction-v1', 'ohio-surplus-v1'])
     .in('status', ['active', 'paused', 'completed', 'manual_hold'])
@@ -133,6 +165,42 @@ Deno.serve(async (req) => {
     enrolledBySeq[e.sequence_id]?.add(e.deal_id)
   }
 
+  // ── 2. Fetch deal IDs that already have a SENT outreach (old cadence) ────
+  // These are rows in outreach_queue where status='sent' and
+  // relay_enrollment_id IS NULL, meaning the old manual/bulk cadence already
+  // contacted this person. We skip them for the surplus sequence to avoid
+  // double-contacting.
+  const { data: priorOutreachRows } = await sb
+    .from('outreach_queue')
+    .select('deal_id')
+    .eq('status', 'sent')
+    .is('relay_enrollment_id', null)
+    .not('deal_id', 'is', null)
+
+  const priorOutreachDealIds = new Set<string>(
+    (priorOutreachRows || []).map((r: { deal_id: string }) => r.deal_id)
+  )
+
+  // ── 3. Build a phone fallback map from outreach_queue ────────────────────
+  // For deals where meta.homeownerPhone is missing, we look up the most recent
+  // outreach_queue row for that deal and use its contact_phone.
+  // We fetch all rows that have a contact_phone and are not null for deal_id,
+  // then keep only the most recent row per deal_id.
+  const { data: outreachPhoneRows } = await sb
+    .from('outreach_queue')
+    .select('deal_id, contact_phone, created_at')
+    .not('deal_id', 'is', null)
+    .not('contact_phone', 'is', null)
+    .order('created_at', { ascending: false })
+
+  // Build a map: deal_id -> contact_phone (first row = most recent due to ORDER BY desc)
+  const fallbackPhoneMap = new Map<string, string>()
+  for (const row of (outreachPhoneRows || [])) {
+    if (!fallbackPhoneMap.has(row.deal_id) && row.contact_phone?.trim()) {
+      fallbackPhoneMap.set(row.deal_id, row.contact_phone.trim())
+    }
+  }
+
   const results = {
     preauction_enrolled:  [] as string[],
     preauction_skipped:   [] as string[],
@@ -142,21 +210,28 @@ Deno.serve(async (req) => {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 1. PRE-AUCTION TRIGGER
-  //    is_30dts = true, lead_tier = 'A', not deceased, phone present
+  // 4. PRE-AUCTION TRIGGER
+  //    is_30dts = true, lead_tier IN ('A','B'), not deceased, not terminal status
   // ─────────────────────────────────────────────────────────────────────────
   const { data: preAuctionDeals } = await sb
     .from('deals')
-    .select('id, address, meta, days_to_sale, surplus_estimate')
-    .eq('lead_tier', 'A')
+    .select('id, address, meta, days_to_sale, surplus_estimate, status')
+    .in('lead_tier', ['A', 'B'])
     .eq('is_30dts', true)
     .eq('death_signal', false)
     .eq('type', 'surplus')
     .is('deleted_at', null)
 
   for (const deal of (preAuctionDeals || [])) {
-    const phone = deal.meta?.homeownerPhone
-    if (!phone || !phone.trim()) {
+    // Skip terminal statuses
+    if (EXCLUDED_STATUSES.has(deal.status)) {
+      results.preauction_skipped.push(`${deal.id} (excluded status: ${deal.status})`)
+      continue
+    }
+
+    // Phone: prefer meta, fall back to outreach_queue
+    const rawPhone = deal.meta?.homeownerPhone?.trim() || fallbackPhoneMap.get(deal.id) || ''
+    if (!rawPhone) {
       results.preauction_skipped.push(`${deal.id} (no phone)`)
       continue
     }
@@ -190,7 +265,7 @@ Deno.serve(async (req) => {
 
     const enrollResp = await callRelayEnroll(supabaseUrl, serviceRoleKey, relaySecret, {
       sequence_id:   'ohio-preauction-v1',
-      contact_phone: normalizePhone(phone),
+      contact_phone: normalizePhone(rawPhone),
       deal_id:       deal.id,
       contact_data:  contactData,
     })
@@ -208,28 +283,70 @@ Deno.serve(async (req) => {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // 2. POST-AUCTION / SURPLUS TRIGGER
-  //    days_to_sale < 0, lead_tier = 'A', surplus_estimate > 0, not deceased
+  // 5. POST-AUCTION / SURPLUS TRIGGER
+  //    Eligibility: lead_tier IN ('A','B'), not deceased, not terminal status,
+  //    no prior sent outreach from the old cadence.
+  //    Trigger (either condition qualifies):
+  //      a) days_to_sale < 0  (computed field confirmed past)
+  //      b) days_to_sale IS NULL AND meta->saleDate is a past date
+  //         (days_to_sale may not have been computed yet for newer imports)
+  //    No surplus_estimate requirement -- use tier gate instead.
   // ─────────────────────────────────────────────────────────────────────────
-  const { data: surplusDeals } = await sb
+
+  // Fetch candidate deals for condition (a): days_to_sale < 0
+  const { data: surplusDealsA } = await sb
     .from('deals')
-    .select('id, address, meta, days_to_sale, surplus_estimate')
-    .eq('lead_tier', 'A')
+    .select('id, address, meta, days_to_sale, surplus_estimate, status')
+    .in('lead_tier', ['A', 'B'])
     .eq('death_signal', false)
     .eq('type', 'surplus')
     .is('deleted_at', null)
-    .lt('days_to_sale', 0)        // auction already happened
-    .gt('surplus_estimate', 0)    // surplus amount confirmed > 0
+    .lt('days_to_sale', 0)
 
-  for (const deal of (surplusDeals || [])) {
-    const phone = deal.meta?.homeownerPhone
-    if (!phone || !phone.trim()) {
-      results.surplus_skipped.push(`${deal.id} (no phone)`)
+  // Fetch candidate deals for condition (b): days_to_sale IS NULL
+  // We will filter by past saleDate in JS since meta is jsonb.
+  const { data: surplusDealsB } = await sb
+    .from('deals')
+    .select('id, address, meta, days_to_sale, surplus_estimate, status')
+    .in('lead_tier', ['A', 'B'])
+    .eq('death_signal', false)
+    .eq('type', 'surplus')
+    .is('deleted_at', null)
+    .is('days_to_sale', null)
+
+  // Merge, dedup by id, filter condition (b) by past saleDate
+  const surplusMap = new Map<string, typeof surplusDealsA[0]>()
+  for (const deal of (surplusDealsA || [])) {
+    surplusMap.set(deal.id, deal)
+  }
+  for (const deal of (surplusDealsB || [])) {
+    if (!surplusMap.has(deal.id) && saleDateIsInPast(deal.meta?.saleDate ?? null)) {
+      surplusMap.set(deal.id, deal)
+    }
+  }
+
+  for (const deal of surplusMap.values()) {
+    // Skip terminal statuses
+    if (EXCLUDED_STATUSES.has(deal.status)) {
+      results.surplus_skipped.push(`${deal.id} (excluded status: ${deal.status})`)
+      continue
+    }
+
+    // Skip deals already contacted by the old cadence
+    if (priorOutreachDealIds.has(deal.id)) {
+      results.surplus_skipped.push(`${deal.id} (prior sent outreach)`)
       continue
     }
 
     if (enrolledBySeq['ohio-surplus-v1'].has(deal.id)) {
       results.surplus_skipped.push(`${deal.id} (already enrolled)`)
+      continue
+    }
+
+    // Phone: prefer meta, fall back to outreach_queue
+    const rawPhone = deal.meta?.homeownerPhone?.trim() || fallbackPhoneMap.get(deal.id) || ''
+    if (!rawPhone) {
+      results.surplus_skipped.push(`${deal.id} (no phone)`)
       continue
     }
 
@@ -257,7 +374,7 @@ Deno.serve(async (req) => {
 
     const enrollResp = await callRelayEnroll(supabaseUrl, serviceRoleKey, relaySecret, {
       sequence_id:   'ohio-surplus-v1',
-      contact_phone: normalizePhone(phone),
+      contact_phone: normalizePhone(rawPhone),
       deal_id:       deal.id,
       contact_data:  contactData,
     })
@@ -286,7 +403,7 @@ Deno.serve(async (req) => {
   return json(summary)
 })
 
-// ── Helper: call relay-enroll ─────────────────────────────────────────────────
+// ── Helper: call relay-enroll ─────────────────────────────────────────────
 async function callRelayEnroll(
   supabaseUrl: string,
   serviceRoleKey: string,

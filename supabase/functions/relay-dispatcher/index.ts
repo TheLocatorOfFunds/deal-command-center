@@ -99,8 +99,7 @@ Deno.serve(async (req) => {
 
   // ── Fetch due touches ─────────────────────────────────────────────────────
   const { data: dueTouches, error: fetchErr } = await sb
-    .schema('relay')
-    .from('scheduled_touches')
+    .from('relay_scheduled_touches')
     .select(`
       id,
       enrollment_id,
@@ -127,8 +126,7 @@ Deno.serve(async (req) => {
   // ── Load enrollments for all due touches ──────────────────────────────────
   const enrollmentIds = [...new Set(dueTouches.map(t => t.enrollment_id))]
   const { data: enrollments } = await sb
-    .schema('relay')
-    .from('enrollments')
+    .from('relay_enrollments')
     .select('id, sequence_id, deal_id, contact_phone, contact_data, status')
     .in('id', enrollmentIds)
 
@@ -137,8 +135,7 @@ Deno.serve(async (req) => {
   // ── Load sequence steps for all relevant sequences ────────────────────────
   const sequenceIds = [...new Set(Object.values(enrollmentMap).map((e: any) => e.sequence_id))]
   const { data: allSteps } = await sb
-    .schema('relay')
-    .from('sequence_steps')
+    .from('relay_sequence_steps')
     .select('sequence_id, step_number, channel, message_template, rvm_template_id, experiment_id')
     .in('sequence_id', sequenceIds)
 
@@ -151,7 +148,7 @@ Deno.serve(async (req) => {
   // ── Load experiment variants for assigned variant_ids ─────────────────────
   const variantIds = dueTouches.filter(t => t.variant_id).map(t => t.variant_id as string)
   const { data: variants } = variantIds.length
-    ? await sb.schema('relay').from('experiment_variants')
+    ? await sb.from('relay_experiment_variants')
         .select('id, message_template').in('id', variantIds)
     : { data: [] }
   const variantMap = Object.fromEntries((variants || []).map(v => [v.id, v]))
@@ -164,7 +161,7 @@ Deno.serve(async (req) => {
 
     // ── Cancel touches for inactive enrollments ───────────────────────────
     if (!enrollment || enrollment.status !== 'active') {
-      await sb.schema('relay').from('scheduled_touches')
+      await sb.from('relay_scheduled_touches')
         .update({ status: 'cancelled', updated_at: new Date().toISOString() })
         .eq('id', touch.id)
       results.skipped++
@@ -225,7 +222,7 @@ Deno.serve(async (req) => {
       }
 
       // Update scheduled_touch: status='firing', link to outreach_queue row
-      await sb.schema('relay').from('scheduled_touches')
+      await sb.from('relay_scheduled_touches')
         .update({
           status:            'firing',
           rendered_body:     rendered,
@@ -236,7 +233,7 @@ Deno.serve(async (req) => {
 
       // Update enrollment.current_step
       if (touch.step_number > (enrollment as any).current_step || 0) {
-        await sb.schema('relay').from('enrollments')
+        await sb.from('relay_enrollments')
           .update({ current_step: touch.step_number, updated_at: new Date().toISOString() })
           .eq('id', touch.enrollment_id)
       }
@@ -275,7 +272,7 @@ Deno.serve(async (req) => {
         continue
       }
 
-      await sb.schema('relay').from('scheduled_touches')
+      await sb.from('relay_scheduled_touches')
         .update({
           status:        'sent',
           rendered_body: `[RVM template: ${step.rvm_template_id}]`,
@@ -284,7 +281,7 @@ Deno.serve(async (req) => {
         })
         .eq('id', touch.id)
 
-      await sb.schema('relay').from('enrollments')
+      await sb.from('relay_enrollments')
         .update({ current_step: touch.step_number, updated_at: new Date().toISOString() })
         .eq('id', touch.enrollment_id)
 
@@ -292,7 +289,7 @@ Deno.serve(async (req) => {
 
     } else if (touch.channel === 'email') {
       // Email not yet implemented — skip and log
-      await sb.schema('relay').from('scheduled_touches')
+      await sb.from('relay_scheduled_touches')
         .update({
           status:        'skipped',
           error_message: 'Email channel not yet implemented',
@@ -314,7 +311,7 @@ Deno.serve(async (req) => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 async function markFailed(sb: ReturnType<typeof createClient>, touchId: string, reason: string) {
   console.error(`relay-dispatcher: touch ${touchId} failed: ${reason}`)
-  await sb.schema('relay').from('scheduled_touches')
+  await sb.from('relay_scheduled_touches')
     .update({
       status:        'failed',
       error_message: reason,

@@ -6934,6 +6934,8 @@ function RelayView({ supabase }) {
   const [pendingTouches, setPendingTouches] = React.useState([])
   const [deals, setDeals] = React.useState({})
   const [loading, setLoading] = React.useState(true)
+  const [scanning, setScanning] = React.useState(false)
+  const [scanResult, setScanResult] = React.useState(null)
 
   React.useEffect(() => {
     loadData()
@@ -6943,8 +6945,8 @@ function RelayView({ supabase }) {
     setLoading(true)
     try {
       const [enrollRes, seqRes, pendingRes] = await Promise.all([
-        supabase.schema('relay').from('enrollments').select('*').order('enrolled_at', { ascending: false }).limit(100),
-        supabase.schema('relay').from('sequences').select('id, name'),
+        supabase.from('relay_enrollments').select('*').order('enrolled_at', { ascending: false }).limit(100),
+        supabase.from('relay_sequences').select('id, name'),
         supabase.from('outreach_queue')
           .select('*')
           .not('relay_enrollment_id', 'is', null)
@@ -6988,8 +6990,37 @@ function RelayView({ supabase }) {
     setPendingTouches(prev => prev.filter(t => t.id !== queueId))
   }
 
+  async function handleScanNow() {
+    setScanning(true)
+    setScanResult(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('relay-auto-enroll', {
+        method: 'POST',
+        body: {},
+      })
+      if (error) {
+        setScanResult({ ok: false, message: error.message || 'Scan failed' })
+      } else {
+        const pre = data?.preauction || {}
+        const sur = data?.surplus || {}
+        const total = (pre.enrolled || 0) + (sur.enrolled || 0)
+        const errs = data?.errors || 0
+        setScanResult({
+          ok: true,
+          message: total > 0
+            ? `Enrolled ${total} lead${total !== 1 ? 's' : ''} (${pre.enrolled || 0} pre-auction, ${sur.enrolled || 0} post-auction)${errs ? ` - ${errs} error${errs !== 1 ? 's' : ''}` : ''}`
+            : `Scan complete - no new eligible leads found${errs ? ` (${errs} error${errs !== 1 ? 's' : ''})` : ''}`,
+        })
+        if (total > 0) await loadData()
+      }
+    } catch (e) {
+      setScanResult({ ok: false, message: e.message || 'Scan failed' })
+    } finally {
+      setScanning(false)
+    }
+  }
+
   const activeCount = enrollments.filter(e => e.status === 'active').length
-  const isLive = activeCount > 0
   const statusColors = {
     active: '#16a34a',
     paused: '#d97706',
@@ -7009,19 +7040,33 @@ function RelayView({ supabase }) {
       {/* Status bar */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 10, height: 10, borderRadius: '50%', background: isLive ? '#16a34a' : '#d97706' }} />
-          <span style={{ fontWeight: 600, fontSize: 15, color: isLive ? '#16a34a' : '#d97706' }}>
-            {isLive ? 'Live' : 'Paused'}
-          </span>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#16a34a' }} />
+          <span style={{ fontWeight: 600, fontSize: 15, color: '#16a34a' }}>Running</span>
         </div>
         <div style={{ color: '#94a3b8', fontSize: 13 }}>
-          {enrollments.length} total enrollments, {activeCount} active, {pendingTouches.length} pending approval
+          {enrollments.length} enrollments, {activeCount} active, {pendingTouches.length} pending approval
+          {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
         </div>
-        {!isLive && (
-          <div style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b', background: '#1e293b', padding: '4px 10px', borderRadius: 6 }}>
-            Cron jobs paused - re-enable when A2P campaign is approved
-          </div>
-        )}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {scanResult && (
+            <span style={{ fontSize: 12, color: scanResult.ok ? '#16a34a' : '#dc2626' }}>
+              {scanResult.message}
+            </span>
+          )}
+          <button
+            onClick={handleScanNow}
+            disabled={scanning}
+            style={{ padding: '6px 14px', background: scanning ? '#1e293b' : '#0f3460', color: scanning ? '#475569' : '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: scanning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
+          >
+            {scanning ? 'Scanning...' : 'Scan Now'}
+          </button>
+          <button
+            onClick={loadData}
+            style={{ padding: '6px 12px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       {/* Pending approvals */}

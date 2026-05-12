@@ -141,8 +141,7 @@ Deno.serve(async (req) => {
 
   // ── Validate sequence exists ────────────────────────────────────────────
   const { data: seq, error: seqErr } = await sb
-    .schema('relay')
-    .from('sequences')
+    .from('relay_sequences')
     .select('id, active')
     .eq('id', sequence_id)
     .single()
@@ -152,8 +151,7 @@ Deno.serve(async (req) => {
 
   // ── Idempotency check ───────────────────────────────────────────────────
   const { data: existing } = await sb
-    .schema('relay')
-    .from('enrollments')
+    .from('relay_enrollments')
     .select('id, status')
     .eq('sequence_id', sequence_id)
     .eq('contact_phone', contact_phone)
@@ -169,10 +167,10 @@ Deno.serve(async (req) => {
       }, 409)
     }
     // Force re-enroll: complete the old enrollment + cancel its pending touches
-    await sb.schema('relay').from('enrollments')
+    await sb.from('relay_enrollments')
       .update({ status: 'completed', completed_at: new Date().toISOString() })
       .eq('id', existing.id)
-    await sb.schema('relay').from('scheduled_touches')
+    await sb.from('relay_scheduled_touches')
       .update({ status: 'cancelled' })
       .eq('enrollment_id', existing.id)
       .in('status', ['pending', 'approved'])
@@ -180,8 +178,7 @@ Deno.serve(async (req) => {
 
   // ── Load sequence steps ─────────────────────────────────────────────────
   const { data: steps, error: stepsErr } = await sb
-    .schema('relay')
-    .from('sequence_steps')
+    .from('relay_sequence_steps')
     .select('step_number, channel, delay_hours, message_template, rvm_template_id, experiment_id')
     .eq('sequence_id', sequence_id)
     .order('step_number', { ascending: true })
@@ -196,8 +193,7 @@ Deno.serve(async (req) => {
 
   if (experimentIds.length) {
     const { data: variants } = await sb
-      .schema('relay')
-      .from('experiment_variants')
+      .from('relay_experiment_variants')
       .select('id, experiment_id, weight')
       .in('experiment_id', experimentIds)
 
@@ -211,8 +207,7 @@ Deno.serve(async (req) => {
   const enrolledAt = enroll_at ? new Date(enroll_at) : new Date()
 
   const { data: enrollment, error: enrollErr } = await sb
-    .schema('relay')
-    .from('enrollments')
+    .from('relay_enrollments')
     .insert({
       sequence_id,
       deal_id: deal_id || null,
@@ -264,14 +259,13 @@ Deno.serve(async (req) => {
   }
 
   const { error: touchErr } = await sb
-    .schema('relay')
-    .from('scheduled_touches')
+    .from('relay_scheduled_touches')
     .insert(touchInserts)
 
   if (touchErr) {
     console.error('scheduled_touches insert error:', touchErr.message)
     // Roll back enrollment
-    await sb.schema('relay').from('enrollments').delete().eq('id', enrollmentId)
+    await sb.from('relay_enrollments').delete().eq('id', enrollmentId)
     return json({ error: 'failed to schedule touches', details: touchErr.message }, 500)
   }
 
