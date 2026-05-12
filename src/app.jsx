@@ -4561,12 +4561,18 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
 }
 
 // ─── GIF Picker (GIPHY) ─────────────────────────────────────────────
-// Per Nathan 2026-05-12: team chat needs a GIF button. Uses GIPHY's
-// public beta API key — rate-limited but fine for our team-scale use.
-// On select, the attachment is added with `path: null` and a direct
-// GIPHY CDN url. TeamAttachments handles that case (use a.url directly
-// instead of creating a signed storage URL).
-const GIPHY_API_KEY = 'dc6zaTOxFJmzC';
+// Per Nathan 2026-05-12: team chat needs a GIF button. Uses Nathan's
+// GIPHY developer API key (free tier). On select, the attachment is
+// added with `path: null` and a direct GIPHY CDN url. TeamAttachments
+// handles that case (use a.url directly instead of creating a signed
+// storage URL).
+//
+// Note: GIPHY API keys are client-side credentials by design (like
+// Google Maps keys) — they're embedded in app.js and visible to anyone
+// who views source on app.refundlocators.com. That's GIPHY's intended
+// usage. For extra safety, restrict the key to specific domains in
+// the GIPHY developer dashboard.
+const GIPHY_API_KEY = '0btoI3X8C1qh2m0JnpCHGSCxfcZ0Cet1';
 const GIPHY_SEARCH_URL = 'https://api.giphy.com/v1/gifs/search';
 const GIPHY_TRENDING_URL = 'https://api.giphy.com/v1/gifs/trending';
 
