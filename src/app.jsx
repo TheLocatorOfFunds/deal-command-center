@@ -561,6 +561,24 @@ function Root() {
   if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />;
   if (!session) return <Login />;
   if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
+  // Defense-in-depth: if a signed-in user is NOT on the team (i.e. they
+  // got role=client/attorney/pending), bounce them to portal.html /
+  // attorney-portal.html instead of rendering the DCC admin shell. RLS
+  // already protects the data, but rendering admin UI to a client is
+  // confusing and unsafe. Added 2026-05-12 after the Kemper Ansel leak:
+  // his role=user default (now fixed in handle_new_user) let him hit
+  // app.refundlocators.com directly. With this guard he'd have been
+  // redirected to portal.html on first load.
+  const isTeamRole = profile.role === 'admin' || profile.role === 'user' || profile.role === 'va';
+  if (!isTeamRole) {
+    if (profile.role === 'attorney') {
+      window.location.replace('/attorney-portal.html');
+    } else {
+      // client / pending / anything else → client portal
+      window.location.replace('/portal.html');
+    }
+    return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Redirecting…</div></Shell>;
+  }
   return <DealCommandCenter session={session} profile={profile} />;
 }
 
