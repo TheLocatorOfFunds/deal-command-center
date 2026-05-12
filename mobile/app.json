@@ -12,7 +12,8 @@
       "bundleIdentifier": "com.fundlocators.dcc",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "DCC uses the microphone for in-app Twilio voice calls with homeowners and contacts.",
-        "NSUserNotificationsUsageDescription": "DCC sends you push notifications when new SMS, calls, or team chat messages arrive."
+        "NSUserNotificationsUsageDescription": "DCC sends you push notifications when new SMS, calls, or team chat messages arrive.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "entitlements": {
         "aps-environment": "production"
@@ -35,10 +36,11 @@
     "experiments": {
       "typedRoutes": true
     },
-    "owner": "fundlocators",
+    "owner": "fundlocator",
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "REPLACE_AFTER_EAS_INIT"
+        "projectId": "e0b2b5d6-0e17-4ab4-96cd-da42233584f6"
       }
     }
   }
