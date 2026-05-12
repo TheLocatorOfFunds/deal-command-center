@@ -3189,6 +3189,14 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const messagesEndRef = useRef(null);
   const composerRef = useRef(null);
   const fileInputRef = useRef(null);
+  // Scroll-behavior tracking — match the TeamChatBubble pattern so
+  // opening a thread lands instantly at the bottom (no visible roll)
+  // and only NEW messages within the same thread animate smoothly.
+  // Per Nathan 2026-05-12: "when I click chat, I want it to open up
+  // already at the bottom — I hate when it rolls all the way to the
+  // bottom."
+  const lastThreadIdRef = useRef(null);
+  const initialScrollDoneRef = useRef(false);
 
   // Ensure the current user has their Lauren DM (Hub mode). Idempotent RPC.
   // NOTE: lauren_get_or_create_dm is intentionally NOT called here.
@@ -3341,10 +3349,36 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
     // eslint-disable-next-line
   }, [activeThreadId, me.id]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages.
+  // Two distinct intents:
+  //   1. First time we land on a thread (or thread changes, or messages
+  //      reload from 0) → INSTANT jump to bottom. No animation.
+  //   2. New message arriving in a thread we're already anchored in →
+  //      smooth scroll so the user sees it slide in.
+  // initialScrollDoneRef gates the smooth-scroll branch until we've
+  // completed at least one instant scroll on the current thread with
+  // a populated message list. Mirrors the TeamChatBubble fix shipped
+  // 2026-05-07 (same Nathan complaint surface).
   useEffect(() => {
-    if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length]);
+    if (!messagesEndRef.current) return;
+    const threadChanged = lastThreadIdRef.current !== activeThreadId;
+    if (threadChanged) {
+      lastThreadIdRef.current = activeThreadId;
+      initialScrollDoneRef.current = false;
+    }
+    if (!initialScrollDoneRef.current) {
+      // Double rAF: wait for React to commit the new message rows so
+      // scrollHeight reflects the populated thread before we jump.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+        });
+      });
+      if (messages.length > 0) initialScrollDoneRef.current = true;
+    } else {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [messages.length, activeThreadId]);
 
   // Load + subscribe to reactions for the active thread's messages.
   useEffect(() => {
