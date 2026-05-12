@@ -3187,16 +3187,9 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
+  const messagesScrollRef = useRef(null);  // the actual scrollable container
   const composerRef = useRef(null);
   const fileInputRef = useRef(null);
-  // Scroll-behavior tracking — match the TeamChatBubble pattern so
-  // opening a thread lands instantly at the bottom (no visible roll)
-  // and only NEW messages within the same thread animate smoothly.
-  // Per Nathan 2026-05-12: "when I click chat, I want it to open up
-  // already at the bottom — I hate when it rolls all the way to the
-  // bottom."
-  const lastThreadIdRef = useRef(null);
-  const initialScrollDoneRef = useRef(false);
 
   // Ensure the current user has their Lauren DM (Hub mode). Idempotent RPC.
   // NOTE: lauren_get_or_create_dm is intentionally NOT called here.
@@ -3349,35 +3342,35 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
     // eslint-disable-next-line
   }, [activeThreadId, me.id]);
 
-  // Auto-scroll to bottom on new messages.
-  // Two distinct intents:
-  //   1. First time we land on a thread (or thread changes, or messages
-  //      reload from 0) → INSTANT jump to bottom. No animation.
-  //   2. New message arriving in a thread we're already anchored in →
-  //      smooth scroll so the user sees it slide in.
-  // initialScrollDoneRef gates the smooth-scroll branch until we've
-  // completed at least one instant scroll on the current thread with
-  // a populated message list. Mirrors the TeamChatBubble fix shipped
-  // 2026-05-07 (same Nathan complaint surface).
+  // Snap to bottom of the message list whenever messages change or
+  // the active thread changes. Per Nathan 2026-05-12 (3rd revision —
+  // "no scroll or roll, just start at the bottom"):
+  //   - Direct scrollTop=scrollHeight on the container (no animation)
+  //   - No smooth-scroll branch — even new arrivals snap instantly
+  //   - Double rAF to wait for React commit + browser layout before
+  //     measuring scrollHeight (otherwise we measure before the new
+  //     rows are in the DOM and land short of the actual bottom)
+  //   - Bonus: re-snap on image load events so GIFs/photos that push
+  //     content height after they decode don't leave us mid-list
   useEffect(() => {
-    if (!messagesEndRef.current) return;
-    const threadChanged = lastThreadIdRef.current !== activeThreadId;
-    if (threadChanged) {
-      lastThreadIdRef.current = activeThreadId;
-      initialScrollDoneRef.current = false;
-    }
-    if (!initialScrollDoneRef.current) {
-      // Double rAF: wait for React to commit the new message rows so
-      // scrollHeight reflects the populated thread before we jump.
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-        });
-      });
-      if (messages.length > 0) initialScrollDoneRef.current = true;
-    } else {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    }
+    const snap = () => {
+      const el = messagesScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(snap));
+    // Re-snap after every image inside the container finishes loading
+    // (GIFs/pasted screenshots resize after decode).
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const imgs = el.querySelectorAll('img');
+    const handlers = [];
+    imgs.forEach(img => {
+      if (img.complete) return;
+      const h = () => snap();
+      img.addEventListener('load', h, { once: true });
+      handlers.push([img, h]);
+    });
+    return () => { handlers.forEach(([img, h]) => img.removeEventListener('load', h)); };
   }, [messages.length, activeThreadId]);
 
   // Load + subscribe to reactions for the active thread's messages.
@@ -3908,7 +3901,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
             </div>
 
             {/* Message list */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
+            <div ref={messagesScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
               {messages.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: 40, color: '#57534e', fontSize: 13 }}>
                   No messages yet. Say hi 👋
