@@ -17,6 +17,10 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.fundlocators.dcc",
       "buildNumber": "1",
+      "associatedDomains": [
+        "webcredentials:app.refundlocators.com",
+        "applinks:app.refundlocators.com"
+      ],
       "infoPlist": {
         "NSMicrophoneUsageDescription": "DCC uses the microphone for in-app Twilio voice calls with homeowners and contacts.",
         "NSUserNotificationsUsageDescription": "DCC sends you push notifications when new SMS, calls, or team chat messages arrive.",
