@@ -63,10 +63,25 @@ type Thread = {
   channel: string
 }
 
+type CallRow = {
+  id: string
+  deal_id: string | null
+  contact_id: string | null
+  direction: string | null
+  from_number: string | null
+  to_number: string | null
+  status: string | null
+  duration_seconds: number | null
+  started_at: string | null
+  contact_name?: string | null
+  deal_name?: string | null
+}
+
 export default function InboxScreen() {
   const { session } = useAuth()
   const router = useRouter()
   const [threads, setThreads] = useState<Thread[]>([])
+  const [calls, setCalls] = useState<CallRow[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -149,6 +164,58 @@ export default function InboxScreen() {
     })
 
     setThreads(out)
+
+    // Load recent calls in parallel — the Calls filter shows them.
+    const { data: callRows } = await supabase
+      .from('call_logs')
+      .select(
+        'id, deal_id, contact_id, direction, from_number, to_number, status, duration_seconds, started_at',
+      )
+      .order('started_at', { ascending: false })
+      .limit(50)
+    const rawCalls = (callRows ?? []) as CallRow[]
+    // Hydrate contact + deal names for the call cards
+    const callContactIds = Array.from(
+      new Set(
+        rawCalls.map((r) => r.contact_id).filter((x): x is string => !!x),
+      ),
+    )
+    const callDealIds = Array.from(
+      new Set(
+        rawCalls.map((r) => r.deal_id).filter((x): x is string => !!x),
+      ),
+    )
+    const callContactMap = new Map<string, string>()
+    const callDealMap = new Map<string, string>()
+    if (callContactIds.length > 0) {
+      const { data: cs } = await supabase
+        .from('contacts')
+        .select('id, name, company')
+        .in('id', callContactIds)
+      for (const c of cs ?? []) {
+        callContactMap.set(
+          c.id as string,
+          (c.name as string) || (c.company as string) || '',
+        )
+      }
+    }
+    if (callDealIds.length > 0) {
+      const { data: ds } = await supabase
+        .from('deals')
+        .select('id, name')
+        .in('id', callDealIds)
+      for (const d of ds ?? []) {
+        callDealMap.set(d.id as string, (d.name as string) || (d.id as string))
+      }
+    }
+    setCalls(
+      rawCalls.map((r) => ({
+        ...r,
+        contact_name: r.contact_id ? callContactMap.get(r.contact_id) : null,
+        deal_name: r.deal_id ? callDealMap.get(r.deal_id) : null,
+      })),
+    )
+
     setLoading(false)
     setRefreshing(false)
   }, [])
@@ -157,14 +224,20 @@ export default function InboxScreen() {
     load()
   }, [load])
 
-  // Realtime — when a new SMS lands in messages_outbound (inbound OR
-  // outbound from another team member's phone), reload the inbox so
-  // the thread floats to the top. Throttled to one reload per inserts
-  // burst to avoid hammering the DB.
+  // Realtime — reload Inbox on any new message OR new call. Throttled
+  // to one reload per 800ms burst.
   useEffect(() => {
     let pending = false
+    const fire = () => {
+      if (pending) return
+      pending = true
+      setTimeout(() => {
+        pending = false
+        load()
+      }, 800)
+    }
     const channel = supabase
-      .channel('inbox-messages-outbound')
+      .channel('inbox-realtime')
       .on(
         'postgres_changes',
         {
@@ -172,14 +245,16 @@ export default function InboxScreen() {
           schema: 'public',
           table: 'messages_outbound',
         },
-        () => {
-          if (pending) return
-          pending = true
-          setTimeout(() => {
-            pending = false
-            load()
-          }, 800)
+        fire,
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'call_logs',
         },
+        fire,
       )
       .subscribe()
     return () => {
@@ -197,6 +272,13 @@ export default function InboxScreen() {
     [threads],
   )
 
+  type FilterKey = 'all' | 'unread' | 'calls'
+  const [filter, setFilter] = useState<FilterKey>('all')
+  const filtered = useMemo(() => {
+    if (filter === 'unread') return threads.filter((t) => t.unread)
+    return threads
+  }, [threads, filter])
+
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'top']}>
       <View style={styles.header}>
@@ -211,12 +293,48 @@ export default function InboxScreen() {
           </Text>
         </View>
         <TouchableOpacity
+          onPress={() => router.push('/forecast')}
+          style={[styles.signOut, { marginRight: 8 }]}
+          accessibilityLabel="Forecast"
+        >
+          <Ionicons name="calendar-outline" size={20} color="#a8a29e" />
+        </TouchableOpacity>
+        <TouchableOpacity
           onPress={() => router.push('/settings')}
           style={styles.signOut}
           accessibilityLabel="Settings"
         >
           <Ionicons name="settings-outline" size={20} color="#a8a29e" />
         </TouchableOpacity>
+      </View>
+
+      {/* Filter chips */}
+      <View style={styles.filterRow}>
+        {(['all', 'unread', 'calls'] as FilterKey[]).map((key) => {
+          const active = filter === key
+          const label =
+            key === 'all'
+              ? `Texts${threads.length ? ` · ${threads.length}` : ''}`
+              : key === 'unread'
+                ? `Unread${unreadCount ? ` · ${unreadCount}` : ''}`
+                : `Calls${calls.length ? ` · ${calls.length}` : ''}`
+          return (
+            <TouchableOpacity
+              key={key}
+              style={[styles.filterChip, active && styles.filterChipActive]}
+              onPress={() => setFilter(key)}
+            >
+              <Text
+                style={[
+                  styles.filterChipText,
+                  active && styles.filterChipTextActive,
+                ]}
+              >
+                {label}
+              </Text>
+            </TouchableOpacity>
+          )
+        })}
       </View>
 
       {loading ? (
@@ -230,9 +348,76 @@ export default function InboxScreen() {
             <Text style={styles.retryText}>Retry</Text>
           </TouchableOpacity>
         </View>
+      ) : filter === 'calls' ? (
+        <FlatList
+          data={calls}
+          keyExtractor={(c) => c.id}
+          contentContainerStyle={{ padding: 14, paddingTop: 4 }}
+          refreshControl={
+            <RefreshControl
+              tintColor="#d97706"
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>
+                No recent calls.
+              </Text>
+            </View>
+          }
+          renderItem={({ item }) => {
+            const outbound = item.direction === 'outbound'
+            const other = outbound ? item.to_number : item.from_number
+            const missed =
+              !outbound &&
+              (item.status === 'no-answer' ||
+                item.status === 'busy' ||
+                item.status === 'failed')
+            const callLabel = (() => {
+              if (missed) return 'missed call'
+              if (item.status === 'completed' && item.duration_seconds) {
+                const min = Math.floor(item.duration_seconds / 60)
+                const sec = item.duration_seconds % 60
+                return min > 0
+                  ? `${min}m ${sec}s call`
+                  : `${sec}s call`
+              }
+              return `${item.status ?? 'call'}`
+            })()
+            return (
+              <TouchableOpacity
+                style={[styles.row, missed && styles.rowUnread]}
+                activeOpacity={item.deal_id ? 0.6 : 1}
+                disabled={!item.deal_id}
+                onPress={() =>
+                  item.deal_id && router.push(`/deal/${item.deal_id}`)
+                }
+              >
+                <View style={styles.rowHeader}>
+                  <Text style={styles.rowTitle} numberOfLines={1}>
+                    {outbound ? '→ ' : '← '}
+                    {item.contact_name || other || '(unknown)'}
+                  </Text>
+                  <Text style={styles.rowTime}>
+                    {formatRelative(item.started_at ?? '')}
+                  </Text>
+                </View>
+                <Text style={styles.rowSub} numberOfLines={1}>
+                  {item.deal_name ?? 'No deal linked'}
+                </Text>
+                <Text style={styles.rowMessage} numberOfLines={1}>
+                  {missed ? '⚠ ' : '📞 '}
+                  {callLabel}
+                </Text>
+              </TouchableOpacity>
+            )
+          }}
+        />
       ) : (
         <FlatList
-          data={threads}
+          data={filtered}
           keyExtractor={(t) => t.threadKey}
           contentContainerStyle={{ padding: 14, paddingTop: 4 }}
           refreshControl={
@@ -325,6 +510,28 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   signOutText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  filterRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 8,
+    borderBottomColor: '#1c1917',
+    borderBottomWidth: 1,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#1c1917',
+    borderColor: '#292524',
+    borderWidth: 1,
+  },
+  filterChipActive: {
+    backgroundColor: '#d97706',
+    borderColor: '#d97706',
+  },
+  filterChipText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  filterChipTextActive: { color: '#0c0a09' },
   loading: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   errorBox: {
     margin: 14,

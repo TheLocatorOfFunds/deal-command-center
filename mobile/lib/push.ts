@@ -133,13 +133,29 @@ export async function registerForPushAsync(): Promise<RegisterResult> {
  * → open the right screen" UX. The notification's `data` field carries
  * intent ("open thread", "open deal", etc.) which the server side sets
  * when firing the push.
+ *
+ * Also handles the cold-start case: if the app was launched FROM a
+ * notification tap (vs. tapped while running), we call `onTap` with the
+ * launching notification's data once on subscribe. Without this, cold
+ * launches drop you on the default tab instead of the deal/thread.
  */
 export function subscribeToNotificationTaps(
   onTap: (data: Record<string, unknown>) => void,
 ): () => void {
+  let unmounted = false
+  // Cold-start: was the app launched by tapping a notification?
+  Notifications.getLastNotificationResponseAsync().then((resp) => {
+    if (unmounted || !resp) return
+    const data = resp.notification.request.content.data ?? {}
+    onTap(data as Record<string, unknown>)
+  })
+  // Warm taps: subscription
   const sub = Notifications.addNotificationResponseReceivedListener((resp) => {
     const data = resp.notification.request.content.data ?? {}
     onTap(data as Record<string, unknown>)
   })
-  return () => sub.remove()
+  return () => {
+    unmounted = true
+    sub.remove()
+  }
 }

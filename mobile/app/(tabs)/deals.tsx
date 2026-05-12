@@ -64,36 +64,32 @@ export default function DealsScreen() {
 
   const load = useCallback(async () => {
     setError(null)
-    let req = supabase
-      .from('deals')
-      .select('id, type, status, name, address, updated_at')
-      .order('updated_at', { ascending: false })
-
     if (isSearching) {
-      // ILIKE with wildcards — case-insensitive substring match on the
-      // three fields Justin would actually search for. Escapes any
-      // commas / parens the user types so they don't break the or()
-      // grammar.
-      const safe = activeTerm.replace(/[,()]/g, ' ')
-      req = req
-        .or(
-          [
-            `name.ilike.%${safe}%`,
-            `address.ilike.%${safe}%`,
-            `id.ilike.%${safe}%`,
-          ].join(','),
-        )
-        .limit(50)
+      // search_deals_mobile RPC hits name, address, id AND meta jsonb —
+      // so "Morrow" or "Clark" or "23 CV 0836" all find the right deal
+      // even though those fields live inside meta.
+      const { data, error: err } = await supabase.rpc(
+        'search_deals_mobile',
+        { p_query: activeTerm },
+      )
+      if (err) {
+        setError(err.message)
+        setDeals([])
+      } else {
+        setDeals((data ?? []) as DealRow[])
+      }
     } else {
-      req = req.limit(25)
-    }
-
-    const { data, error: err } = await req
-    if (err) {
-      setError(err.message)
-      setDeals([])
-    } else {
-      setDeals((data ?? []) as DealRow[])
+      const { data, error: err } = await supabase
+        .from('deals')
+        .select('id, type, status, name, address, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(25)
+      if (err) {
+        setError(err.message)
+        setDeals([])
+      } else {
+        setDeals((data ?? []) as DealRow[])
+      }
     }
     setLoading(false)
     setRefreshing(false)

@@ -33,6 +33,7 @@ import {
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
+import { useLocalSearchParams } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
@@ -52,6 +53,7 @@ export default function LaurenScreen() {
   const { session } = useAuth()
   const userId = session?.user?.id ?? null
   const listRef = useRef<FlatList<Msg>>(null)
+  const params = useLocalSearchParams<{ seed?: string }>()
 
   const [threadId, setThreadId] = useState<string | null>(null)
   const [msgs, setMsgs] = useState<Msg[]>([])
@@ -127,6 +129,16 @@ export default function LaurenScreen() {
   useEffect(() => {
     load()
   }, [load])
+
+  // When the user navigates here with a ?seed= param (e.g. from
+  // Deal Detail's "Ask Lauren about this deal"), pre-fill the
+  // composer so they can just tap Send (or edit first).
+  useEffect(() => {
+    if (params.seed && !draft) {
+      setDraft(String(params.seed))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.seed])
 
   // ── Realtime — new messages on this thread ─────────────────────────
   useEffect(() => {
@@ -329,6 +341,28 @@ export default function LaurenScreen() {
             }
           />
 
+          {/* Suggested prompts — show only when conversation is empty
+              and not currently sending. One-tap to seed common questions. */}
+          {msgs.length === 0 && !sending && (
+            <View style={styles.suggestRow}>
+              {[
+                'What deals need attention today?',
+                'Summarize my surplus pipeline',
+                'Which cases have upcoming hearings?',
+              ].map((s) => (
+                <TouchableOpacity
+                  key={s}
+                  style={styles.suggestChip}
+                  onPress={() => setDraft(s)}
+                >
+                  <Text style={styles.suggestText} numberOfLines={1}>
+                    {s}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+
           <View style={styles.composer}>
             <TextInput
               style={styles.composerInput}
@@ -452,6 +486,22 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   thinkingText: { color: '#a8a29e', fontSize: 13, fontStyle: 'italic' },
+  suggestRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
+  suggestChip: {
+    backgroundColor: '#1c1917',
+    borderColor: '#7c3aed44',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  suggestText: { color: '#d6d3d1', fontSize: 12, fontWeight: '500' },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',

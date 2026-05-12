@@ -27,7 +27,14 @@ export function QuickFabButton() {
   const [open, setOpen] = useState(false)
   const router = useRouter()
 
-  const go = (path: '/quick/call' | '/quick/sms' | '/quick/note') => {
+  const go = (
+    path:
+      | '/quick/call'
+      | '/quick/sms'
+      | '/quick/note'
+      | '/quick/new-deal'
+      | '/quick/new-task',
+  ) => {
     setOpen(false)
     // Tiny delay lets the modal close animation finish before pushing
     // the next screen, otherwise iOS sometimes loses the back gesture.
@@ -88,6 +95,18 @@ export function QuickFabButton() {
               label="Note on a deal"
               detail="Drop a quick note — typeahead search to find the deal"
               onPress={() => go('/quick/note')}
+            />
+            <Action
+              icon="checkmark-circle"
+              label="New task"
+              detail="Drop a to-do on a deal — title, optional due date"
+              onPress={() => go('/quick/new-task')}
+            />
+            <Action
+              icon="add-circle"
+              label="New deal"
+              detail="Capture a new lead — type, name, address"
+              onPress={() => go('/quick/new-deal')}
             />
 
             <TouchableOpacity

@@ -20,6 +20,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -31,6 +32,12 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { registerForPushAsync } from '../lib/push'
 
+type NotificationPrefs = {
+  sms: boolean
+  calls: boolean
+  team: boolean
+}
+
 type Profile = {
   id: string
   name: string | null
@@ -38,6 +45,7 @@ type Profile = {
   role: string | null
   phone: string | null
   expo_push_token: string | null
+  notification_prefs: NotificationPrefs | null
 }
 
 export default function SettingsScreen() {
@@ -46,6 +54,7 @@ export default function SettingsScreen() {
   const email = session?.user?.email ?? ''
 
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [nameDraft, setNameDraft] = useState('')
   const [phoneDraft, setPhoneDraft] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -56,7 +65,9 @@ export default function SettingsScreen() {
     if (!userId) return
     const { data, error: err } = await supabase
       .from('profiles')
-      .select('id, name, display_name, role, phone, expo_push_token')
+      .select(
+        'id, name, display_name, role, phone, expo_push_token, notification_prefs',
+      )
       .eq('id', userId)
       .maybeSingle()
     if (err) {
@@ -64,6 +75,32 @@ export default function SettingsScreen() {
     } else if (data) {
       setProfile(data as Profile)
       setPhoneDraft((data.phone as string) ?? '')
+      setNameDraft(
+        (data.display_name as string) || (data.name as string) || '',
+      )
+    }
+  }
+
+  const togglePref = async (
+    key: keyof NotificationPrefs,
+    nextValue: boolean,
+  ) => {
+    if (!userId) return
+    const current: NotificationPrefs = profile?.notification_prefs ?? {
+      sms: true,
+      calls: true,
+      team: true,
+    }
+    const next = { ...current, [key]: nextValue }
+    // Optimistic update so the switch animates instantly
+    setProfile((p) => (p ? { ...p, notification_prefs: next } : p))
+    const { error: err } = await supabase
+      .from('profiles')
+      .update({ notification_prefs: next })
+      .eq('id', userId)
+    if (err) {
+      Alert.alert('Could not save', err.message)
+      await refreshProfile()
     }
   }
 
@@ -96,6 +133,76 @@ export default function SettingsScreen() {
       }
     } finally {
       setRegistering(false)
+    }
+  }
+
+  const pingSelf = async () => {
+    if (!userId) return
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) throw new Error('Not signed in')
+      // send-push-notification is verify_jwt=false (DB triggers call it)
+      // so anon-key auth is fine. Self-targeted ping for verification.
+      const res = await fetch(
+        'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/send-push-notification',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            // Anon key is fine for this; the function doesn't gate on JWT
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            title: 'DCC push test',
+            body: 'If you see this banner, push is wired end-to-end.',
+            data: { type: 'self_test' },
+          }),
+        },
+      )
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(payload.error || `HTTP ${res.status}`)
+      }
+      if (payload.delivered === 0) {
+        Alert.alert(
+          'Sent — but no token',
+          'The function ran but your push token is null. Tap "Enable notifications" above first.',
+        )
+      } else {
+        Alert.alert(
+          'Test push sent',
+          'You should see a banner within a few seconds. If nothing appears, check iOS Settings → DCC → Notifications.',
+        )
+      }
+    } catch (e) {
+      Alert.alert(
+        'Test failed',
+        e instanceof Error ? e.message : 'Unknown error',
+      )
+    }
+  }
+
+  const saveName = async () => {
+    if (!userId || saving) return
+    const trimmed = nameDraft.trim()
+    if (!trimmed) return
+    setSaving(true)
+    try {
+      const { error: err } = await supabase
+        .from('profiles')
+        .update({ display_name: trimmed })
+        .eq('id', userId)
+      if (err) throw err
+      setProfile((p) => (p ? { ...p, display_name: trimmed } : p))
+      Alert.alert('Saved', 'Display name updated.')
+    } catch (e) {
+      Alert.alert(
+        'Could not save',
+        e instanceof Error ? e.message : 'Unknown error',
+      )
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -150,12 +257,28 @@ export default function SettingsScreen() {
             <>
               <Text style={styles.sectionLabel}>Profile</Text>
               <View style={styles.section}>
-                <ReadOnlyField
-                  label="Name"
-                  value={
-                    profile?.display_name || profile?.name || '(not set)'
-                  }
-                />
+                <Text style={styles.fieldLabel}>Display name</Text>
+                <View style={styles.inlineInputRow}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                    value={nameDraft}
+                    onChangeText={setNameDraft}
+                    placeholder="Justin"
+                    placeholderTextColor="#78716c"
+                    editable={!saving}
+                  />
+                  {(profile?.display_name ?? profile?.name ?? '') !==
+                    nameDraft.trim() &&
+                    !!nameDraft.trim() && (
+                      <TouchableOpacity
+                        onPress={saveName}
+                        style={styles.inlineSave}
+                        disabled={saving}
+                      >
+                        <Text style={styles.inlineSaveText}>Save</Text>
+                      </TouchableOpacity>
+                    )}
+                </View>
                 <ReadOnlyField label="Email" value={email} />
                 <ReadOnlyField
                   label="Role"
@@ -218,22 +341,60 @@ export default function SettingsScreen() {
                   incoming calls. Tapping a banner deep-links you to the
                   relevant thread or deal.
                 </Text>
-                <TouchableOpacity
-                  style={[
-                    styles.saveBtn,
-                    registering && styles.saveBtnDisabled,
-                  ]}
-                  onPress={reRegisterPush}
-                  disabled={registering}
-                >
-                  <Text style={styles.saveBtnText}>
-                    {registering
-                      ? 'Registering…'
-                      : profile?.expo_push_token
-                        ? 'Re-register this device'
-                        : 'Enable notifications'}
-                  </Text>
-                </TouchableOpacity>
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  <TouchableOpacity
+                    style={[
+                      styles.saveBtn,
+                      { flex: 1 },
+                      registering && styles.saveBtnDisabled,
+                    ]}
+                    onPress={reRegisterPush}
+                    disabled={registering}
+                  >
+                    <Text style={styles.saveBtnText}>
+                      {registering
+                        ? 'Registering…'
+                        : profile?.expo_push_token
+                          ? 'Re-register'
+                          : 'Enable notifications'}
+                    </Text>
+                  </TouchableOpacity>
+                  {profile?.expo_push_token && (
+                    <TouchableOpacity
+                      style={[styles.saveBtn, { flex: 1, backgroundColor: '#1c1917', borderColor: '#d97706', borderWidth: 1 }]}
+                      onPress={pingSelf}
+                    >
+                      <Text
+                        style={[styles.saveBtnText, { color: '#d97706' }]}
+                      >
+                        Test push
+                      </Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              <Text style={styles.sectionLabel}>Notify me about</Text>
+              <View style={styles.section}>
+                <PrefRow
+                  label="Inbound SMS"
+                  detail="When a homeowner texts the Twilio number"
+                  value={profile?.notification_prefs?.sms ?? true}
+                  onChange={(v) => togglePref('sms', v)}
+                />
+                <PrefRow
+                  label="Incoming calls"
+                  detail="When someone calls the Twilio number"
+                  value={profile?.notification_prefs?.calls ?? true}
+                  onChange={(v) => togglePref('calls', v)}
+                />
+                <PrefRow
+                  label="Team chat"
+                  detail="When a teammate posts in channels or DMs"
+                  value={profile?.notification_prefs?.team ?? true}
+                  onChange={(v) => togglePref('team', v)}
+                  last
+                />
               </View>
 
               <TouchableOpacity
@@ -262,6 +423,29 @@ export default function SettingsScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
+  )
+}
+
+function PrefRow(props: {
+  label: string
+  detail: string
+  value: boolean
+  onChange: (v: boolean) => void
+  last?: boolean
+}) {
+  return (
+    <View style={[styles.prefRow, props.last && { borderBottomWidth: 0 }]}>
+      <View style={{ flex: 1, paddingRight: 12 }}>
+        <Text style={styles.prefLabel}>{props.label}</Text>
+        <Text style={styles.prefDetail}>{props.detail}</Text>
+      </View>
+      <Switch
+        value={props.value}
+        onValueChange={props.onChange}
+        trackColor={{ false: '#292524', true: '#d97706' }}
+        thumbColor="#fafaf9"
+      />
+    </View>
   )
 }
 
@@ -336,6 +520,29 @@ const styles = StyleSheet.create({
   saveBtnText: { color: '#0c0a09', fontWeight: '700', fontSize: 14 },
   statusOk: { color: '#34d399' },
   statusWarn: { color: '#fbbf24' },
+  prefRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  prefLabel: { color: '#fafaf9', fontSize: 14, fontWeight: '600' },
+  prefDetail: { color: '#78716c', fontSize: 12, marginTop: 2 },
+  inlineInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  inlineSave: {
+    backgroundColor: '#d97706',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  inlineSaveText: { color: '#0c0a09', fontWeight: '700' },
   signOutBtn: {
     backgroundColor: '#7f1d1d',
     paddingVertical: 14,

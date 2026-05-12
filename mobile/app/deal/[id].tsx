@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Linking,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -27,7 +28,9 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
+import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
+import { useAuth } from '../../lib/auth'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
 
 type Deal = {
@@ -76,6 +79,38 @@ type Note = {
   created_at: string | null
 }
 
+type DocketEvent = {
+  id: string
+  event_type: string | null
+  event_date: string | null
+  description: string | null
+  litigation_stage: string | null
+}
+
+type Document = {
+  id: string
+  name: string | null
+  path: string | null
+  size: number | null
+  extraction_status: string | null
+  created_at: string | null
+}
+
+type AttorneyAssignment = {
+  user_id: string | null
+  email: string | null
+  attorney_name?: string | null
+  enabled: boolean | null
+}
+
+type Task = {
+  id: number
+  title: string | null
+  done: boolean | null
+  due_date: string | null
+  assigned_to: string | null
+}
+
 type CommsItem = {
   kind: 'sms' | 'call'
   id: string
@@ -89,6 +124,7 @@ type CommsItem = {
 
 export default function DealDetailScreen() {
   const router = useRouter()
+  const { session } = useAuth()
   const { id } = useLocalSearchParams<{ id: string }>()
   const [deal, setDeal] = useState<Deal | null>(null)
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -96,6 +132,10 @@ export default function DealDetailScreen() {
   const [activity, setActivity] = useState<ActivityRow[]>([])
   const [comms, setComms] = useState<CommsItem[]>([])
   const [notes, setNotes] = useState<Note[]>([])
+  const [documents, setDocuments] = useState<Document[]>([])
+  const [docketEvents, setDocketEvents] = useState<DocketEvent[]>([])
+  const [attorneys, setAttorneys] = useState<AttorneyAssignment[]>([])
+  const [tasks, setTasks] = useState<Task[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -103,7 +143,7 @@ export default function DealDetailScreen() {
   const load = useCallback(async () => {
     if (!id) return
     setError(null)
-    const [d, v, c, a, msgs, calls, n] = await Promise.all([
+    const [d, v, c, a, msgs, calls, n, docs, dock, att, tk] = await Promise.all([
       supabase
         .from('deals')
         .select('id, type, status, name, address, meta, updated_at')
@@ -149,6 +189,33 @@ export default function DealDetailScreen() {
         .eq('deal_id', id)
         .order('created_at', { ascending: false })
         .limit(20),
+      // Documents
+      supabase
+        .from('documents')
+        .select('id, name, path, size, extraction_status, created_at')
+        .eq('deal_id', id)
+        .order('created_at', { ascending: false })
+        .limit(20),
+      // Docket events
+      supabase
+        .from('docket_events')
+        .select('id, event_type, event_date, description, litigation_stage')
+        .eq('deal_id', id)
+        .order('event_date', { ascending: false })
+        .limit(15),
+      // Counsel / attorney assignments on this deal
+      supabase
+        .from('attorney_assignments')
+        .select('user_id, email, enabled')
+        .eq('deal_id', id),
+      // Tasks
+      supabase
+        .from('tasks')
+        .select('id, title, done, due_date, assigned_to')
+        .eq('deal_id', id)
+        .order('done', { ascending: true })
+        .order('due_date', { ascending: true, nullsFirst: false })
+        .limit(25),
     ])
     const firstErr =
       d.error ||
@@ -238,6 +305,36 @@ export default function DealDetailScreen() {
           author_name: nn.author_id ? authorMap.get(nn.author_id) : null,
         })),
       )
+
+      setDocuments((docs.data ?? []) as Document[])
+      setDocketEvents((dock.data ?? []) as DocketEvent[])
+
+      // Hydrate attorney names from profiles where we know the user_id
+      const attRows = (att.data ?? []) as AttorneyAssignment[]
+      const attUserIds = attRows
+        .map((r) => r.user_id)
+        .filter((x): x is string => !!x)
+      const attMap = new Map<string, string>()
+      if (attUserIds.length > 0) {
+        const { data: profs } = await supabase
+          .from('profiles')
+          .select('id, name, display_name')
+          .in('id', attUserIds)
+        for (const p of profs ?? []) {
+          attMap.set(
+            p.id as string,
+            (p.display_name as string) || (p.name as string) || '',
+          )
+        }
+      }
+      setAttorneys(
+        attRows.map((r) => ({
+          ...r,
+          attorney_name: r.user_id ? attMap.get(r.user_id) : null,
+        })),
+      )
+
+      setTasks((tk.data ?? []) as Task[])
     }
     setLoading(false)
     setRefreshing(false)
@@ -401,7 +498,17 @@ export default function DealDetailScreen() {
         <View style={styles.section}>
           <Text style={styles.dealName}>{deal.name ?? deal.id}</Text>
           {deal.address && (
-            <Text style={styles.dealAddress}>{deal.address}</Text>
+            <TouchableOpacity
+              activeOpacity={0.6}
+              onPress={() => openMaps(deal.address ?? '')}
+            >
+              <Text style={styles.dealAddress}>
+                <Ionicons name="location" size={13} color="#d97706" />
+                {'  '}
+                {deal.address}
+              </Text>
+              <Text style={styles.addressHint}>Tap to open in Maps</Text>
+            </TouchableOpacity>
           )}
           <View style={styles.pillRow}>
             {deal.type && (
@@ -410,12 +517,87 @@ export default function DealDetailScreen() {
               </View>
             )}
             {deal.status && (
-              <View style={[styles.pill, styles.pillStatus]}>
-                <Text style={styles.pillText}>{deal.status}</Text>
-              </View>
+              <TouchableOpacity
+                activeOpacity={0.7}
+                onPress={() => openStatusPicker(deal, setDeal)}
+              >
+                <View
+                  style={[
+                    styles.pill,
+                    { backgroundColor: statusColor(deal.status) },
+                  ]}
+                >
+                  <Text style={styles.pillText}>{deal.status} ▾</Text>
+                </View>
+              </TouchableOpacity>
             )}
           </View>
+
+          {/* Ask Lauren about this deal — seeds the Lauren tab with a
+              prompt that includes this deal's id, letting her pull
+              context via get_deal / get_deal_documents tools. */}
+          <TouchableOpacity
+            style={styles.laurenLink}
+            activeOpacity={0.7}
+            onPress={() => {
+              const prompt = `Tell me everything I should know about deal ${deal.id}${
+                deal.name ? ` (${deal.name})` : ''
+              } before I call them.`
+              router.push({
+                pathname: '/(tabs)/lauren',
+                params: { seed: prompt },
+              })
+            }}
+          >
+            <Ionicons name="sparkles" size={16} color="#7c3aed" />
+            <Text style={styles.laurenLinkText}>
+              Ask Lauren about this deal
+            </Text>
+          </TouchableOpacity>
         </View>
+
+        {/* Welcome video — if Nathan recorded one for this client */}
+        {(() => {
+          const wv = (meta.welcome_video ?? {}) as {
+            path?: string
+            recorded_at?: string
+          }
+          if (!wv.path) return null
+          return (
+            <>
+              <Text style={styles.sectionLabel}>Welcome video</Text>
+              <TouchableOpacity
+                style={[styles.section, styles.videoCard]}
+                activeOpacity={0.7}
+                onPress={async () => {
+                  const { data, error: e } = await supabase.storage
+                    .from('deal-docs')
+                    .createSignedUrl(wv.path!, 60 * 10)
+                  if (e || !data?.signedUrl) {
+                    Alert.alert(
+                      'Could not load',
+                      e?.message ?? 'Video missing',
+                    )
+                    return
+                  }
+                  Linking.openURL(data.signedUrl).catch(() => {})
+                }}
+              >
+                <View style={styles.playIcon}>
+                  <Ionicons name="play" size={28} color="#0c0a09" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={styles.videoTitle}>Watch welcome video</Text>
+                  <Text style={styles.videoSub}>
+                    {wv.recorded_at
+                      ? `Recorded ${formatRelative(wv.recorded_at)}`
+                      : 'Recorded for this case'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )
+        })()}
 
         {/* Case Intel — Claude's case briefing if generated */}
         {caseIntel?.text && (
@@ -487,7 +669,231 @@ export default function DealDetailScreen() {
           )}
         </View>
 
+        {/* Counsel — attorneys on this deal */}
+        {attorneys.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>Counsel</Text>
+            <View style={styles.section}>
+              {attorneys.map((att, i) => (
+                <View
+                  key={`att-${att.user_id ?? att.email ?? i}`}
+                  style={styles.contactRow}
+                >
+                  <Ionicons
+                    name="briefcase-outline"
+                    size={20}
+                    color="#d97706"
+                  />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={styles.contactName}>
+                      {att.attorney_name || att.email || '(no name)'}
+                    </Text>
+                    <Text style={styles.contactSub}>
+                      {att.enabled === false
+                        ? 'Disabled'
+                        : 'Attorney portal access'}
+                    </Text>
+                  </View>
+                  {att.email && (
+                    <TouchableOpacity
+                      onPress={() =>
+                        Linking.openURL(`mailto:${att.email}`).catch(() => {})
+                      }
+                    >
+                      <Ionicons name="mail" size={20} color="#d97706" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* Documents */}
+        {documents.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>
+              Documents · {documents.length}
+            </Text>
+            <View style={styles.section}>
+              {documents.slice(0, 6).map((doc) => (
+                <TouchableOpacity
+                  key={doc.id}
+                  style={styles.docRow}
+                  activeOpacity={0.6}
+                  onPress={async () => {
+                    if (!doc.path) {
+                      Alert.alert('No file', 'This document has no stored path.')
+                      return
+                    }
+                    const { data, error: e } = await supabase.storage
+                      .from('deal-docs')
+                      .createSignedUrl(doc.path, 60 * 5)
+                    if (e || !data?.signedUrl) {
+                      Alert.alert(
+                        'Could not open',
+                        e?.message ?? 'Unknown error',
+                      )
+                      return
+                    }
+                    Linking.openURL(data.signedUrl).catch(() => {})
+                  }}
+                >
+                  <Ionicons
+                    name="document-text-outline"
+                    size={20}
+                    color="#a8a29e"
+                  />
+                  <View style={{ flex: 1, marginLeft: 12 }}>
+                    <Text style={styles.docTitle} numberOfLines={1}>
+                      {doc.name ?? '(unnamed)'}
+                    </Text>
+                    <Text style={styles.docSub}>
+                      {formatBytes(doc.size)}
+                      {doc.created_at
+                        ? ` · ${formatRelative(doc.created_at)}`
+                        : ''}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={20}
+                    color="#57534e"
+                  />
+                </TouchableOpacity>
+              ))}
+              {documents.length > 6 && (
+                <Text style={styles.moreText}>
+                  + {documents.length - 6} more · view on web
+                </Text>
+              )}
+            </View>
+          </>
+        )}
+
+        {/* Docket events */}
+        {docketEvents.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>
+              Docket · {docketEvents.length}
+            </Text>
+            <View style={styles.section}>
+              {docketEvents.map((evt) => (
+                <View key={evt.id} style={styles.docketRow}>
+                  <View style={styles.docketDate}>
+                    <Text style={styles.docketDateText}>
+                      {evt.event_date ? formatShortDate(evt.event_date) : '—'}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={styles.docketType}>
+                      {evt.event_type ?? '(event)'}
+                    </Text>
+                    {evt.description && (
+                      <Text
+                        style={styles.docketDescription}
+                        numberOfLines={2}
+                      >
+                        {evt.description}
+                      </Text>
+                    )}
+                    {evt.litigation_stage && (
+                      <Text style={styles.docketStage}>
+                        {evt.litigation_stage}
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
+        {/* Tasks */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionLabel}>
+            Tasks ·{' '}
+            {tasks.length === 0
+              ? '0'
+              : `${tasks.filter((t) => !t.done).length} open`}
+          </Text>
+          <TouchableOpacity
+            onPress={() =>
+              router.push({
+                pathname: '/quick/new-task',
+                params: { deal_id: id, deal_name: deal.name ?? id },
+              })
+            }
+            style={styles.addButton}
+          >
+            <Text style={styles.addButtonText}>+ Add</Text>
+          </TouchableOpacity>
+        </View>
+        {tasks.length === 0 ? (
+          <View style={styles.section}>
+            <Text style={styles.emptyText}>
+              No tasks yet. Tap "+ Add" to create one.
+            </Text>
+          </View>
+        ) : (
+          <>
+            <View style={styles.section}>
+              {tasks.map((t) => (
+                <TouchableOpacity
+                  key={t.id}
+                  style={styles.taskRow}
+                  activeOpacity={0.6}
+                  onPress={async () => {
+                    // Toggle done state
+                    const { error: e } = await supabase
+                      .from('tasks')
+                      .update({ done: !t.done })
+                      .eq('id', t.id)
+                    if (e) {
+                      Alert.alert('Could not update', e.message)
+                      return
+                    }
+                    setTasks((prev) =>
+                      prev.map((x) =>
+                        x.id === t.id ? { ...x, done: !x.done } : x,
+                      ),
+                    )
+                  }}
+                >
+                  <View
+                    style={[
+                      styles.taskCheck,
+                      t.done && styles.taskCheckDone,
+                    ]}
+                  >
+                    {t.done && (
+                      <Ionicons name="checkmark" size={14} color="#0c0a09" />
+                    )}
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text
+                      style={[
+                        styles.taskTitle,
+                        t.done && styles.taskTitleDone,
+                      ]}
+                      numberOfLines={2}
+                    >
+                      {t.title ?? '(untitled)'}
+                    </Text>
+                    {t.due_date && (
+                      <Text style={styles.taskDue}>
+                        Due {formatShortDate(t.due_date)}
+                      </Text>
+                    )}
+                  </View>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+
         {/* Notes */}
+        {/* (anchor) */}
         <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionLabel}>Notes · {notes.length}</Text>
           <TouchableOpacity
@@ -509,7 +915,76 @@ export default function DealDetailScreen() {
             </Text>
           ) : (
             notes.map((nn) => (
-              <View key={nn.id} style={styles.noteRow}>
+              <TouchableOpacity
+                key={nn.id}
+                activeOpacity={0.8}
+                onLongPress={() => {
+                  // Only the author can edit / delete. RLS would block
+                  // others anyway, but show the right affordance.
+                  const isMine = nn.author_id === session?.user?.id
+                  if (!isMine) return
+                  Alert.alert(
+                    'Note',
+                    'Edit or delete this note?',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      {
+                        text: 'Edit',
+                        onPress: () => {
+                          Alert.prompt(
+                            'Edit note',
+                            'Update the note body.',
+                            [
+                              { text: 'Cancel', style: 'cancel' },
+                              {
+                                text: 'Save',
+                                onPress: async (next?: string) => {
+                                  if (!next) return
+                                  const trimmed = next.trim()
+                                  if (!trimmed) return
+                                  const { error: e } = await supabase
+                                    .from('deal_notes')
+                                    .update({ body: trimmed })
+                                    .eq('id', nn.id)
+                                  if (e) {
+                                    Alert.alert('Could not save', e.message)
+                                    return
+                                  }
+                                  setNotes((prev) =>
+                                    prev.map((x) =>
+                                      x.id === nn.id ? { ...x, body: trimmed } : x,
+                                    ),
+                                  )
+                                },
+                              },
+                            ],
+                            'plain-text',
+                            nn.body ?? '',
+                          )
+                        },
+                      },
+                      {
+                        text: 'Delete',
+                        style: 'destructive',
+                        onPress: async () => {
+                          const { error: e } = await supabase
+                            .from('deal_notes')
+                            .delete()
+                            .eq('id', nn.id)
+                          if (e) {
+                            Alert.alert('Could not delete', e.message)
+                            return
+                          }
+                          setNotes((prev) =>
+                            prev.filter((x) => x.id !== nn.id),
+                          )
+                        },
+                      },
+                    ],
+                  )
+                }}
+                style={styles.noteRow}
+              >
                 {nn.title && (
                   <Text style={styles.noteTitle}>{nn.title}</Text>
                 )}
@@ -517,8 +992,11 @@ export default function DealDetailScreen() {
                 <Text style={styles.noteMeta}>
                   {nn.author_name ?? 'team'} ·{' '}
                   {nn.created_at ? formatRelative(nn.created_at) : ''}
+                  {nn.author_id === session?.user?.id
+                    ? ' · long-press to edit'
+                    : ''}
                 </Text>
-              </View>
+              </TouchableOpacity>
             ))
           )}
         </View>
@@ -674,14 +1152,15 @@ function ContactRow(props: {
   onDial: (phone: string | null | undefined) => void
 }) {
   const callable = !!props.phone && !props.doNotCall
+  const emailable = !!props.email
   return (
-    <TouchableOpacity
-      activeOpacity={callable ? 0.6 : 1}
-      onPress={() => callable && props.onDial(props.phone)}
-      style={styles.contactRow}
-      disabled={!callable}
-    >
-      <View style={{ flex: 1 }}>
+    <View style={styles.contactRow}>
+      <TouchableOpacity
+        activeOpacity={callable ? 0.6 : 1}
+        onPress={() => callable && props.onDial(props.phone)}
+        style={{ flex: 1 }}
+        disabled={!callable}
+      >
         <Text style={styles.contactName}>{props.name}</Text>
         <Text style={styles.contactSub}>{props.subtitle}</Text>
         {props.phone && (
@@ -692,10 +1171,144 @@ function ContactRow(props: {
             {props.doNotCall ? ' · DO NOT CALL' : ''}
           </Text>
         )}
+        {props.email && (
+          <Text style={styles.contactEmail}>{props.email}</Text>
+        )}
+      </TouchableOpacity>
+      <View style={styles.contactActions}>
+        {emailable && (
+          <TouchableOpacity
+            onPress={() =>
+              Linking.openURL(`mailto:${props.email}`).catch(() => {})
+            }
+            style={styles.contactIconBtn}
+          >
+            <Ionicons name="mail" size={18} color="#d97706" />
+          </TouchableOpacity>
+        )}
+        {callable && (
+          <TouchableOpacity
+            onPress={() => props.onDial(props.phone)}
+            style={styles.contactIconBtn}
+          >
+            <Ionicons name="call" size={18} color="#d97706" />
+          </TouchableOpacity>
+        )}
       </View>
-      {callable && <Text style={styles.callIcon}>📞</Text>}
-    </TouchableOpacity>
+    </View>
   )
+}
+
+// Status options per type, ordered roughly by pipeline progression.
+// Mirrors the web app's DEAL_STATUSES constant.
+const STATUSES_BY_TYPE: Record<string, string[]> = {
+  surplus: [
+    'new-lead',
+    'researching',
+    'contacted',
+    'fee-agreement',
+    'filed',
+    'served',
+    'hearing-set',
+    'hearing-passed',
+    'order-issued',
+    'paid',
+    'archived',
+    'cancelled',
+  ],
+  flip: [
+    'new-lead',
+    'researching',
+    'under-contract',
+    'rehab',
+    'listed',
+    'closed',
+    'archived',
+    'cancelled',
+  ],
+  wholesale: ['new-lead', 'under-contract', 'assigned', 'closed', 'archived'],
+  rental: ['new-lead', 'under-contract', 'rented', 'closed', 'archived'],
+  other: ['new-lead', 'in-progress', 'closed', 'archived'],
+}
+
+function openStatusPicker(
+  deal: Deal,
+  setDeal: React.Dispatch<React.SetStateAction<Deal | null>>,
+) {
+  const options =
+    STATUSES_BY_TYPE[deal.type ?? 'other'] ?? STATUSES_BY_TYPE.other
+  // iOS Alert.alert with N buttons. Cap at ~8 to avoid the system-
+  // imposed action-sheet height limit.
+  const trimmed = options.slice(0, 8)
+  Alert.alert(
+    'Change status',
+    `Current: ${deal.status ?? '(none)'}`,
+    [
+      { text: 'Cancel', style: 'cancel' as const },
+      ...trimmed
+        .filter((s) => s !== deal.status)
+        .slice(0, 7)
+        .map((s) => ({
+          text: s,
+          onPress: async () => {
+            const { error } = await supabase
+              .from('deals')
+              .update({ status: s })
+              .eq('id', deal.id)
+            if (error) {
+              Alert.alert('Could not update', error.message)
+              return
+            }
+            setDeal((p) => (p ? { ...p, status: s } : p))
+          },
+        })),
+    ],
+  )
+}
+
+function openMaps(addr: string) {
+  if (!addr) return
+  const q = encodeURIComponent(addr)
+  // Apple Maps on iOS; falls back to https on other platforms
+  Linking.openURL(`https://maps.apple.com/?q=${q}`).catch(() =>
+    Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${q}`),
+  )
+}
+
+// Status color map matching the web app's STATUS_COLORS roughly. Anything
+// not in the map gets a neutral charcoal pill.
+const STATUS_COLORS: Record<string, string> = {
+  'new-lead': '#1e40af',          // blue
+  'researching': '#6d28d9',        // purple
+  'contacted': '#0f766e',          // teal
+  'fee-agreement': '#0e7490',      // cyan
+  'filed': '#a16207',              // amber
+  'served': '#a16207',
+  'hearing-set': '#a16207',
+  'hearing-passed': '#92400e',
+  'order-issued': '#15803d',       // green
+  'paid': '#15803d',
+  'archived': '#44403c',
+  'under-contract': '#9333ea',
+  'closed': '#15803d',
+  'cancelled': '#7f1d1d',
+}
+function statusColor(s: string | null | undefined) {
+  if (!s) return '#7c2d12'
+  return STATUS_COLORS[s] ?? '#7c2d12'
+}
+
+function formatBytes(b: number | null | undefined): string {
+  if (b == null) return ''
+  if (b < 1024) return `${b} B`
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`
+  return `${(b / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
 function formatCall(item: CommsItem): string {
@@ -785,6 +1398,16 @@ const styles = StyleSheet.create({
   contactSub: { color: '#a8a29e', fontSize: 12, marginTop: 2 },
   contactPhone: { color: '#d97706', fontSize: 13, marginTop: 4, fontWeight: '600' },
   contactPhoneDnd: { color: '#78716c', textDecorationLine: 'line-through' },
+  contactEmail: { color: '#a8a29e', fontSize: 12, marginTop: 2 },
+  contactActions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginLeft: 6 },
+  contactIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#0c0a09',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   callIcon: { fontSize: 22, marginLeft: 10 },
   activityRow: {
     paddingVertical: 8,
@@ -793,6 +1416,95 @@ const styles = StyleSheet.create({
   },
   activityAction: { color: '#d6d3d1', fontSize: 13, lineHeight: 18 },
   activityTime: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  addressHint: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  videoCard: { flexDirection: 'row', alignItems: 'center' },
+  playIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#d97706',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoTitle: { color: '#fafaf9', fontSize: 16, fontWeight: '700' },
+  videoSub: { color: '#a8a29e', fontSize: 12, marginTop: 2 },
+  laurenLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: '#0c0a09',
+    borderRadius: 10,
+    borderColor: '#7c3aed44',
+    borderWidth: 1,
+  },
+  laurenLinkText: { color: '#d6d3d1', fontSize: 13, fontWeight: '600' },
+  taskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  taskCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderColor: '#57534e',
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  taskCheckDone: { backgroundColor: '#d97706', borderColor: '#d97706' },
+  taskTitle: { color: '#fafaf9', fontSize: 14 },
+  taskTitleDone: {
+    color: '#78716c',
+    textDecorationLine: 'line-through',
+  },
+  taskDue: { color: '#d97706', fontSize: 11, marginTop: 2, fontWeight: '600' },
+  docRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  docTitle: { color: '#fafaf9', fontSize: 14, fontWeight: '500' },
+  docSub: { color: '#78716c', fontSize: 11, marginTop: 2 },
+  moreText: {
+    color: '#78716c',
+    fontSize: 12,
+    marginTop: 8,
+    paddingHorizontal: 4,
+    fontStyle: 'italic',
+  },
+  docketRow: {
+    flexDirection: 'row',
+    paddingVertical: 10,
+    borderBottomColor: '#292524',
+    borderBottomWidth: 1,
+  },
+  docketDate: {
+    width: 56,
+    paddingTop: 2,
+  },
+  docketDateText: {
+    color: '#d97706',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  docketType: { color: '#fafaf9', fontSize: 14, fontWeight: '500' },
+  docketDescription: { color: '#a8a29e', fontSize: 12, marginTop: 2, lineHeight: 17 },
+  docketStage: {
+    color: '#78716c',
+    fontSize: 10,
+    marginTop: 2,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    fontWeight: '600',
+  },
   intelText: { color: '#d6d3d1', fontSize: 14, lineHeight: 21 },
   intelBold: { color: '#fafaf9', fontWeight: '700' },
   intelBullet: {
