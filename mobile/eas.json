@@ -13,6 +13,7 @@
     },
     "preview": {
       "distribution": "internal",
+      "channel": "preview",
       "ios": {
         "resourceClass": "m-medium",
         "simulator": false
@@ -20,6 +21,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "ios": {
         "resourceClass": "m-medium"
       }
@@ -27,6 +29,13 @@
   },
   "submit": {
     "production": {
+      "ios": {
+        "appleId": "racin2701@yahoo.com",
+        "ascAppId": "REPLACE_AFTER_FIRST_SUBMIT",
+        "appleTeamId": "8RJDH7L35Q"
+      }
+    },
+    "preview": {
       "ios": {
         "appleId": "racin2701@yahoo.com",
         "ascAppId": "REPLACE_AFTER_FIRST_SUBMIT",
