@@ -3549,7 +3549,15 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
     if ((!trimmed && pendingAttachments.length === 0) || sending || !me.id || !activeThreadId) return;
     setSending(true);
     // Strip the URL field — signed URLs expire; we re-sign on render
-    const attachmentsForDb = pendingAttachments.map(({ path, name, size, type }) => ({ path, name, size, type }));
+    // Preserve `url` + `source` + `giphy_id` for external attachments
+    // (GIPHY GIFs picked via the in-chat picker). These have path=null
+    // and the renderer needs the url to display them. Pre-fix this only
+    // kept path/name/size/type and the url got dropped → GIFs rendered
+    // forever-loading for both sender and other team members.
+    const attachmentsForDb = pendingAttachments.map(({ path, name, size, type, url, source, giphy_id }) => ({
+      path, name, size, type,
+      ...(path ? {} : { url, source, giphy_id }),  // only persist url for external attachments
+    }));
     const { error } = await sb.from('team_messages').insert({
       thread_id: activeThreadId,
       sender_id: me.id,
