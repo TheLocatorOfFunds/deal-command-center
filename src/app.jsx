@@ -1541,6 +1541,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('today',    '📌', 'Today')}
               {navItem('attention','⚡', 'Attention')}
               {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','inbox','leads','forecast'] })}
+              {navItem('relay',    '📡', 'Relay')}
               {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
@@ -2833,7 +2834,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -2841,6 +2842,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
+          ) : view === "relay" ? (
+            <RelayView supabase={sb} />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
           ) : view === "inbox" ? (
@@ -6922,6 +6925,206 @@ function ForecastEmpty({ text }) {
 }
 function ForecastLoading() {
   return <div style={{ fontSize: 11, color: '#78716c', padding: 14 }}>Loading…</div>;
+}
+
+// ─── Relay View ──────────────────────────────────────────────────
+function RelayView({ supabase }) {
+  const [enrollments, setEnrollments] = React.useState([])
+  const [sequences, setSequences] = React.useState({})
+  const [pendingTouches, setPendingTouches] = React.useState([])
+  const [deals, setDeals] = React.useState({})
+  const [loading, setLoading] = React.useState(true)
+
+  React.useEffect(() => {
+    loadData()
+  }, [])
+
+  async function loadData() {
+    setLoading(true)
+    try {
+      const [enrollRes, seqRes, pendingRes] = await Promise.all([
+        supabase.schema('relay').from('enrollments').select('*').order('enrolled_at', { ascending: false }).limit(100),
+        supabase.schema('relay').from('sequences').select('id, name'),
+        supabase.from('outreach_queue')
+          .select('*')
+          .not('relay_enrollment_id', 'is', null)
+          .eq('status', 'pending')
+          .order('scheduled_for', { ascending: true })
+          .limit(50),
+      ])
+
+      const enrollmentList = enrollRes.data || []
+      setEnrollments(enrollmentList)
+
+      const seqMap = {}
+      for (const s of (seqRes.data || [])) seqMap[s.id] = s.name
+      setSequences(seqMap)
+
+      const pending = pendingRes.data || []
+      setPendingTouches(pending)
+
+      const dealIds = [...new Set([
+        ...enrollmentList.map(e => e.deal_id).filter(Boolean),
+        ...pending.map(p => p.deal_id).filter(Boolean),
+      ])]
+      if (dealIds.length) {
+        const { data: dealRows } = await supabase.from('deals').select('id, name, address').in('id', dealIds)
+        const dealMap = {}
+        for (const d of (dealRows || [])) dealMap[d.id] = d
+        setDeals(dealMap)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleApprove(queueId) {
+    await supabase.from('outreach_queue').update({ status: 'approved', updated_at: new Date().toISOString() }).eq('id', queueId)
+    setPendingTouches(prev => prev.filter(t => t.id !== queueId))
+  }
+
+  async function handleSkip(queueId) {
+    await supabase.from('outreach_queue').update({ status: 'cancelled', skipped_reason: 'manually skipped in Relay view', updated_at: new Date().toISOString() }).eq('id', queueId)
+    setPendingTouches(prev => prev.filter(t => t.id !== queueId))
+  }
+
+  const activeCount = enrollments.filter(e => e.status === 'active').length
+  const isLive = activeCount > 0
+  const statusColors = {
+    active: '#16a34a',
+    paused: '#d97706',
+    completed: '#6b7280',
+    opted_out: '#dc2626',
+    undeliverable: '#dc2626',
+    manual_hold: '#d97706',
+  }
+
+  if (loading) return (
+    <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Loading Relay...</div>
+  )
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
+
+      {/* Status bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: isLive ? '#16a34a' : '#d97706' }} />
+          <span style={{ fontWeight: 600, fontSize: 15, color: isLive ? '#16a34a' : '#d97706' }}>
+            {isLive ? 'Live' : 'Paused'}
+          </span>
+        </div>
+        <div style={{ color: '#94a3b8', fontSize: 13 }}>
+          {enrollments.length} total enrollments, {activeCount} active, {pendingTouches.length} pending approval
+        </div>
+        {!isLive && (
+          <div style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b', background: '#1e293b', padding: '4px 10px', borderRadius: 6 }}>
+            Cron jobs paused - re-enable when A2P campaign is approved
+          </div>
+        )}
+      </div>
+
+      {/* Pending approvals */}
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+          Pending Approval ({pendingTouches.length})
+        </div>
+        {pendingTouches.length === 0 ? (
+          <div style={{ padding: '20px 16px', background: '#0f172a', borderRadius: 8, color: '#475569', fontSize: 14, textAlign: 'center' }}>
+            No messages waiting for approval
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {pendingTouches.map(touch => {
+              const deal = deals[touch.deal_id]
+              const scheduledDate = touch.scheduled_for ? new Date(touch.scheduled_for).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'now'
+              return (
+                <div key={touch.id} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 12, color: '#d97706', fontWeight: 600 }}>
+                        Step {touch.relay_step_number}
+                      </span>
+                      {deal && (
+                        <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
+                          {deal.address || deal.name || touch.deal_id}
+                        </span>
+                      )}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#475569' }}>Scheduled {scheduledDate}</span>
+                  </div>
+                  <div style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.5, marginBottom: 12, padding: '10px 12px', background: '#162032', borderRadius: 6, fontFamily: 'inherit' }}>
+                    {touch.draft_body}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => handleApprove(touch.id)}
+                      style={{ padding: '6px 16px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      onClick={() => handleSkip(touch.id)}
+                      style={{ padding: '6px 16px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+                    >
+                      Skip
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Enrollments table */}
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+          Enrollments ({enrollments.length})
+        </div>
+        {enrollments.length === 0 ? (
+          <div style={{ padding: '20px 16px', background: '#0f172a', borderRadius: 8, color: '#475569', fontSize: 14, textAlign: 'center' }}>
+            No enrollments yet
+          </div>
+        ) : (
+          <div style={{ background: '#0f172a', borderRadius: 8, overflow: 'hidden', border: '1px solid #1e293b' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #1e293b' }}>
+                  {['Phone', 'Deal', 'Sequence', 'Step', 'Status', 'Enrolled'].map(h => (
+                    <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#64748b', fontWeight: 500 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {enrollments.map((e, i) => {
+                  const deal = deals[e.deal_id]
+                  const phone = e.contact_phone ? '****' + e.contact_phone.replace(/\D/g, '').slice(-4) : 'unknown'
+                  const enrolledDate = e.enrolled_at ? new Date(e.enrolled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+                  return (
+                    <tr key={e.id} style={{ borderBottom: i < enrollments.length - 1 ? '1px solid #1e293b' : 'none' }}>
+                      <td style={{ padding: '10px 14px', color: '#e2e8f0', fontFamily: 'monospace' }}>{phone}</td>
+                      <td style={{ padding: '10px 14px', color: '#94a3b8', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {deal ? (deal.address || deal.name || e.deal_id) : (e.deal_id || 'manual')}
+                      </td>
+                      <td style={{ padding: '10px 14px', color: '#94a3b8' }}>{sequences[e.sequence_id] || e.sequence_id}</td>
+                      <td style={{ padding: '10px 14px', color: '#e2e8f0', textAlign: 'center' }}>{e.current_step}</td>
+                      <td style={{ padding: '10px 14px' }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: statusColors[e.status] || '#94a3b8', background: (statusColors[e.status] || '#94a3b8') + '22', padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          {e.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '10px 14px', color: '#475569' }}>{enrolledDate}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ─── Outreach View ───────────────────────────────────────────────
