@@ -2533,6 +2533,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
   // Soft-delete admin recovery modal (added 2026-05-07).
   const [showDeletedLeads, setShowDeletedLeads] = useState(false);
+  // Per Eric 2026-05-12: he was expecting to find deals in Deleted Leads
+  // that he'd actually marked dead / closed / recovered via status change
+  // (not soft-delete). Added a separate "Recently Hidden" view so anything
+  // out of sight in the last 30 days is one click away regardless of
+  // which mechanism was used.
+  const [showRecentlyHidden, setShowRecentlyHidden] = useState(false);
   // Advanced filters — same modal Pipeline uses. Per Eric 2026-05-11:
   // Leads / Deal-list views need tag + money + date + boolean filters
   // (he tried filtering by `nod` / `need-more-info` tags and the UI
@@ -2655,10 +2661,19 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads.
-          Only shown on deal-list views. */}
+      {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads +
+          Recently Hidden. Only shown on deal-list views. */}
       {["active","flagged","hygiene","archive","pipeline","leads-phase"].includes(view) && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
+          {isAdmin && (
+            <button
+              onClick={() => setShowRecentlyHidden(true)}
+              style={{ ...btnGhost, color: '#a8a29e' }}
+              title="Deals marked dead / closed / recovered in the last 30 days. Status changes hide them from active views but they're not deleted — click to find or revive one."
+            >
+              🪦 Recently hidden
+            </button>
+          )}
           {isAdmin && (
             <button
               onClick={() => setShowDeletedLeads(true)}
@@ -2675,6 +2690,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       {showDeletedLeads && (
         <DeletedLeadsModal
           onClose={() => setShowDeletedLeads(false)}
+          onRestored={() => { /* realtime sub on `deals` will refresh the list */ }}
+        />
+      )}
+      {showRecentlyHidden && (
+        <RecentlyHiddenModal
+          onClose={() => setShowRecentlyHidden(false)}
           onRestored={() => { /* realtime sub on `deals` will refresh the list */ }}
         />
       )}
@@ -11295,6 +11316,128 @@ function DeletedLeadsModal({ onClose, onRestored }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── RecentlyHiddenModal ────────────────────────────────────────────
+// Per Eric 2026-05-12: he was looking in Deleted Leads for things he
+// thought he'd deleted, but they were actually status-changed to
+// dead / closed / recovered (which hides them from active views but
+// is NOT soft-delete). This modal surfaces those.
+//
+// Distinct from DeletedLeadsModal:
+//   - DeletedLeadsModal = `deleted_at IS NOT NULL` (true soft-delete)
+//   - RecentlyHiddenModal = `deleted_at IS NULL AND status IN ('dead',
+//     'closed','recovered') AND updated_at >= now() - 30d` (status-
+//     based archive within recent memory)
+//
+// Restore here = flipping status back to a working value. We don't
+// know which status it was BEFORE archive, so the restore button
+// puts it back at 'engaged' (a safe active-pipeline starting point);
+// the team can then move it to the right stage.
+function RecentlyHiddenModal({ onClose, onRestored }) {
+  const [rows, setRows] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    const { data, error } = await sb.from('deals')
+      .select('id, name, address, type, status, lead_tier, updated_at, closed_at, meta')
+      .is('deleted_at', null)
+      .in('status', ['dead', 'closed', 'recovered'])
+      .gte('updated_at', cutoff)
+      .order('updated_at', { ascending: false });
+    if (error) { setErr(error.message); setRows([]); return; }
+    setRows(data || []);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const restore = async (row) => {
+    if (busyId) return;
+    if (!window.confirm(`Move "${row.name}" back into the active pipeline?\n\nCurrent status: ${row.status.toUpperCase()}\nNew status: ENGAGED (you can change it from the deal page).`)) return;
+    setBusyId(row.id);
+    const { error } = await sb.from('deals').update({
+      status: 'engaged',
+      closed_at: null,
+    }).eq('id', row.id);
+    setBusyId(null);
+    if (error) { alert('Restore failed: ' + error.message); return; }
+    const { data: { user } } = await sb.auth.getUser();
+    if (user) {
+      await sb.from('activity').insert({
+        deal_id: row.id,
+        user_id: user.id,
+        action: `Deal moved back to active pipeline from Recently Hidden (was: ${row.status})`,
+        visibility: ['team'],
+      });
+    }
+    await load();
+    onRestored?.();
+  };
+
+  const statusLabel = (s) => ({
+    dead:      { label: 'Dead',      color: '#78716c' },
+    closed:    { label: 'Closed',    color: '#10b981' },
+    recovered: { label: 'Recovered', color: '#10b981' },
+  })[s] || { label: s, color: '#a8a29e' };
+  const fmtDate = (ts) => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+  return (
+    <Modal onClose={onClose} title="🪦 Recently Hidden Deals" wide>
+      <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 14, lineHeight: 1.55 }}>
+        Deals marked <strong>dead</strong>, <strong>closed</strong>, or <strong>recovered</strong> in the last 30 days. These aren't soft-deleted — they're status-archived, hidden from active views, but the data is intact. Restoring puts them back at status <strong>engaged</strong>.
+      </div>
+      {rows === null && <div style={{ color: '#78716c', fontSize: 13, padding: 20, textAlign: 'center' }}>Loading…</div>}
+      {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
+      {rows && rows.length === 0 && (
+        <div style={{ color: '#78716c', fontSize: 13, padding: 30, textAlign: 'center', fontStyle: 'italic' }}>
+          No deals hidden in the last 30 days.
+        </div>
+      )}
+      {rows && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 11, color: '#78716c', marginBottom: 4 }}>
+            {rows.length} hidden {rows.length === 1 ? 'deal' : 'deals'} (status-based archive, NOT soft-deleted).
+          </div>
+          {rows.map(r => {
+            const meta = statusLabel(r.status);
+            return (
+              <div key={r.id} style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.name || r.id}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#a8a29e', marginBottom: 6 }}>
+                      {r.address || '—'}
+                      {r.meta?.courtCase ? ` · ${r.meta.courtCase}` : ''}
+                      {r.meta?.county ? ` · ${r.meta.county}` : ''}
+                      {r.lead_tier ? ` · Tier ${r.lead_tier}` : ''}
+                    </div>
+                    <div style={{ fontSize: 11, display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ padding: '2px 8px', borderRadius: 10, background: '#1c1917', color: meta.color, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', fontSize: 10 }}>
+                        {meta.label}
+                      </span>
+                      <span style={{ color: '#78716c' }}>Hidden {fmtDate(r.updated_at)}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => restore(r)}
+                    disabled={busyId === r.id}
+                    style={{ ...btnPrimary, background: busyId === r.id ? '#44403c' : '#10b981', color: '#0c0a09', cursor: busyId === r.id ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    {busyId === r.id ? 'Restoring…' : '↩ Move to active'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </Modal>
