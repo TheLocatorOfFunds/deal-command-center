@@ -215,10 +215,9 @@ Deno.serve(async (req) => {
   // ─────────────────────────────────────────────────────────────────────────
   const { data: preAuctionDeals } = await sb
     .from('deals')
-    .select('id, address, meta, days_to_sale, surplus_estimate, status')
+    .select('id, name, address, meta, days_to_sale, surplus_estimate, status, lead_tier')
     .in('lead_tier', ['A', 'B'])
     .eq('is_30dts', true)
-    .eq('death_signal', false)
     .eq('type', 'surplus')
     .is('deleted_at', null)
 
@@ -241,7 +240,9 @@ Deno.serve(async (req) => {
       continue
     }
 
-    const { first, last } = splitName(deal.meta?.homeownerName)
+    // Name: prefer meta.homeownerName, fall back to deals.name column
+    const rawName = deal.meta?.homeownerName?.trim() || (deal as any).name || ''
+    const { first, last } = splitName(rawName)
     if (!first) {
       results.preauction_skipped.push(`${deal.id} (no name)`)
       continue
@@ -294,11 +295,11 @@ Deno.serve(async (req) => {
   // ─────────────────────────────────────────────────────────────────────────
 
   // Fetch candidate deals for condition (a): days_to_sale < 0
+  // Note: death_signal filter is intentionally omitted for tier B (deceased is expected).
   const { data: surplusDealsA } = await sb
     .from('deals')
-    .select('id, address, meta, days_to_sale, surplus_estimate, status')
+    .select('id, name, address, meta, days_to_sale, surplus_estimate, status, lead_tier')
     .in('lead_tier', ['A', 'B'])
-    .eq('death_signal', false)
     .eq('type', 'surplus')
     .is('deleted_at', null)
     .lt('days_to_sale', 0)
@@ -307,9 +308,8 @@ Deno.serve(async (req) => {
   // We will filter by past saleDate in JS since meta is jsonb.
   const { data: surplusDealsB } = await sb
     .from('deals')
-    .select('id, address, meta, days_to_sale, surplus_estimate, status')
+    .select('id, name, address, meta, days_to_sale, surplus_estimate, status, lead_tier')
     .in('lead_tier', ['A', 'B'])
-    .eq('death_signal', false)
     .eq('type', 'surplus')
     .is('deleted_at', null)
     .is('days_to_sale', null)
@@ -350,7 +350,9 @@ Deno.serve(async (req) => {
       continue
     }
 
-    const { first, last } = splitName(deal.meta?.homeownerName)
+    // Name: prefer meta.homeownerName, fall back to deals.name column
+    const rawName = deal.meta?.homeownerName?.trim() || (deal as any).name || ''
+    const { first, last } = splitName(rawName)
     if (!first) {
       results.surplus_skipped.push(`${deal.id} (no name)`)
       continue
