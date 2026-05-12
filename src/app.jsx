@@ -3170,6 +3170,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const [me, setMe] = useState({ id: null, name: '', role: 'admin' });
   const [pendingAttachments, setPendingAttachments] = useState([]);  // [{name, size, type, path, url}]
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [showNewThreadModal, setShowNewThreadModal] = useState(false);
@@ -4087,7 +4088,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                 }}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative' }}>
                   <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={onPickFiles} />
                   <button
                     onClick={() => fileInputRef.current && fileInputRef.current.click()}
@@ -4095,9 +4096,23 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                     style={{ ...btnGhost, fontSize: 12, padding: '6px 10px' }}
                     title="Attach files (or drag onto the message area)"
                   >📎 Attach</button>
+                  <button
+                    onClick={() => setShowGifPicker(v => !v)}
+                    style={{ ...btnGhost, fontSize: 12, padding: '6px 10px' }}
+                    title="Search GIPHY"
+                  >🎬 GIF</button>
                   <span style={{ fontSize: 10, color: '#57534e' }}>
                     Files, photos, videos · HEIC auto-converts
                   </span>
+                  {showGifPicker && (
+                    <GifPickerPopover
+                      onSelect={(gif) => {
+                        setPendingAttachments(prev => [...prev, gif]);
+                        setShowGifPicker(false);
+                      }}
+                      onClose={() => setShowGifPicker(false)}
+                    />
+                  )}
                 </div>
                 <button
                   onClick={send}
@@ -4545,8 +4560,135 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
   );
 }
 
+// ─── GIF Picker (GIPHY) ─────────────────────────────────────────────
+// Per Nathan 2026-05-12: team chat needs a GIF button. Uses GIPHY's
+// public beta API key — rate-limited but fine for our team-scale use.
+// On select, the attachment is added with `path: null` and a direct
+// GIPHY CDN url. TeamAttachments handles that case (use a.url directly
+// instead of creating a signed storage URL).
+const GIPHY_API_KEY = 'dc6zaTOxFJmzC';
+const GIPHY_SEARCH_URL = 'https://api.giphy.com/v1/gifs/search';
+const GIPHY_TRENDING_URL = 'https://api.giphy.com/v1/gifs/trending';
+
+function GifPickerPopover({ onSelect, onClose }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const inputRef = useRef(null);
+
+  // Auto-focus search input on mount.
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 50); }, []);
+
+  // Initial load: trending. Debounced search: 250ms.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setErr(null);
+      const url = query.trim()
+        ? `${GIPHY_SEARCH_URL}?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query.trim())}&limit=24&rating=pg-13`
+        : `${GIPHY_TRENDING_URL}?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`GIPHY HTTP ${resp.status}`);
+        const json = await resp.json();
+        if (!cancelled) setResults(json.data || []);
+      } catch (e) {
+        if (!cancelled) setErr(e.message || 'Failed to load GIFs');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, query.trim() ? 250 : 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query]);
+
+  // Click-outside to close.
+  const popoverRef = useRef(null);
+  useEffect(() => {
+    const handler = (e) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target)) onClose();
+    };
+    setTimeout(() => document.addEventListener('mousedown', handler), 50);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div ref={popoverRef} style={{
+      position: 'absolute', bottom: '100%', left: 0, marginBottom: 8,
+      width: 380, maxHeight: 460,
+      background: '#0c0a09', border: '1px solid #44403c', borderRadius: 10,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+      display: 'flex', flexDirection: 'column', zIndex: 1000,
+    }}>
+      <div style={{ padding: 10, borderBottom: '1px solid #292524', display: 'flex', gap: 6 }}>
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search GIPHY… (or browse trending)"
+          style={{
+            flex: 1, background: '#1c1917', color: '#fafaf9',
+            border: '1px solid #44403c', borderRadius: 6,
+            padding: '6px 10px', fontSize: 12, outline: 'none', fontFamily: 'inherit',
+          }}
+        />
+        <button onClick={onClose} title="Close"
+          style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '0 10px', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>×</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+        {loading && results.length === 0 && (
+          <div style={{ padding: 30, textAlign: 'center', color: '#78716c', fontSize: 11 }}>Loading…</div>
+        )}
+        {err && (
+          <div style={{ padding: 12, color: '#fca5a5', fontSize: 11 }}>GIPHY error: {err}</div>
+        )}
+        {!loading && !err && results.length === 0 && (
+          <div style={{ padding: 30, textAlign: 'center', color: '#78716c', fontSize: 11 }}>
+            No GIFs found{query ? ` for "${query}"` : ''}.
+          </div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+          {results.map(g => {
+            const thumb = g.images?.fixed_height_small?.url || g.images?.fixed_height_downsampled?.url || g.images?.fixed_height?.url;
+            const full  = g.images?.fixed_height?.url || g.images?.original?.url;
+            return (
+              <button
+                key={g.id}
+                onClick={() => onSelect({
+                  path: null,
+                  name: (g.slug || g.id) + '.gif',
+                  size: 0,
+                  type: 'image/gif',
+                  url: full,
+                  source: 'giphy',
+                  giphy_id: g.id,
+                })}
+                title={g.title || g.slug || ''}
+                style={{
+                  background: '#1c1917', border: '1px solid #292524', borderRadius: 6,
+                  padding: 0, cursor: 'pointer', overflow: 'hidden',
+                  aspectRatio: '1 / 1', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                {thumb && <img src={thumb} alt={g.title || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ padding: '6px 10px', borderTop: '1px solid #292524', fontSize: 9, color: '#57534e', textAlign: 'center' }}>
+        Powered by GIPHY
+      </div>
+    </div>
+  );
+}
+
 // Renders attachments in a team_messages row. Re-signs URLs on render
 // (signed URLs in the DB would expire) so we always have fresh links.
+//
+// Attachments with `path: null` are external URLs (e.g. GIPHY GIFs sent
+// via the in-chat picker). For those we skip the storage signed-URL
+// flow and just use `a.url` directly when rendering.
 function TeamAttachments({ attachments, onLightbox }) {
   const [resolved, setResolved] = useState({});
   useEffect(() => {
@@ -4554,7 +4696,7 @@ function TeamAttachments({ attachments, onLightbox }) {
     (async () => {
       const out = {};
       await Promise.all(attachments.map(async (a) => {
-        if (!a.path) return;
+        if (!a.path) return;  // external (GIPHY etc.) — handled at render time via a.url
         const { data } = await sb.storage.from('team-chat').createSignedUrl(a.path, 3600);
         if (data?.signedUrl) out[a.path] = data.signedUrl;
       }));
@@ -4569,7 +4711,9 @@ function TeamAttachments({ attachments, onLightbox }) {
   return (
     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
       {attachments.map((a, i) => {
-        const url = resolved[a.path];
+        // For storage-backed attachments, use the resolved signed URL.
+        // For external (GIPHY GIFs, etc.), use the URL stored in the DB directly.
+        const url = a.path ? resolved[a.path] : a.url;
         const isImage = /^image\//.test(a.type) || /\.(jpg|jpeg|png|webp|gif)$/i.test(a.name);
         const isVideo = /^video\//.test(a.type) || /\.(mp4|mov|m4v|webm)$/i.test(a.name);
         if (isImage) {
@@ -26278,6 +26422,7 @@ function TeamChatBubble() {
   // can be sent without leaving the deal context.
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
   const fileInputRef = useRef(null);
   const composerRef = useRef(null);
   const msgsEndRef = useRef(null);
@@ -26794,7 +26939,7 @@ function TeamChatBubble() {
                   )}
                 </div>
               )}
-              <div style={{ padding: 10, background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', gap: 6, flexShrink: 0, alignItems: 'flex-end' }}>
+              <div style={{ padding: 10, background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', gap: 6, flexShrink: 0, alignItems: 'flex-end', position: 'relative' }}>
                 {/* Hidden file input — picker triggered by 📎 button */}
                 <input ref={fileInputRef} type="file" multiple onChange={onPickFiles}
                   accept="image/*,video/*,application/pdf,.doc,.docx,.txt,.csv,.xlsx,.heic"
@@ -26811,6 +26956,27 @@ function TeamChatBubble() {
                     fontFamily: 'inherit', flexShrink: 0,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>📎</button>
+                <button
+                  onClick={() => setShowGifPicker(v => !v)}
+                  title="Search GIPHY"
+                  style={{
+                    background: showGifPicker ? '#78350f' : '#1c1917',
+                    border: '1px solid ' + (showGifPicker ? '#d97706' : '#44403c'),
+                    color: showGifPicker ? '#fbbf24' : '#a8a29e',
+                    borderRadius: 8, width: 36, height: 36,
+                    fontSize: 14, cursor: 'pointer',
+                    fontFamily: 'inherit', flexShrink: 0, fontWeight: 700,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>GIF</button>
+                {showGifPicker && (
+                  <GifPickerPopover
+                    onSelect={(gif) => {
+                      setPendingAttachments(prev => [...prev, gif]);
+                      setShowGifPicker(false);
+                    }}
+                    onClose={() => setShowGifPicker(false)}
+                  />
+                )}
                 <textarea
                   ref={composerRef}
                   value={body}
