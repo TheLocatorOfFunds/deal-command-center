@@ -1,0 +1,17 @@
+{
+  "webcredentials": {
+    "apps": ["8RJDH7L35Q.com.fundlocators.dcc"]
+  },
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["8RJDH7L35Q.com.fundlocators.dcc"],
+        "components": [
+          { "/": "/", "comment": "Match app root" },
+          { "/": "/deal/*", "comment": "Match deal detail links" },
+          { "/": "/inbox/*", "comment": "Match inbox links" }
+        ]
+      }
+    ]
+  }
+}

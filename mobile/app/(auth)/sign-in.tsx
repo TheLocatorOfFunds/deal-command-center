@@ -1,22 +1,23 @@
 /**
- * Sign in via Supabase email OTP. Two-step flow that avoids the
- * deep-link mess entirely:
- *
+ * Sign in via Supabase email OTP. Two-step flow:
  *   1. User enters email → we call `signInWithOtp` to email them a
- *      magic link AND a 6-digit code (both come in the same email,
- *      Supabase's default template).
+ *      magic link AND a 6-digit code (both come in the same email).
  *   2. User types the 6-digit code into the app → we call
- *      `verifyOtp({ type: 'email', token })` and the session is set
- *      directly. No redirect, no browser bounce, no allowlist.
+ *      `verifyOtp({ type: 'email', token })` and the session is set.
  *
- * The link in the email still works in TestFlight + production builds
- * via the `dcc://` scheme. In Expo Go dev, the code path is the
- * reliable one because Expo Go's `exp://...` URL needs to be in the
- * Supabase redirect allowlist for deep-linking to work, and that URL
- * changes every time you switch Wi-Fi networks.
+ * iOS niceties:
+ *   - Email field uses textContentType="emailAddress" so iOS Keychain
+ *     offers saved emails above the keyboard.
+ *   - We also persist the last-used email to AsyncStorage and pre-fill
+ *     on mount — second sign-in onwards skips the typing step entirely.
+ *   - Code field uses textContentType="oneTimeCode" + autoComplete=
+ *     "one-time-code". Paired with the Associated Domains entitlement
+ *     for `app.refundlocators.com`, the email's `@domain #123456` line
+ *     gets auto-detected by iOS and offered as a one-tap fill above
+ *     the keyboard.
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   View,
   Text,
@@ -26,9 +27,13 @@ import {
   Platform,
   StyleSheet,
 } from 'react-native'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../../lib/supabase'
 
 type Step = 'email' | 'code'
+
+// AsyncStorage key for the last-used email — pre-fill on next launch.
+const LAST_EMAIL_KEY = 'dcc.signin.lastEmail'
 
 export default function SignInScreen() {
   const [step, setStep] = useState<Step>('email')
@@ -36,6 +41,17 @@ export default function SignInScreen() {
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Pre-fill the email field with the last value we sent a code to.
+  // For the 99% "one human, same email every time" case, this means
+  // sign-in is just "tap Send code → tap the autofilled OTP → Verify".
+  useEffect(() => {
+    AsyncStorage.getItem(LAST_EMAIL_KEY)
+      .then((saved) => {
+        if (saved) setEmail(saved)
+      })
+      .catch(() => {})
+  }, [])
 
   const sendCode = async () => {
     const target = email.trim().toLowerCase()
@@ -45,11 +61,11 @@ export default function SignInScreen() {
     try {
       const { error: err } = await supabase.auth.signInWithOtp({
         email: target,
-        options: {
-          shouldCreateUser: true,
-        },
+        options: { shouldCreateUser: true },
       })
       if (err) throw err
+      // Persist for next launch
+      AsyncStorage.setItem(LAST_EMAIL_KEY, target).catch(() => {})
       setStep('code')
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Unknown error')
@@ -70,8 +86,6 @@ export default function SignInScreen() {
         type: 'email',
       })
       if (err) throw err
-      // Auth state change picked up by AuthProvider → ProtectedRouter
-      // redirects to (tabs). No further work here.
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Invalid or expired code')
     } finally {
@@ -101,11 +115,14 @@ export default function SignInScreen() {
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
+              autoCorrect={false}
               autoComplete="email"
+              textContentType="emailAddress"
               keyboardType="email-address"
               returnKeyType="send"
               onSubmitEditing={sendCode}
               editable={!busy}
+              clearButtonMode="while-editing"
             />
             <TouchableOpacity
               style={[
