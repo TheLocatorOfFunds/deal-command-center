@@ -62,6 +62,14 @@ verify_jwt = false
 # Called by pg_net.http_post trigger from lauren_event_dispatch — no JWT.
 verify_jwt = false
 
+[functions.intel-sync]
+# Fired by pg_cron every 30 min — no Authorization header sent. Auth is
+# enforced inside the function via the X-Intel-Sync-Secret header (cron
+# path) or via Bearer service-role key (manual debug path). This setting
+# was missing — caused 2 weeks of 401 UNAUTHORIZED_NO_AUTH_HEADER until
+# fixed 2026-05-13.
+verify_jwt = false
+
 [functions.lauren-daily-review]
 # Called by pg_cron via net.http_post — no JWT. Authenticated by
 # X-Lauren-Daily-Review-Secret header instead.
