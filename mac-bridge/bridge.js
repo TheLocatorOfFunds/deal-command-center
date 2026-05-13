@@ -58,6 +58,8 @@ const OUR_NUMBERS    = new Set([NATHAN_NUMBER, '+15139985440']); // numbers we o
 const SUPABASE_URL   = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
+const ATTACH_DIR     = path.join(os.homedir(), 'Library/Messages/Attachments');
+const MEDIA_BUCKET   = 'inbound-media';
 const WATERMARK_FILE = path.join(__dirname, '.watermark');
 const PID_FILE       = path.join(__dirname, '.bridge.pid');
 const POLL_MS        = 5000;
@@ -336,6 +338,66 @@ function downloadMediaToTmp(url) {
   });
 }
 
+/**
+ * Resolve an iMessage attachment row's on-disk path and upload it to Supabase
+ * Storage under `<dealId>/<uuid>.<ext>`. Returns the public URL or null on
+ * any failure (we never want an attachment miss to drop the whole message).
+ *
+ * chat.db's attachment.filename can be:
+ *   - "~/Library/Messages/Attachments/aa/01/...filename.ext"
+ *   - "/Users/<user>/Library/Messages/Attachments/..."  (already absolute)
+ *   - NULL while transfer_state ≠ 5 (transfer in flight or failed)
+ */
+async function uploadIMessageAttachment(att, dealId) {
+  try {
+    const rawPath = att.filename;
+    if (!rawPath) return null;            // transfer not complete
+    if (att.transfer_state !== undefined && att.transfer_state !== null && att.transfer_state !== 5) {
+      // 5 = "transferred". 0–4 are in-flight / failed states.
+      return null;
+    }
+    const absPath = rawPath.startsWith('~')
+      ? path.join(os.homedir(), rawPath.slice(1).replace(/^\/+/, ''))
+      : rawPath;
+
+    // Defensive: keep us inside the Messages Attachments tree.
+    if (!absPath.startsWith(ATTACH_DIR)) {
+      console.error(`⚠️  attachment outside ATTACH_DIR — skipping: ${absPath}`);
+      return null;
+    }
+    if (!fs.existsSync(absPath)) {
+      console.error(`⚠️  attachment file missing on disk: ${absPath}`);
+      return null;
+    }
+
+    const bytes = fs.readFileSync(absPath);
+    const mime  = att.mime_type || 'application/octet-stream';
+    // Prefer the file's actual extension over a MIME-derived one — iMessage
+    // sometimes stores HEIC images with image/jpeg content-type, etc.
+    const extFromPath = (path.extname(absPath) || '').replace(/^\./, '').toLowerCase();
+    const ext = extFromPath || 'bin';
+
+    const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const storagePath = `${dealId}/${uuid}.${ext}`;
+
+    const { error: upErr } = await sb.storage
+      .from(MEDIA_BUCKET)
+      .upload(storagePath, bytes, { contentType: mime, upsert: false });
+    if (upErr) {
+      console.error(`⚠️  attachment upload failed: ${upErr.message}`);
+      return null;
+    }
+
+    const { data: urlData } = sb.storage.from(MEDIA_BUCKET).getPublicUrl(storagePath);
+    return urlData?.publicUrl || null;
+  } catch (e) {
+    console.error('⚠️  uploadIMessageAttachment error:', e.message);
+    return null;
+  }
+}
+
 /** Send a local file (image/video) via Messages.app — iMessage only on Tahoe. */
 function sendFileViaMessages(toPhone, localPath) {
   const safePath = localPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
@@ -520,8 +582,14 @@ async function syncFromChatDb() {
   let rows;
   // Map of chatIdentifier → [phone, ...] built while DB is still open
   const participantsByChatId = new Map();
+  // Map of message ROWID → [{ filename, mime_type, transfer_name }, ...]
+  // Populated while DB is open so we can upload after close.
+  const attachmentsByRowId = new Map();
 
   try {
+    // Allow inbound attachment-only rows (photo with no caption → text IS NULL).
+    // Keep the text-required filter for outbound to preserve the existing
+    // body-based dedup against DCC-originated 'handed_off_to_mac' rows.
     rows = db.prepare(`
       SELECT
         m.ROWID,
@@ -533,6 +601,7 @@ async function syncFromChatDb() {
         m.error           AS apple_error,      -- 0 = ok; 22 = not iMessage; non-zero = failure
         m.associated_message_type,
         m.associated_message_guid,
+        m.cache_has_attachments,               -- 1 = at least one row in message_attachment_join
         h.id              AS sender_handle,    -- who sent this specific message
         c.chat_identifier,                     -- phone for 1:1, Apple GUID for groups
         c.style           AS chat_style,       -- 43 = 1:1, 45 = group
@@ -542,11 +611,35 @@ async function syncFromChatDb() {
       LEFT JOIN chat              c   ON cmj.chat_id = c.ROWID
       LEFT JOIN handle            h   ON m.handle_id = h.ROWID
       WHERE m.ROWID > ?
-        AND m.text IS NOT NULL
-        AND m.text != ''
+        AND (
+          m.is_from_me = 0                       -- inbound: take any row (attachments may have null text)
+          OR (m.text IS NOT NULL AND m.text != '')  -- outbound: keep text-required for dedup
+        )
       ORDER BY m.ROWID ASC
       LIMIT 100
     `).all(watermark);
+
+    // Pre-fetch attachments for any row that has cache_has_attachments=1
+    const rowsWithAttachments = rows.filter(r => r.cache_has_attachments === 1).map(r => r.ROWID);
+    if (rowsWithAttachments.length > 0) {
+      const placeholders = rowsWithAttachments.map(() => '?').join(',');
+      const attachRows = db.prepare(`
+        SELECT
+          maj.message_id,
+          a.filename,
+          a.mime_type,
+          a.transfer_name,
+          a.transfer_state
+        FROM message_attachment_join maj
+        JOIN attachment a ON maj.attachment_id = a.ROWID
+        WHERE maj.message_id IN (${placeholders})
+        ORDER BY maj.message_id, a.ROWID
+      `).all(...rowsWithAttachments);
+      for (const a of attachRows) {
+        if (!attachmentsByRowId.has(a.message_id)) attachmentsByRowId.set(a.message_id, []);
+        attachmentsByRowId.get(a.message_id).push(a);
+      }
+    }
 
     // For group chats not yet cached, fetch participant list while DB is open.
     const unseenGroupIds = [...new Set(
@@ -619,6 +712,12 @@ async function syncFromChatDb() {
     const isInbound = row.is_from_me === 0;
     const guid      = `imsg_${row.guid}`;
     const reactType = REACTION_EMOJI[row.associated_message_type] || null;
+    const attachList = attachmentsByRowId.get(row.ROWID) || [];
+
+    // Skip rows that have neither text nor a usable attachment.
+    // (Attachment-only outbound rows are also filtered by the SQL WHERE.)
+    const hasText = !!(row.text && String(row.text).trim());
+    if (!hasText && attachList.length === 0) continue;
 
     let fromPhone, toPhone, dealId, threadKey;
 
@@ -654,10 +753,25 @@ async function syncFromChatDb() {
       threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, null);
     }
 
+    // Upload the first attachment (if any) to inbound-media bucket and store
+    // the public URL on the row. v1 keeps a single media_url column; multi-
+    // attachment support is a future media_urls jsonb upgrade.
+    let mediaUrl = null;
+    if (isInbound && attachList.length > 0) {
+      mediaUrl = await uploadIMessageAttachment(attachList[0], dealId);
+      if (attachList.length > 1) {
+        console.log(`📎 ${attachList.length} attachments on msg ${row.ROWID} — only first synced (v1 limitation)`);
+      }
+    }
+
+    const bodyText = reactType
+      ? `${reactType} reacted to: "${(row.text || '').replace(/^(Liked|Loved|Disliked|Emphasized|Questioned|Laughed at) "/, '').replace(/"$/, '')}"`
+      : (row.text || '');
+
     const msgData = {
       from_number:  fromPhone,
       to_number:    toPhone,
-      body:         reactType ? `${reactType} reacted to: "${row.text.replace(/^(Liked|Loved|Disliked|Emphasized|Questioned|Laughed at) "/, '').replace(/"$/, '')}"` : row.text,
+      body:         bodyText,
       direction:    isInbound ? 'inbound' : 'outbound',
       status:       isInbound ? 'received' : 'sent',
       channel:      'imessage',
@@ -665,6 +779,7 @@ async function syncFromChatDb() {
       created_at:   appleTs(row.date),
       deal_id:      dealId,
       thread_key:   threadKey,
+      media_url:    mediaUrl,
     };
 
     // For outbound (is_from_me) messages: check if a DCC-originated row already
@@ -722,9 +837,11 @@ async function syncFromChatDb() {
     if (error) {
       console.error(`⚠️  Supabase error (${guid}):`, error.message);
     } else {
-      const tag     = isGroup ? `GRP` : (isInbound ? '⬇ IN ' : '⬆ OUT');
-      const preview = msgData.body.length > 60 ? msgData.body.slice(0, 57) + '…' : msgData.body;
-      console.log(`${tag}  ${fromPhone || toPhone}  "${preview}"`);
+      const tag       = isGroup ? `GRP` : (isInbound ? '⬇ IN ' : '⬆ OUT');
+      const bodyStr   = msgData.body || '';
+      const preview   = bodyStr.length > 60 ? bodyStr.slice(0, 57) + '…' : bodyStr;
+      const mediaTag  = msgData.media_url ? ' 📎' : '';
+      console.log(`${tag}${mediaTag}  ${fromPhone || toPhone}  "${preview}"`);
     }
   }
 

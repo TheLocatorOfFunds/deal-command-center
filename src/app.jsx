@@ -744,6 +744,12 @@ function DealCommandCenter({ session, profile }) {
   const [callMuted, setCallMuted]       = useState(false);
   const [showDialpad, setShowDialpad]   = useState(false);
   const [dialpadNumber, setDialpadNumber] = useState('');
+  const [showKeypad, setShowKeypad]       = useState(false);
+  const [keypadBuffer, setKeypadBuffer]   = useState('');
+  const [callSid, setCallSid]             = useState(null);
+  const [addingToCall, setAddingToCall]   = useState(false);
+  const [addToCallNumber, setAddToCallNumber] = useState('');
+  const [addCallMsg, setAddCallMsg]       = useState(null); // { type: 'ok'|'error', text }
   // 'idle' = not yet enabled (needs click) | 'initializing' | 'registered' | 'error'
   const [twilioStatus, setTwilioStatus] = useState('idle');
   const twilioDeviceRef = React.useRef(null);
@@ -896,11 +902,21 @@ function DealCommandCenter({ session, profile }) {
   const startRingtone = startTitleFlash;
   const stopRingtone  = stopTitleFlash;
 
+  const resetCallOverlayState = React.useCallback(() => {
+    setShowKeypad(false);
+    setKeypadBuffer('');
+    setAddingToCall(false);
+    setAddToCallNumber('');
+    setAddCallMsg(null);
+    setCallSid(null);
+  }, []);
+
   const startCall = React.useCallback(async (contact) => {
     if (callStatus) return;
     setCallStatus('connecting');
     setCallContact(contact);
     setCallMuted(false);
+    resetCallOverlayState();
     try {
       const device = twilioDeviceRef.current || await initTwilioDevice();
       if (!device) throw new Error('Phone not enabled — click "Enable phone" in the header first');
@@ -909,10 +925,16 @@ function DealCommandCenter({ session, profile }) {
       });
       activeCallRef.current = call;
       call.on('ringing',    () => setCallStatus('ringing'));
-      call.on('accept',     () => { setCallStatus('in-progress'); startCallTimer(); });
-      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
-      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); });
-      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('accept',     () => {
+        setCallStatus('in-progress');
+        startCallTimer();
+        // Capture the call SID once the call is accepted
+        const sid = call.parameters?.CallSid || call.parameters?.callSid || null;
+        if (sid) setCallSid(sid);
+      });
+      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); resetCallOverlayState(); });
+      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
     } catch (err) {
       console.error('startCall error:', err);
       setCallStatus(null);
@@ -926,7 +948,8 @@ function DealCommandCenter({ session, profile }) {
     setCallStatus(null);
     setCallContact(null);
     setCallMuted(false);
-  }, [stopCallTimer]);
+    resetCallOverlayState();
+  }, [stopCallTimer, resetCallOverlayState]);
 
   const toggleMute = React.useCallback(() => {
     if (!activeCallRef.current) return;
@@ -951,16 +974,19 @@ function DealCommandCenter({ session, profile }) {
       setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
       activeCallRef.current = incomingCall.call;
       startCallTimer();
+      const sid = incomingCall.call.parameters?.CallSid || incomingCall.call.parameters?.callSid || null;
+      if (sid) setCallSid(sid);
       incomingCall.call.on('disconnect', () => {
         setCallStatus('ended');
         stopCallTimer();
+        resetCallOverlayState();
         setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
       });
     } catch (e) {
       console.error('Failed to accept call:', e);
     }
     setIncomingCall(null);
-  }, [incomingCall, startCallTimer, stopCallTimer, stopTitleFlash]);
+  }, [incomingCall, startCallTimer, stopCallTimer, stopTitleFlash, resetCallOverlayState]);
 
   const rejectIncoming = React.useCallback(() => {
     if (!incomingCall) return;
@@ -1489,26 +1515,9 @@ function DealCommandCenter({ session, profile }) {
     await sb.from('deals').update(patch).eq('id', id);
   };
 
-  // Safety: convert ANY caller that still routes through `deleteDeal` into
-  // a soft-delete instead of a hard one. Pre-fix this did
-  // `sb.from('deals').delete()` which permanently destroyed the row —
-  // the reason Eric couldn't find his deletions in the Deleted Leads
-  // view (per Nathan 2026-05-12). Now any orphan caller still does the
-  // right thing; the card "×" path opens DeleteDealModal for the proper
-  // reason-coded flow.
   const deleteDeal = async (id) => {
-    if (!confirm("Move this deal to Deleted Leads? You'll be able to restore it from the admin view.")) return;
-    await sb.from('deals').update({
-      deleted_at: new Date().toISOString(),
-      deleted_reason: 'other',
-      deleted_by: session.user.id,
-    }).eq('id', id);
-    // Cancel any in-flight outreach for this deal so we don't text a
-    // homeowner we just removed.
-    await sb.from('outreach_queue')
-      .update({ status: 'cancelled' })
-      .eq('deal_id', id)
-      .in('status', ['queued', 'pending', 'generating']);
+    if (!confirm("Delete this deal and all its data? This cannot be undone.")) return;
+    await sb.from('deals').delete().eq('id', id);
     if (activeDealId === id) setActiveDealId(null);
     await loadDeals();
   };
@@ -2157,7 +2166,7 @@ function DealCommandCenter({ session, profile }) {
       <div style={{
         position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
         background: '#1c1917', border: `2px solid ${callStatus === 'in-progress' ? '#16a34a' : callStatus === 'ended' ? '#ef4444' : '#d97706'}`,
-        borderRadius: 16, padding: '20px 24px', minWidth: 280,
+        borderRadius: 16, padding: '20px 24px', width: showKeypad ? 320 : 280, minWidth: 280,
         boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
         display: 'flex', flexDirection: 'column', gap: 10,
       }}>
@@ -2170,16 +2179,155 @@ function DealCommandCenter({ session, profile }) {
           <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a', fontFamily: "'DM Mono', monospace" }}>{fmtCallDuration(callDuration)}</div>
         )}
         {callStatus !== 'ended' && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button onClick={toggleMute} style={{
-              flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
-              borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-            }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
-            <button onClick={hangupCall} style={{
-              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
-              borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-            }}>End</button>
-          </div>
+          <>
+            {/* Primary action row: Mute | Keypad | Add | End */}
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button onClick={toggleMute} style={{
+                flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
+              {callStatus === 'in-progress' && (
+                <button onClick={() => { setShowKeypad(v => !v); setAddingToCall(false); }} style={{
+                  flex: 1, background: showKeypad ? '#44403c' : '#292524', border: 'none', color: showKeypad ? '#fafaf9' : '#a8a29e',
+                  borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>⌨ {showKeypad ? 'Hide' : 'Keypad'}</button>
+              )}
+              {callStatus === 'in-progress' && (
+                <button onClick={() => { setAddingToCall(v => !v); setShowKeypad(false); }} style={{
+                  flex: 1, background: addingToCall ? '#44403c' : '#292524', border: 'none', color: addingToCall ? '#fafaf9' : '#a8a29e',
+                  borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>+ Add</button>
+              )}
+              <button onClick={hangupCall} style={{
+                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>End</button>
+            </div>
+
+            {/* DTMF Keypad */}
+            {showKeypad && callStatus === 'in-progress' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                {/* Buffer display */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{
+                    flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8,
+                    padding: '6px 10px', fontFamily: "'DM Mono', monospace", fontSize: 14,
+                    color: keypadBuffer ? '#fafaf9' : '#57534e', letterSpacing: '0.15em', minHeight: 32,
+                  }}>{keypadBuffer || <span style={{ color: '#57534e' }}>—</span>}</div>
+                  <button onClick={() => setKeypadBuffer('')} style={{
+                    background: '#292524', border: 'none', color: '#78716c', borderRadius: 8,
+                    padding: '6px 10px', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+                  }}>⌫</button>
+                </div>
+                {/* Digit grid */}
+                {[['1','2','3'],['4','5','6'],['7','8','9'],['*','0','#']].map((row, ri) => (
+                  <div key={ri} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                    {row.map(digit => (
+                      <button key={digit} onClick={() => {
+                        if (activeCallRef.current) {
+                          try { activeCallRef.current.sendDigits(digit); } catch (_) {}
+                        }
+                        setKeypadBuffer(b => b + digit);
+                      }} style={{
+                        height: 40, background: '#292524', border: '1px solid #44403c',
+                        color: '#fafaf9', borderRadius: 8, fontSize: 16, fontWeight: 700,
+                        cursor: 'pointer', fontFamily: "'DM Mono', monospace",
+                      }}>{digit}</button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add participant row */}
+            {addingToCall && callStatus === 'in-progress' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                <div style={{ fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Add to call</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    type="tel"
+                    value={addToCallNumber}
+                    onChange={e => setAddToCallNumber(e.target.value)}
+                    placeholder="+1 555 000 0000"
+                    style={{
+                      flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8,
+                      padding: '7px 10px', fontSize: 13, color: '#fafaf9', fontFamily: "'DM Mono', monospace",
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    disabled={!addToCallNumber.trim()}
+                    onClick={async () => {
+                      if (!addToCallNumber.trim()) return;
+                      const sid = callSid;
+                      setAddCallMsg(null);
+                      try {
+                        const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                          body: { call_sid: sid, to_number: addToCallNumber.trim() },
+                        });
+                        if (error) throw new Error(error.message);
+                        if (!data?.ok) throw new Error(data?.error || 'Failed to add participant');
+                        setAddCallMsg({ type: 'ok', text: `Adding ${addToCallNumber.trim()}…` });
+                        setAddToCallNumber('');
+                        setAddingToCall(false);
+                        setTimeout(() => setAddCallMsg(null), 4000);
+                      } catch (e) {
+                        setAddCallMsg({ type: 'error', text: e.message });
+                      }
+                    }}
+                    style={{
+                      background: addToCallNumber.trim() ? '#16a34a' : '#292524',
+                      border: 'none', color: '#fff', borderRadius: 8,
+                      padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: addToCallNumber.trim() ? 'pointer' : 'default',
+                    }}>Call</button>
+                  <button onClick={() => { setAddingToCall(false); setAddToCallNumber(''); setAddCallMsg(null); }} style={{
+                    background: 'transparent', border: '1px solid #44403c', color: '#78716c',
+                    borderRadius: 8, padding: '7px 10px', fontSize: 12, cursor: 'pointer',
+                  }}>✕</button>
+                </div>
+                {/* Transfer row */}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    disabled={!addToCallNumber.trim()}
+                    onClick={async () => {
+                      if (!addToCallNumber.trim()) return;
+                      const sid = callSid;
+                      setAddCallMsg(null);
+                      try {
+                        const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                          body: { call_sid: sid, to_number: addToCallNumber.trim(), action: 'transfer' },
+                        });
+                        if (error) throw new Error(error.message);
+                        if (!data?.ok) throw new Error(data?.error || 'Transfer failed');
+                        setAddCallMsg({ type: 'ok', text: `Transferring to ${addToCallNumber.trim()}…` });
+                        setAddToCallNumber('');
+                        setAddingToCall(false);
+                        setTimeout(() => { setAddCallMsg(null); hangupCall(); }, 3000);
+                      } catch (e) {
+                        setAddCallMsg({ type: 'error', text: e.message });
+                      }
+                    }}
+                    style={{
+                      flex: 1, background: addToCallNumber.trim() ? '#78350f' : '#292524',
+                      border: 'none', color: '#fff', borderRadius: 8,
+                      padding: '7px 0', fontSize: 11, fontWeight: 700, cursor: addToCallNumber.trim() ? 'pointer' : 'default',
+                    }}>Transfer (blind)</button>
+                </div>
+                {addCallMsg && (
+                  <div style={{ fontSize: 11, color: addCallMsg.type === 'ok' ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                    {addCallMsg.text}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Persistent add-call confirmation (shown after addingToCall panel closes) */}
+            {addCallMsg && !addingToCall && (
+              <div style={{ fontSize: 11, color: addCallMsg.type === 'ok' ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                {addCallMsg.text}
+              </div>
+            )}
+          </>
         )}
       </div>
     )}
@@ -2577,12 +2725,6 @@ function CallHistoryView({ onSelect }) {
 
 // ─── Deal List ───────────────────────────────────────────────────────
 function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed }) {
-  // Per Nathan 2026-05-12: the card-level "×" buttons used to call a hard
-  // DELETE on the deals table — bypassing soft-delete entirely. Anything
-  // deleted that way was permanently gone, which is why "Deleted Leads"
-  // never seemed complete. NOW: card "×" opens the proper DeleteDealModal
-  // (reason codes + outreach cancel + activity log + recoverable).
-  const [softDeleteTarget, setSoftDeleteTarget] = useState(null);  // deal | null
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
@@ -2765,17 +2907,6 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           onClose={() => setShowAdvancedFilters(false)}
         />
       )}
-      {softDeleteTarget && (
-        <DeleteDealModal
-          deal={softDeleteTarget}
-          userId={userId}
-          onClose={() => setSoftDeleteTarget(null)}
-          onDeleted={() => {
-            setSoftDeleteTarget(null);
-            // realtime sub on `deals` refreshes the list
-          }}
-        />
-      )}
 
       {/* Hub sub-chips — second-level nav inside sidebar sections.
           Outreach:  Drafts & Replies · Inbox · Leads · Forecast
@@ -2949,13 +3080,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {flips.length > 0 && (<>
                 <SectionLabel icon="🏠" label={view === "archive" ? "Closed Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
-                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => setSoftDeleteTarget(d)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {surplus.length > 0 && (<>
                 <SectionLabel icon="💰" label={view === "archive" ? "Closed Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => setSoftDeleteTarget(d)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
@@ -11233,17 +11364,7 @@ function ConversionFunnel({ deals, setView }) {
         Pipeline funnel
       </div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
-        <Cell icon="📥" label="Prep" count={counts.prep} onClick={() => {
-          // Per Nathan 2026-05-12: we're already on Today when this funnel
-          // renders, so setView('today') was a no-op. Scroll to the Prep
-          // Queue section instead — the actual list of deals to work.
-          if (setView) setView('today');
-          // Wait a tick in case the view actually changed, then scroll.
-          setTimeout(() => {
-            const el = document.getElementById('prep-queue-section');
-            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }, 50);
-        }} color="#3b82f6" />
+        <Cell icon="📥" label="Prep" count={counts.prep} onClick={() => setView && setView('today')} color="#3b82f6" />
         <Arrow />
         <Cell icon="✅" label="Ready" count={counts.ready} onClick={() => setView && setView('pipeline')} color="#06b6d4" />
         <Arrow />
@@ -11340,37 +11461,34 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   // What this deal is missing relative to "ready for outreach". Eric
   // sees this as a dim line under each prep-queue row.
   //
-  // Per Eric 2026-05-13: for pre-sale leads (NOD / 30DTS / future
-  // saleDate), the surplus estimate + personalized URL are STRUCTURALLY
-  // unknowable until the sale event happens. Surplus depends on sale
-  // price minus judgment + fees; URL is minted on/after the sale.
-  // Flagging them as "missing" on a pre-sale lead is misleading.
+  // History (all 2026-05-13):
+  //   - 89ee41c: drop URL + surplus est for is_30dts/future-saleDate
+  //     pre-auction leads. Worked for 30DTS.
+  //   - 8874b12: broadened to inferred pre-sale (no cosDate/flags/
+  //     salePrice → pre-sale). Caught NOD too. Worked briefly.
+  //   - c5cc467: Justin's DTMF feat committed off a stale src/app.jsx
+  //     and accidentally reverted both fixes. Both regressed.
+  //   - THIS rev: re-apply, but drop salePrice from the post-sale
+  //     signal entirely. intel-main's sale_price writeback cron
+  //     (shipped same day in b01d74c) populates salePrice on
+  //     scheduled-but-unsold leads, so it's not a reliable "sold"
+  //     signal anymore. Trust only cosDate / explicit isPostAuction
+  //     flag — same canonical signal DealStatusBadges uses (line
+  //     ~3167).
   //
-  // First-pass fix used a narrow isPreAuction check (is_30dts OR future
-  // saleDate). That caught 30DTS but missed NOD — NOD leads have no
-  // scheduled sale yet, so saleDate is null and is_30dts is false.
-  // Eric flagged this 2026-05-13 13:00.
-  //
-  // Broader fix: treat ANY lead without a confirmed sale event as
-  // pre-sale. The unambiguous post-sale signals are:
-  //   - confirmationOfSaleDate / isPostAuction flag set
-  //   - meta.salePrice set (sale happened, we know the price)
-  // Anything else (NOD, 30DTS, future saleDate, unsold, unclassified)
-  // is pre-sale → URL + surplus est are optional. Future-proofs against
-  // any new pre-sale category without needing schema changes.
+  // Net: pre-sale leads (NOD, 30DTS, scheduled, unclassified) only
+  // need phone/tier/county/case#. URL + surplus est are gated on a
+  // confirmed-sold signal (cosDate or explicit isPostAuction flag).
   const prepMissing = (d) => {
     const m = d.meta || {};
     const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
-    const hasSalePrice = !!(m.salePrice ?? m.sale_price);
-    const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction || hasSalePrice;
+    const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
 
     const missing = [];
     if (!dealMetaPhone(m)) missing.push('phone');
     if (!d.lead_tier) missing.push('tier');
     if (!m.county) missing.push('county');
     if (!m.courtCase) missing.push('case #');
-    // URL + surplus est are only required AFTER a confirmed sale event.
-    // Castle fills both in automatically after the sale lands.
     if (isPostSale) {
       if (!d.refundlocators_token) missing.push('URL');
       if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
@@ -11486,7 +11604,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
           it out of the queue when he's done. Collapsed by default to
           first 3 rows so it doesn't drown the rest of the page. */}
       {prepQueueAll.length > 0 && (
-        <div id="prep-queue-section" style={{ marginBottom: 22, scrollMarginTop: 80 }}>
+        <div style={{ marginBottom: 22 }}>
           <SectionLabel icon="📥" label={`Prep Queue · new leads to work (${prepQueueAll.length})`} />
           {prepQueueVisible.map(d => {
             const m = d.meta || {};
@@ -11515,7 +11633,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); markPrepped(d.id); }}
-                  title="Mark prepped — pulls this lead out of the queue. Required: phone confirmed, tier set, county + case # populated. For post-auction leads also: surplus est + URL. Pre-auction leads: URL + surplus auto-fill after the sale."
+                  title="Mark prepped — pulls this lead out of the queue. Use only when phone is confirmed, contacts are labeled, tier is set, and the URL is minted."
                   style={{
                     background: missing.length === 0 ? '#065f46' : 'transparent',
                     color: missing.length === 0 ? '#6ee7b7' : '#a8a29e',
@@ -20564,12 +20682,6 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const [ownerUrl, setOwnerUrl] = useState(null);
   const [mintingContactId, setMintingContactId] = useState(null);
   const [contactRelDraft, setContactRelDraft] = useState('child');
-  // phone_intel: per-phone-number capability cache. Keyed by E.164 string.
-  // Populated on mount from phone_intel table for every phone in the
-  // current contacts list. Mac Mini bridge writes back asynchronously
-  // when probes complete; we listen via realtime.
-  const [phoneIntel, setPhoneIntel] = useState({}); // { '+15135551234': { imessage_capable, line_type, status, ... } }
-  const [probingPhones, setProbingPhones] = useState({}); // { '+15135551234': true } during request
   // Inline relationship-edit state for an already-minted URL. When the user
   // changes the dropdown next to "· child", we update personalized_links
   // AND contact_deals in one shot so the public rendered page + the
@@ -20825,42 +20937,6 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
     extraContacts.forEach(add);
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
-
-  // ── Phone intel: load capability per phone + realtime subscribe ──────────
-  const loadPhoneIntel = async () => {
-    const phones = Array.from(new Set(
-      contacts.map(c => normalizePhone(c.phone)).filter(Boolean)
-    ));
-    if (phones.length === 0) return;
-    const { data } = await sb.from('phone_intel')
-      .select('*').in('phone_e164', phones);
-    const map = {};
-    (data || []).forEach(r => { map[r.phone_e164] = r; });
-    setPhoneIntel(map);
-  };
-  useEffect(() => {
-    loadPhoneIntel();
-    const ch = sb.channel('phone-intel-' + dealId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'phone_intel' }, loadPhoneIntel)
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-    // eslint-disable-next-line
-  }, [dealId, contacts.length]);
-
-  // Queue (or re-queue) a probe of a number. Bridge polls phone_intel
-  // WHERE status='queued' and runs the AppleScript Messages probe.
-  const probePhone = async (rawPhone) => {
-    const e164 = normalizePhone(rawPhone);
-    if (!e164) return;
-    setProbingPhones(p => ({ ...p, [e164]: true }));
-    try {
-      const { error } = await sb.rpc('queue_phone_probe', { p_phone_e164: e164 });
-      if (error) { alert('Could not queue probe: ' + error.message); return; }
-      await loadPhoneIntel();
-    } finally {
-      setProbingPhones(p => { const x = { ...p }; delete x[e164]; return x; });
-    }
-  };
 
   // ── Load messages + calls + notes for this deal ──────────────────────────
   const load = async () => {
@@ -21460,24 +21536,11 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
           const active = activeContact?.phone === c.phone;
           const count  = msgCount(c);
           const color  = participantColor(c.name);
-          const intel  = phoneIntel[normalizePhone(c.phone)];
-          // Dot color reflects probe result: blue=iMessage, green=SMS,
-          // gray-with-slash=landline/voip/unreachable, amber=probing,
-          // translucent=unprobed. Tooltip on hover explains.
-          const dot = (() => {
-            if (!intel) return { bg: '#44403c', title: 'Not yet probed for iMessage. Click the phone tab and use the Probe button below.' };
-            if (intel.status === 'queued' || intel.status === 'probing') return { bg: '#fbbf24', title: `Probe ${intel.status}…` };
-            if (intel.imessage_capable === true) return { bg: '#3b82f6', title: 'iMessage (blue) — outbound will route via iPhone bridge' };
-            if (intel.imessage_capable === false) return { bg: '#10b981', title: 'SMS only (green) — outbound will route via Twilio' };
-            if (['landline','voip','unreachable'].includes(intel.line_type)) return { bg: '#78716c', title: `${intel.line_type} — texting won't reach this number` };
-            return { bg: '#44403c', title: 'Probe result unknown' };
-          })();
           return (
             <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); localStorage.setItem(`comms_contact_${dealId}`, c.phone || '_everyone'); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? `2px solid ${color}` : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 {c.deceased && <span title="Deceased — outreach disabled" style={{ fontSize: 11, flexShrink: 0 }}>🕊️</span>}
-                <span title={dot.title} style={{ width: 7, height: 7, borderRadius: '50%', background: dot.bg, flexShrink: 0, boxShadow: dot.bg === '#fbbf24' ? '0 0 6px rgba(251,191,36,0.6)' : 'none' }} />
                 <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textDecoration: c.deceased ? 'line-through' : 'none' }}>
                   {c.name.split(' ')[0]}
                 </span>
@@ -22182,6 +22245,20 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               const mediaIsVideo = m.media_url && /\.(mp4|mov|webm|m4v)(\?|$)/i.test(m.media_url);
               const mediaIsImage = m.media_url && /\.(jpg|jpeg|png|gif|webp|heic)(\?|$)/i.test(m.media_url);
 
+              // "via NNNN" chip — which of OUR numbers received (inbound) or
+              // sent (outbound) this message. Lets you tell at-a-glance
+              // whether a text hit Twilio (5440) or the iMessage bridge
+              // (2306). Defensive about the receive-sms/bridge inconsistency
+              // where one path swaps from_number/to_number meaning.
+              const OUR_NUMS = ['+15139985440', '+15135162306'];
+              const ourNum = OUR_NUMS.includes(m.from_number) ? m.from_number
+                           : OUR_NUMS.includes(m.to_number)   ? m.to_number
+                           : null;
+              const viaLast4 = ourNum ? ourNum.replace(/\D/g, '').slice(-4) : null;
+              const viaColor = ourNum === '+15139985440' ? '#10b981'   // 5440 = Twilio SMS → green
+                             : ourNum === '+15135162306' ? '#60a5fa'   // 2306 = bridge/iMessage → blue
+                             : '#78716c';
+
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
                   <div style={{ maxWidth: '78%', background: isInbound ? '#1c1917' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? `1px solid ${senderColor}33` : 'none' }}>
@@ -22201,6 +22278,9 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                       {isInbound
                         ? <>
                             <span style={{ fontSize: 10, fontWeight: 600, color: senderColor }}>{senderName.split(' ')[0]}</span>
+                            {viaLast4 && (
+                              <span title={`Received on ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
+                            )}
                             <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>{time}</span>
                           </>
                         : <>
@@ -22211,6 +22291,9 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                               const recipientColor = participantColor(recipient?.name || m.to_number);
                               return <span style={{ fontSize: 10, color: '#78716c' }}>to <span style={{ color: recipientColor, fontWeight: 600 }}>{recipientName}</span></span>;
                             })()}
+                            {viaLast4 && (
+                              <span title={`Sent from ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
+                            )}
                             <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
                             <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
                           </>
@@ -22316,62 +22399,6 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               style={{ background: '#78350f', color: '#fafaf9', border: 0, padding: '4px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: mintingContactId === cid ? 'wait' : 'pointer', fontFamily: 'inherit', opacity: mintingContactId === cid ? 0.6 : 1 }}>
               {mintingContactId === cid ? 'Generating…' : '🔗 Generate URL'}
             </button>
-          </div>
-        );
-      })()}
-
-      {/* Phone-intel status row — appears above composer when an active
-          contact has a phone. Shows iMessage-capable / SMS / unreachable
-          + a Probe button to (re-)run the Mac Mini bridge probe. Result
-          determines whether outbound routes via iPhone bridge or Twilio. */}
-      {activeContact?.phone && !activeContact?._everyone && (() => {
-        const e164 = normalizePhone(activeContact.phone);
-        const intel = phoneIntel[e164];
-        const stuckMs = intel?.requested_at ? (Date.now() - new Date(intel.requested_at).getTime()) : 0;
-        const isStuck = (intel?.status === 'queued' || intel?.status === 'probing') && stuckMs > 2 * 60 * 1000;
-        const probingNow = probingPhones[e164];
-        let label, color, route, showStuckReset = false;
-        if (probingNow) {
-          label = 'Queuing probe…'; color = '#fbbf24'; route = 'Inserting probe request.';
-        } else if (isStuck) {
-          label = '⚠ Probe stuck'; color = '#f97316';
-          route = `Queued ${Math.round(stuckMs / 60000)}m ago — Mac bridge probe daemon hasn't run yet (Justin's session is still wiring it up). Reset to clear, then re-probe once the bridge is live.`;
-          showStuckReset = true;
-        } else if (intel?.status === 'queued') {
-          label = '⏳ Queued for probe'; color = '#fbbf24'; route = 'Waiting for Mac bridge daemon to pick this up.';
-        } else if (intel?.status === 'probing') {
-          label = '🔄 Bridge probing now'; color = '#fbbf24'; route = 'Bridge has it — refresh in ~30s.';
-        } else if (!intel) {
-          label = 'Not yet probed'; color = '#78716c'; route = 'Click Probe to queue an iMessage capability check via the Mac bridge.';
-        } else if (intel.status === 'failed') {
-          label = '✗ Probe failed'; color = '#ef4444'; route = intel.probe_error || 'Re-probe to retry.';
-        } else if (intel.imessage_capable === true) {
-          label = '🔵 iMessage capable'; color = '#3b82f6'; route = 'Outbound routes via iPhone bridge (513-516-2306 — currently DOWN per memory; falls back to Twilio until restored).';
-        } else if (intel.imessage_capable === false) {
-          label = '🟢 SMS only'; color = '#10b981'; route = 'Outbound routes via Twilio (513-951-8855).';
-        } else if (['landline','voip','unreachable'].includes(intel.line_type)) {
-          label = `📞 ${intel.line_type}`; color = '#78716c'; route = "This number can't receive texts. Send paths should refuse.";
-        } else {
-          label = 'Result unclear'; color = '#a8a29e'; route = intel.probe_error || 'Probe completed but capability unknown. Re-probe to retry.';
-        }
-        return (
-          <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: '0.04em' }}>{label}</span>
-            <span style={{ fontSize: 10, color: '#78716c', flex: 1, minWidth: 200 }}>{route}</span>
-            {showStuckReset && (
-              <button onClick={async () => {
-                await sb.from('phone_intel').update({ status: 'failed', probe_error: 'manual reset — bridge unresponsive' }).eq('phone_e164', e164);
-                await loadPhoneIntel();
-              }} style={{ background: '#7f1d1d', color: '#fca5a5', border: '1px solid #b91c1c', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                Reset
-              </button>
-            )}
-            <button onClick={() => probePhone(activeContact.phone)} disabled={probingNow}
-              title="Queue an iMessage probe. Mac Mini bridge picks up queued rows and probes via Messages.app — result cached on phone_intel."
-              style={{ background: probingNow ? '#1c1917' : '#78350f', color: probingNow ? '#78716c' : '#fbbf24', border: '1px solid #92400e', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: probingNow ? 'wait' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-              {probingNow ? '…' : (intel ? 'Re-probe' : 'Probe')}
-            </button>
-            {intel?.probed_at && <span style={{ fontSize: 9, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>last: {new Date(intel.probed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
           </div>
         );
       })()}

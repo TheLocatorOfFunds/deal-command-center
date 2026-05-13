@@ -70,9 +70,34 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
-**Status:** Active — 2026-05-07 (evening)
-**Branch:** `chore/park-client-notify-migrations`
-**Working on:** Shipping RVM (Slybroadcast + Fish Audio + 2-step UI) and built
+**Status:** Active — 2026-05-13
+**Branch:** `claude/cranky-boyd-d5f84a` (worktree)
+**Working on:** Inbound MMS / iMessage attachment support — both the Twilio
+path (receive-sms edge fn) and the mac_bridge inbound path were dropping
+attachments and only persisting body text. Both now download the media,
+upload to a new public `inbound-media` Supabase bucket under
+`<deal_id>/<uuid>.<ext>`, and store the durable URL on
+`messages_outbound.media_url`. UI side already rendered images/video/audio
+from media_url — no app.jsx changes needed.
+
+**Recent decisions:**
+- 2026-05-13: New public storage bucket `inbound-media` (migration
+  20260513120000). Public-read for `<img src>` rendering to "just work";
+  privacy via random uuid filenames. Mirrors the `rvm-audio` pattern.
+- 2026-05-13: receive-sms now reads `NumMedia` + `MediaUrl0` /
+  `MediaContentType0`, fetches with Twilio Basic auth, uploads, stores
+  the public URL on the row. Edge fn deployed (v51, verify_jwt=false
+  preserved). Multi-attachment is deferred (only first stored in v1).
+- 2026-05-13: bridge.js now reads `message_attachment_join` + `attachment`
+  rows for cache_has_attachments=1 messages, resolves the on-disk
+  `~/Library/Messages/Attachments/...` path, uploads, and stamps
+  media_url. SQL WHERE relaxed for inbound to allow text-null
+  attachment-only rows; outbound kept text-required to preserve the
+  body-based dedup against pending DCC handoffs.
+
+---
+
+**Previous (2026-05-07):** Shipping RVM (Slybroadcast + Fish Audio + 2-step UI) and built
 a CI migration-drift check (PR #121, merged). Cleanup of pre-existing drift
 surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
