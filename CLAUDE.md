@@ -250,6 +250,20 @@ the more recent your section is, the less likely they are to step on
 your work. Conflict-free as long as everyone edits only their own
 section. **Never edit another user's section.**
 
+**Per-worktree subsections (2026-05-13):** when you run two or more
+Claude Code worktrees as the same user in parallel, each worktree
+owns its own `### <Name> · <slug>` subsection under your top-level
+`## <Name>'s session` heading. Slug = branch name with `claude/`
+stripped (e.g. `claude/nice-williams-94b3e6` → `nice-williams-94b3e6`,
+plain `main` stays `main`). Edit ONLY your current worktree's
+subsection; don't touch another worktree's subsection even if it's
+yours, because that worktree is racing you on the same lines. The
+Stop hook auto-creates the subsection on first heartbeat. Prune
+stale subsections manually or as part of `/handoff` when a worktree
+finishes. This eliminates the merge conflict that hit on 2026-05-13
+when PR #152 (cranky-boyd) and PR #153 (vigorous-williamson) both
+rewrote Justin's flat section minutes apart.
+
 ### Session end ritual
 1. Commit everything (including any migration files).
 2. Update **your own section** of `WORKING_ON.md` — mark idle if you
@@ -275,14 +289,21 @@ now," archives for "what's been figured out before," `memory/` for
 
 ### Stop hook safety net (`.claude/hooks/touch-working-on.sh`)
 A Stop hook fires after every Claude turn and updates a
-`**Last updated (auto):**` timestamp in your section of
+`**Last updated (auto):**` timestamp in your worktree's subsection of
 `WORKING_ON.md` — automatically, even if Claude itself forgets to
 update its content. The hook:
-- Maps your OS user (`$USER`) → DCC name (`Justin`/`Nathan`/`Erik`)
-- Updates only the timestamp line in your section (never touches others')
-- Auto-commits the heartbeat if the file's last commit is > 2 min old
-  (avoids commit spam while still surfacing state to other sessions
-  on their next `git pull`)
+- Maps your git email (with `$USER` fallback) → DCC name
+  (`Justin`/`Nathan`/`Erik`)
+- Maps `git rev-parse --abbrev-ref HEAD` (with `claude/` prefix
+  stripped) → worktree slug
+- Updates only the timestamp line in your `### <Name> · <slug>`
+  subsection (never touches another worktree's subsection, never
+  touches another user's section)
+- If the subsection doesn't exist yet, creates a minimal stub so
+  other sessions immediately see the worktree is alive
+- Auto-commits the heartbeat if `WORKING_ON.md`'s last commit is
+  > 2 min old (avoids commit spam while still surfacing state to
+  other sessions on their next `git pull`)
 - Never pushes — Claude pushes as part of normal commit flow
 - Always exits 0 (best-effort; never blocks a session)
 

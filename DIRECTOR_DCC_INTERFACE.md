@@ -1,6 +1,6 @@
 # Director ↔ DCC interface contract
 
-**Last updated:** 2026-05-13 (by Director / intel-main session, reviewed by Justin)
+**Last updated:** 2026-05-13 (Justin — Stop hook now per-worktree; see "Open coordination items" below)
 **Living doc.** Either side updates as the contract evolves. Bump the date when you do.
 
 ## Domains
@@ -70,6 +70,18 @@ This is **not yet built.** It's tracked in Director's Phase 2B queue. Justin: wh
 - ⏳ `COVERED_COUNTIES` list in DCC's intel-sync EF needs to sync with ohio-intel's 75-county registry (Justin's task)
 - ⏳ Stark County scraper — OH session work (Nathan ferries to OH session)
 - ⏳ `ohio-intel-to-deal` EF PK race — Justin to fix OR retire (Director's path doesn't need it)
+- ✅ 2026-05-13 (Justin) — **`WORKING_ON.md` structure changed: per-worktree subsections.**
+  Each `## <Name>'s session` parent now contains one `### <Name> · <slug>` subsection
+  per active worktree (slug = branch with `claude/` stripped). The Stop hook
+  (`.claude/hooks/touch-working-on.sh`) reads/writes only the subsection matching
+  the current worktree's branch. This eliminates the multi-worktree race that
+  produced merge conflicts on PRs #152 / #153. **For Nathan / Director:** if a
+  session inserts content into Nathan's section, target the existing
+  `### Nathan · main` subsection (or create a new `### Nathan · <slug>` if you're
+  on a non-main branch). `.claude/commands/catchup.md` (lands with PR #153) was
+  updated in the same PR to read the new structure — if PR #153 lands first and
+  the catchup.md edits aren't there, re-apply the two diff hunks under
+  "Read `WORKING_ON.md`" and "Where I left off" from this PR.
 
 ## Naming + ID conventions
 
