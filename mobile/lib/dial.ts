@@ -1,22 +1,31 @@
 /**
  * Outbound call helper for the mobile app.
  *
- * Hits the `mobile-place-call` Edge Function, which uses Twilio to ring
- * the signed-in user's cell and bridge them to the destination — so the
- * destination sees the Twilio business number, not the user's personal
- * cell.
+ * Two paths, tried in order:
+ *
+ *   1. **Twilio Voice SDK** (preferred). The app dials directly over a
+ *      VoIP connection. CallKit shows the native call UI. Recipient sees
+ *      +1 513 998 5440 (FundLocators Twilio) as caller ID. No bridge to
+ *      the user's personal cell.
+ *
+ *   2. **Bridge-callback fallback** (legacy). If the Voice SDK isn't
+ *      initialized (token fetch failed, network error on launch, etc),
+ *      we fall back to the `mobile-place-call` Edge Function, which
+ *      rings the user's personal cell first and bridges to the
+ *      destination. Same caller-ID behavior, just adds a step.
  *
  * Returns a discriminated result instead of throwing — keeps the UI
  * code's error handling flat.
  */
 
 import { supabase } from './supabase'
+import { placeCallIn, getVoice } from './voice'
 
 const FUNCTION_URL =
   'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/mobile-place-call'
 
 export type PlaceCallResult =
-  | { ok: true; message: string; callSid: string }
+  | { ok: true; message: string; callSid: string; mode: 'sdk' | 'bridge' }
   | { ok: false; error: 'cell_phone_required'; message: string }
   | { ok: false; error: 'recipient_on_dnd'; message: string }
   | { ok: false; error: 'auth'; message: string }
@@ -26,6 +35,26 @@ export async function placeCall(
   toNumber: string,
   opts?: { dealId?: string; contactId?: string },
 ): Promise<PlaceCallResult> {
+  // Path 1: try the Voice SDK if it's initialized.
+  if (getVoice()) {
+    const sdkResult = await placeCallIn(toNumber, opts)
+    if (sdkResult.ok) {
+      const sid = sdkResult.call.getSid?.() ?? ''
+      return {
+        ok: true,
+        mode: 'sdk',
+        message: 'Connecting…',
+        callSid: typeof sid === 'string' ? sid : '',
+      }
+    }
+    // SDK failed for a reason that's not "not initialized" — log and
+    // still fall through to the bridge so the user gets connected.
+    if (sdkResult.reason !== 'not_initialized') {
+      console.warn('[dial] Voice SDK failed, falling back to bridge:', sdkResult.message)
+    }
+  }
+
+  // Path 2: legacy bridge-callback. Rings the user's cell first.
   const { data: sessionData } = await supabase.auth.getSession()
   const token = sessionData.session?.access_token
   if (!token) {
@@ -68,6 +97,7 @@ export async function placeCall(
   if (res.ok && body.ok) {
     return {
       ok: true,
+      mode: 'bridge',
       message: String(
         body.message ?? 'Your phone will ring shortly. Answer to connect.',
       ),
