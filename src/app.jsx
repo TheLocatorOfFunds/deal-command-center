@@ -11250,15 +11250,39 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
   // What this deal is missing relative to "ready for outreach". Eric
   // sees this as a dim line under each prep-queue row.
+  //
+  // History (all 2026-05-13):
+  //   - 89ee41c: drop URL + surplus est for is_30dts/future-saleDate
+  //     pre-auction leads. Worked for 30DTS.
+  //   - 8874b12: broadened to inferred pre-sale (no cosDate/flags/
+  //     salePrice → pre-sale). Caught NOD too. Worked briefly.
+  //   - c5cc467: Justin's DTMF feat committed off a stale src/app.jsx
+  //     and accidentally reverted both fixes. Both regressed.
+  //   - THIS rev: re-apply, but drop salePrice from the post-sale
+  //     signal entirely. intel-main's sale_price writeback cron
+  //     (shipped same day in b01d74c) populates salePrice on
+  //     scheduled-but-unsold leads, so it's not a reliable "sold"
+  //     signal anymore. Trust only cosDate / explicit isPostAuction
+  //     flag — same canonical signal DealStatusBadges uses (line
+  //     ~3167).
+  //
+  // Net: pre-sale leads (NOD, 30DTS, scheduled, unclassified) only
+  // need phone/tier/county/case#. URL + surplus est are gated on a
+  // confirmed-sold signal (cosDate or explicit isPostAuction flag).
   const prepMissing = (d) => {
     const m = d.meta || {};
+    const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
+    const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
+
     const missing = [];
     if (!dealMetaPhone(m)) missing.push('phone');
     if (!d.lead_tier) missing.push('tier');
-    if (!d.refundlocators_token) missing.push('URL');
-    if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
     if (!m.county) missing.push('county');
     if (!m.courtCase) missing.push('case #');
+    if (isPostSale) {
+      if (!d.refundlocators_token) missing.push('URL');
+      if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
+    }
     return missing;
   };
 
