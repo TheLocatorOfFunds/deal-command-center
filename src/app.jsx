@@ -744,6 +744,12 @@ function DealCommandCenter({ session, profile }) {
   const [callMuted, setCallMuted]       = useState(false);
   const [showDialpad, setShowDialpad]   = useState(false);
   const [dialpadNumber, setDialpadNumber] = useState('');
+  const [showKeypad, setShowKeypad]       = useState(false);
+  const [keypadBuffer, setKeypadBuffer]   = useState('');
+  const [callSid, setCallSid]             = useState(null);
+  const [addingToCall, setAddingToCall]   = useState(false);
+  const [addToCallNumber, setAddToCallNumber] = useState('');
+  const [addCallMsg, setAddCallMsg]       = useState(null); // { type: 'ok'|'error', text }
   // 'idle' = not yet enabled (needs click) | 'initializing' | 'registered' | 'error'
   const [twilioStatus, setTwilioStatus] = useState('idle');
   const twilioDeviceRef = React.useRef(null);
@@ -896,11 +902,21 @@ function DealCommandCenter({ session, profile }) {
   const startRingtone = startTitleFlash;
   const stopRingtone  = stopTitleFlash;
 
+  const resetCallOverlayState = React.useCallback(() => {
+    setShowKeypad(false);
+    setKeypadBuffer('');
+    setAddingToCall(false);
+    setAddToCallNumber('');
+    setAddCallMsg(null);
+    setCallSid(null);
+  }, []);
+
   const startCall = React.useCallback(async (contact) => {
     if (callStatus) return;
     setCallStatus('connecting');
     setCallContact(contact);
     setCallMuted(false);
+    resetCallOverlayState();
     try {
       const device = twilioDeviceRef.current || await initTwilioDevice();
       if (!device) throw new Error('Phone not enabled — click "Enable phone" in the header first');
@@ -909,10 +925,16 @@ function DealCommandCenter({ session, profile }) {
       });
       activeCallRef.current = call;
       call.on('ringing',    () => setCallStatus('ringing'));
-      call.on('accept',     () => { setCallStatus('in-progress'); startCallTimer(); });
-      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
-      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); });
-      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('accept',     () => {
+        setCallStatus('in-progress');
+        startCallTimer();
+        // Capture the call SID once the call is accepted
+        const sid = call.parameters?.CallSid || call.parameters?.callSid || null;
+        if (sid) setCallSid(sid);
+      });
+      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); resetCallOverlayState(); });
+      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
     } catch (err) {
       console.error('startCall error:', err);
       setCallStatus(null);
@@ -926,7 +948,8 @@ function DealCommandCenter({ session, profile }) {
     setCallStatus(null);
     setCallContact(null);
     setCallMuted(false);
-  }, [stopCallTimer]);
+    resetCallOverlayState();
+  }, [stopCallTimer, resetCallOverlayState]);
 
   const toggleMute = React.useCallback(() => {
     if (!activeCallRef.current) return;
@@ -951,16 +974,19 @@ function DealCommandCenter({ session, profile }) {
       setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
       activeCallRef.current = incomingCall.call;
       startCallTimer();
+      const sid = incomingCall.call.parameters?.CallSid || incomingCall.call.parameters?.callSid || null;
+      if (sid) setCallSid(sid);
       incomingCall.call.on('disconnect', () => {
         setCallStatus('ended');
         stopCallTimer();
+        resetCallOverlayState();
         setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
       });
     } catch (e) {
       console.error('Failed to accept call:', e);
     }
     setIncomingCall(null);
-  }, [incomingCall, startCallTimer, stopCallTimer, stopTitleFlash]);
+  }, [incomingCall, startCallTimer, stopCallTimer, stopTitleFlash, resetCallOverlayState]);
 
   const rejectIncoming = React.useCallback(() => {
     if (!incomingCall) return;
@@ -2140,7 +2166,7 @@ function DealCommandCenter({ session, profile }) {
       <div style={{
         position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
         background: '#1c1917', border: `2px solid ${callStatus === 'in-progress' ? '#16a34a' : callStatus === 'ended' ? '#ef4444' : '#d97706'}`,
-        borderRadius: 16, padding: '20px 24px', minWidth: 280,
+        borderRadius: 16, padding: '20px 24px', width: showKeypad ? 320 : 280, minWidth: 280,
         boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
         display: 'flex', flexDirection: 'column', gap: 10,
       }}>
@@ -2153,16 +2179,155 @@ function DealCommandCenter({ session, profile }) {
           <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a', fontFamily: "'DM Mono', monospace" }}>{fmtCallDuration(callDuration)}</div>
         )}
         {callStatus !== 'ended' && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-            <button onClick={toggleMute} style={{
-              flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
-              borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-            }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
-            <button onClick={hangupCall} style={{
-              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
-              borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
-            }}>End</button>
-          </div>
+          <>
+            {/* Primary action row: Mute | Keypad | Add | End */}
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button onClick={toggleMute} style={{
+                flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
+              {callStatus === 'in-progress' && (
+                <button onClick={() => { setShowKeypad(v => !v); setAddingToCall(false); }} style={{
+                  flex: 1, background: showKeypad ? '#44403c' : '#292524', border: 'none', color: showKeypad ? '#fafaf9' : '#a8a29e',
+                  borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>⌨ {showKeypad ? 'Hide' : 'Keypad'}</button>
+              )}
+              {callStatus === 'in-progress' && (
+                <button onClick={() => { setAddingToCall(v => !v); setShowKeypad(false); }} style={{
+                  flex: 1, background: addingToCall ? '#44403c' : '#292524', border: 'none', color: addingToCall ? '#fafaf9' : '#a8a29e',
+                  borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>+ Add</button>
+              )}
+              <button onClick={hangupCall} style={{
+                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>End</button>
+            </div>
+
+            {/* DTMF Keypad */}
+            {showKeypad && callStatus === 'in-progress' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                {/* Buffer display */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{
+                    flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8,
+                    padding: '6px 10px', fontFamily: "'DM Mono', monospace", fontSize: 14,
+                    color: keypadBuffer ? '#fafaf9' : '#57534e', letterSpacing: '0.15em', minHeight: 32,
+                  }}>{keypadBuffer || <span style={{ color: '#57534e' }}>—</span>}</div>
+                  <button onClick={() => setKeypadBuffer('')} style={{
+                    background: '#292524', border: 'none', color: '#78716c', borderRadius: 8,
+                    padding: '6px 10px', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+                  }}>⌫</button>
+                </div>
+                {/* Digit grid */}
+                {[['1','2','3'],['4','5','6'],['7','8','9'],['*','0','#']].map((row, ri) => (
+                  <div key={ri} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                    {row.map(digit => (
+                      <button key={digit} onClick={() => {
+                        if (activeCallRef.current) {
+                          try { activeCallRef.current.sendDigits(digit); } catch (_) {}
+                        }
+                        setKeypadBuffer(b => b + digit);
+                      }} style={{
+                        height: 40, background: '#292524', border: '1px solid #44403c',
+                        color: '#fafaf9', borderRadius: 8, fontSize: 16, fontWeight: 700,
+                        cursor: 'pointer', fontFamily: "'DM Mono', monospace",
+                      }}>{digit}</button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add participant row */}
+            {addingToCall && callStatus === 'in-progress' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                <div style={{ fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Add to call</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    type="tel"
+                    value={addToCallNumber}
+                    onChange={e => setAddToCallNumber(e.target.value)}
+                    placeholder="+1 555 000 0000"
+                    style={{
+                      flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8,
+                      padding: '7px 10px', fontSize: 13, color: '#fafaf9', fontFamily: "'DM Mono', monospace",
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    disabled={!addToCallNumber.trim()}
+                    onClick={async () => {
+                      if (!addToCallNumber.trim()) return;
+                      const sid = callSid;
+                      setAddCallMsg(null);
+                      try {
+                        const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                          body: { call_sid: sid, to_number: addToCallNumber.trim() },
+                        });
+                        if (error) throw new Error(error.message);
+                        if (!data?.ok) throw new Error(data?.error || 'Failed to add participant');
+                        setAddCallMsg({ type: 'ok', text: `Adding ${addToCallNumber.trim()}…` });
+                        setAddToCallNumber('');
+                        setAddingToCall(false);
+                        setTimeout(() => setAddCallMsg(null), 4000);
+                      } catch (e) {
+                        setAddCallMsg({ type: 'error', text: e.message });
+                      }
+                    }}
+                    style={{
+                      background: addToCallNumber.trim() ? '#16a34a' : '#292524',
+                      border: 'none', color: '#fff', borderRadius: 8,
+                      padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: addToCallNumber.trim() ? 'pointer' : 'default',
+                    }}>Call</button>
+                  <button onClick={() => { setAddingToCall(false); setAddToCallNumber(''); setAddCallMsg(null); }} style={{
+                    background: 'transparent', border: '1px solid #44403c', color: '#78716c',
+                    borderRadius: 8, padding: '7px 10px', fontSize: 12, cursor: 'pointer',
+                  }}>✕</button>
+                </div>
+                {/* Transfer row */}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    disabled={!addToCallNumber.trim()}
+                    onClick={async () => {
+                      if (!addToCallNumber.trim()) return;
+                      const sid = callSid;
+                      setAddCallMsg(null);
+                      try {
+                        const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                          body: { call_sid: sid, to_number: addToCallNumber.trim(), action: 'transfer' },
+                        });
+                        if (error) throw new Error(error.message);
+                        if (!data?.ok) throw new Error(data?.error || 'Transfer failed');
+                        setAddCallMsg({ type: 'ok', text: `Transferring to ${addToCallNumber.trim()}…` });
+                        setAddToCallNumber('');
+                        setAddingToCall(false);
+                        setTimeout(() => { setAddCallMsg(null); hangupCall(); }, 3000);
+                      } catch (e) {
+                        setAddCallMsg({ type: 'error', text: e.message });
+                      }
+                    }}
+                    style={{
+                      flex: 1, background: addToCallNumber.trim() ? '#78350f' : '#292524',
+                      border: 'none', color: '#fff', borderRadius: 8,
+                      padding: '7px 0', fontSize: 11, fontWeight: 700, cursor: addToCallNumber.trim() ? 'pointer' : 'default',
+                    }}>Transfer (blind)</button>
+                </div>
+                {addCallMsg && (
+                  <div style={{ fontSize: 11, color: addCallMsg.type === 'ok' ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                    {addCallMsg.text}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Persistent add-call confirmation (shown after addingToCall panel closes) */}
+            {addCallMsg && !addingToCall && (
+              <div style={{ fontSize: 11, color: addCallMsg.type === 'ok' ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                {addCallMsg.text}
+              </div>
+            )}
+          </>
         )}
       </div>
     )}
