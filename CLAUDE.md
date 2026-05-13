@@ -359,7 +359,7 @@ ssh defender-mini   # resolves to dealcommandcenter@defender-mini.local
 
 **After any change to `mac-bridge/bridge.js`**, always run this to deploy:
 ```bash
-ssh defender-mini "cd '/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center' && git pull && launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist && launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist && sleep 3 && tail -20 /tmp/dcc-bridge.log"
+ssh defender-mini "cd /Users/dealcommandcenter/Documents/deal-command-center && git pull && launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist && launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist && sleep 3 && tail -20 /tmp/dcc-bridge.log"
 ```
 
 Check bridge logs anytime:
@@ -369,7 +369,17 @@ ssh defender-mini "tail -50 /tmp/dcc-bridge.log"
 
 SSH key: `~/.ssh/defender_mini` (ed25519, already authorized on Mac Mini)
 Plist: `com.refundlocators.bridge`
-Bridge repo path: `/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
+**Bridge repo path** (the one the LaunchAgent actually runs from — see
+`~/Library/LaunchAgents/com.refundlocators.bridge.plist` ProgramArguments):
+`/Users/dealcommandcenter/Documents/deal-command-center/`
+
+**⚠ Trap (2026-05-13):** there's ALSO a stale clone at
+`/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
+(with a space + "DealCommand Center/" subdirectory). The bridge does NOT
+run from there. Earlier versions of this doc pointed there; SSH-deploys
+to that path silently succeeded but never updated the running daemon.
+If a deploy "succeeds" but behavior doesn't change, double-check you
+pulled to the path above, not the stale one.
 
 ## Action confirmation — close the loop on every external side effect
 
