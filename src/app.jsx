@@ -2861,7 +2861,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "relay" ? (
-            <RelayView supabase={sb} onOpenDeal={(id) => { setActiveDealId(id); }} />
+            <RelayView supabase={sb} onOpenDeal={onSelect} />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
           ) : view === "inbox" ? (
