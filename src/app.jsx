@@ -6948,7 +6948,60 @@ function ForecastLoading() {
 // ─── Relay Deal Detail Panel ─────────────────────────────────────
 // Slide-over panel shown when reviewing a lead before approving.
 // touch is the outreach_queue row (null when opened from enrollments table).
-function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
+// Fetches comms, docket, contacts, and files on mount.
+function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, supabase }) {
+  const [comms, setComms]       = React.useState(null)   // null = loading
+  const [docket, setDocket]     = React.useState(null)
+  const [contacts, setContacts] = React.useState(null)
+  const [docs, setDocs]         = React.useState(null)
+
+  React.useEffect(() => {
+    if (!deal?.id || !supabase) return
+    const id = deal.id
+
+    // Comms: last 15 SMS + last 10 calls, merged and sorted newest-first
+    Promise.all([
+      supabase.from('messages_outbound')
+        .select('id, direction, body, created_at, status')
+        .eq('deal_id', id)
+        .order('created_at', { ascending: false })
+        .limit(15),
+      supabase.from('call_logs')
+        .select('id, direction, status, started_at, duration_seconds, from_number, to_number')
+        .eq('deal_id', id)
+        .order('started_at', { ascending: false })
+        .limit(10),
+    ]).then(([smsRes, callRes]) => {
+      const sms   = (smsRes.data || []).map(m => ({ ...m, _type: 'sms',  _ts: m.created_at }))
+      const calls = (callRes.data || []).map(c => ({ ...c, _type: 'call', _ts: c.started_at }))
+      const merged = [...sms, ...calls].sort((a, b) => new Date(b._ts) - new Date(a._ts))
+      setComms(merged)
+    })
+
+    // Docket: last 3 events
+    supabase.from('docket_events')
+      .select('id, event_type, event_date, description, received_at')
+      .eq('deal_id', id)
+      .order('received_at', { ascending: false })
+      .limit(3)
+      .then(({ data }) => setDocket(data || []))
+
+    // Contacts/vendors
+    supabase.from('vendors')
+      .select('id, name, role, phone, email')
+      .eq('deal_id', id)
+      .order('created_at')
+      .then(({ data }) => setContacts(data || []))
+
+    // Documents
+    supabase.from('documents')
+      .select('id, name, path, size, created_at')
+      .eq('deal_id', id)
+      .order('created_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => setDocs(data || []))
+  }, [deal?.id])
+
   if (!deal) return null
 
   const surplus = deal.surplus_estimate
@@ -6961,80 +7014,91 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
     ? new Date(deal.meta.saleDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     : null
 
-  const phone = deal.meta?.homeownerPhone || ''
-  const county = deal.meta?.county || ''
-  const caseNum = deal.meta?.courtCase || ''
+  const phone    = deal.meta?.homeownerPhone || ''
+  const county   = deal.meta?.county || ''
+  const caseNum  = deal.meta?.courtCase || ''
   const attorney = deal.meta?.attorney || ''
+  const caseIntel = deal.meta?.case_intel_summary || null
   const deceased = deal.meta?.deceased === 'true' || deal.meta?.deceased === true
   const tierColors = { A: '#16a34a', B: '#d97706', C: '#64748b' }
-  const tierColor = tierColors[deal.lead_tier] || '#64748b'
+  const tierColor  = tierColors[deal.lead_tier] || '#64748b'
+  const displayName = deal.meta?.homeownerName || deal.name || deal.id
+
+  // Section header helper
+  const SectionHead = ({ label }) => (
+    <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 20, marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #1e293b' }}>
+      {label}
+    </div>
+  )
 
   const Row = ({ label, value, accent }) => value ? (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '8px 0', borderBottom: '1px solid #1e293b' }}>
-      <span style={{ fontSize: 12, color: '#64748b', minWidth: 120 }}>{label}</span>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid #0f1929' }}>
+      <span style={{ fontSize: 12, color: '#64748b', minWidth: 110, flexShrink: 0 }}>{label}</span>
       <span style={{ fontSize: 13, color: accent || '#e2e8f0', textAlign: 'right', fontWeight: accent ? 700 : 400 }}>{value}</span>
     </div>
   ) : null
 
+  function fmtTime(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+
+  function fmtDuration(sec) {
+    if (!sec) return ''
+    const m = Math.floor(sec / 60), s = sec % 60
+    return m > 0 ? `${m}m ${s}s` : `${s}s`
+  }
+
+  async function openDoc(doc) {
+    if (!supabase) return
+    const { data } = await supabase.storage.from('deal-docs').createSignedUrl(doc.path, 3600)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 420, background: '#0f172a', borderLeft: '1px solid #1e293b', zIndex: 10001, display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 32px rgba(0,0,0,0.5)' }}>
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, background: '#0a0f1e', borderLeft: '1px solid #1e293b', zIndex: 10001, display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)' }}>
+
       {/* Header */}
-      <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            {deal.lead_tier && (
-              <span style={{ fontSize: 11, fontWeight: 700, color: tierColor, background: tierColor + '22', padding: '2px 7px', borderRadius: 4 }}>
-                Tier {deal.lead_tier}
-              </span>
+      <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, flexWrap: 'wrap' }}>
+              {deal.lead_tier && (
+                <span style={{ fontSize: 10, fontWeight: 700, color: tierColor, background: tierColor + '22', padding: '2px 7px', borderRadius: 4 }}>
+                  Tier {deal.lead_tier}
+                </span>
+              )}
+              {deceased && <span style={{ fontSize: 10, color: '#94a3b8', background: '#1e293b', padding: '2px 7px', borderRadius: 4 }}>Deceased</span>}
+              <span style={{ fontSize: 10, color: '#475569', background: '#1e293b', padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' }}>{deal.status}</span>
+            </div>
+            {/* Name - clickable to open full deal */}
+            {onOpenDeal ? (
+              <button
+                onClick={() => { onOpenDeal(deal.id); onClose(); }}
+                style={{ background: 'none', border: 'none', padding: 0, fontSize: 17, fontWeight: 700, color: '#93c5fd', cursor: 'pointer', textAlign: 'left', lineHeight: 1.3, textDecoration: 'underline', textDecorationColor: '#1e4080' }}
+              >
+                {displayName}
+              </button>
+            ) : (
+              <div style={{ fontSize: 17, fontWeight: 700, color: '#f1f5f9', lineHeight: 1.3 }}>{displayName}</div>
             )}
-            {deceased && (
-              <span style={{ fontSize: 11, color: '#94a3b8', background: '#1e293b', padding: '2px 7px', borderRadius: 4 }}>Deceased</span>
-            )}
-            <span style={{ fontSize: 11, color: '#475569', background: '#1e293b', padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' }}>
-              {deal.status}
-            </span>
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>{deal.address}</div>
           </div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: '#f1f5f9', lineHeight: 1.3 }}>
-            {deal.meta?.homeownerName || deal.name}
-          </div>
-          <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>{deal.address}</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '2px 0 0 12px', flexShrink: 0 }}>✕</button>
         </div>
-        <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', fontSize: 20, lineHeight: 1, padding: '0 0 0 12px', flexShrink: 0 }}>x</button>
       </div>
 
-      {/* Deal fields */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: '4px 20px 20px' }}>
-        <div style={{ paddingTop: 4 }}>
-          <Row label="Estimated Surplus" value={surplus} accent="#16a34a" />
-          <Row label="Sale Date" value={saleDate} />
-          <Row label="County" value={county} />
-          <Row label="Case Number" value={caseNum} />
-          <Row label="Phone" value={phone} accent="#93c5fd" />
-          <Row label="Attorney" value={attorney} />
-          {deal.meta?.verifiedSurplus && (
-            <Row label="Verified Surplus" value={deal.meta.verifiedSurplus === 'true' ? 'Yes' : deal.meta.verifiedSurplus} />
-          )}
-          {deal.meta?.judgmentAmount && (
-            <Row label="Judgment Amount" value={'$' + parseInt(deal.meta.judgmentAmount).toLocaleString()} />
-          )}
-          {deal.meta?.minimumBidAmount && (
-            <Row label="Min Bid" value={'$' + parseInt(deal.meta.minimumBidAmount).toLocaleString()} />
-          )}
-          {deal.meta?.totalDebt && (
-            <Row label="Total Debt" value={'$' + parseInt(deal.meta.totalDebt).toLocaleString()} />
-          )}
-          {deal.days_to_sale !== null && deal.days_to_sale !== undefined && (
-            <Row label="Days to Sale" value={deal.days_to_sale < 0 ? `${Math.abs(deal.days_to_sale)} days ago` : `${deal.days_to_sale} days away`} />
-          )}
-        </div>
+      {/* Scrollable body */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 24px' }}>
 
-        {/* Pending message */}
+        {/* Pending message - shown at top when reviewing */}
         {touch && (
-          <div style={{ marginTop: 20 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
+          <div style={{ marginTop: 16, padding: '12px 14px', background: '#0d1f3c', border: '1px solid #1e4080', borderRadius: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
               Step {touch.relay_step_number} - Pending Message
             </div>
-            <div style={{ background: '#162032', border: '1px solid #1e4080', borderRadius: 8, padding: '12px 14px', fontSize: 14, color: '#e2e8f0', lineHeight: 1.6, fontFamily: 'inherit' }}>
+            <div style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.6, fontFamily: 'inherit' }}>
               {touch.draft_body}
             </div>
             <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>
@@ -7042,20 +7106,140 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
             </div>
           </div>
         )}
+
+        {/* Case snapshot */}
+        <SectionHead label="Case Details" />
+        <Row label="Surplus Est." value={surplus} accent="#16a34a" />
+        <Row label="Sale Date"    value={saleDate} />
+        <Row label="County"       value={county} />
+        <Row label="Case Number"  value={caseNum} />
+        <Row label="Phone"        value={phone} accent="#93c5fd" />
+        <Row label="Attorney"     value={attorney} />
+        {deal.meta?.judgmentAmount   && <Row label="Judgment"   value={'$' + parseInt(deal.meta.judgmentAmount).toLocaleString()} />}
+        {deal.meta?.minimumBidAmount && <Row label="Min Bid"    value={'$' + parseInt(deal.meta.minimumBidAmount).toLocaleString()} />}
+        {deal.meta?.totalDebt        && <Row label="Total Debt" value={'$' + parseInt(deal.meta.totalDebt).toLocaleString()} />}
+        {deal.days_to_sale != null   && <Row label="Days to Sale" value={deal.days_to_sale < 0 ? `${Math.abs(deal.days_to_sale)} days ago` : `${deal.days_to_sale} days away`} />}
+
+        {/* Case intelligence summary */}
+        {caseIntel && (
+          <>
+            <SectionHead label="Case Intelligence" />
+            <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.65, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '10px 12px' }}>
+              {caseIntel}
+            </div>
+          </>
+        )}
+
+        {/* Communications */}
+        <SectionHead label={`Communications${comms ? ` (${comms.length})` : ''}`} />
+        {comms === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : comms.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No messages or calls on record</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {comms.map(item => item._type === 'sms' ? (
+              <div key={item.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 10, color: item.direction === 'inbound' ? '#34d399' : '#93c5fd', fontWeight: 700, minWidth: 44, paddingTop: 2 }}>
+                  {item.direction === 'inbound' ? 'IN' : 'OUT'}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.5, wordBreak: 'break-word' }}>{item.body}</div>
+                  <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{fmtTime(item.created_at)}</div>
+                </div>
+              </div>
+            ) : (
+              <div key={item.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontSize: 10, color: '#a78bfa', fontWeight: 700, minWidth: 44 }}>
+                  {item.direction === 'inbound' ? '📞 IN' : '📞 OUT'}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: 12, color: item.status === 'completed' ? '#e2e8f0' : '#64748b' }}>
+                    {item.status}{item.duration_seconds ? ` - ${fmtDuration(item.duration_seconds)}` : ''}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#475569', marginLeft: 8 }}>{fmtTime(item._ts)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Docket */}
+        <SectionHead label="Docket (last 3)" />
+        {docket === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : docket.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No docket events</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {docket.map(ev => (
+              <div key={ev.id} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{ev.event_type?.replace(/_/g, ' ')}</span>
+                  <span style={{ fontSize: 10, color: '#475569' }}>{ev.event_date ? new Date(ev.event_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : fmtTime(ev.received_at)}</span>
+                </div>
+                {ev.description && <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}>{ev.description}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Contacts */}
+        <SectionHead label="Contacts" />
+        {contacts === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : contacts.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No contacts on file</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {contacts.map(c => (
+              <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '6px 0', borderBottom: '1px solid #0f1929' }}>
+                <div>
+                  <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>{c.name}</span>
+                  {c.role && <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>{c.role}</span>}
+                </div>
+                {c.phone && <span style={{ fontSize: 12, color: '#93c5fd', fontFamily: 'monospace' }}>{c.phone}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Files */}
+        <SectionHead label={`Files${docs ? ` (${docs.length})` : ''}`} />
+        {docs === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : docs.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No files uploaded</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {docs.map(doc => (
+              <div key={doc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #0f1929' }}>
+                <button
+                  onClick={() => openDoc(doc)}
+                  style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: '#93c5fd', cursor: 'pointer', textAlign: 'left', textDecoration: 'underline', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {doc.name}
+                </button>
+                {doc.size && <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, marginLeft: 8 }}>{(doc.size / 1024).toFixed(0)} KB</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
       </div>
 
       {/* Action buttons */}
       {touch && (
-        <div style={{ padding: '16px 20px', paddingBottom: 'max(80px, calc(64px + env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid #1e293b', display: 'flex', gap: 10 }}>
+        <div style={{ padding: '14px 20px', paddingBottom: 'max(80px, calc(64px + env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid #1e293b', display: 'flex', gap: 10, flexShrink: 0 }}>
           <button
             onClick={() => { onApprove(touch.id); onClose(); }}
-            style={{ flex: 1, padding: '10px 0', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
+            style={{ flex: 1, padding: '11px 0', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 15, fontWeight: 700 }}
           >
             Approve
           </button>
           <button
             onClick={() => { onSkip(touch.id); onClose(); }}
-            style={{ padding: '10px 20px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+            style={{ padding: '11px 24px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
           >
             Skip
           </button>
@@ -7353,6 +7537,8 @@ function RelayView({ supabase, onOpenDeal }) {
             onApprove={handleApprove}
             onSkip={handleSkip}
             onClose={() => setReviewPanel(null)}
+            onOpenDeal={onOpenDeal}
+            supabase={supabase}
           />
         </>
       )}
