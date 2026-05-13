@@ -11129,15 +11129,36 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
   // What this deal is missing relative to "ready for outreach". Eric
   // sees this as a dim line under each prep-queue row.
+  //
+  // Per Eric 2026-05-13: for pre-auction leads (NOD / 30DTS / future
+  // saleDate), the surplus estimate + personalized URL are STRUCTURALLY
+  // unknowable until the sale event happens. Surplus depends on sale
+  // price minus judgment + fees; URL is minted on/after the sale. So
+  // flagging them as "missing" on a pre-auction lead is misleading —
+  // Eric's done all the work he can do, but the queue thinks he hasn't.
+  // Result before fix: 36 pre-auction leads sitting in Prep with
+  // "missing: URL, surplus est" warnings, queue structurally clogged.
+  //
+  // Fix: same isPreAuction logic the DealStatusBadges component uses
+  // (line ~3167). URL + surplus est only show as missing on post-
+  // auction leads.
   const prepMissing = (d) => {
     const m = d.meta || {};
+    const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
+    const isPostAuction = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
+    const isPreAuction = !isPostAuction && (!!d.is_30dts || (m.saleDate && new Date(m.saleDate) > new Date()));
+
     const missing = [];
     if (!dealMetaPhone(m)) missing.push('phone');
     if (!d.lead_tier) missing.push('tier');
-    if (!d.refundlocators_token) missing.push('URL');
-    if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
     if (!m.county) missing.push('county');
     if (!m.courtCase) missing.push('case #');
+    // Only flag URL + surplus est on post-auction deals (or deals that
+    // aren't explicitly pre-auction — e.g. unknown / data-incomplete).
+    if (!isPreAuction) {
+      if (!d.refundlocators_token) missing.push('URL');
+      if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
+    }
     return missing;
   };
 
@@ -11278,7 +11299,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); markPrepped(d.id); }}
-                  title="Mark prepped — pulls this lead out of the queue. Use only when phone is confirmed, contacts are labeled, tier is set, and the URL is minted."
+                  title="Mark prepped — pulls this lead out of the queue. Required: phone confirmed, tier set, county + case # populated. For post-auction leads also: surplus est + URL. Pre-auction leads: URL + surplus auto-fill after the sale."
                   style={{
                     background: missing.length === 0 ? '#065f46' : 'transparent',
                     color: missing.length === 0 ? '#6ee7b7' : '#a8a29e',
