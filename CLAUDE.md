@@ -201,6 +201,27 @@ Nathan's column — leave it alone and ask. Same in reverse.
 **When in doubt**: don't write migrations or edit Edge Functions in another owner's domain.
 Post a note and wait for the other session to coordinate.
 
+## Cross-project: intel-main interface
+
+DCC is not standalone — Nathan also runs **intel-main** (`~/Documents/Claude/main-intel/`,
+Vercel-hosted, separate Supabase project `qbdslghonhuvkacqlsbd`) which writes into DCC.
+The contract is documented in **[`DIRECTOR_DCC_INTERFACE.md`](./DIRECTOR_DCC_INTERFACE.md)** —
+read it before touching `deals`, `intel_subscriptions`, `intel-sync`, `ohio-intel-to-deal`,
+or any of the intel-main-managed `deals.meta` fields.
+
+**Hot rules** (the rest is in the interface doc):
+- intel-main writes these `deals.meta` keys every 30 min via cron — do not manually mutate
+  them in DCC code or SQL: `salePrice`, `isPostAuction`, `estimatedSurplus`,
+  `surplusClaimStatus`, `walkerVerified`, `walkerPlatform`, `grade`, `gradeScore`,
+  `lifecycleStage`, `auctionStatus`, `buyerName`, `judgmentAmount`, `saleDate`,
+  `lastIntelSyncAt`. If you need to change one of them, do it through intel-main and the
+  next cron reconciles within 30 min.
+- When intel-main inserts a deal, `tg_ensure_intel_subscription` fires automatically. **Do
+  not manually insert into `intel_subscriptions` after a deal insert** — PK-collides and
+  rolls the deal back. This is why `ohio-intel-to-deal` EF is currently bypassed.
+- Bump the `Last updated` date at the top of `DIRECTOR_DCC_INTERFACE.md` whenever you
+  change something on this contract.
+
 ## Co-coding protocol (read every session)
 
 ### Session start ritual
