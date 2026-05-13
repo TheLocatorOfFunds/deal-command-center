@@ -271,6 +271,16 @@ the more recent your section is, the less likely they are to step on
 your work. Conflict-free as long as everyone edits only their own
 section. **Never edit another user's section.**
 
+**Multiple worktrees as the same user**: if you run two Claude Code
+worktrees in parallel (e.g. Justin running `claude/foo-bar` AND
+`claude/baz-qux` simultaneously), the Stop hook auto-creates a
+per-worktree subsection `### <Your name> · <worktree-slug>` inside
+your top-level user section. Each worktree updates only its own
+subsection — no race. Your manual notes about "what I'm working on"
+can go either at the user-section level (high-level status) or
+inside a specific worktree subsection (fine-grained per-branch).
+Subsections from finished worktrees can be pruned manually.
+
 ### Session end ritual
 1. Commit everything (including any migration files).
 2. Update **your own section** of `WORKING_ON.md` — mark idle if you
@@ -296,12 +306,20 @@ now," archives for "what's been figured out before," `memory/` for
 
 ### Stop hook safety net (`.claude/hooks/touch-working-on.sh`)
 A Stop hook fires after every Claude turn and updates a
-`**Last updated (auto):**` timestamp in your section of
-`WORKING_ON.md` — automatically, even if Claude itself forgets to
+`**Last updated (auto):**` timestamp in your **per-worktree subsection**
+of `WORKING_ON.md` — automatically, even if Claude itself forgets to
 update its content. The hook:
-- Maps your OS user (`$USER`) → DCC name (`Justin`/`Nathan`/`Erik`)
-- Updates only the timestamp line in your section (never touches others')
-- Auto-commits the heartbeat if the file's last commit is > 2 min old
+- Maps your `git config user.email` (or fallback `$USER`) → DCC name
+  (`Justin`/`Nathan`/`Erik`)
+- Detects the current worktree slug (`basename $(git rev-parse --show-toplevel)`,
+  or "main" if you're in the main worktree)
+- Finds/creates a `### <Your name> · <worktree-slug>` subsection inside
+  your top-level `## <Name>'s session` section
+- Updates the timestamp line **only inside that subsection** — never
+  touches other users' sections, never touches your other worktrees'
+  subsections
+- Auto-commits the heartbeat if the file's last commit is > 2 min old,
+  with message `chore(working_on): <Name> heartbeat (auto, <slug>)`
   (avoids commit spam while still surfacing state to other sessions
   on their next `git pull`)
 - Never pushes — Claude pushes as part of normal commit flow
@@ -314,9 +332,17 @@ focus drift over long sessions, and mid-session crashes. The
 timestamp moves regardless. Other sessions can see "active 2 min
 ago" vs "stale 6 hours, probably crashed."
 
-If the hook ever causes problems, disable it by removing the `Stop`
-block from `.claude/settings.json` — the convention still works
-without it, just less robustly.
+**Per-worktree subsections also fix the race condition** where a single
+user running two parallel worktrees would have both hooks fighting over
+the same user-level section, producing merge conflicts on shared lines.
+Each worktree now owns its own subsection. Subsection naming is stable
+(based on worktree path), so the hook is idempotent across runs.
+
+If the hook ever causes problems, disable it for a specific worktree
+by adding `"hooks": {"Stop": []}` to that worktree's
+`.claude/settings.local.json` (gitignored, local-only). The convention
+still works without it, just less robustly. Disable repo-wide only as a
+last resort by removing the `Stop` block from `.claude/settings.json`.
 
 ### RLS convention (hard rule — applies to both sessions)
 Always use the helper functions — never inline role checks:
