@@ -51,7 +51,8 @@
           "sounds": []
         }
       ],
-      "expo-font"
+      "expo-font",
+      "./plugins/with-twilio-voice.js"
     ],
     "experiments": {
       "typedRoutes": true
