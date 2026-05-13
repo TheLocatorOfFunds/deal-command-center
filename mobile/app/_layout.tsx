@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
 import { registerForPushAsync, subscribeToNotificationTaps } from '../lib/push'
+import { initVoice, teardownVoice } from '../lib/voice'
 
 function ProtectedRouter() {
   const { session, loading } = useAuth()
@@ -34,6 +35,20 @@ function ProtectedRouter() {
     registerForPushAsync().catch(() => {
       // Already handled inside; nothing more to do.
     })
+  }, [loading, session])
+
+  // Initialize Twilio Voice SDK after sign-in so inbound calls to
+  // +1 513 998 5440 ring this device via PushKit/CallKit. If init fails
+  // (no network, no Twilio config), the legacy bridge-callback dialer in
+  // dial.ts continues to work — see voice.ts.
+  useEffect(() => {
+    if (loading || !session) return
+    initVoice().catch(() => {
+      // Already handled inside; voice.ts returns false on failure.
+    })
+    return () => {
+      teardownVoice().catch(() => {})
+    }
   }, [loading, session])
 
   // Notification-tap routing. Different payloads land you in different
@@ -146,6 +161,14 @@ function ProtectedRouter() {
           headerShown: true,
           headerStyle: { backgroundColor: '#0c0a09' },
           headerTintColor: '#fafaf9',
+        }}
+      />
+      <Stack.Screen
+        name="call/[sid]"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+          gestureEnabled: false,
         }}
       />
     </Stack>
