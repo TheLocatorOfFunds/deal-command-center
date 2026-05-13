@@ -10989,7 +10989,17 @@ function ConversionFunnel({ deals, setView }) {
         Pipeline funnel
       </div>
       <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
-        <Cell icon="📥" label="Prep" count={counts.prep} onClick={() => setView && setView('today')} color="#3b82f6" />
+        <Cell icon="📥" label="Prep" count={counts.prep} onClick={() => {
+          // Per Nathan 2026-05-12: we're already on Today when this funnel
+          // renders, so setView('today') was a no-op. Scroll to the Prep
+          // Queue section instead — the actual list of deals to work.
+          if (setView) setView('today');
+          // Wait a tick in case the view actually changed, then scroll.
+          setTimeout(() => {
+            const el = document.getElementById('prep-queue-section');
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 50);
+        }} color="#3b82f6" />
         <Arrow />
         <Cell icon="✅" label="Ready" count={counts.ready} onClick={() => setView && setView('pipeline')} color="#06b6d4" />
         <Arrow />
@@ -11205,7 +11215,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
           it out of the queue when he's done. Collapsed by default to
           first 3 rows so it doesn't drown the rest of the page. */}
       {prepQueueAll.length > 0 && (
-        <div style={{ marginBottom: 22 }}>
+        <div id="prep-queue-section" style={{ marginBottom: 22, scrollMarginTop: 80 }}>
           <SectionLabel icon="📥" label={`Prep Queue · new leads to work (${prepQueueAll.length})`} />
           {prepQueueVisible.map(d => {
             const m = d.meta || {};
