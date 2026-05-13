@@ -7004,11 +7004,26 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, s
 
   if (!deal) return null
 
-  const surplus = deal.surplus_estimate
-    ? parseFloat(deal.surplus_estimate).toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+  // Surplus display: actual verified > estimatedSurplus > estimatedAvailableEquity (pre-auction fallback)
+  const isPostAuction = deal.meta?.isPostAuction === true || deal.meta?.isPostAuction === 'true'
+  const salePrice     = deal.meta?.salePrice ? parseFloat(deal.meta.salePrice) : null
+  const rawSurplus    = deal.surplus_estimate
+    ? parseFloat(deal.surplus_estimate)
     : deal.meta?.estimatedSurplus
-      ? '$' + parseInt(deal.meta.estimatedSurplus).toLocaleString()
+      ? parseInt(deal.meta.estimatedSurplus)
       : null
+  const equity        = deal.meta?.estimatedAvailableEquity ? parseInt(deal.meta.estimatedAvailableEquity) : null
+
+  // What to show + label
+  const surplusValue = rawSurplus ?? equity
+  const surplusLabel = rawSurplus
+    ? (isPostAuction ? 'Surplus' : 'Est. Surplus')
+    : equity
+      ? 'Est. Available Equity'
+      : null
+  const surplus = surplusValue
+    ? surplusValue.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+    : null
 
   const saleDate = deal.meta?.saleDate
     ? new Date(deal.meta.saleDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
@@ -7109,7 +7124,8 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, s
 
         {/* Case snapshot */}
         <SectionHead label="Case Details" />
-        <Row label="Surplus Est." value={surplus} accent="#16a34a" />
+        {surplus && surplusLabel && <Row label={surplusLabel} value={surplus} accent={rawSurplus ? '#16a34a' : '#d97706'} />}
+        {salePrice && <Row label="Sale Price" value={salePrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} accent="#93c5fd" />}
         <Row label="Sale Date"    value={saleDate} />
         <Row label="County"       value={county} />
         <Row label="Case Number"  value={caseNum} />
@@ -7446,7 +7462,7 @@ function RelayView({ supabase, onOpenDeal }) {
                       onClick={() => touch.deal_id ? openReview(touch.deal_id, touch) : handleApprove(touch.id)}
                       style={{ padding: '6px 16px', background: '#0f3460', color: '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
                     >
-                      Review
+                      Quick Look
                     </button>
                     <button
                       onClick={() => handleApprove(touch.id)}
