@@ -10433,7 +10433,7 @@ function useOutreachQueue() {
     if (ids.length === 0) return;
     const { data: dealRows } = await sb
       .from('deals')
-      .select('id, name, address, meta, lead_tier')
+      .select('id, name, address, meta, lead_tier, type, status, is_30dts')
       .in('id', ids);
     if (dealRows) {
       setDeals(prev => {
@@ -10495,6 +10495,121 @@ function btnStyle(variant) {
   if (variant === 'outline') return { ...base, background: 'transparent', borderColor: '#44403c', color: '#e7e5e4' };
   if (variant === 'ghost')   return { ...base, background: 'transparent', borderColor: 'transparent', color: '#78716c' };
   return base;
+}
+
+// ─── Training-loop feedback widget — text drafts AND research grading ────────
+// Writes to public.agent_feedback (migration 20260513000000). Compact two-row
+// widget: signal buttons + reason capture on thumbs-down. Per Justin + Nathan
+// 2026-05-13 meeting — every AI surface that humans review should support
+// thumbs-up/down + structured "what it should have been" so we can train.
+//
+// Props:
+//   kind             — 'text_draft' or 'research_grade'
+//   label            — short string shown next to the buttons
+//   dealId           — required for both kinds
+//   outreachQueueId  — required for 'text_draft', null for 'research_grade'
+//   context          — jsonb snapshot (draft body, lead_tier at time, meta, etc.)
+//   suggestionPrompt — placeholder for the "should have been" textarea
+//   suggestionLabel  — label above the suggestion field
+function AgentFeedbackWidget({ kind, label, dealId, outreachQueueId, context, suggestionPrompt, suggestionLabel }) {
+  const [signal, setSignal]               = React.useState(null);   // 'up' | 'down' | null
+  const [submittedAt, setSubmittedAt]     = React.useState(null);
+  const [reason, setReason]               = React.useState('');
+  const [suggestion, setSuggestion]       = React.useState('');
+  const [submitting, setSubmitting]       = React.useState(false);
+  const [error, setError]                 = React.useState(null);
+
+  async function submit(nextSignal) {
+    if (submitting || submittedAt) return;
+    // Thumbs-up = fire-and-forget. Thumbs-down requires a reason.
+    if (nextSignal === 'down' && signal !== 'down') {
+      setSignal('down');
+      return;
+    }
+    setSubmitting(true); setError(null);
+    try {
+      const { data: authData } = await sb.auth.getUser();
+      const payload = {
+        kind,
+        deal_id: dealId,
+        outreach_queue_id: outreachQueueId || null,
+        user_id: authData?.user?.id || null,
+        signal: nextSignal,
+        reason: reason.trim() || null,
+        suggested_correction: suggestion.trim() || null,
+        context: context || null,
+      };
+      const { error: insErr } = await sb.from('agent_feedback').insert(payload);
+      if (insErr) throw new Error(insErr.message);
+      setSignal(nextSignal);
+      setSubmittedAt(new Date());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Already submitted → render a quiet confirmation
+  if (submittedAt) {
+    return (
+      <div style={{ padding: '6px 14px', fontSize: 10, color: '#78716c', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ color: signal === 'up' ? '#6ee7b7' : '#fbbf24' }}>{signal === 'up' ? '👍' : '👎'}</span>
+        <span>{label} feedback logged · thanks</span>
+      </div>
+    );
+  }
+
+  const btnStyle = (kind, active) => ({
+    padding: '3px 8px',
+    background: active ? (kind === 'up' ? '#064e3b' : '#7f1d1d') : '#1c1917',
+    border: '1px solid ' + (active ? (kind === 'up' ? '#10b981' : '#dc2626') : '#44403c'),
+    borderRadius: 4,
+    color: active ? (kind === 'up' ? '#6ee7b7' : '#fca5a5') : '#a8a29e',
+    fontSize: 11,
+    cursor: 'pointer',
+    fontWeight: 600,
+  });
+
+  return (
+    <div style={{ padding: '6px 14px', borderTop: '1px solid #292524', background: '#161412' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10, color: '#78716c', fontWeight: 600, letterSpacing: '0.04em' }}>{label}</span>
+        <button onClick={() => submit('up')} disabled={submitting} style={btnStyle('up', signal === 'up')} title="Looks right">👍</button>
+        <button onClick={() => submit('down')} disabled={submitting} style={btnStyle('down', signal === 'down')} title="Needs correction">👎</button>
+        {error && <span style={{ fontSize: 10, color: '#fca5a5' }}>⚠ {error}</span>}
+      </div>
+      {signal === 'down' && !submittedAt && (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <input
+            type="text"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder="What's wrong with it?"
+            style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '5px 8px', fontSize: 11, outline: 'none' }}
+          />
+          <input
+            type="text"
+            value={suggestion}
+            onChange={e => setSuggestion(e.target.value)}
+            placeholder={suggestionPrompt || (suggestionLabel ? suggestionLabel + ' (optional)' : 'What should it have been? (optional)')}
+            style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '5px 8px', fontSize: 11, outline: 'none' }}
+          />
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              onClick={() => submit('down')}
+              disabled={submitting || !reason.trim()}
+              style={{ padding: '4px 10px', background: reason.trim() ? '#7f1d1d' : '#1c1917', border: '1px solid ' + (reason.trim() ? '#dc2626' : '#44403c'), borderRadius: 4, color: reason.trim() ? '#fca5a5' : '#57534e', fontSize: 11, cursor: reason.trim() ? 'pointer' : 'default', fontWeight: 600 }}>
+              {submitting ? 'Saving…' : 'Log feedback'}
+            </button>
+            <button onClick={() => { setSignal(null); setReason(''); setSuggestion(''); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #44403c', borderRadius: 4, color: '#78716c', fontSize: 11, cursor: 'pointer' }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Full draft approval panel — lives inside Comms tab ───────────────────────
@@ -10750,6 +10865,55 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
           )}
         </div>
       )}
+
+      {/* Training-loop feedback — two widgets stacked. Only render once
+          a draft body exists (no point rating a blank loading state). */}
+      {!isLoading && item?.draft_body && (
+        <>
+          <AgentFeedbackWidget
+            kind="text_draft"
+            label="Rate this draft"
+            dealId={item.deal_id}
+            outreachQueueId={item.id}
+            context={{
+              draft_body: item.draft_body,
+              cadence_day: item.cadence_day,
+              lead_tier: deal?.lead_tier || null,
+              meta_snapshot: {
+                county: deal?.meta?.county || null,
+                walkerVerified: deal?.meta?.walkerVerified ?? null,
+                salePrice: deal?.meta?.salePrice ?? null,
+                estimatedSurplus: deal?.meta?.estimatedSurplus ?? null,
+                grade: deal?.meta?.grade ?? null,
+              },
+              agent_reasoning: item.agent_reasoning || null,
+            }}
+            suggestionPrompt="What should the text have said? (optional)"
+          />
+          <AgentFeedbackWidget
+            kind="research_grade"
+            label={`Is "${deal?.lead_tier || 'unscored'}" the right grade?`}
+            dealId={item.deal_id}
+            outreachQueueId={null}
+            context={{
+              lead_tier: deal?.lead_tier || null,
+              is_30dts: deal?.is_30dts ?? null,
+              meta_snapshot: {
+                county: deal?.meta?.county || null,
+                walkerVerified: deal?.meta?.walkerVerified ?? null,
+                isPostAuction: deal?.meta?.isPostAuction ?? null,
+                salePrice: deal?.meta?.salePrice ?? null,
+                estimatedSurplus: deal?.meta?.estimatedSurplus ?? null,
+                grade: deal?.meta?.grade ?? null,
+                gradeScore: deal?.meta?.gradeScore ?? null,
+                lifecycleStage: deal?.meta?.lifecycleStage ?? null,
+                deceased: deal?.meta?.deceased ?? null,
+              },
+            }}
+            suggestionPrompt='What should it be? e.g. "B — plaintiff deceased, kick to deeper research"'
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -10781,25 +10945,66 @@ function AutomationsQueue({ onSelectDeal }) {
   const firedRef = React.useRef(new Set());
   const cancelledRef = React.useRef(new Set());
 
-  // Per Nathan 2026-04-30: drafts for deals past lead phase shouldn't show
-  // (e.g. Kemper Ansel is FILED — Day 0 Intro language is wrong for him).
-  // Filter the visible list AND auto-cancel the underlying queue rows so
-  // they don't keep coming back on Today / Outreach for anyone.
+  // Phase 1 scope lock (Justin + Nathan, 2026-05-13 meeting):
+  // Auto-outreach fires ONLY on Verified A-tier surplus leads.
+  // Everything else gets auto-cancelled with a reason so the queue
+  // self-cleans and the team isn't reviewing drafts we shouldn't send.
+  //
+  // The verified flag is meta.walkerVerified — populated by intel-main's
+  // /api/cron/sync-deal-updates writeback (30-min cron, started 2026-05-13).
+  // If walkerVerified hasn't propagated to a deal yet, that row sits in
+  // 'queued' status until the next sync stamps it (or gets cancelled
+  // by the explicit-out-of-scope rules below).
+  //
+  // Out of Phase 1 (auto-cancel):
+  //   - past lead phase (already filed/etc.) → 'deal_past_lead_phase'
+  //   - not a surplus deal (flip/wholesale/rental) → 'phase1_not_surplus'
+  //   - 30-DTS pre-auction → 'phase1_pre_auction'
+  //   - tier B/C/D or unscored → 'phase1_not_a_tier'
+  //   - explicitly post-auction but walker_verified=false → 'phase1_unverified'
+  //
+  // Stays queued (waiting on sync):
+  //   - A-tier surplus, not 30-DTS, walkerVerified not yet set
+  //   - unknown deal (no row joined yet) — keep, don't touch
   const items = React.useMemo(() => {
+    function cancel(itemId, reason) {
+      if (cancelledRef.current.has(itemId)) return;
+      cancelledRef.current.add(itemId);
+      sb.from('outreach_queue')
+        .update({ status: 'cancelled', skipped_reason: reason })
+        .eq('id', itemId);
+    }
+
     return (rawItems || []).filter(item => {
       const d = deals[item.deal_id];
-      if (!d) return true;        // unknown deal — keep, don't cancel
-      if (isLeadStatus(d)) return true;
-      // Past lead phase → cancel once + hide
-      if (!cancelledRef.current.has(item.id)) {
-        cancelledRef.current.add(item.id);
-        sb.from('outreach_queue')
-          .update({ status: 'cancelled', skipped_reason: 'deal_past_lead_phase' })
-          .eq('id', item.id);
-      }
-      return false;
+      if (!d) return true;                       // unknown deal — keep
+      if (!isLeadStatus(d)) { cancel(item.id, 'deal_past_lead_phase'); return false; }
+
+      // Phase 1: surplus only
+      if (d.type && d.type !== 'surplus') { cancel(item.id, 'phase1_not_surplus'); return false; }
+
+      // Phase 1: not 30-DTS
+      if (d.is_30dts === true) { cancel(item.id, 'phase1_pre_auction'); return false; }
+
+      // Phase 1: A-tier only (no B/C/D, no unscored)
+      if (d.lead_tier !== 'A') { cancel(item.id, 'phase1_not_a_tier'); return false; }
+
+      // Phase 1: verified only. Walker-verified is the strict gate.
+      // If walkerVerified=false (explicit), cancel. If undefined, keep
+      // the row queued and wait for intel-main's next 30-min sync.
+      const m = d.meta || {};
+      if (m.walkerVerified === false) { cancel(item.id, 'phase1_unverified'); return false; }
+
+      return true;
     });
   }, [rawItems, deals]);
+
+  // Auto-fire generation only runs on items that pass the Phase 1 gate
+  // above (so we don't burn Claude tokens drafting texts for leads we
+  // wouldn't send). Items that fall through to 'unknown deal' or
+  // 'walkerVerified undefined' also pass — we draft optimistically and
+  // either the next sync confirms verified (draft was useful) or the
+  // sync stamps verified=false and the next render cancels.
 
   // Auto-fire generation for any 'queued' items the moment they appear in Today view
   React.useEffect(() => {
@@ -10832,9 +11037,14 @@ function AutomationsQueue({ onSelectDeal }) {
 
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: '#d8b560', textTransform: 'uppercase', letterSpacing: '0.08em' }}>🤖 Automations</span>
         <span style={{ fontSize: 10, background: '#292524', color: '#d8b560', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>{items.length}</span>
+        <span
+          title="Phase 1 scope (locked 2026-05-13): only A-tier verified surplus leads auto-draft. Out-of-scope rows in outreach_queue auto-cancel with skipped_reason."
+          style={{ fontSize: 9, background: '#1c1917', color: '#86efac', border: '1px solid #14532d', borderRadius: 10, padding: '1px 6px', fontWeight: 700, letterSpacing: '0.06em', cursor: 'help' }}>
+          PHASE 1 · A-TIER VERIFIED SURPLUS
+        </span>
         <span style={{ fontSize: 11, color: '#57534e', marginLeft: 2 }}>· tap a deal to review &amp; send</span>
       </div>
       {items.map(item => {

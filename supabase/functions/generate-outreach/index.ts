@@ -38,6 +38,19 @@ RULES:
 - Use plain punctuation only: periods, commas, question marks. No dashes used as connectors.
 - Nathan's phone number is not shown. They reply directly to this message.
 
+VERIFIED vs ESTIMATED — language matters:
+- When the DEAL CONTEXT says "Verified surplus: $X" it means the auction has happened
+  and a real surplus amount is on file. Reference it directly ("you have about $X
+  sitting with the county").
+- When the DEAL CONTEXT says "Estimated surplus: $X" it means we're projecting from
+  judgment vs sale value. Use softer language ("there may be roughly $X").
+- If a "Sale completed on YYYY-MM-DD" is shown, you may anchor to it ("your case
+  closed last month / a few weeks ago"). Never give an exact date in the SMS itself
+  unless directly asked — sounds robotic. Use relative phrasing.
+- If a "Latest docket event" is shown and it's recent (within ~30 days), you can
+  reference activity on the case generally without naming the event. e.g. "I saw
+  things have been moving on your case recently." Do not quote docket text.
+
 Respond ONLY with valid JSON:
 {
   "draft": "the full SMS text Nathan will send",
@@ -91,11 +104,39 @@ Deno.serve(async (req) => {
     const firstName    = ((meta.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there'
     const fullName     = (meta.homeownerName || deal.name || '').split(' - ')[0]
     const county       = meta.county || ''
-    const surplus      = meta.estimatedSurplus ? `$${Number(meta.estimatedSurplus).toLocaleString()}` : null
     const portalLink   = deal.refundlocators_token
       ? `https://refundlocators.com/s/${deal.refundlocators_token}`
       : null
-    const saleDate     = meta.sale_date || meta.saleDate || null
+
+    // Verified vs estimated surplus — Director's writeback (intel-main
+    // /api/cron/sync-deal-updates, every 30 min) now stamps meta.walkerVerified
+    // and meta.salePrice when the auction has confirmed. Use the strongest
+    // signal we have. Prompt language adapts based on which one we pass.
+    const walkerVerified  = meta.walkerVerified === true
+    const hasSale         = !!meta.salePrice && Number(meta.salePrice) > 0
+    const isVerified      = walkerVerified && hasSale
+    const surplusAmount   = meta.estimatedSurplus
+      ? Number(meta.estimatedSurplus)
+      : null
+    const surplusFormatted = surplusAmount
+      ? `$${surplusAmount.toLocaleString()}`
+      : null
+    const saleDate     = meta.saleDate || meta.sale_date || null
+
+    // ── Load latest docket event for activity context ─────────────────────
+    // Per the May 13 meeting: drafts should be able to say "I saw things have
+    // been moving on your case recently" when there's been activity, but
+    // never quote docket text. One latest event is enough for that signal.
+    const { data: latestDocket } = await sb
+      .from('docket_events')
+      .select('event_type, event_date, detected_at')
+      .eq('deal_id', qRow.deal_id)
+      .order('event_date', { ascending: false, nullsFirst: false })
+      .limit(1)
+
+    const recentDocket = latestDocket && latestDocket.length > 0
+      ? latestDocket[0]
+      : null
 
     // ── Load prior message history for this deal ──────────────────────────
     const { data: msgs } = await sb
@@ -112,6 +153,28 @@ Deno.serve(async (req) => {
           .join('\n')
       : null
 
+    // ── Recent thumbs-down feedback on past drafts for this deal ──────────
+    // Per the May 13 meeting (training loop): when the user has flagged a
+    // prior draft as wrong, we should learn from that next time. Pull the
+    // most recent thumbs-down text_draft feedback for this deal and feed
+    // the reason + suggested correction back into the prompt as guidance.
+    const { data: pastFeedback } = await sb
+      .from('agent_feedback')
+      .select('reason, suggested_correction, context, created_at')
+      .eq('deal_id', qRow.deal_id)
+      .eq('kind', 'text_draft')
+      .eq('signal', 'down')
+      .order('created_at', { ascending: false })
+      .limit(3)
+
+    const feedbackContext = pastFeedback && pastFeedback.length > 0
+      ? pastFeedback.map((f, i) => {
+          const parts = [`#${i + 1}: ${f.reason || '(no reason given)'}`]
+          if (f.suggested_correction) parts.push(`should have been: "${f.suggested_correction}"`)
+          return parts.join(' | ')
+        }).join('\n')
+      : null
+
     // ── Mark as generating ────────────────────────────────────────────────
     await sb.from('outreach_queue')
       .update({ status: 'generating', updated_at: new Date().toISOString() })
@@ -120,13 +183,37 @@ Deno.serve(async (req) => {
     // ── Build user prompt ─────────────────────────────────────────────────
     const effectiveCoachNote = coach_note || qRow.coach_note
 
+    const surplusLine = surplusFormatted
+      ? (isVerified
+          ? `- Verified surplus: ${surplusFormatted} (auction completed, real dollar amount on file)`
+          : `- Estimated surplus: ${surplusFormatted} (projected from judgment vs sale, not yet confirmed)`)
+      : null
+
+    const saleDateLine = saleDate && isVerified
+      ? `- Sale completed on ${saleDate}`
+      : (saleDate ? `- Sale date on file: ${saleDate}` : null)
+
+    const docketLine = recentDocket
+      ? (() => {
+          const eventDateStr = recentDocket.event_date || recentDocket.detected_at
+          const days = eventDateStr
+            ? Math.floor((Date.now() - new Date(eventDateStr).getTime()) / 86400000)
+            : null
+          if (days == null) return `- Latest docket event: ${recentDocket.event_type || 'activity on file'}`
+          if (days <= 3)   return `- Latest docket event: ${recentDocket.event_type || 'activity'}, ${days === 0 ? 'today' : days + 'd ago'} (very recent)`
+          if (days <= 30)  return `- Latest docket event: ${recentDocket.event_type || 'activity'}, ${days}d ago (recent)`
+          return `- Latest docket event: ${recentDocket.event_type || 'activity'}, ${days}d ago`
+        })()
+      : null
+
     const userPrompt = [
       `DEAL CONTEXT:`,
       `- Homeowner: ${fullName} (first name: ${firstName})`,
       `- Property: ${deal.address || 'unknown address'}`,
       county        ? `- County: ${county} County, Ohio` : null,
-      surplus       ? `- Estimated surplus funds: ${surplus}` : null,
-      saleDate      ? `- Sale date: ${saleDate}` : null,
+      surplusLine,
+      saleDateLine,
+      docketLine,
       `- Lead tier: ${deal.lead_tier || 'A'} (A = highest equity)`,
       portalLink    ? `- Personal portal link: ${portalLink}` : null,
       `- Cadence day: ${qRow.cadence_day} (0=first contact, 3=follow-up day 3, 7=final touch)`,
@@ -134,6 +221,10 @@ Deno.serve(async (req) => {
       priorHistory
         ? `PRIOR CONVERSATION:\n${priorHistory}`
         : 'PRIOR CONVERSATION: None — this is the first contact.',
+      '',
+      feedbackContext
+        ? `PAST CORRECTIONS ON THIS DEAL (avoid repeating these mistakes):\n${feedbackContext}`
+        : null,
       '',
       effectiveCoachNote
         ? `NATHAN'S COACHING NOTE: "${effectiveCoachNote}"\nIncorporate this guidance.`
