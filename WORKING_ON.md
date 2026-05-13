@@ -8,6 +8,13 @@ and `memory/` (long-term user-level knowledge).
 > session start/end. Other sessions `git pull` to refresh. Conflict-free as long
 > as everyone respects the section boundaries. Erik works in the DCC UI, not
 > Claude Code in this repo, so this doesn't apply to him.
+>
+> **Per-worktree subsections (2026-05-13):** when you're running multiple Claude
+> Code worktrees as the same user in parallel, each worktree gets its own
+> `### <Name> · <slug>` subsection under your top-level `## <Name>'s session`
+> heading (slug = branch name with `claude/` stripped). Stop hook creates the
+> subsection automatically on first heartbeat. Edit only your own worktree's
+> subsection. Stale ones can be pruned manually or via `/handoff`.
 
 ---
 
@@ -69,6 +76,8 @@ Only if you literally have no other option AND you have the source backed up. Fr
 ---
 
 ## Justin's session
+
+### Justin · cranky-boyd-d5f84a
 
 **Status:** Active — 2026-05-13
 **Branch:** `claude/cranky-boyd-d5f84a` (worktree)
@@ -134,13 +143,32 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 - Nathan + Justin design approval flow for client-notify triggers
 - Twilio Brand approval still parked
 
----
-
 **Last updated:** 2026-05-07 evening
 
 **Last updated (auto):** 2026-05-13 19:14 UTC
 
+### Justin · nice-williams-94b3e6
+
+**Status:** Active — 2026-05-13
+**Branch:** `claude/nice-williams-94b3e6` (worktree)
+**Working on:** Fixing the Stop hook race when one user runs multiple Claude
+Code worktrees in parallel. PR #152 (cranky-boyd) and PR #153
+(vigorous-williamson) both wrote to Justin's flat WORKING_ON.md section
+within minutes of each other on 2026-05-13 and produced merge conflicts.
+Solution: per-worktree subsections (`### <Name> · <slug>`) so concurrent
+edits target different lines and merge cleanly.
+
+**Touching:** `.claude/hooks/touch-working-on.sh`, `WORKING_ON.md` (this
+migration), `CLAUDE.md`, `.claude/commands/catchup.md` (cross-PR with #153),
+`DIRECTOR_DCC_INTERFACE.md` (coordination note for Nathan).
+
+**Last updated (auto):** 2026-05-13 19:40 UTC
+
+---
+
 ## Nathan's session
+
+### Nathan · main
 
 **Status:** Active — 2026-05-08 evening — full-day audit + 8 migrations + system alert hardening
 **Branch:** main (all work merged)
@@ -221,9 +249,11 @@ Full list: `session_archives/index.md`.
 ---
 
 <!--
-Per-user template:
+Per-user template (one user section, one subsection per active worktree):
 
 ## <Name>'s session
+
+### <Name> · <slug>          ← slug = branch name with "claude/" stripped
 
 **Status:** Active — <date>
 **Branch:** <branch name>
@@ -234,6 +264,11 @@ Per-user template:
 **Open follow-ups:**
 - <bullets>
 **Last updated:** <timestamp>
+**Last updated (auto):** <managed by Stop hook>
+
+If you're running a second worktree at the same time, add another
+`### <Name> · <other-slug>` subsection — don't reuse this one. The Stop hook
+auto-creates a subsection on first heartbeat if one doesn't exist.
 -->
 
 _If a session crashes mid-work, leave a "crashed at <step>, resume from
