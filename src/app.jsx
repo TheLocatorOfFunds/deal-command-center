@@ -224,6 +224,24 @@ const STATUS_COLORS = {
 };
 const EXPENSE_CATEGORIES = ["Acquisition","Inspection","Plumbing","Electrical","Well/Septic","Cleanup","Labor","Holding","Marketing","Setup","Site","Legal","Filing","Other"];
 
+// ─── Z-Index Scale ───────────────────────────────────────────────────
+// Keep all fixed/absolute layers here so nothing accidentally overlaps.
+//   100   sticky header bar
+//   200   sidebar (mobile slide-in)
+//   500   dropdown menus / popovers (phone popover, deal action menu)
+//   600   tooltip overlays
+//   999   (retired — use 10000 for overlays now)
+//  1000   (retired — use 10001 for panels now)
+//  1200   toast notification stack (top-right)
+//  1250   chat notification popover
+//  9999   call widgets: incoming-call ring + active-call overlay (bottom-right)
+// 10000   modal / panel backdrop overlay (dims everything incl. call widgets)
+// 10001   slide-over panels (RelayDealPanel, etc.) — must always beat 10000
+// RULE: nothing new should use a value already in this list. Add a new entry here first.
+// RULE: panels and their overlays must always be >= 10000 so they clear call/chat bubbles.
+// RULE: action buttons inside panels must have paddingBottom >= 80px on mobile
+//       to clear any persistent bottom-right widget (call bubble = ~56px + 24px gap).
+
 // ─── Styles ──────────────────────────────────────────────────────────
 const inputStyle = { width: "100%", background: "#0c0a09", border: "1px solid #44403c", color: "#fafaf9", padding: "8px 10px", borderRadius: 6, fontSize: 13, outline: "none" };
 const selectStyle = { background: "#1c1917", border: "1px solid #44403c", color: "#fafaf9", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600 };
@@ -6959,7 +6977,7 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
   ) : null
 
   return (
-    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 420, background: '#0f172a', borderLeft: '1px solid #1e293b', zIndex: 1000, display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 32px rgba(0,0,0,0.5)' }}>
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 420, background: '#0f172a', borderLeft: '1px solid #1e293b', zIndex: 10001, display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 32px rgba(0,0,0,0.5)' }}>
       {/* Header */}
       <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid #1e293b', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -7028,7 +7046,7 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
 
       {/* Action buttons */}
       {touch && (
-        <div style={{ padding: '16px 20px', borderTop: '1px solid #1e293b', display: 'flex', gap: 10 }}>
+        <div style={{ padding: '16px 20px', paddingBottom: 'max(80px, calc(64px + env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid #1e293b', display: 'flex', gap: 10 }}>
           <button
             onClick={() => { onApprove(touch.id); onClose(); }}
             style={{ flex: 1, padding: '10px 0', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 14, fontWeight: 700 }}
@@ -7323,7 +7341,7 @@ function RelayView({ supabase }) {
         <>
           <div
             onClick={() => setReviewPanel(null)}
-            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 999 }}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10000 }}
           />
           <RelayDealPanel
             deal={reviewPanel.deal}
