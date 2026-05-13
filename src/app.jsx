@@ -2861,7 +2861,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "relay" ? (
-            <RelayView supabase={sb} />
+            <RelayView supabase={sb} onOpenDeal={(id) => { setActiveDealId(id); }} />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
           ) : view === "inbox" ? (
@@ -7066,7 +7066,7 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose }) {
 }
 
 // ─── Relay View ──────────────────────────────────────────────────
-function RelayView({ supabase }) {
+function RelayView({ supabase, onOpenDeal }) {
   const [enrollments, setEnrollments] = React.useState([])
   const [sequences, setSequences] = React.useState({})
   const [pendingTouches, setPendingTouches] = React.useState([])
@@ -7239,9 +7239,9 @@ function RelayView({ supabase }) {
                       <span style={{ fontSize: 12, color: '#d97706', fontWeight: 600 }}>
                         Step {touch.relay_step_number}
                       </span>
-                      {deal && (
+                      {deal && touch.deal_id && (
                         <button
-                          onClick={() => touch.deal_id && openReview(touch.deal_id, touch)}
+                          onClick={() => onOpenDeal && onOpenDeal(touch.deal_id)}
                           style={{ background: 'none', border: 'none', padding: '0 0 0 8px', fontSize: 12, color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline' }}
                         >
                           {deal.address || deal.name || touch.deal_id}
@@ -7250,7 +7250,11 @@ function RelayView({ supabase }) {
                     </div>
                     <span style={{ fontSize: 11, color: '#475569' }}>Scheduled {scheduledDate}</span>
                   </div>
-                  <div style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.5, marginBottom: 12, padding: '10px 12px', background: '#162032', borderRadius: 6, fontFamily: 'inherit' }}>
+                  <div
+                    onClick={() => touch.deal_id && onOpenDeal && onOpenDeal(touch.deal_id)}
+                    style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.5, marginBottom: 12, padding: '10px 12px', background: '#162032', borderRadius: 6, fontFamily: 'inherit', cursor: touch.deal_id ? 'pointer' : 'default' }}
+                    title={touch.deal_id ? 'Open deal' : undefined}
+                  >
                     {touch.draft_body}
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
@@ -7308,7 +7312,7 @@ function RelayView({ supabase }) {
                     <tr
                       key={e.id}
                       style={{ borderBottom: i < enrollments.length - 1 ? '1px solid #1e293b' : 'none', cursor: e.deal_id ? 'pointer' : 'default' }}
-                      onClick={() => e.deal_id && openReview(e.deal_id)}
+                      onClick={() => e.deal_id && onOpenDeal && onOpenDeal(e.deal_id)}
                     >
                       <td style={{ padding: '10px 14px', color: '#e2e8f0', fontFamily: 'monospace' }}>{phone}</td>
                       <td style={{ padding: '10px 14px', color: '#93c5fd', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
