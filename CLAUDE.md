@@ -2,6 +2,30 @@
 
 This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund cases). Read this file before making changes — it has the stuff that isn't obvious from reading the code.
 
+## Session start and end ritual (REQUIRED)
+
+This repo is co-coded by Justin and Nathan, each running their own Claude Code sessions.
+Cross-session state lives in `WORKING_ON.md`, `session_archives/`, and `DIRECTOR_DCC_INTERFACE.md`.
+**You must run the session rituals so the other session doesn't work blind.**
+
+### Starting a session
+Run `/catchup` as your very first action. It pulls, reads WORKING_ON.md + recent session
+archives + DIRECTOR_DCC_INTERFACE.md + recent commits, and produces a <300-word briefing
+on what the other session shipped, what's in-flight, and any gotchas. Do not start work
+until you have run it.
+
+### Ending a session
+Run `/handoff` before your last response. It audits what you shipped, decides if it's
+substantive enough to archive (architectural decisions, migrations, edge function deploys,
+non-obvious gotchas), writes the session_archives entry if so, updates your section in
+WORKING_ON.md, and proposes a commit. **If you skip this, the next session starts blind.**
+
+Both commands live in `.claude/commands/`. If you are running from outside the repo
+directory and the slash commands are not available, manually do the equivalent:
+- Start: `git pull`, read `WORKING_ON.md` + `session_archives/index.md` + `DIRECTOR_DCC_INTERFACE.md`
+- End: update your section in `WORKING_ON.md` with status + what you shipped + open follow-ups,
+  write a `session_archives/YYYY-MM-DD-<slug>.md` if the session was substantive, commit both
+
 ## Architecture at a glance
 
 - **Source**: React JSX in `src/app.jsx` (~12,640 lines). Pre-compiled by **esbuild** to `app.js` (~483KB minified) via `npm run build`. **Edit `src/app.jsx`, NOT `index.html`.**
