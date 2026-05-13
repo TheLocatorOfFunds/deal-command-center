@@ -14,6 +14,7 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "autoIncrement": true,
       "ios": {
         "resourceClass": "m-medium",
         "simulator": false
@@ -31,14 +32,14 @@
     "production": {
       "ios": {
         "appleId": "racin2701@yahoo.com",
-        "ascAppId": "REPLACE_AFTER_FIRST_SUBMIT",
+        "ascAppId": "6768752406",
         "appleTeamId": "8RJDH7L35Q"
       }
     },
     "preview": {
       "ios": {
         "appleId": "racin2701@yahoo.com",
-        "ascAppId": "REPLACE_AFTER_FIRST_SUBMIT",
+        "ascAppId": "6768752406",
         "appleTeamId": "8RJDH7L35Q"
       }
     }
