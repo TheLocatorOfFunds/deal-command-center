@@ -1489,9 +1489,26 @@ function DealCommandCenter({ session, profile }) {
     await sb.from('deals').update(patch).eq('id', id);
   };
 
+  // Safety: convert ANY caller that still routes through `deleteDeal` into
+  // a soft-delete instead of a hard one. Pre-fix this did
+  // `sb.from('deals').delete()` which permanently destroyed the row —
+  // the reason Eric couldn't find his deletions in the Deleted Leads
+  // view (per Nathan 2026-05-12). Now any orphan caller still does the
+  // right thing; the card "×" path opens DeleteDealModal for the proper
+  // reason-coded flow.
   const deleteDeal = async (id) => {
-    if (!confirm("Delete this deal and all its data? This cannot be undone.")) return;
-    await sb.from('deals').delete().eq('id', id);
+    if (!confirm("Move this deal to Deleted Leads? You'll be able to restore it from the admin view.")) return;
+    await sb.from('deals').update({
+      deleted_at: new Date().toISOString(),
+      deleted_reason: 'other',
+      deleted_by: session.user.id,
+    }).eq('id', id);
+    // Cancel any in-flight outreach for this deal so we don't text a
+    // homeowner we just removed.
+    await sb.from('outreach_queue')
+      .update({ status: 'cancelled' })
+      .eq('deal_id', id)
+      .in('status', ['queued', 'pending', 'generating']);
     if (activeDealId === id) setActiveDealId(null);
     await loadDeals();
   };
@@ -2560,6 +2577,12 @@ function CallHistoryView({ onSelect }) {
 
 // ─── Deal List ───────────────────────────────────────────────────────
 function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed }) {
+  // Per Nathan 2026-05-12: the card-level "×" buttons used to call a hard
+  // DELETE on the deals table — bypassing soft-delete entirely. Anything
+  // deleted that way was permanently gone, which is why "Deleted Leads"
+  // never seemed complete. NOW: card "×" opens the proper DeleteDealModal
+  // (reason codes + outreach cancel + activity log + recoverable).
+  const [softDeleteTarget, setSoftDeleteTarget] = useState(null);  // deal | null
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
@@ -2742,6 +2765,17 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           onClose={() => setShowAdvancedFilters(false)}
         />
       )}
+      {softDeleteTarget && (
+        <DeleteDealModal
+          deal={softDeleteTarget}
+          userId={userId}
+          onClose={() => setSoftDeleteTarget(null)}
+          onDeleted={() => {
+            setSoftDeleteTarget(null);
+            // realtime sub on `deals` refreshes the list
+          }}
+        />
+      )}
 
       {/* Hub sub-chips — second-level nav inside sidebar sections.
           Outreach:  Drafts & Replies · Inbox · Leads · Forecast
@@ -2915,13 +2949,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {flips.length > 0 && (<>
                 <SectionLabel icon="🏠" label={view === "archive" ? "Closed Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
-                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => setSoftDeleteTarget(d)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {surplus.length > 0 && (<>
                 <SectionLabel icon="💰" label={view === "archive" ? "Closed Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => setSoftDeleteTarget(d)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
