@@ -32,6 +32,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
+import { OutreachDraftPanel } from '../../components/OutreachDraftPanel'
 
 type Deal = {
   id: string
@@ -555,6 +556,12 @@ export default function DealDetailScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+
+        {/* AI Draft panel — surfaces the current Phase 1 outreach queue
+            row for this deal (if any) with review/edit/send/skip actions
+            and the training-loop feedback widgets shipped 2026-05-13.
+            Renders null when no queued/pending row exists. */}
+        <OutreachDraftPanel dealId={deal.id} deal={deal as any} />
 
         {/* Welcome video — if Nathan recorded one for this client */}
         {(() => {
