@@ -15,13 +15,43 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 // Default Supabase secrets (auto-injected, no need to set):
 //   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY  — DCC project (this one)
 //
-// Counties currently scraped by ohio-intel (= Castle's CV3_VERIFIED + a few
-// others). If a subscription's county isn't in this list we tag it
-// county_unbuilt instead of no_match — a future scraper build will flip it
-// to matched without manual intervention.
-const COVERED_COUNTIES = new Set([
-  "Butler", "Cuyahoga", "Franklin", "Montgomery",
-]);
+// Counties scraped by ohio-intel were previously hard-coded to 4
+// (Butler/Cuyahoga/Franklin/Montgomery). Per Director (intel-main Claude
+// session) 2026-05-13 handoff: ohio-intel is at ~75 LIVE counties as of
+// the meeting, and this static list was silently filtering 71 counties of
+// subscriptions to county_unbuilt. The list is now computed at runtime
+// from ohio-intel's actual scraped data (distinct counties in ohio_case)
+// so it stays in sync as new scrapers ship without DCC code changes.
+//
+// Resolved by getCoveredCounties() inside the handler — fetches once per
+// invocation. If the fetch fails for any reason, we fall back to NOT
+// gating: every subscription is attempted, and the natural no_match path
+// catches anything ohio-intel doesn't have yet.
+
+async function getCoveredCounties(intel: ReturnType<typeof createClient>): Promise<Set<string> | null> {
+  try {
+    // Pull all county values from ohio_case and dedupe in JS. PostgREST
+    // doesn't expose DISTINCT cleanly through supabase-js, but at typical
+    // case volumes (thousands, not millions) a flat select + JS dedupe
+    // is cheap and keeps the function self-contained.
+    const { data, error } = await intel
+      .from("ohio_case")
+      .select("county")
+      .limit(50000);
+    if (error) {
+      console.warn("[intel-sync] getCoveredCounties failed:", error.message);
+      return null;
+    }
+    const set = new Set<string>();
+    for (const row of data || []) {
+      if (row?.county) set.add(row.county);
+    }
+    return set;
+  } catch (e) {
+    console.warn("[intel-sync] getCoveredCounties threw:", e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -62,11 +92,16 @@ Deno.serve(async (req) => {
   const dcc = createClient(dccUrl, dccKey, { auth: { persistSession: false } });
   const intel = createClient(intelUrl, intelKey, { auth: { persistSession: false } });
 
+  // Build the covered-counties set dynamically. null = couldn't compute,
+  // we fall back to "trust the lookup" (no county gate).
+  const COVERED_COUNTIES = await getCoveredCounties(intel);
+
   const stats = {
     batch_size: 0,
     matched: 0,
     no_match: 0,
     county_unbuilt: 0,
+    covered_count: COVERED_COUNTIES ? COVERED_COUNTIES.size : null,
     events_added: 0,
     errors: 0,
   };
@@ -85,9 +120,11 @@ Deno.serve(async (req) => {
 
   for (const sub of subs || []) {
     try {
-      // Counties Castle/ohio-intel can't scrape get tagged so the UI can
+      // Counties ohio-intel can't scrape yet get tagged so the UI can
       // show "scraper not built yet" without making a hopeless lookup.
-      if (!COVERED_COUNTIES.has(sub.county)) {
+      // COVERED_COUNTIES is null when the runtime fetch failed — in that
+      // case, skip the gate and let the natural no_match path handle it.
+      if (COVERED_COUNTIES && !COVERED_COUNTIES.has(sub.county)) {
         await dcc.from("intel_subscriptions").update({
           status: "county_unbuilt",
           last_synced_at: new Date().toISOString(),
