@@ -22090,6 +22090,20 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
               const mediaIsVideo = m.media_url && /\.(mp4|mov|webm|m4v)(\?|$)/i.test(m.media_url);
               const mediaIsImage = m.media_url && /\.(jpg|jpeg|png|gif|webp|heic)(\?|$)/i.test(m.media_url);
 
+              // "via NNNN" chip — which of OUR numbers received (inbound) or
+              // sent (outbound) this message. Lets you tell at-a-glance
+              // whether a text hit Twilio (5440) or the iMessage bridge
+              // (2306). Defensive about the receive-sms/bridge inconsistency
+              // where one path swaps from_number/to_number meaning.
+              const OUR_NUMS = ['+15139985440', '+15135162306'];
+              const ourNum = OUR_NUMS.includes(m.from_number) ? m.from_number
+                           : OUR_NUMS.includes(m.to_number)   ? m.to_number
+                           : null;
+              const viaLast4 = ourNum ? ourNum.replace(/\D/g, '').slice(-4) : null;
+              const viaColor = ourNum === '+15139985440' ? '#10b981'   // 5440 = Twilio SMS → green
+                             : ourNum === '+15135162306' ? '#60a5fa'   // 2306 = bridge/iMessage → blue
+                             : '#78716c';
+
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
                   <div style={{ maxWidth: '78%', background: isInbound ? '#1c1917' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? `1px solid ${senderColor}33` : 'none' }}>
@@ -22109,6 +22123,9 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                       {isInbound
                         ? <>
                             <span style={{ fontSize: 10, fontWeight: 600, color: senderColor }}>{senderName.split(' ')[0]}</span>
+                            {viaLast4 && (
+                              <span title={`Received on ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
+                            )}
                             <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>{time}</span>
                           </>
                         : <>
@@ -22119,6 +22136,9 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                               const recipientColor = participantColor(recipient?.name || m.to_number);
                               return <span style={{ fontSize: 10, color: '#78716c' }}>to <span style={{ color: recipientColor, fontWeight: 600 }}>{recipientName}</span></span>;
                             })()}
+                            {viaLast4 && (
+                              <span title={`Sent from ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
+                            )}
                             <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
                             <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
                           </>
