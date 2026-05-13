@@ -11130,32 +11130,38 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   // What this deal is missing relative to "ready for outreach". Eric
   // sees this as a dim line under each prep-queue row.
   //
-  // Per Eric 2026-05-13: for pre-auction leads (NOD / 30DTS / future
+  // Per Eric 2026-05-13: for pre-sale leads (NOD / 30DTS / future
   // saleDate), the surplus estimate + personalized URL are STRUCTURALLY
   // unknowable until the sale event happens. Surplus depends on sale
-  // price minus judgment + fees; URL is minted on/after the sale. So
-  // flagging them as "missing" on a pre-auction lead is misleading —
-  // Eric's done all the work he can do, but the queue thinks he hasn't.
-  // Result before fix: 36 pre-auction leads sitting in Prep with
-  // "missing: URL, surplus est" warnings, queue structurally clogged.
+  // price minus judgment + fees; URL is minted on/after the sale.
+  // Flagging them as "missing" on a pre-sale lead is misleading.
   //
-  // Fix: same isPreAuction logic the DealStatusBadges component uses
-  // (line ~3167). URL + surplus est only show as missing on post-
-  // auction leads.
+  // First-pass fix used a narrow isPreAuction check (is_30dts OR future
+  // saleDate). That caught 30DTS but missed NOD — NOD leads have no
+  // scheduled sale yet, so saleDate is null and is_30dts is false.
+  // Eric flagged this 2026-05-13 13:00.
+  //
+  // Broader fix: treat ANY lead without a confirmed sale event as
+  // pre-sale. The unambiguous post-sale signals are:
+  //   - confirmationOfSaleDate / isPostAuction flag set
+  //   - meta.salePrice set (sale happened, we know the price)
+  // Anything else (NOD, 30DTS, future saleDate, unsold, unclassified)
+  // is pre-sale → URL + surplus est are optional. Future-proofs against
+  // any new pre-sale category without needing schema changes.
   const prepMissing = (d) => {
     const m = d.meta || {};
     const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
-    const isPostAuction = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
-    const isPreAuction = !isPostAuction && (!!d.is_30dts || (m.saleDate && new Date(m.saleDate) > new Date()));
+    const hasSalePrice = !!(m.salePrice ?? m.sale_price);
+    const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction || hasSalePrice;
 
     const missing = [];
     if (!dealMetaPhone(m)) missing.push('phone');
     if (!d.lead_tier) missing.push('tier');
     if (!m.county) missing.push('county');
     if (!m.courtCase) missing.push('case #');
-    // Only flag URL + surplus est on post-auction deals (or deals that
-    // aren't explicitly pre-auction — e.g. unknown / data-incomplete).
-    if (!isPreAuction) {
+    // URL + surplus est are only required AFTER a confirmed sale event.
+    // Castle fills both in automatically after the sale lands.
+    if (isPostSale) {
       if (!d.refundlocators_token) missing.push('URL');
       if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
     }
