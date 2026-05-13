@@ -11,8 +11,11 @@ cross-project interface to intel-main. Run the standard session-start ritual.
 Run these in parallel where possible (single message, multiple tool calls):
 
 1. **`git pull`** — get any commits the other sessions pushed
-2. **Read `WORKING_ON.md`** — every user has their own section; see what's in flight
-   on the others and what your own section says about where you left off
+2. **Read `WORKING_ON.md`** — every user has their own `## <Name>'s session`. Within
+   each, there may be per-worktree subsections `### <Name> · <worktree-slug>` auto-
+   maintained by the Stop hook (one per parallel worktree that user has running). To
+   know which worktrees of mine are active vs stale, scan the subsections in my user
+   section — the freshest `**Last updated (auto):**` timestamp is the active session.
 3. **Read `session_archives/index.md`** — the table of past sessions, newest first.
    Scan the last ~10 rows for context.
 4. **For substantive recent entries** (anything that looks like it could affect what you
