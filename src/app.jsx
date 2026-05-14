@@ -7301,15 +7301,25 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, s
         {deal.meta?.totalDebt        && <Row label="Total Debt" value={'$' + parseInt(deal.meta.totalDebt).toLocaleString()} />}
         {deal.days_to_sale != null   && <Row label="Days to Sale" value={deal.days_to_sale < 0 ? `${Math.abs(deal.days_to_sale)} days ago` : `${deal.days_to_sale} days away`} />}
 
-        {/* Case intelligence summary */}
-        {caseIntel && (
-          <>
-            <SectionHead label="Case Intelligence" />
-            <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.65, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '10px 12px' }}>
-              {caseIntel}
-            </div>
-          </>
-        )}
+        {/* Case intelligence summary.
+            caseIntel is stored as a Claude response object — {text, generated_at,
+            input_tokens, output_tokens} — but older rows may have it as a plain
+            string. Render whichever form we got, never the bare object (that's
+            the React #31 crash). */}
+        {(() => {
+          const intelText = typeof caseIntel === 'string'
+            ? caseIntel
+            : (caseIntel?.text || '')
+          if (!intelText) return null
+          return (
+            <>
+              <SectionHead label="Case Intelligence" />
+              <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.65, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '10px 12px', whiteSpace: 'pre-wrap' }}>
+                {intelText}
+              </div>
+            </>
+          )
+        })()}
 
         {/* Communications */}
         <SectionHead label={`Communications${comms ? ` (${comms.length})` : ''}`} />
