@@ -7642,6 +7642,30 @@ function RelayView({ supabase, onOpenDeal }) {
                       Skip
                     </button>
                   </div>
+                  {/* Grade the draft inline — same widget that appears on the deal's Comms
+                      tab, surfaced here so we can review the whole queue in one pass
+                      without drilling into individual deals. */}
+                  {touch.deal_id && touch.draft_body && (
+                    <div style={{ marginTop: 10, marginLeft: -16, marginRight: -16, marginBottom: -16 }}>
+                      <AgentFeedbackWidget
+                        kind="text_draft"
+                        label="Grade this draft"
+                        dealId={touch.deal_id}
+                        outreachQueueId={touch.id}
+                        context={{
+                          draft_body: touch.draft_body,
+                          relay_step_number: touch.relay_step_number,
+                          relay_sequence_id: touch.relay_sequence_id,
+                          relay_enrollment_id: touch.relay_enrollment_id,
+                          scheduled_for: touch.scheduled_for,
+                          deal_address: deal?.address || null,
+                          deal_name: deal?.name || null,
+                          surface: 'relay_view',
+                        }}
+                        suggestionPrompt="What should the text have said?"
+                      />
+                    </div>
+                  )}
                 </div>
               )
             })}
