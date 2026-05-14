@@ -705,8 +705,15 @@ async function syncFromChatDb() {
   let maxRowid = watermark;
 
   for (const row of rows) {
+    // Always advance the watermark, even if processing this row throws.
+    // Before 2026-05-13 a transient Supabase 5xx mid-loop would skip the
+    // saveWatermark() at the bottom, so the next tick re-processed the
+    // same rows — and because the upsert uses ignoreDuplicates:true,
+    // any media_url uploaded on a later retry got DROPPED on the floor.
+    // The try/catch + post-upsert backfill below close that hole.
     maxRowid = Math.max(maxRowid, row.ROWID);
 
+    try {
     const chatId    = row.chat_identifier;
     const isGroup   = row.chat_style === 45;
     const isInbound = row.is_from_me === 0;
@@ -756,9 +763,25 @@ async function syncFromChatDb() {
     // Upload the first attachment (if any) to inbound-media bucket and store
     // the public URL on the row. v1 keeps a single media_url column; multi-
     // attachment support is a future media_urls jsonb upgrade.
+    //
+    // Skip the upload if a row with this guid already exists in DB AND already
+    // has media_url set — that's the steady state after a successful prior
+    // upload, and re-uploading on every tick (when the watermark gets stuck)
+    // burns Supabase storage bandwidth for no benefit.
     let mediaUrl = null;
+    let existingMediaUrl = null;
     if (isInbound && attachList.length > 0) {
-      mediaUrl = await uploadIMessageAttachment(attachList[0], dealId);
+      const { data: existingRow } = await sb
+        .from('messages_outbound')
+        .select('media_url')
+        .eq('twilio_sid', guid)
+        .maybeSingle();
+      existingMediaUrl = existingRow?.media_url || null;
+      if (existingMediaUrl) {
+        mediaUrl = existingMediaUrl;          // already uploaded — reuse
+      } else {
+        mediaUrl = await uploadIMessageAttachment(attachList[0], dealId);
+      }
       if (attachList.length > 1) {
         console.log(`📎 ${attachList.length} attachments on msg ${row.ROWID} — only first synced (v1 limitation)`);
       }
@@ -842,6 +865,24 @@ async function syncFromChatDb() {
       const preview   = bodyStr.length > 60 ? bodyStr.slice(0, 57) + '…' : bodyStr;
       const mediaTag  = msgData.media_url ? ' 📎' : '';
       console.log(`${tag}${mediaTag}  ${fromPhone || toPhone}  "${preview}"`);
+    }
+
+    // Backfill media_url on rows that were inserted earlier with null media_url
+    // (e.g. when the first upload attempt failed due to a transient Supabase
+    // 5xx). The upsert above uses ignoreDuplicates:true, which would otherwise
+    // silently drop the newly-successful upload on the floor.
+    if (isInbound && mediaUrl && !existingMediaUrl) {
+      const { error: updErr } = await sb.from('messages_outbound')
+        .update({ media_url: mediaUrl })
+        .eq('twilio_sid', guid)
+        .is('media_url', null);
+      if (updErr) console.error(`⚠️  media_url backfill failed (${guid}): ${updErr.message}`);
+    }
+    } catch (rowErr) {
+      // Per-row failure must NOT prevent saveWatermark from running. Log
+      // and continue — the next tick will retry this row (and the backfill
+      // path above will recover media_url if the row was already inserted).
+      console.error(`⚠️  row processing error ROWID=${row.ROWID}: ${rowErr.message}`);
     }
   }
 

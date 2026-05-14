@@ -7301,15 +7301,25 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, s
         {deal.meta?.totalDebt        && <Row label="Total Debt" value={'$' + parseInt(deal.meta.totalDebt).toLocaleString()} />}
         {deal.days_to_sale != null   && <Row label="Days to Sale" value={deal.days_to_sale < 0 ? `${Math.abs(deal.days_to_sale)} days ago` : `${deal.days_to_sale} days away`} />}
 
-        {/* Case intelligence summary */}
-        {caseIntel && (
-          <>
-            <SectionHead label="Case Intelligence" />
-            <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.65, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '10px 12px' }}>
-              {caseIntel}
-            </div>
-          </>
-        )}
+        {/* Case intelligence summary.
+            caseIntel is stored as a Claude response object — {text, generated_at,
+            input_tokens, output_tokens} — but older rows may have it as a plain
+            string. Render whichever form we got, never the bare object (that's
+            the React #31 crash). */}
+        {(() => {
+          const intelText = typeof caseIntel === 'string'
+            ? caseIntel
+            : (caseIntel?.text || '')
+          if (!intelText) return null
+          return (
+            <>
+              <SectionHead label="Case Intelligence" />
+              <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.65, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '10px 12px', whiteSpace: 'pre-wrap' }}>
+                {intelText}
+              </div>
+            </>
+          )
+        })()}
 
         {/* Communications */}
         <SectionHead label={`Communications${comms ? ` (${comms.length})` : ''}`} />
@@ -7642,6 +7652,30 @@ function RelayView({ supabase, onOpenDeal }) {
                       Skip
                     </button>
                   </div>
+                  {/* Grade the draft inline — same widget that appears on the deal's Comms
+                      tab, surfaced here so we can review the whole queue in one pass
+                      without drilling into individual deals. */}
+                  {touch.deal_id && touch.draft_body && (
+                    <div style={{ marginTop: 10, marginLeft: -16, marginRight: -16, marginBottom: -16 }}>
+                      <AgentFeedbackWidget
+                        kind="text_draft"
+                        label="Grade this draft"
+                        dealId={touch.deal_id}
+                        outreachQueueId={touch.id}
+                        context={{
+                          draft_body: touch.draft_body,
+                          relay_step_number: touch.relay_step_number,
+                          relay_sequence_id: touch.relay_sequence_id,
+                          relay_enrollment_id: touch.relay_enrollment_id,
+                          scheduled_for: touch.scheduled_for,
+                          deal_address: deal?.address || null,
+                          deal_name: deal?.name || null,
+                          surface: 'relay_view',
+                        }}
+                        suggestionPrompt="What should the text have said?"
+                      />
+                    </div>
+                  )}
                 </div>
               )
             })}
@@ -10652,11 +10686,16 @@ function AgentFeedbackWidget({ kind, label, dealId, outreachQueueId, context, su
 
   async function submit(nextSignal) {
     if (submitting || submittedAt) return;
-    // Thumbs-up = fire-and-forget. Thumbs-down requires a reason.
-    if (nextSignal === 'down' && signal !== 'down') {
-      setSignal('down');
+    // Both signals open the inputs first — thumbs-up's notes are optional,
+    // thumbs-down's reason is required. Toggling on first click; the second
+    // click (from inside the inputs, via the "Log feedback" button) does the
+    // actual insert.
+    if (signal !== nextSignal) {
+      setSignal(nextSignal);
       return;
     }
+    // Thumbs-down can only be saved with a non-empty reason
+    if (nextSignal === 'down' && !reason.trim()) return;
     setSubmitting(true); setError(null);
     try {
       const { data: authData } = await sb.auth.getUser();
@@ -10710,29 +10749,44 @@ function AgentFeedbackWidget({ kind, label, dealId, outreachQueueId, context, su
         <button onClick={() => submit('down')} disabled={submitting} style={btnStyle('down', signal === 'down')} title="Needs correction">👎</button>
         {error && <span style={{ fontSize: 10, color: '#fca5a5' }}>⚠ {error}</span>}
       </div>
-      {signal === 'down' && !submittedAt && (
+      {(signal === 'down' || signal === 'up') && !submittedAt && (
         <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
           <input
             type="text"
             value={reason}
             onChange={e => setReason(e.target.value)}
-            placeholder="What's wrong with it?"
+            placeholder={signal === 'up'
+              ? 'What worked about this one? (optional)'
+              : "What's wrong with it?"}
             style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '5px 8px', fontSize: 11, outline: 'none' }}
           />
           <input
             type="text"
             value={suggestion}
             onChange={e => setSuggestion(e.target.value)}
-            placeholder={suggestionPrompt || (suggestionLabel ? suggestionLabel + ' (optional)' : 'What should it have been? (optional)')}
+            placeholder={
+              signal === 'up'
+                ? 'Anything we should do more of? (optional)'
+                : (suggestionPrompt || (suggestionLabel ? suggestionLabel + ' (optional)' : 'What should it have been? (optional)'))
+            }
             style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '5px 8px', fontSize: 11, outline: 'none' }}
           />
           <div style={{ display: 'flex', gap: 6 }}>
-            <button
-              onClick={() => submit('down')}
-              disabled={submitting || !reason.trim()}
-              style={{ padding: '4px 10px', background: reason.trim() ? '#7f1d1d' : '#1c1917', border: '1px solid ' + (reason.trim() ? '#dc2626' : '#44403c'), borderRadius: 4, color: reason.trim() ? '#fca5a5' : '#57534e', fontSize: 11, cursor: reason.trim() ? 'pointer' : 'default', fontWeight: 600 }}>
-              {submitting ? 'Saving…' : 'Log feedback'}
-            </button>
+            {(() => {
+              // Up: always enabled (notes are optional). Down: gated on reason.
+              const canSave = signal === 'up' || (signal === 'down' && reason.trim());
+              const accent = signal === 'up' ? '#10b981' : '#dc2626';
+              const accentBg = signal === 'up' ? '#064e3b' : '#7f1d1d';
+              const accentText = signal === 'up' ? '#6ee7b7' : '#fca5a5';
+              return (
+                <button
+                  onClick={() => submit(signal)}
+                  disabled={submitting || !canSave}
+                  style={{ padding: '4px 10px', background: canSave ? accentBg : '#1c1917', border: '1px solid ' + (canSave ? accent : '#44403c'), borderRadius: 4, color: canSave ? accentText : '#57534e', fontSize: 11, cursor: canSave ? 'pointer' : 'default', fontWeight: 600 }}>
+                  {submitting ? 'Saving…' : 'Log feedback'}
+                </button>
+              );
+            })()}
             <button onClick={() => { setSignal(null); setReason(''); setSuggestion(''); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #44403c', borderRadius: 4, color: '#78716c', fontSize: 11, cursor: 'pointer' }}>
               Cancel
             </button>

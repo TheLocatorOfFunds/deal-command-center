@@ -34,3 +34,8 @@ node_modules/
 # Supabase CLI cache (machine-local, never commit)
 supabase/.temp/
 pitch.source.html
+
+# Local MCP server config — contains per-user API tokens
+# (eSignatures.com, future MCP servers, etc.)
+.mcp.json
+.mcp.json.local
