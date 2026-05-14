@@ -138,7 +138,7 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 **Last updated:** 2026-05-07 evening
 
-**Last updated (auto):** 2026-05-14 17:02 UTC
+**Last updated (auto):** 2026-05-14 19:26 UTC
 
 ## Nathan's session
 
