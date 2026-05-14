@@ -7450,6 +7450,12 @@ function RelayView({ supabase, onOpenDeal }) {
   const [scanning, setScanning] = React.useState(false)
   const [scanResult, setScanResult] = React.useState(null)
   const [reviewPanel, setReviewPanel] = React.useState(null) // { deal, touch|null }
+  // Per-touch coach note + regen state — keyed by touch.id.
+  // Coach notes are the actual training data; persisted to outreach_queue.coach_note
+  // by generate-outreach Edge Function so we can mine them later.
+  const [coachByTouch, setCoachByTouch] = React.useState({})
+  const [regenByTouch, setRegenByTouch] = React.useState({})
+  const [regenErrByTouch, setRegenErrByTouch] = React.useState({})
 
   React.useEffect(() => {
     loadData()
@@ -7502,6 +7508,40 @@ function RelayView({ supabase, onOpenDeal }) {
   async function handleSkip(queueId) {
     await supabase.from('outreach_queue').update({ status: 'cancelled', skipped_reason: 'manually skipped in Relay view', updated_at: new Date().toISOString() }).eq('id', queueId)
     setPendingTouches(prev => prev.filter(t => t.id !== queueId))
+  }
+
+  async function handleRegenerate(touchId) {
+    const note = (coachByTouch[touchId] || '').trim()
+    if (!note) return
+    setRegenByTouch(prev => ({ ...prev, [touchId]: true }))
+    setRegenErrByTouch(prev => ({ ...prev, [touchId]: null }))
+    try {
+      const { data: sess } = await supabase.auth.getSession()
+      const token = sess?.session?.access_token
+      const r = await fetch(SUPABASE_URL + '/functions/v1/generate-outreach', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + (token || SUPABASE_KEY),
+        },
+        body: JSON.stringify({ queue_id: touchId, coach_note: note }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || 'Generation failed')
+      // Pull the fresh draft so the row updates in place.
+      const { data: fresh } = await supabase
+        .from('outreach_queue').select('*').eq('id', touchId).single()
+      if (fresh) {
+        setPendingTouches(prev => prev.map(t => t.id === touchId ? { ...t, ...fresh } : t))
+      }
+      // Clear the coach input so it's ready for a follow-up nudge.
+      setCoachByTouch(prev => ({ ...prev, [touchId]: '' }))
+    } catch (e) {
+      setRegenErrByTouch(prev => ({ ...prev, [touchId]: e.message || 'Regenerate failed' }))
+    } finally {
+      setRegenByTouch(prev => ({ ...prev, [touchId]: false }))
+    }
   }
 
   async function openReview(dealId, touch = null) {
@@ -7652,29 +7692,35 @@ function RelayView({ supabase, onOpenDeal }) {
                       Skip
                     </button>
                   </div>
-                  {/* Grade the draft inline — same widget that appears on the deal's Comms
-                      tab, surfaced here so we can review the whole queue in one pass
-                      without drilling into individual deals. */}
+                  {/* Coach field — type a correction, hit Regenerate to get a new
+                      draft. The coach note is persisted to outreach_queue.coach_note
+                      by the Edge Function, which gives us the training data we want
+                      without needing a separate thumbs widget. */}
                   {touch.deal_id && touch.draft_body && (
-                    <div style={{ marginTop: 10, marginLeft: -16, marginRight: -16, marginBottom: -16 }}>
-                      <AgentFeedbackWidget
-                        kind="text_draft"
-                        label="Grade this draft"
-                        dealId={touch.deal_id}
-                        outreachQueueId={touch.id}
-                        context={{
-                          draft_body: touch.draft_body,
-                          relay_step_number: touch.relay_step_number,
-                          relay_sequence_id: touch.relay_sequence_id,
-                          relay_enrollment_id: touch.relay_enrollment_id,
-                          scheduled_for: touch.scheduled_for,
-                          deal_address: deal?.address || null,
-                          deal_name: deal?.name || null,
-                          surface: 'relay_view',
+                    <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                      <input
+                        type="text"
+                        value={coachByTouch[touch.id] || ''}
+                        onChange={e => setCoachByTouch(prev => ({ ...prev, [touch.id]: e.target.value }))}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id]) {
+                            handleRegenerate(touch.id)
+                          }
                         }}
-                        suggestionPrompt="What should the text have said?"
+                        disabled={!!regenByTouch[touch.id]}
+                        placeholder='Coach: "shorter", "mention the auction date", "warmer tone"…'
+                        style={{ flex: 1, background: '#0c0a09', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', padding: '7px 10px', fontSize: 12, outline: 'none' }}
                       />
+                      <button
+                        onClick={() => handleRegenerate(touch.id)}
+                        disabled={!(coachByTouch[touch.id] || '').trim() || !!regenByTouch[touch.id]}
+                        style={{ padding: '7px 12px', background: (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id] ? '#1e293b' : '#0f172a', border: '1px solid #334155', borderRadius: 6, color: (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id] ? '#93c5fd' : '#475569', fontSize: 12, cursor: (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id] ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                        {regenByTouch[touch.id] ? 'Regenerating…' : '↺ Regenerate'}
+                      </button>
                     </div>
+                  )}
+                  {regenErrByTouch[touch.id] && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: '#fca5a5' }}>⚠ {regenErrByTouch[touch.id]}</div>
                   )}
                 </div>
               )
@@ -11051,30 +11097,13 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
         </div>
       )}
 
-      {/* Training-loop feedback — two widgets stacked. Only render once
-          a draft body exists (no point rating a blank loading state). */}
+      {/* Training-loop feedback. Text-draft signal is captured implicitly
+          via the coach note above (persisted to outreach_queue.coach_note) +
+          whether the user hit Send as-is, edited, or skipped — no thumbs
+          widget needed. We keep the research_grade widget below since
+          lead-tier accuracy is a distinct training signal. */}
       {!isLoading && item?.draft_body && (
         <>
-          <AgentFeedbackWidget
-            kind="text_draft"
-            label="Rate this draft"
-            dealId={item.deal_id}
-            outreachQueueId={item.id}
-            context={{
-              draft_body: item.draft_body,
-              cadence_day: item.cadence_day,
-              lead_tier: deal?.lead_tier || null,
-              meta_snapshot: {
-                county: deal?.meta?.county || null,
-                walkerVerified: deal?.meta?.walkerVerified ?? null,
-                salePrice: deal?.meta?.salePrice ?? null,
-                estimatedSurplus: deal?.meta?.estimatedSurplus ?? null,
-                grade: deal?.meta?.grade ?? null,
-              },
-              agent_reasoning: item.agent_reasoning || null,
-            }}
-            suggestionPrompt="What should the text have said? (optional)"
-          />
           <AgentFeedbackWidget
             kind="research_grade"
             label={`Is "${deal?.lead_tier || 'unscored'}" the right grade?`}
