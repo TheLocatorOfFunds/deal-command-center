@@ -408,6 +408,47 @@ Do NOT delete `TXT resend._domainkey` or `TXT _dmarc` under any circumstance —
 those are the active outbound sending config. SES leftovers (`MX send` and `TXT send`
 with `include:amazonses.com`) were deleted Apr 22, 2026 and do not need to come back.
 
+## e-signature integration — two parallel surfaces
+
+DCC has TWO independent signing pipelines, both production-live:
+
+### DocuSign (legacy, $500/yr Starter tier)
+- **EF**: `docusign-send-envelope` / `docusign-sign` / `docusign-status` / `docusign-webhook`
+- **Table**: `docusign_envelopes`
+- **Template column**: `library_documents.docusign_template_id`
+- **UI**: `DocuSignSendModal` in `src/app.jsx`, amber button in the Documents section
+- **Status**: stuck on Starter — production embedded signing requires Enterprise ($2,500/yr). Sandbox-only until we pay or migrate.
+
+### eSignatures.com (added 2026-05-14 — pay-as-you-go)
+- **EF**: `send-esignature-contract` (REST) + `esignatures-webhook`
+- **Table**: `esignatures_contracts`
+- **Template column**: `library_documents.esignatures_template_id`
+- **UI**: `ESignaturesSendModal` in `src/app.jsx`, green button in the Documents section
+- **MCP server**: `mcp-server-esignatures` published on PyPI. Project `.mcp.json` exposes 13 tools (create / query / withdraw / delete / list contracts; create / update / query / delete / list templates; 3 collaborator tools). Token source: https://esignatures.com/api_accounts → Automation & API tab.
+- **Cost**: $0.49/contract pay-as-you-go, $50 minimum top-up, no monthly floor.
+
+### When to use which surface
+
+| Trigger | Surface | Why |
+|---|---|---|
+| Nathan/Eric/Inaam clicks Send in DCC UI | REST/EF (either provider) | UI calls Edge Function; UI has no MCP access |
+| Inbound webhook from vendor | EF (`docusign-webhook` or `esignatures-webhook`) | HTTP-only by definition |
+| Justin in a Claude Code chat: "send the Retention to Elaine" | MCP (eSignatures) | One tool call, no UI round-trip |
+| Lauren autonomous flow: "client said ready" | MCP (eSignatures) | Agent-native interface |
+| Research agent: "lead graded A, send retainer" | MCP (eSignatures) | Agent-native interface |
+
+### Critical UX caveat for the MCP path
+
+The MCP `create_contract` tool may NOT honor `signature_request_delivery_methods=[]` the way the REST/EF path does. We built the EF to suppress eSignatures.com's own email/SMS so we can deliver the signing URL via Nathan's iPhone bridge (homeowner-on-an-iPhone UX). If you use the MCP server to send a contract, eSignatures.com will probably email/SMS the signer from a `noreply@esignatures.com` address — which is a worse experience for elderly surplus-fund homeowners.
+
+**Rule of thumb**: for envelopes that go to homeowners, use the DCC UI (which goes through the EF). For internal / professional recipients (attorneys, vendors) where a `noreply` sender is fine, the MCP path is faster.
+
+### Records reconciliation
+
+Both surfaces should write to `esignatures_contracts`. The webhook EF reconciles either way — when a contract is created via MCP that DCC didn't originate, the first `signer-viewed-the-contract` webhook event inserts a stub row keyed on the `metadata.deal_id` we pass in the MCP call.
+
+If you create a contract via MCP and want it to appear in DCC, set the `metadata` field to `{"deal_id": "<dcc-deal-id>", "source": "mcp"}` so the webhook can stitch it together.
+
 ## ⚠️ Messaging gateway — ALWAYS use Nathan's iPhone, NEVER Twilio
 
 **All outbound SMS, MMS, and video is sent via Nathan's iPhone through the mac_bridge.**
