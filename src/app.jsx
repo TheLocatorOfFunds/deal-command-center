@@ -3026,7 +3026,16 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "relay" ? (
-            <RelayView supabase={sb} onOpenDeal={onSelect} />
+            <RelayView
+              supabase={sb}
+              onOpenDeal={(id) => {
+                // When drilling in from Relay, the user almost always wants to
+                // look at the Comms thread for that deal — that's where the
+                // pending message and full conversation context live. Skip
+                // Overview and route straight there.
+                window.location.hash = `#/deal/${id}/comms`;
+              }}
+            />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
           ) : view === "inbox" ? (
@@ -7513,6 +7522,7 @@ function RelayView({ supabase, onOpenDeal }) {
   async function handleRegenerate(touchId) {
     const note = (coachByTouch[touchId] || '').trim()
     if (!note) return
+    const touch = pendingTouches.find(t => t.id === touchId)
     setRegenByTouch(prev => ({ ...prev, [touchId]: true }))
     setRegenErrByTouch(prev => ({ ...prev, [touchId]: null }))
     try {
@@ -7535,12 +7545,68 @@ function RelayView({ supabase, onOpenDeal }) {
       if (fresh) {
         setPendingTouches(prev => prev.map(t => t.id === touchId ? { ...t, ...fresh } : t))
       }
+      // Durable training record — every coach note we use to regenerate is
+      // captured in agent_feedback too, with the previous draft for context.
+      logCoachNote({
+        note,
+        dealId: touch?.deal_id,
+        outreachQueueId: touchId,
+        previousDraft: touch?.draft_body,
+        newDraft: fresh?.draft_body,
+        surface: 'relay_view_regenerate',
+      })
       // Clear the coach input so it's ready for a follow-up nudge.
       setCoachByTouch(prev => ({ ...prev, [touchId]: '' }))
     } catch (e) {
       setRegenErrByTouch(prev => ({ ...prev, [touchId]: e.message || 'Regenerate failed' }))
     } finally {
       setRegenByTouch(prev => ({ ...prev, [touchId]: false }))
+    }
+  }
+
+  // Save a coach note without regenerating — for feedback that isn't about
+  // the message itself (e.g. "wrong tier — homeowner deceased", "this lead
+  // is bad in general", or any free-form training input).
+  async function handleLogCoachNote(touchId) {
+    const note = (coachByTouch[touchId] || '').trim()
+    if (!note) return
+    const touch = pendingTouches.find(t => t.id === touchId)
+    setRegenByTouch(prev => ({ ...prev, [touchId]: true }))
+    setRegenErrByTouch(prev => ({ ...prev, [touchId]: null }))
+    try {
+      await logCoachNote({
+        note,
+        dealId: touch?.deal_id,
+        outreachQueueId: touchId,
+        previousDraft: touch?.draft_body,
+        newDraft: null,
+        surface: 'relay_view_log_only',
+      })
+      setCoachByTouch(prev => ({ ...prev, [touchId]: '' }))
+    } catch (e) {
+      setRegenErrByTouch(prev => ({ ...prev, [touchId]: e.message || 'Log failed' }))
+    } finally {
+      setRegenByTouch(prev => ({ ...prev, [touchId]: false }))
+    }
+  }
+
+  // Shared coach-note writer — used by both regenerate and log-only paths.
+  async function logCoachNote({ note, dealId, outreachQueueId, previousDraft, newDraft, surface }) {
+    try {
+      const { data: authData } = await supabase.auth.getUser()
+      await supabase.from('agent_feedback').insert({
+        kind: 'coach',
+        deal_id: dealId || null,
+        outreach_queue_id: outreachQueueId || null,
+        user_id: authData?.user?.id || null,
+        signal: null,
+        reason: note,
+        suggested_correction: newDraft || null,
+        context: { previous_draft: previousDraft || null, surface },
+      })
+    } catch (e) {
+      // Best-effort — don't block the user flow on the training log.
+      console.warn('[coach] agent_feedback insert failed', e)
     }
   }
 
@@ -7692,33 +7758,46 @@ function RelayView({ supabase, onOpenDeal }) {
                       Skip
                     </button>
                   </div>
-                  {/* Coach field — type a correction, hit Regenerate to get a new
-                      draft. The coach note is persisted to outreach_queue.coach_note
-                      by the Edge Function, which gives us the training data we want
-                      without needing a separate thumbs widget. */}
-                  {touch.deal_id && touch.draft_body && (
-                    <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
-                      <input
-                        type="text"
-                        value={coachByTouch[touch.id] || ''}
-                        onChange={e => setCoachByTouch(prev => ({ ...prev, [touch.id]: e.target.value }))}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' && (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id]) {
-                            handleRegenerate(touch.id)
-                          }
-                        }}
-                        disabled={!!regenByTouch[touch.id]}
-                        placeholder='Coach: "shorter", "mention the auction date", "warmer tone"…'
-                        style={{ flex: 1, background: '#0c0a09', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', padding: '7px 10px', fontSize: 12, outline: 'none' }}
-                      />
-                      <button
-                        onClick={() => handleRegenerate(touch.id)}
-                        disabled={!(coachByTouch[touch.id] || '').trim() || !!regenByTouch[touch.id]}
-                        style={{ padding: '7px 12px', background: (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id] ? '#1e293b' : '#0f172a', border: '1px solid #334155', borderRadius: 6, color: (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id] ? '#93c5fd' : '#475569', fontSize: 12, cursor: (coachByTouch[touch.id] || '').trim() && !regenByTouch[touch.id] ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                        {regenByTouch[touch.id] ? 'Regenerating…' : '↺ Regenerate'}
-                      </button>
-                    </div>
-                  )}
+                  {/* Coach field — type anything: a correction for the message,
+                      a note on the lead tier ("wrong tier, homeowner deceased"),
+                      or general training input. Two save paths:
+                        ↺ Regenerate — regenerate the draft using the note + log it
+                        💾 Log — just log it (no regen), for non-message feedback
+                      Both write to agent_feedback (kind='coach') for training. */}
+                  {touch.deal_id && touch.draft_body && (() => {
+                    const note = (coachByTouch[touch.id] || '').trim()
+                    const busy = !!regenByTouch[touch.id]
+                    const enabled = !!note && !busy
+                    return (
+                      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <input
+                          type="text"
+                          value={coachByTouch[touch.id] || ''}
+                          onChange={e => setCoachByTouch(prev => ({ ...prev, [touch.id]: e.target.value }))}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && enabled) handleRegenerate(touch.id)
+                          }}
+                          disabled={busy}
+                          placeholder='Coach: about the message, the tier, the contact, anything…'
+                          style={{ flex: 1, minWidth: 200, background: '#0c0a09', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', padding: '7px 10px', fontSize: 12, outline: 'none' }}
+                        />
+                        <button
+                          onClick={() => handleRegenerate(touch.id)}
+                          disabled={!enabled}
+                          title="Regenerate draft using this note"
+                          style={{ padding: '7px 12px', background: enabled ? '#1e293b' : '#0f172a', border: '1px solid #334155', borderRadius: 6, color: enabled ? '#93c5fd' : '#475569', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          {busy ? 'Working…' : '↺ Regenerate'}
+                        </button>
+                        <button
+                          onClick={() => handleLogCoachNote(touch.id)}
+                          disabled={!enabled}
+                          title="Save note for training without regenerating"
+                          style={{ padding: '7px 12px', background: 'transparent', border: '1px solid #334155', borderRadius: 6, color: enabled ? '#cbd5e1' : '#475569', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          💾 Log
+                        </button>
+                      </div>
+                    )
+                  })()}
                   {regenErrByTouch[touch.id] && (
                     <div style={{ marginTop: 6, fontSize: 11, color: '#fca5a5' }}>⚠ {regenErrByTouch[touch.id]}</div>
                   )}
@@ -10848,6 +10927,8 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const [coachNote, setCoachNote] = React.useState('');
   const [isGen, setIsGen]         = React.useState(false);
   const [isSend, setIsSend]       = React.useState(false);
+  const [isLogging, setIsLogging] = React.useState(false);
+  const [logToast, setLogToast]   = React.useState(null);
   const [editMode, setEditMode]   = React.useState(false);
   const sendingRef                = React.useRef(false);
   const [editBody, setEditBody]   = React.useState('');
@@ -10855,6 +10936,46 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const [phoneNums, setPhoneNums] = React.useState([]);
   const [error, setError]         = React.useState(null);
   const [sentInfo, setSentInfo]   = React.useState(null);
+
+  // Log a coach note to agent_feedback without regenerating — for non-message
+  // feedback like "wrong tier, person is deceased" or general training input.
+  async function logCoachNote(note, { regenerated = false, newDraft = null } = {}) {
+    if (!note || !item?.id) return;
+    try {
+      const { data: authData } = await sb.auth.getUser();
+      await sb.from('agent_feedback').insert({
+        kind: 'coach',
+        deal_id: item.deal_id || null,
+        outreach_queue_id: item.id,
+        user_id: authData?.user?.id || null,
+        signal: null,
+        reason: note,
+        suggested_correction: newDraft,
+        context: {
+          previous_draft: item?.draft_body || null,
+          cadence_day: item?.cadence_day ?? null,
+          lead_tier: deal?.lead_tier || null,
+          surface: regenerated ? 'comms_draft_panel_regenerate' : 'comms_draft_panel_log_only',
+        },
+      });
+    } catch (e) {
+      console.warn('[coach] agent_feedback insert failed', e);
+    }
+  }
+
+  async function handleLogFeedback() {
+    const note = coachNote.trim();
+    if (!note || isLogging || isGen) return;
+    setIsLogging(true);
+    try {
+      await logCoachNote(note, { regenerated: false });
+      setCoachNote('');
+      setLogToast('Logged');
+      setTimeout(() => setLogToast(null), 1800);
+    } finally {
+      setIsLogging(false);
+    }
+  }
 
   const meta      = deal?.meta || {};
   const firstName = ((meta.homeownerName || deal?.name || '').split(' - ')[0].split(' ')[0]) || 'them';
@@ -10886,6 +11007,11 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Generation failed');
+      // Log the coach note alongside the regenerated draft so we have a
+      // permanent training record (previous draft → coach note → new draft).
+      if (note && note.trim()) {
+        logCoachNote(note.trim(), { regenerated: true, newDraft: j?.draft_body || null });
+      }
     } catch (e) { setError(e.message); } finally { setIsGen(false); }
   }
 
@@ -11052,25 +11178,42 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
         })()}
       </div>
 
-      {/* Coach note + regenerate */}
-      {!isLoading && (
-        <div style={{ padding: '0 14px 10px', display: 'flex', gap: 8 }}>
-          <input
-            type="text"
-            value={coachNote}
-            onChange={e => setCoachNote(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && coachNote.trim()) { callGenerate(coachNote); setCoachNote(''); } }}
-            placeholder='Coach: "make it shorter", "mention the auction date", "friendlier tone"…'
-            style={{ flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#e7e5e4', padding: '7px 10px', fontSize: 12, outline: 'none' }}
-          />
-          <button
-            onClick={() => { if (coachNote.trim()) { callGenerate(coachNote); setCoachNote(''); } }}
-            disabled={!coachNote.trim() || isGen}
-            style={{ padding: '7px 12px', background: coachNote.trim() ? '#292524' : '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: coachNote.trim() ? '#e7e5e4' : '#57534e', fontSize: 12, cursor: coachNote.trim() ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>
-            ↺ Regenerate
-          </button>
-        </div>
-      )}
+      {/* Coach field — type anything: a correction for the message, a note
+          on the lead tier ("wrong tier, homeowner deceased"), or general
+          training input. Two save paths:
+            ↺ Regenerate — regenerate the draft using the note + log it
+            💾 Log       — just log it for training (no regen) */}
+      {!isLoading && (() => {
+        const enabled = !!coachNote.trim() && !isGen && !isLogging;
+        return (
+          <div style={{ padding: '0 14px 10px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              value={coachNote}
+              onChange={e => setCoachNote(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && enabled) { callGenerate(coachNote); setCoachNote(''); } }}
+              disabled={isGen || isLogging}
+              placeholder='Coach: about the message, the tier, the contact, anything…'
+              style={{ flex: 1, minWidth: 200, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#e7e5e4', padding: '7px 10px', fontSize: 12, outline: 'none' }}
+            />
+            <button
+              onClick={() => { if (enabled) { callGenerate(coachNote); setCoachNote(''); } }}
+              disabled={!enabled}
+              title="Regenerate the draft using this note"
+              style={{ padding: '7px 12px', background: enabled ? '#292524' : '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: enabled ? '#e7e5e4' : '#57534e', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+              {isGen ? 'Regenerating…' : '↺ Regenerate'}
+            </button>
+            <button
+              onClick={handleLogFeedback}
+              disabled={!enabled}
+              title="Save note for training without regenerating"
+              style={{ padding: '7px 12px', background: 'transparent', border: '1px solid #44403c', borderRadius: 6, color: enabled ? '#a8a29e' : '#57534e', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+              {isLogging ? 'Saving…' : '💾 Log'}
+            </button>
+            {logToast && <span style={{ fontSize: 11, color: '#6ee7b7', alignSelf: 'center' }}>✓ {logToast}</span>}
+          </div>
+        );
+      })()}
 
       {error && <div style={{ padding: '0 14px 8px', fontSize: 12, color: '#fca5a5' }}>⚠ {error}</div>}
 
@@ -11097,37 +11240,12 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
         </div>
       )}
 
-      {/* Training-loop feedback. Text-draft signal is captured implicitly
-          via the coach note above (persisted to outreach_queue.coach_note) +
-          whether the user hit Send as-is, edited, or skipped — no thumbs
-          widget needed. We keep the research_grade widget below since
-          lead-tier accuracy is a distinct training signal. */}
-      {!isLoading && item?.draft_body && (
-        <>
-          <AgentFeedbackWidget
-            kind="research_grade"
-            label={`Is "${deal?.lead_tier || 'unscored'}" the right grade?`}
-            dealId={item.deal_id}
-            outreachQueueId={null}
-            context={{
-              lead_tier: deal?.lead_tier || null,
-              is_30dts: deal?.is_30dts ?? null,
-              meta_snapshot: {
-                county: deal?.meta?.county || null,
-                walkerVerified: deal?.meta?.walkerVerified ?? null,
-                isPostAuction: deal?.meta?.isPostAuction ?? null,
-                salePrice: deal?.meta?.salePrice ?? null,
-                estimatedSurplus: deal?.meta?.estimatedSurplus ?? null,
-                grade: deal?.meta?.grade ?? null,
-                gradeScore: deal?.meta?.gradeScore ?? null,
-                lifecycleStage: deal?.meta?.lifecycleStage ?? null,
-                deceased: deal?.meta?.deceased ?? null,
-              },
-            }}
-            suggestionPrompt='What should it be? e.g. "B — plaintiff deceased, kick to deeper research"'
-          />
-        </>
-      )}
+      {/* All training signal is now captured through the coach field above —
+          message corrections, lead-tier feedback, contact notes ("deceased"),
+          general training input — all flow into agent_feedback with
+          kind='coach'. Combined with implicit signal from sent-as-is vs
+          edited vs skipped, that's enough to train without a separate
+          thumbs widget. */}
     </div>
   );
 }
