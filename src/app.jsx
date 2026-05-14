@@ -18378,6 +18378,10 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [envelopes, setEnvelopes] = useState([]);
   const [showDocuSign, setShowDocuSign] = useState(false);
   const [resendEnv, setResendEnv] = useState(null); // envelope to pre-populate on resend
+  // Parallel eSignatures.com pipeline (added 2026-05-14 — kept separate from DocuSign)
+  const [esigContracts, setEsigContracts] = useState([]);
+  const [showEsig, setShowEsig] = useState(false);
+  const [resendEsig, setResendEsig] = useState(null);
   const fileRef = useRef(null);
 
   // Drag-drop upload state. dragDepth tracks nested dragenter/dragleave so
@@ -18474,6 +18478,22 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   useEffect(() => {
     const ch = sb.channel('ds-envelopes-' + dealId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docusign_envelopes', filter: `deal_id=eq.${dealId}` }, loadEnvelopes)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  // Parallel eSignatures.com pipeline — same realtime pattern, different table
+  const loadEsigContracts = async () => {
+    const { data } = await sb.from('esignatures_contracts')
+      .select('*, library_documents(title)')
+      .eq('deal_id', dealId)
+      .order('created_at', { ascending: false });
+    setEsigContracts(data || []);
+  };
+  useEffect(() => { loadEsigContracts(); }, [dealId]);
+  useEffect(() => {
+    const ch = sb.channel('esig-contracts-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'esignatures_contracts', filter: `deal_id=eq.${dealId}` }, loadEsigContracts)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [dealId]);
@@ -18912,7 +18932,10 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
       <Card title={`Documents (${items.length}${pins.length > 0 ? ' · ' + pins.length + ' pinned' : ''})`} action={
       <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
         <button onClick={() => setShowDocuSign(true)} title="Send a library template via DocuSign for e-signature (email + optional SMS)" style={{ ...btnGhost, fontSize: 11, color: "#d97706", borderColor: "#78350f" }}>
-          📝 Send for signature
+          📝 Send via DocuSign
+        </button>
+        <button onClick={() => setShowEsig(true)} title="Send a library template via eSignatures.com — cheaper, mobile-first, SMS-delivered" style={{ ...btnGhost, fontSize: 11, color: "#10b981", borderColor: "#065f46" }}>
+          ✍ Send via eSignatures
         </button>
         <button onClick={() => { setPickerMode('pin'); setShowLibraryPicker(true); }} title="Expose a library doc on this deal's client or attorney portal without copying" style={{ ...btnGhost, fontSize: 11 }}>
           📌 Pin from library
@@ -18946,6 +18969,16 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
           resendFrom={resendEnv}
           onClose={() => { setShowDocuSign(false); setResendEnv(null); loadEnvelopes(); }}
           onSent={loadEnvelopes}
+        />
+      )}
+
+      {showEsig && (
+        <ESignaturesSendModal
+          deal={deal}
+          dealId={dealId}
+          resendFrom={resendEsig}
+          onClose={() => { setShowEsig(false); setResendEsig(null); loadEsigContracts(); }}
+          onSent={loadEsigContracts}
         />
       )}
 
@@ -18998,6 +19031,65 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                 </div>
                 {env.ds_error && (
                   <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{env.ds_error}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Active eSignatures.com contract status — realtime, parallel to DocuSign panel */}
+      {esigContracts.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #10b981", borderRadius: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+            ✍ eSignatures.com contracts ({esigContracts.length})
+          </div>
+          {esigContracts.map(c => {
+            const statusColor = c.status === 'completed' ? "#10b981"
+              : c.status === 'declined' || c.status === 'withdrawn' || c.status === 'error' ? "#ef4444"
+              : c.status === 'signed' ? "#10b981"
+              : c.status === 'viewed' ? "#3b82f6"
+              : c.status === 'sent' ? "#f59e0b"
+              : "#78716c";
+            const statusLabel = c.status === 'draft' ? 'Draft'
+              : c.status === 'sent' ? 'Waiting for signature'
+              : c.status === 'viewed' ? 'Opened by signer'
+              : c.status === 'signed' ? 'Signed'
+              : c.status === 'completed' ? 'Completed · all signers done'
+              : c.status === 'declined' ? 'Declined by signer'
+              : c.status === 'withdrawn' ? 'Withdrawn'
+              : c.status === 'error' ? 'Error'
+              : c.status;
+            return (
+              <div key={c.id} style={{ padding: "8px 0", borderBottom: "1px solid #1c1917" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 14 }}>✍</span>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#fafaf9" }}>
+                      {c.library_documents?.title || 'Contract'}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                      {c.recipient_name} · {c.recipient_email}{c.send_sms ? ' · + SMS' : ''}
+                      {c.sent_at && <> · sent {new Date(c.sent_at).toLocaleString()}</>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 3, background: statusColor + '22', color: statusColor, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                    {statusLabel}
+                  </span>
+                  {c.signer_url && (
+                    <a href={c.signer_url} target="_blank" rel="noreferrer" title="Open the signer URL (the same link the homeowner gets)" style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#10b981", textDecoration: "none", flexShrink: 0 }}>↗ Link</a>
+                  )}
+                  <button
+                    onClick={() => {
+                      setResendEsig({ library_document_id: c.library_document_id, recipient_name: c.recipient_name, recipient_email: c.recipient_email, recipient_phone: c.recipient_phone || null });
+                      setShowEsig(true);
+                    }}
+                    title="Send this contract again to the same or a different recipient"
+                    style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#a8a29e", flexShrink: 0 }}
+                  >↩ Resend</button>
+                </div>
+                {c.esig_api_error && (
+                  <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{c.esig_api_error}</div>
                 )}
               </div>
             );
@@ -26382,6 +26474,372 @@ function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
                   <button onClick={onClose} style={{ ...btnGhost, fontSize: 12 }}>Cancel</button>
                   <button onClick={send} disabled={sending} style={{ ...btnPrimary, fontSize: 12 }}>
                     {sending ? 'Sending to DocuSign…' : '📝 Send for signature'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── eSignatures.com Send Modal — parallel to DocuSignSendModal ────────────
+// Per Justin 2026-05-14: we are keeping DocuSign untouched as one path and
+// adding eSignatures.com as a second, independent path. This modal sends a
+// library template via eSignatures.com Edge Function `send-esignature-contract`.
+// The EF suppresses the vendor's email/SMS (signature_request_delivery_methods=[])
+// so the signing URL is delivered via our existing Twilio bridge — homeowner
+// gets one SMS with one tap-to-sign link, no DocuSign account, mobile-first.
+function ESignaturesSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [mergeOverrides, setMergeOverrides] = useState({});
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [phoneManualMode, setPhoneManualMode] = useState(false);
+  const [sendSms, setSendSms] = useState(true);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [sentResult, setSentResult] = useState(null);
+  const [dealContacts, setDealContacts] = useState([]);
+
+  // Load ONLY library docs that have an eSignatures.com template id wired.
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from('library_documents')
+        .select('id, title, kind, template_fields, esignatures_template_id, description')
+        .not('esignatures_template_id', 'is', null)
+        .order('created_at', { ascending: false });
+      const list = data || [];
+      setTemplates(list);
+      setLoading(false);
+      if (resendFrom?.library_document_id) {
+        const match = list.find(t => t.id === resendFrom.library_document_id);
+        if (match) setSelectedDoc(match);
+      }
+    })();
+  }, []);
+
+  // Pre-fill recipient from resendFrom or deal contacts (mirror of DocuSign)
+  useEffect(() => {
+    if (resendFrom) {
+      if (resendFrom.recipient_name)  setRecipientName(resendFrom.recipient_name);
+      if (resendFrom.recipient_email) setRecipientEmail(resendFrom.recipient_email);
+      if (resendFrom.recipient_phone) { setRecipientPhone(resendFrom.recipient_phone); setPhoneManualMode(false); }
+    }
+    (async () => {
+      const clientName = (deal.name || '').split(' - ')[0];
+      if (!resendFrom) setRecipientName(clientName);
+
+      const { data: cdRows } = await sb
+        .from('contact_deals')
+        .select('contacts(id, name, email, phone)')
+        .eq('deal_id', dealId);
+      const linked = (cdRows || [])
+        .map(r => r.contacts)
+        .filter(Boolean)
+        .filter(c => c.email || c.phone);
+      setDealContacts(linked);
+
+      if (!resendFrom) {
+        const firstWithEmail = linked.find(c => c.email);
+        const firstWithPhone = linked.find(c => c.phone);
+        if (firstWithEmail) {
+          setRecipientName(firstWithEmail.name || clientName);
+          setRecipientEmail(firstWithEmail.email);
+        } else {
+          const { data: ca } = await sb.from('client_access')
+            .select('email, prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.email) setRecipientEmail(ca.email);
+          else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
+        }
+        if (firstWithPhone) setRecipientPhone(firstWithPhone.phone);
+        else {
+          const { data: ca } = await sb.from('client_access')
+            .select('prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
+          else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+        }
+      }
+    })();
+  }, [dealId]);
+
+  // Merge defaults when template picked
+  useEffect(() => {
+    if (!selectedDoc) { setMergeOverrides({}); return; }
+    const fields = selectedDoc.template_fields || {};
+    const initial = {};
+    for (const [k, path] of Object.entries(fields)) {
+      initial[k] = resolveDealPath(deal, path);
+    }
+    setMergeOverrides(initial);
+    setEmailSubject(`Please sign: ${selectedDoc.title}`);
+  }, [selectedDoc]);
+
+  const send = async () => {
+    if (!selectedDoc || !recipientEmail || !recipientName) {
+      setMsg({ type: 'error', text: 'Pick a template, confirm recipient email + name.' });
+      return;
+    }
+    if (sendSms && !recipientPhone) {
+      setMsg({ type: 'error', text: 'SMS is on — enter a phone number or turn off SMS.' });
+      return;
+    }
+    setSending(true); setMsg(null);
+    try {
+      const { data, error } = await sb.functions.invoke('send-esignature-contract', {
+        body: {
+          deal_id: dealId,
+          library_document_id: selectedDoc.id,
+          recipient_email: recipientEmail.trim(),
+          recipient_name: recipientName.trim(),
+          recipient_phone: sendSms ? (recipientPhone.trim() || null) : null,
+          email_subject_override: emailSubject.trim() || null,
+          merge_overrides: mergeOverrides,
+        },
+      });
+      if (error) throw error;
+      if (data?.error) {
+        if (data.error === 'esignatures_not_configured') {
+          setMsg({ type: 'error', text: '⚠ eSignatures.com not configured yet — add ESIGNATURES_API_TOKEN to the Edge Function secrets.' });
+        } else if (data.error === 'not_an_esignatures_template') {
+          setMsg({ type: 'error', text: 'This template has no esignatures_template_id set. SQL-update the library row with the template id from your eSignatures.com dashboard.' });
+        } else {
+          setMsg({ type: 'error', text: data.message || JSON.stringify(data) });
+        }
+        setSending(false);
+        return;
+      }
+      setSentResult({
+        name: recipientName.trim(),
+        email: recipientEmail.trim(),
+        phone: data.sms_sent ? recipientPhone.trim() : null,
+        signing_link: data.signing_link,
+        sms_sent: data.sms_sent,
+      });
+      onSent?.();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Send failed' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const mergeFieldKeys = selectedDoc ? Object.keys(selectedDoc.template_fields || {}) : [];
+  const clientName = (deal.name || '').split(' - ')[0];
+
+  if (sentResult) {
+    return (
+      <Modal onClose={onClose} title={`✍ Sent for signature → ${clientName}`} wide>
+        <div style={{ textAlign: 'center', padding: '12px 0 24px' }}>
+          <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>Contract sent!</div>
+          <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 20 }}>
+            Sent to <strong style={{ color: '#fafaf9' }}>{sentResult.name}</strong> ({sentResult.email})
+          </div>
+          {sentResult.sms_sent && sentResult.phone && (
+            <div style={{ marginBottom: 16, padding: '10px 14px', background: '#064e3b', border: '1px solid #065f46', borderRadius: 8, fontSize: 13, color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: 8 }}>
+              📱 Signing link texted to {sentResult.phone}
+              <span style={{ fontSize: 11, color: '#34d399', marginLeft: 'auto' }}>via eSignatures.com</span>
+            </div>
+          )}
+          {sentResult.signing_link && (
+            <div style={{ marginBottom: 20, padding: '10px 14px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, fontSize: 12, textAlign: 'left' }}>
+              <div style={{ color: '#78716c', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Signing Link</div>
+              <a href={sentResult.signing_link} target="_blank" rel="noreferrer" style={{ color: '#10b981', wordBreak: 'break-all', textDecoration: 'underline', fontSize: 12 }}>{sentResult.signing_link}</a>
+            </div>
+          )}
+          <button onClick={onClose} style={{ ...btnPrimary, fontSize: 13, padding: '10px 32px' }}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal onClose={onClose} title={`✍ Send via eSignatures.com → ${clientName}`} wide>
+      {resendFrom && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "#022c22", border: "1px solid #065f46", borderRadius: 6, fontSize: 12, color: "#6ee7b7", display: "flex", alignItems: "center", gap: 6 }}>
+          ↩ <strong>Resending</strong> — template and recipient pre-filled from the previous send. Adjust anything before hitting Send.
+        </div>
+      )}
+      {loading ? (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading templates…</div>
+      ) : templates.length === 0 ? (
+        <div style={{ padding: 18, background: "#1c1917", border: "1px dashed #44403c", borderRadius: 8, color: "#a8a29e", fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", marginBottom: 8 }}>No eSignatures.com-ready templates yet.</div>
+          <p style={{ margin: "6px 0" }}>To send via eSignatures.com, a library doc needs <code style={{ background: "#0c0a09", padding: "2px 6px", borderRadius: 3 }}>esignatures_template_id</code> set to a template id from your eSignatures.com dashboard.</p>
+          <p style={{ margin: "6px 0" }}>Workflow:</p>
+          <ol style={{ margin: "6px 0", paddingLeft: 20 }}>
+            <li>Create the template at <a href="https://esignatures.com" target="_blank" rel="noreferrer" style={{ color: '#10b981' }}>esignatures.com</a> (use <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>{`{{ClientName}}`}</code>, <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>{`{{CaseNumber}}`}</code>, etc. as placeholder fields)</li>
+            <li>Copy the template id</li>
+            <li>SQL-update: <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>update library_documents set esignatures_template_id = '...' where id = '...'</code></li>
+            <li>Refresh this modal — the template will appear</li>
+          </ol>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 280px) 1fr", gap: 14 }} className="library-panes">
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, maxHeight: 520, overflowY: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", padding: "4px 8px 8px" }}>
+              eSignatures.com templates
+            </div>
+            {templates.map(t => {
+              const isSel = selectedDoc?.id === t.id;
+              const fieldCount = Object.keys(t.template_fields || {}).length;
+              return (
+                <button key={t.id} onClick={() => setSelectedDoc(t)} style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "10px 12px", marginBottom: 3, borderRadius: 5, cursor: "pointer",
+                  background: isSel ? "#292524" : "transparent",
+                  border: "1px solid " + (isSel ? "#10b981" : "transparent"),
+                  color: isSel ? "#fafaf9" : "#a8a29e",
+                  fontSize: 12, fontFamily: "inherit",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16 }}>✍</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.title}</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                        {fieldCount > 0 ? `${fieldCount} merge field${fieldCount === 1 ? '' : 's'}` : 'no merge fields'}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {!selectedDoc ? (
+              <div style={{ background: "#0c0a09", border: "1px dashed #292524", borderRadius: 8, padding: 32, textAlign: "center", fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
+                Pick a template on the left to configure the send.
+              </div>
+            ) : (
+              <>
+                <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                    Recipient
+                  </div>
+                  {dealContacts.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Quick-select contact</div>
+                      <select
+                        onChange={e => {
+                          const c = dealContacts.find(x => x.id === e.target.value);
+                          if (c) {
+                            if (c.name) setRecipientName(c.name);
+                            if (c.email) setRecipientEmail(c.email);
+                            if (c.phone) setRecipientPhone(c.phone);
+                          }
+                        }}
+                        defaultValue=""
+                        style={{ ...inputStyle, fontSize: 13 }}
+                      >
+                        <option value="" disabled>— pick a contact —</option>
+                        {dealContacts.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}{c.email ? ` · ${c.email}` : ''}{c.phone ? ` · ${c.phone}` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Name</div>
+                      <input value={recipientName} onChange={e => setRecipientName(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Email</div>
+                      <input type="email" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: sendSms ? "#064e3b" : "#1c1917", border: "1px solid " + (sendSms ? "#10b981" : "#292524"), borderRadius: 5, cursor: "pointer", marginBottom: sendSms ? 8 : 0 }}>
+                    <input type="checkbox" checked={sendSms} onChange={e => setSendSms(e.target.checked)} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send signing link via SMS</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a Twilio text with one tap-to-sign link. Mobile-first signing page, no signer account needed.</div>
+                    </div>
+                  </label>
+                  {sendSms && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone</div>
+                      {dealContacts.filter(c => c.phone).length > 0 && !phoneManualMode ? (
+                        <select
+                          value={recipientPhone}
+                          onChange={e => {
+                            if (e.target.value === '__custom__') {
+                              setPhoneManualMode(true);
+                              setRecipientPhone('');
+                            } else {
+                              setRecipientPhone(e.target.value);
+                            }
+                          }}
+                          style={{ ...inputStyle, fontSize: 13 }}
+                        >
+                          <option value="">— pick a number —</option>
+                          {dealContacts.filter(c => c.phone).map(c => (
+                            <option key={c.id} value={c.phone}>{c.name ? `${c.name} · ` : ''}{c.phone}</option>
+                          ))}
+                          <option value="__custom__">Enter manually…</option>
+                        </select>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="tel"
+                            value={recipientPhone}
+                            onChange={e => setRecipientPhone(e.target.value)}
+                            placeholder="(614) 555-1234"
+                            style={{ ...inputStyle, fontSize: 13, flex: 1 }}
+                            autoFocus={phoneManualMode}
+                          />
+                          {phoneManualMode && dealContacts.filter(c => c.phone).length > 0 && (
+                            <button onClick={() => { setPhoneManualMode(false); setRecipientPhone(''); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 8px", flexShrink: 0 }}>← Pick</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {mergeFieldKeys.length > 0 && (
+                  <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                      Merge fields · pre-filled from this deal
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                      {mergeFieldKeys.map(key => (
+                        <div key={key}>
+                          <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>{key}</div>
+                          <input value={mergeOverrides[key] || ''} onChange={e => setMergeOverrides(v => ({ ...v, [key]: e.target.value }))} style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} placeholder="—" />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 8 }}>
+                      These map to eSignatures.com placeholder fields by api_key. Double-check the placeholder names match your template.
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                    Contract title
+                  </div>
+                  <input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                </div>
+
+                {msg && msg.type === 'error' && (
+                  <div style={{ padding: "8px 12px", borderRadius: 6, background: "#7f1d1d", color: "#fca5a5", fontSize: 12 }}>
+                    {msg.text}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <button onClick={onClose} style={{ ...btnGhost, fontSize: 12 }}>Cancel</button>
+                  <button onClick={send} disabled={sending} style={{ ...btnPrimary, fontSize: 12, background: "#10b981", borderColor: "#10b981" }}>
+                    {sending ? 'Sending to eSignatures.com…' : '✍ Send for signature'}
                   </button>
                 </div>
               </>
