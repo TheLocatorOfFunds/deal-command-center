@@ -33,12 +33,14 @@ export function QuickFabButton() {
       | '/quick/sms'
       | '/quick/note'
       | '/quick/new-deal'
-      | '/quick/new-task',
+      | '/quick/new-task'
+      | '/search'
+      | '/notifications',
   ) => {
     setOpen(false)
     // Tiny delay lets the modal close animation finish before pushing
     // the next screen, otherwise iOS sometimes loses the back gesture.
-    setTimeout(() => router.push(path), 150)
+    setTimeout(() => router.push(path as any), 150)
   }
 
   return (
@@ -78,6 +80,18 @@ export function QuickFabButton() {
             <View style={styles.handle} />
             <Text style={styles.sheetTitle}>Quick actions</Text>
 
+            <Action
+              icon="search"
+              label="Search everything"
+              detail="Find a deal, note, contact, phone, address, or message"
+              onPress={() => go('/search')}
+            />
+            <Action
+              icon="notifications"
+              label="Notifications"
+              detail="Inbox of texts, team messages, and other alerts"
+              onPress={() => go('/notifications')}
+            />
             <Action
               icon="call"
               label="Call a number"

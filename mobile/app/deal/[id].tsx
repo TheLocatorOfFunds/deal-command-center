@@ -18,6 +18,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Linking,
   RefreshControl,
   ScrollView,
@@ -120,6 +121,7 @@ type CommsItem = {
   status: string | null
   duration_seconds?: number | null
   thread_key?: string | null
+  media_url?: string | null
   at: string
 }
 
@@ -170,7 +172,7 @@ export default function DealDetailScreen() {
       // Last 10 SMS for this deal
       supabase
         .from('messages_outbound')
-        .select('id, direction, body, status, thread_key, created_at')
+        .select('id, direction, body, status, thread_key, media_url, created_at')
         .eq('deal_id', id)
         .order('created_at', { ascending: false })
         .limit(10),
@@ -242,6 +244,7 @@ export default function DealDetailScreen() {
         body: string | null
         status: string | null
         thread_key: string | null
+        media_url: string | null
         created_at: string | null
       }>) {
         merged.push({
@@ -251,6 +254,7 @@ export default function DealDetailScreen() {
           body: m.body ?? '',
           status: m.status,
           thread_key: m.thread_key,
+          media_url: m.media_url,
           at: m.created_at ?? '',
         })
       }
@@ -1043,8 +1047,16 @@ export default function DealDetailScreen() {
                       </Text>
                       {item.kind === 'call'
                         ? formatCall(item)
-                        : item.body || '(empty)'}
+                        : item.body || (item.media_url ? '(image)' : '(empty)')}
                     </Text>
+                    {item.kind === 'sms' && item.media_url ? (
+                      <Image
+                        source={{ uri: item.media_url }}
+                        style={styles.commsMedia}
+                        resizeMode="cover"
+                        accessibilityLabel="MMS attachment"
+                      />
+                    ) : null}
                     <Text style={styles.commsMeta}>
                       {formatRelative(item.at)}
                       {item.status && item.kind === 'sms' && outbound
@@ -1573,6 +1585,13 @@ const styles = StyleSheet.create({
   },
   noteBody: { color: '#d6d3d1', fontSize: 14, lineHeight: 20 },
   noteMeta: { color: '#78716c', fontSize: 11, marginTop: 4 },
+  commsMedia: {
+    width: 200,
+    height: 200,
+    borderRadius: 8,
+    marginTop: 6,
+    backgroundColor: '#0c0a09',
+  },
   commsRow: {
     flexDirection: 'row',
     alignItems: 'center',

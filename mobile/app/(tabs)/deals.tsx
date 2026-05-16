@@ -23,6 +23,7 @@ import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
+import { useDealUnreadCounts } from '../../lib/notifications'
 
 type DealRow = {
   id: string
@@ -42,6 +43,7 @@ export default function DealsScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const dealUnread = useDealUnreadCounts(session?.user?.id ?? null)
 
   // Search state — `query` is what the user is typing (re-renders every
   // keystroke), `activeTerm` is the debounced version that actually
@@ -177,23 +179,35 @@ export default function DealsScreen() {
               <Text style={styles.emptyText}>{emptyMessage}</Text>
             </View>
           }
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              style={styles.card}
-              activeOpacity={0.6}
-              onPress={() => router.push(`/deal/${item.id}`)}
-            >
-              <Text style={styles.cardTitle} numberOfLines={1}>
-                {item.name ?? item.id}
-              </Text>
-              <Text style={styles.cardSub} numberOfLines={1}>
-                {[item.address, item.type, item.status]
-                  .filter(Boolean)
-                  .join(' · ')}
-              </Text>
-              <Text style={styles.cardHint}>Tap to open →</Text>
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            const unread = dealUnread[item.id] ?? 0
+            return (
+              <TouchableOpacity
+                style={[styles.card, unread > 0 && styles.cardUnread]}
+                activeOpacity={0.6}
+                onPress={() => router.push(`/deal/${item.id}`)}
+              >
+                <View style={styles.cardTitleRow}>
+                  <Text style={styles.cardTitle} numberOfLines={1}>
+                    {item.name ?? item.id}
+                  </Text>
+                  {unread > 0 ? (
+                    <View style={styles.unreadBadge}>
+                      <Text style={styles.unreadBadgeText}>
+                        {unread > 9 ? '9+' : unread}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={styles.cardSub} numberOfLines={1}>
+                  {[item.address, item.type, item.status]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </Text>
+                <Text style={styles.cardHint}>Tap to open →</Text>
+              </TouchableOpacity>
+            )
+          }}
         />
       )}
     </SafeAreaView>
@@ -262,7 +276,27 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
   },
-  cardTitle: { color: '#fafaf9', fontSize: 15, fontWeight: '600', marginBottom: 4 },
+  cardUnread: {
+    borderColor: '#d97706',
+    backgroundColor: '#1f1a13',
+  },
+  cardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+    gap: 8,
+  },
+  unreadBadge: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#d97706',
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unreadBadgeText: { color: '#0c0a09', fontSize: 11, fontWeight: '700' },
+  cardTitle: { color: '#fafaf9', fontSize: 15, fontWeight: '600', flex: 1 },
   cardSub: { color: '#78716c', fontSize: 12 },
   cardHint: { color: '#d97706', fontSize: 11, marginTop: 8, fontWeight: '600' },
 })

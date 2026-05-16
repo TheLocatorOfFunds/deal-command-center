@@ -1,0 +1,153 @@
+# DCC Mobile — Feature Backlog
+
+Running list of things to build after v1 ships. Add ideas here instead of
+starting them immediately. When we ask "what should we work on next?" pull
+from this list.
+
+Items marked **[DESIGN NEEDED]** need more thought before any code starts.
+
+---
+
+## Notifications (big topic — needs design)
+
+### App icon badge count
+Show a numeric badge on the DCC app icon (the red dot with a number) driven
+by unread notifications. Requires the app to track a "total unread" count
+server-side so the badge updates even when the app is closed.
+
+**Design questions:**
+- What events increment the badge? (inbound SMS, docket events, team messages, deal activity?)
+- Does anything NOT badge? (outbound confirmations, system events?)
+- When does a badge clear — on open, or on explicit read?
+
+**[DESIGN NEEDED]**
+
+### Notification center (inbox)
+When a user taps the badge or a notification banner, they need a clear path
+to see ALL N pending notifications in one place, grouped by source. Something
+like a notification feed / inbox screen that lists each event with enough
+context to know what happened and where.
+
+Each entry should deep-link directly to the relevant screen:
+- Inbound SMS from a deal contact → opens that deal's Comms tab
+- Docket event on a case → opens that deal's Intel/Docket tab
+- Team message from Nathan or Eric → opens Team Chat
+- Deal status change (if we ever push those) → opens deal detail
+
+**Possible home for the icon:** calendar/activity icon top-right of the
+header (already exists), or a dedicated bell icon. TBD.
+
+**[DESIGN NEEDED]**
+
+### Per-deal notification indicator
+When a notification is tied to a deal, the deal card in the list should
+show a visual indicator (unread dot, highlighted border, etc.) so it's
+obvious which deals have something new without having to open each one.
+Drilling into the deal should show WHICH tab the notification is on
+(Comms, Docket, Activity, etc.) — not just that something happened.
+
+**[DESIGN NEEDED]**
+
+### Team chat notification badge
+Bottom nav "Team" icon should show a badge when there are unread messages
+in any team thread (Justin-Nathan DM, Ops channel, etc.).
+
+Relates to the broader notification center — the same unread-tracking
+system should drive both the app icon badge and the per-tab badges.
+
+**[DESIGN NEEDED]**
+
+---
+
+## UX Polish
+
+### Splash screen — hold 1 second longer
+The splash screen currently dismisses too quickly. Add ~1 second of minimum
+display time so it doesn't flash. Simple — just a `setTimeout` or
+`SplashScreen.preventAutoHideAsync()` + manual hide after delay.
+
+**Effort: small (< 30 min). No design needed.**
+
+---
+
+## Search
+
+### Global search
+Currently search only exists on the Deals tab. Consider a global search
+accessible from anywhere in the app (persistent search icon in the header,
+or a search tab in the bottom nav) that searches across deals, contacts,
+and team messages in one place.
+
+**Open question:** Is deal-only search actually fine for the use case?
+Nathan and Justin mostly navigate by deal. Global search adds complexity
+(mixed result types, ranking). May be premature. Revisit once the app
+has more daily users.
+
+**[DESIGN NEEDED — decide if this is actually worth it]**
+
+---
+
+## Comms / Messaging
+
+### SMS inbox + thread view + reply
+Full two-way SMS surface on mobile. View inbound messages, send replies
+from inside a deal. Currently deferred per v1 scope.
+
+This is the next big surface after the dialer is solid.
+
+**[DEFERRED — revisit after dialer is stable in TestFlight]**
+
+### Team chat
+Justin/Nathan/Eric internal channel on mobile. Currently deferred.
+
+**[DEFERRED]**
+
+---
+
+## TestFlight
+
+### Invite Nathan as internal tester
+Nathan has an iPhone and needs to be on the same TestFlight builds as Justin.
+
+Steps:
+1. Log into App Store Connect (appstoreconnect.apple.com) with `racin2701@yahoo.com`
+2. Go to the DCC app -> TestFlight -> Internal Testing
+3. Add Nathan's Apple ID (need to confirm which email he uses for his Apple ID)
+4. He'll get an email invite, accepts it, installs TestFlight app, installs DCC
+
+Nathan's Apple ID email: **TBD - ask him.**
+
+Once he's in, every new `eas submit --platform ios --latest` automatically
+lands in his TestFlight. No manual steps per build after initial invite.
+
+**Effort: 10 minutes once we have Nathan's Apple ID.**
+
+---
+
+## Dialer (already in progress)
+
+### VoIP push cert → Twilio upload
+`voip_services.cer` is in ~/Downloads. Needs to be uploaded to Twilio
+console so PushKit delivery works for inbound calls.
+
+**Action item, not a feature — do this now.**
+
+### Deploy twilio-add-to-call + twilio-conference-twiml edge functions
+Built but not deployed. Needed for conference/transfer from the DCC
+call overlay.
+
+**Action item, not a feature — do this now.**
+
+---
+
+## Notes / Principles
+
+- Mobile is a thin, opinionated surface. It does 3-5 jobs well. It is NOT
+  a clone of the web app on a phone.
+- Notifications are the highest-leverage feature after the dialer — they
+  are the reason to have the app on your phone at all.
+- Before building any notification feature, design the full read/unread
+  tracking system first. Bolting badge counts onto an app with no unread
+  model produces a mess.
+- Global search: only build it if there's a demonstrated need. A well-sorted
+  deal list with a tab-level search may be sufficient.

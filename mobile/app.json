@@ -8,6 +8,12 @@
     "scheme": "dcc",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e0b2b5d6-0e17-4ab4-96cd-da42233584f6"
+    },
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
