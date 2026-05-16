@@ -7,14 +7,39 @@
 import { useEffect } from 'react'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as SplashScreen from 'expo-splash-screen'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
 import { registerForPushAsync, subscribeToNotificationTaps } from '../lib/push'
+import { initVoice, teardownVoice } from '../lib/voice'
+import { useUnreadCount } from '../lib/notifications'
+
+// Hold the splash screen until we've had ~1s to settle. Without this,
+// the splash dismisses the instant the JS bundle finishes, which on a
+// fast device flashes by before the user can register it.
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // Fine if it was already auto-hidden — this is a no-op in that case.
+})
 
 function ProtectedRouter() {
   const { session, loading } = useAuth()
   const segments = useSegments()
   const router = useRouter()
+
+  // Subscribe to unread notifications for the signed-in user. The hook
+  // syncs the iOS app icon badge whenever the count changes. Returns the
+  // current count too (unused here — the screens read it themselves).
+  useUnreadCount(session?.user?.id ?? null)
+
+  // Hide the splash once auth state has resolved (or after 1s, whichever
+  // comes later — gives a tiny minimum hold so the splash actually shows).
+  useEffect(() => {
+    if (loading) return
+    const t = setTimeout(() => {
+      SplashScreen.hideAsync().catch(() => {})
+    }, 1000)
+    return () => clearTimeout(t)
+  }, [loading])
 
   useEffect(() => {
     if (loading) return
@@ -34,6 +59,20 @@ function ProtectedRouter() {
     registerForPushAsync().catch(() => {
       // Already handled inside; nothing more to do.
     })
+  }, [loading, session])
+
+  // Initialize Twilio Voice SDK after sign-in so inbound calls to
+  // +1 513 998 5440 ring this device via PushKit/CallKit. If init fails
+  // (no network, no Twilio config), the legacy bridge-callback dialer in
+  // dial.ts continues to work — see voice.ts.
+  useEffect(() => {
+    if (loading || !session) return
+    initVoice().catch(() => {
+      // Already handled inside; voice.ts returns false on failure.
+    })
+    return () => {
+      teardownVoice().catch(() => {})
+    }
   }, [loading, session])
 
   // Notification-tap routing. Different payloads land you in different
@@ -146,6 +185,34 @@ function ProtectedRouter() {
           headerShown: true,
           headerStyle: { backgroundColor: '#0c0a09' },
           headerTintColor: '#fafaf9',
+        }}
+      />
+      <Stack.Screen
+        name="notifications"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+          headerBackTitle: 'Back',
+          title: 'Notifications',
+        }}
+      />
+      <Stack.Screen
+        name="search"
+        options={{
+          headerShown: true,
+          headerStyle: { backgroundColor: '#0c0a09' },
+          headerTintColor: '#fafaf9',
+          headerBackTitle: 'Back',
+          title: 'Search',
+        }}
+      />
+      <Stack.Screen
+        name="call/[sid]"
+        options={{
+          presentation: 'modal',
+          headerShown: false,
+          gestureEnabled: false,
         }}
       />
     </Stack>

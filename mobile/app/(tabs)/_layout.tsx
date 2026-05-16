@@ -17,6 +17,8 @@
 import { Tabs } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { QuickFabButton } from '../../components/QuickFabButton'
+import { useAuth } from '../../lib/auth'
+import { useTeamUnreadCount } from '../../lib/notifications'
 
 type IoniconName = React.ComponentProps<typeof Ionicons>['name']
 
@@ -28,6 +30,8 @@ const icon =
   )
 
 export default function TabsLayout() {
+  const { session } = useAuth()
+  const teamUnread = useTeamUnreadCount(session?.user?.id ?? null)
   return (
     <Tabs
       screenOptions={{
@@ -84,6 +88,13 @@ export default function TabsLayout() {
           title: 'Team',
           tabBarLabel: 'Team',
           tabBarIcon: icon('people'),
+          tabBarBadge: teamUnread > 0 ? (teamUnread > 9 ? '9+' : teamUnread) : undefined,
+          tabBarBadgeStyle: {
+            backgroundColor: '#d97706',
+            color: '#0c0a09',
+            fontSize: 10,
+            fontWeight: '700',
+          },
         }}
       />
     </Tabs>

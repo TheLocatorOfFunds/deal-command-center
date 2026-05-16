@@ -16,11 +16,16 @@ import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const RING_SECONDS = 30;
 
-// Single shared identity for all DCC browsers.
+// Single shared identity for all DCC browsers AND mobile clients.
 // Twilio rings EVERY registered Twilio.Device with this identity simultaneously,
-// so all team member browsers ring without any per-user configuration.
+// so all team member browsers + mobile apps ring without any per-user configuration.
 // This matches the identity issued by twilio-token.
 const DCC_CLIENT_IDENTITIES = ['dcc-fundlocators'];
+
+// Nathan's Spectrum iPhone — always-on safety-net leg that rings in
+// parallel with the DCC clients. Screened by twilio-voice-screen so
+// voicemail can't "answer" the call and kill the other legs.
+const NATHAN_FALLBACK_NUMBER = '+15139982306';
 
 const normalizePhone = (p: string): string => {
   const digits = (p || '').replace(/\D/g, '');
@@ -110,6 +115,7 @@ Deno.serve(async (req: Request) => {
   // Edge Function URL for the status callback
   const projectRef = supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] || '';
   const statusUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-status`;
+  const screenUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-screen`;
 
   // Build <Client> entries for every DCC team member browser.
   // All registered browsers with these identities ring simultaneously.
@@ -127,11 +133,14 @@ Deno.serve(async (req: Request) => {
       <Parameter name="contactId" value="${safeContactId}"/>
     </Client>`).join('\n');
 
-  // TwiML: ring ALL DCC browser clients simultaneously.
-  // Nathan's iPhone is intentionally NOT included here — if his iPhone voicemail
-  // were in the <Dial>, it would "answer" the call at ~15s and fire cancel on
-  // all browsers, cutting ring time short and preventing the voicemail prompt.
-  // After 30s of no answer, the <Dial> action fires and plays our voicemail greeting.
+  // TwiML: ring ALL DCC clients (web + mobile) AND Nathan's 2306 in
+  // parallel. The <Number> leg is screened by twilio-voice-screen
+  // (press-1-to-accept), which prevents voicemail from "answering" the
+  // call and killing every other leg before a human picks up.
+  //
+  // First leg to confirm pickup wins; Twilio cancels the others.
+  // If nobody picks up in RING_SECONDS, statusUrl fires with no-answer
+  // and the existing missed-call flow handles it.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
@@ -144,6 +153,7 @@ Deno.serve(async (req: Request) => {
     callerId="${to}"
   >
 ${clientElements}
+    <Number url="${screenUrl}" method="POST">${NATHAN_FALLBACK_NUMBER}</Number>
   </Dial>
 </Response>`;
 
