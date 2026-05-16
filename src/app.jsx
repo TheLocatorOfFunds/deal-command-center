@@ -617,6 +617,9 @@ function DealCommandCenter({ session, profile }) {
     'today', 'attention', 'outreach', 'inbox', 'leads', 'forecast',
     'active', 'flagged', 'hygiene', 'archive', 'pipeline', 'leads-phase',
     'tasks', 'time', 'reports', 'analytics', 'traffic', 'team',
+    // Added 2026-05-15 per Justin: these were nav items but missing from
+    // the whitelist, so refresh on these views bounced you back to today.
+    'relay', 'calls', 'comms', 'va-queue',
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
