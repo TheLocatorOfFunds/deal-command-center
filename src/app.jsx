@@ -16089,9 +16089,24 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   // Aggregate extracted fields across all docs — take the first non-null value.
   // Docs are sorted newest-first so recent wins, but judgment/appraised rarely
   // change so stability is fine.
-  const aggregate = (keys) => {
+  //
+  // Optional `docTypeFilter` (string | string[]) narrows which doc types we
+  // pull from. Needed for surplus_amount where:
+  //   - sheriff_sale_confirmation + surplus_distribution_order → AUTHORITATIVE
+  //     (court-confirmed math)
+  //   - engagement_agreement.surplus_amount_estimated → just Eric's sales-time
+  //     estimate, not the actual surplus
+  // Without the filter, the unrestricted aggregator was picking the engagement
+  // estimate when it was the most recent doc, and proposing it as if it were
+  // verified. Per Eric 2026-05-15 — surfaced via $359k AI proposal vs $226k
+  // actual on a case he'd researched manually.
+  const aggregate = (keys, docTypeFilter) => {
     const list = Array.isArray(keys) ? keys : [keys];
+    const types = docTypeFilter
+      ? (Array.isArray(docTypeFilter) ? docTypeFilter : [docTypeFilter])
+      : null;
     for (const doc of docs) {
+      if (types && !types.includes(doc.extracted?.document_type)) continue;
       for (const k of list) {
         const v = doc.extracted?.fields?.[k];
         if (v != null && v !== '' && !Number.isNaN(v)) return v;
@@ -16111,7 +16126,14 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const aiAppraised  = aggregate('appraised_value');
   const aiSalePrice  = aggregate('sale_price');
   const aiMinBid     = aggregate('minimum_bid');
-  const aiSurplus    = aggregate(['surplus_amount', 'surplus_amount_estimated']);
+  // surplus: only trust court-authoritative docs. surplus_amount_estimated
+  // from engagement_agreement is a sales-time guess, not a verified amount.
+  // Per Eric 2026-05-15 — was getting $359k AI proposal vs $226k actual
+  // because the engagement-agreement estimate was being treated as truth.
+  const aiSurplus    = aggregate(
+    'surplus_amount',
+    ['surplus_distribution_order', 'sheriff_sale_confirmation']
+  );
   const judgment     = m.judgmentAmount       ?? aiJudgment;
   const appraised    = m.courtAppraisalValue  ?? aiAppraised;
   const salePrice    = m.salePrice            ?? aiSalePrice;
@@ -16280,10 +16302,21 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
           { key: 'minimumBidAmount',    label: 'Minimum bid',        kind: 'money', aiValue: aiMinBid,    existing: m.minimumBidAmount },
           { key: 'verifiedSurplus',     label: 'Verified surplus (court-confirmed)',
                                                                      kind: 'money', aiValue: aiSurplus,   existing: m.verifiedSurplus,
-            // Cross-check against Nathan's manual estimate AND the
-            // computed (sale - judgment) value so we surface mismatches
-            // before they hit client comms.
-            secondaryCompare: { value: m.estimatedSurplus, label: 'manual est.' } },
+            // Cross-check against (a) the math (sale - judgment) which is
+            // deterministic, and (b) Nathan/Eric's manual estimate. The
+            // math wins when it's available — surplus is a deterministic
+            // computation, not a guess. Per Eric 2026-05-15: AI was
+            // proposing $359k from an engagement_agreement estimate vs
+            // $226k actual math. Now if AI and math disagree by >10% we
+            // flag it explicitly with the math value as the cross-check.
+            secondaryCompare: (() => {
+              const math = (salePrice != null && judgment != null)
+                ? Math.max(0, salePrice - judgment)
+                : null;
+              if (math != null) return { value: math, label: 'math (sale − judgment)' };
+              if (m.estimatedSurplus != null) return { value: m.estimatedSurplus, label: 'manual est.' };
+              return null;
+            })() },
           { key: 'courtCase',           label: 'Case number',        kind: 'text',  aiValue: aggregate('case_number'),                  existing: m.courtCase },
           { key: 'county',              label: 'County',             kind: 'text',  aiValue: aggregate('county'),                       existing: m.county },
           { key: 'plaintiff',           label: 'Plaintiff',          kind: 'text',  aiValue: aggregate(['plaintiff_name', 'firm_name']), existing: m.plaintiff },
