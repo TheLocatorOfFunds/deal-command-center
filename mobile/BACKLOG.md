@@ -5,6 +5,8 @@ starting them immediately. When we ask "what should we work on next?" pull
 from this list.
 
 Items marked **[DESIGN NEEDED]** need more thought before any code starts.
+Items marked **[SHIPPED]** are merged — left in this doc so the history of
+what we asked for is visible alongside what's still open.
 
 ---
 
@@ -97,10 +99,82 @@ This is the next big surface after the dialer is solid.
 
 **[DEFERRED — revisit after dialer is stable in TestFlight]**
 
-### Team chat
-Justin/Nathan/Eric internal channel on mobile. Currently deferred.
+### Team chat — feature parity with web **[SHIPPED]**
+Justin/Nathan/Eric internal channel on mobile. Built out
+2026-05-19. Implementation lives in
+`mobile/app/team-thread/[id].tsx`.
 
-**[DEFERRED]**
+Parity items now live on mobile:
+- **Reactions** — long-press on a bubble opens an emoji picker (👍 ❤️
+  😂 🎉 🔥 ✅ 👀 🤔). Tap an existing pill to toggle. Optimistic
+  update + realtime sync via `team_reactions` table.
+- **GIFs + images render inline** — was the priority bug. Storage-backed
+  attachments re-sign via `team-chat` bucket signed URLs; Giphy
+  attachments use the embedded `url`. Tap an image to open full-size
+  in the system viewer.
+- **Reply to a specific message** — long-press → Reply, composer
+  shows quoted preview, reply bubbles render the parent body inline.
+  Stored via `team_messages.parent_id` (schema has supported this
+  since phase 1; web hasn't built it yet, so mobile leads).
+- **@mentions** — composer detects `@<prefix>`, shows a picker of
+  team profiles, inserts `@Name `. Plain-text storage, matches web.
+
+Open follow-ups (not blocking — backlog them if they become real):
+- Edit/delete a message from mobile (web has it; mobile doesn't).
+- Image / file upload from mobile (mobile can render incoming images
+  and send GIFs, but can't upload a photo from the camera roll yet —
+  needs expo-image-picker + storage upload).
+
+### Team chat — @mention push notifications **[SHIPPED]**
+Done 2026-05-19 alongside the GIPHY picker. Postgres migration
+`20260519130000_team_message_mention_pushes.sql` replaces
+`tg_push_notify_team_message()` to:
+- Scan the message body for `@<word>` tokens (regexp)
+- Resolve each to a profile via case-insensitive prefix match on
+  `display_name` or `name`
+- Send a distinct "X mentioned you in #thread" push to mentioned
+  users (data.type = `team_mention`)
+- Subtract them from the generic thread recipients so they don't
+  get double-pinged
+
+Limitation: single-word names only. All current teammates (Nathan,
+Justin, Eric, Anam) qualify. Multi-word names would need a
+mentions[] column on team_messages.
+
+### Team chat — GIPHY picker on mobile composer **[SHIPPED]**
+Done 2026-05-19. `mobile/components/GifPicker.tsx` mirrors the web
+`GifPickerPopover` — same GIPHY API key, trending on empty query,
+debounced search, 3-col grid. Wired into the team-thread composer
+via a 🎬 button next to the text input. Selected GIFs land in a
+new `pendingAttachments` preview row and ship with the next send
+inside `team_messages.attachments` (same shape the web app
+produces, so AttachmentView round-trips them on both ends).
+
+### Pull-to-refresh on chat + SMS threads **[SHIPPED]**
+Done 2026-05-19. `RefreshControl` wired on both
+`mobile/app/team-thread/[id].tsx` and `mobile/app/thread/[key].tsx`.
+Pulling down on either thread re-fetches the messages list from
+Supabase. The team-list view already had it.
+
+### Join a video call from the mobile app **[SHIPPED]**
+Done 2026-05-19. All four fixed rooms (Eric, Anam, Nathan,
+Justin) now exist in both web and mobile. `mobile/lib/videoRooms.ts`
+is the single source of truth — used by the Team tab roster and the
+Jitsi-URL detection in both thread surfaces.
+
+- Web room lists in `src/app.jsx` (the desktop sidebar at line ~3905
+  and the mobile-popover at line ~28497) now include Nathan + Justin.
+- Mobile Team tab (`mobile/app/(tabs)/team.tsx`) renders a Video
+  Rooms bar with all four rooms. Tap → `Linking.openURL` hands off
+  to the Jitsi Meet iOS app (or Safari if not installed).
+- Both thread views (`team-thread/[id].tsx` and `thread/[key].tsx`)
+  detect `meet.jit.si/...` URLs in message bodies and render a
+  tappable "📹 Join video call" button.
+
+Upgrade later to in-app WebView or the Jitsi React Native SDK if the
+handoff feels janky — but `Linking.openURL` gives us full Jitsi
+features (screen share, raise hand, audio routing) for zero
+maintenance overhead.
 
 ---
 
