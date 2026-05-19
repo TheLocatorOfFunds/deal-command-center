@@ -35,3 +35,50 @@ enabled = false
 [functions.lauren-team-respond]
 # Fired by the pg trigger on team_messages INSERT (no auth header).
 verify_jwt = false
+
+[functions.twilio-voice-outbound]
+# Called by Twilio as a TwiML App webhook — no Supabase JWT.
+verify_jwt = false
+
+[functions.twilio-voice-status]
+# Called by Twilio as a status/recording callback webhook — no Supabase JWT.
+verify_jwt = false
+
+[functions.twilio-voice]
+# Called by Twilio for inbound call routing — no Supabase JWT.
+verify_jwt = false
+
+[functions.twilio-recording]
+# Called by <audio src="..."> elements — browser can't send JWT on media requests.
+# The RE... recording SID is Twilio's own unguessable token (access control).
+verify_jwt = false
+
+[functions.lauren-chat]
+# Public widget for home sellers — no Supabase JWT. Rate-limited internally
+# by lauren_rate_limit table (visitor_id + IP buckets).
+verify_jwt = false
+
+[functions.lauren-event-router]
+# Called by pg_net.http_post trigger from lauren_event_dispatch — no JWT.
+verify_jwt = false
+
+[functions.intel-sync]
+# Fired by pg_cron every 30 min — no Authorization header sent. Auth is
+# enforced inside the function via the X-Intel-Sync-Secret header (cron
+# path) or via Bearer service-role key (manual debug path). This setting
+# was missing — caused 2 weeks of 401 UNAUTHORIZED_NO_AUTH_HEADER until
+# fixed 2026-05-13.
+verify_jwt = false
+
+[functions.lauren-daily-review]
+# Called by pg_cron via net.http_post — no JWT. Authenticated by
+# X-Lauren-Daily-Review-Secret header instead.
+verify_jwt = false
+
+[functions.docusign-status]
+# Called by DocuSign Connect webhook — no Supabase JWT.
+verify_jwt = false
+
+[functions.docusign-sign]
+# Public tap-to-sign link sent via SMS — no Supabase JWT.
+verify_jwt = false

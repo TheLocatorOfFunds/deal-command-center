@@ -1,0 +1,15 @@
+{
+  "_README": "Template for .mcp.json. Copy this to .mcp.json (gitignored) and replace the placeholder values with real tokens. See CLAUDE.md → 'MCP servers' section for full setup.",
+  "mcpServers": {
+    "esignatures": {
+      "_description": "eSignatures.com MCP server. Gives AI agents (Claude Code, future Lauren) the ability to send / query / withdraw contracts and manage templates directly. The REST/EF integration in supabase/functions/send-esignature-contract owns the human-driven UI path; this MCP server is the agent-driven path.",
+      "_prereq": "Run `brew install uv` once on your machine. The 'uvx' command auto-fetches the published PyPI package mcp-server-esignatures on first use.",
+      "_token_source": "https://esignatures.com/api_accounts/ — Automation & API tab → 'Your Secret token' → copy",
+      "command": "uvx",
+      "args": ["mcp-server-esignatures"],
+      "env": {
+        "ESIGNATURES_SECRET_TOKEN": "PASTE_YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}

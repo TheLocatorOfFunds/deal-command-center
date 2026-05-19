@@ -232,7 +232,10 @@ ${JSON.stringify(recent3, null, 2)}`;
 
 async function sendEmail(to: string, agents: AgentRow[], severity: string, summary: string, recommendations: any): Promise<boolean> {
   const resendKey = Deno.env.get('RESEND_API_KEY');
-  if (!resendKey) return false;
+  if (!resendKey) {
+    console.error('[castle-health-daily] sendEmail: RESEND_API_KEY env var missing');
+    return false;
+  }
 
   const emoji = severity === 'critical' ? '🔴' : severity === 'chronic' ? '🟡' : '⚠';
   const issuesNoun = severity === 'critical' ? 'agents down' : severity === 'chronic' ? 'agents stale' : 'transient stall';
@@ -296,8 +299,21 @@ async function sendEmail(to: string, agents: AgentRow[], severity: string, summa
         html,
       }),
     });
-    return resp.ok;
-  } catch {
+    if (!resp.ok) {
+      const respBody = await resp.text().catch(() => '<read-failed>');
+      console.error(
+        `[castle-health-daily] sendEmail: Resend rejected (status=${resp.status}) `
+        + `from=${FROM_EMAIL} to=${to} subject_len=${subject.length} html_bytes=${html.length}: `
+        + respBody.slice(0, 800),
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error(
+      `[castle-health-daily] sendEmail: exception during fetch: `
+      + `${(e as Error).name}: ${(e as Error).message}`,
+    );
     return false;
   }
 }

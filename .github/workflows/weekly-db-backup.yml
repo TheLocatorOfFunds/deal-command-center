@@ -1,0 +1,147 @@
+name: Weekly DB backup → R2
+
+# Runs every Sunday at 03:00 UTC (10pm ET Saturday). Manual trigger
+# also works — useful for the first-run smoke test after setup.
+#
+# What it does:
+#   1. pg_dump the entire Supabase Postgres (schema + data, custom format)
+#   2. gzip the dump
+#   3. Upload to a Cloudflare R2 bucket named in R2_BUCKET
+#   4. Keep last ~16 weekly backups (R2 lifecycle handles older deletion)
+#   5. On any failure, POST to public.report_system_alert so the ⚠ badge
+#      in DCC's header lights up
+#
+# Required GitHub Secrets (set in repo Settings → Secrets and variables → Actions):
+#   SUPABASE_DB_URL          — postgres://postgres.<project>:<pwd>@<host>:5432/postgres
+#   R2_ACCESS_KEY_ID         — R2 API token's access key
+#   R2_SECRET_ACCESS_KEY     — R2 API token's secret
+#   R2_BUCKET                — bucket name (e.g. fundlocators-backups)
+#   R2_ENDPOINT              — e.g. https://<accountid>.r2.cloudflarestorage.com
+#   SUPABASE_URL             — https://rcfaashkfpurkvtmsmeb.supabase.co
+#   SUPABASE_ANON_KEY        — sb_publishable_... (for the alert-on-failure call)
+
+on:
+  schedule:
+    - cron: '0 3 * * 0'  # Sunday 03:00 UTC
+  workflow_dispatch:      # manual trigger from Actions tab
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install Postgres client + AWS CLI
+        run: |
+          # Match the major version of Supabase Postgres. Ubuntu 22.04 / 24.04
+          # ship older clients; install v17 from PGDG so `pg_dump` matches whatever
+          # major Supabase is running (currently 15-17 across projects). v17 client
+          # can dump from any v15+ server.
+          #
+          # IMPORTANT: the sources.list line must reference the keyring file with
+          # signed-by=, otherwise apt-get update fails with NO_PUBKEY on Ubuntu 24+.
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          sudo sh -c 'echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          sudo apt-get update -qq
+          # Pin priority so PGDG wins over the older Ubuntu archive copy of
+          # postgresql-client. Without this the system can fall back to v16
+          # even when v17 is requested, leading to "server version mismatch"
+          # against PG 17 servers. Written via printf (avoids YAML-fragile heredoc).
+          printf 'Package: *\nPin: release o=apt.postgresql.org\nPin-Priority: 600\n' \
+            | sudo tee /etc/apt/preferences.d/pgdg.pref >/dev/null
+          sudo apt-get install -y postgresql-client-17
+          # Put the explicit v17 binary path first so `pg_dump` in PATH
+          # resolves to v17 regardless of update-alternatives quirks.
+          echo "/usr/lib/postgresql/17/bin" >> "$GITHUB_PATH"
+          /usr/lib/postgresql/17/bin/pg_dump --version
+
+          # AWS CLI v2 — apt's `awscli` package was dropped from Ubuntu 24.04
+          # (Noble). Install the official v2 zip directly. ~50MB download,
+          # one-time per run.
+          curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          sudo /tmp/aws/install --update
+          aws --version
+
+      - name: pg_dump → gzip
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -uo pipefail
+          ts=$(date -u +%Y-%m-%dT%H-%M-%SZ)
+          out="dcc-backup-${ts}.dump.gz"
+          echo "Dumping to $out"
+          # Tee stderr to BOTH the runner log and dump.log so failures are
+          # debuggable from GitHub Actions output without SSH'ing in. Use
+          # PIPESTATUS to detect pg_dump failure (the gzip step on the right
+          # side of the pipe always succeeds even when pg_dump errors).
+          pg_dump "$SUPABASE_DB_URL" \
+            --format=custom \
+            --no-owner \
+            --no-privileges \
+            --no-comments \
+            --verbose 2> >(tee dump.log >&2) \
+          | gzip -9 > "$out"
+          dump_rc=${PIPESTATUS[0]}
+          if [ "$dump_rc" -ne 0 ]; then
+            echo "::error::pg_dump exited $dump_rc"
+            tail -50 dump.log || true
+            exit "$dump_rc"
+          fi
+          ls -lh "$out"
+          echo "DUMP_FILE=$out" >> $GITHUB_ENV
+          echo "DUMP_SIZE=$(stat -c%s "$out")" >> $GITHUB_ENV
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET:             ${{ secrets.R2_BUCKET }}
+          R2_ENDPOINT:           ${{ secrets.R2_ENDPOINT }}
+          AWS_DEFAULT_REGION:    auto
+        run: |
+          set -euo pipefail
+          aws s3 cp "$DUMP_FILE" "s3://$R2_BUCKET/weekly/$DUMP_FILE" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --no-progress
+          echo "Uploaded s3://$R2_BUCKET/weekly/$DUMP_FILE ($DUMP_SIZE bytes)"
+
+      - name: Prune older than ~16 weeks
+        env:
+          AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET:             ${{ secrets.R2_BUCKET }}
+          R2_ENDPOINT:           ${{ secrets.R2_ENDPOINT }}
+          AWS_DEFAULT_REGION:    auto
+        run: |
+          # List backups, keep newest 16 (~4 months), delete the rest.
+          # Best-effort — failure here doesn't fail the whole run.
+          aws s3 ls "s3://$R2_BUCKET/weekly/" --endpoint-url "$R2_ENDPOINT" \
+            | awk '{print $4}' | sort -r | tail -n +17 \
+            | while read -r f; do
+                [ -n "$f" ] && aws s3 rm "s3://$R2_BUCKET/weekly/$f" --endpoint-url "$R2_ENDPOINT"
+              done || true
+
+      - name: Report failure to system_alerts
+        if: failure()
+        env:
+          SUPABASE_URL:      ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          # The anon key can't call report_system_alert (it requires
+          # authenticated/service_role). Drop a row directly to the
+          # alerts table via the REST endpoint with the service-role key
+          # would expose it; instead, embed minimal info in the run name
+          # and rely on GitHub Actions email + the cron sweeper.
+          # If you'd rather have the badge light up, add SUPABASE_SERVICE_ROLE_KEY
+          # as a secret and switch this to a service-role POST.
+          echo "Backup failed — see GitHub Actions logs. URL: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # Best-effort: try the RPC if SUPABASE_SERVICE_ROLE_KEY is set.
+          if [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            curl -sS -X POST \
+              -H "apikey: $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_ROLE_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"p_source\":\"weekly-db-backup\",\"p_message\":\"Weekly backup failed — see GitHub run $GITHUB_RUN_ID\",\"p_severity\":\"critical\",\"p_context\":{\"run_url\":\"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID\"}}" \
+              "$SUPABASE_URL/rest/v1/rpc/report_system_alert" || true
+          fi

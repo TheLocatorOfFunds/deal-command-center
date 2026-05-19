@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "DCC",
+    "slug": "dcc-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "dcc",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e0b2b5d6-0e17-4ab4-96cd-da42233584f6"
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0c0a09"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.fundlocators.dcc",
+      "buildNumber": "1",
+      "associatedDomains": [
+        "webcredentials:app.refundlocators.com",
+        "applinks:app.refundlocators.com"
+      ],
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "DCC uses the microphone for in-app Twilio voice calls with homeowners and contacts.",
+        "NSUserNotificationsUsageDescription": "DCC sends you push notifications when new SMS, calls, or team chat messages arrive.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "entitlements": {
+        "aps-environment": "production"
+      }
+    },
+    "android": {
+      "package": "com.fundlocators.dcc",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0c0a09"
+      }
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#d97706",
+          "sounds": []
+        }
+      ],
+      "expo-font",
+      "./plugins/with-twilio-voice.js"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "owner": "fundlocator",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e0b2b5d6-0e17-4ab4-96cd-da42233584f6"
+      }
+    }
+  }
+}

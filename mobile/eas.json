@@ -1,0 +1,47 @@
+{
+  "cli": {
+    "version": ">= 12.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "autoIncrement": true,
+      "ios": {
+        "resourceClass": "m-medium",
+        "simulator": false
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "channel": "production",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleId": "racin2701@yahoo.com",
+        "ascAppId": "6768752406",
+        "appleTeamId": "8RJDH7L35Q"
+      }
+    },
+    "preview": {
+      "ios": {
+        "appleId": "racin2701@yahoo.com",
+        "ascAppId": "6768752406",
+        "appleTeamId": "8RJDH7L35Q"
+      }
+    }
+  }
+}

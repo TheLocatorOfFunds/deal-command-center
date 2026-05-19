@@ -58,6 +58,8 @@ const OUR_NUMBERS    = new Set([NATHAN_NUMBER, '+15139985440']); // numbers we o
 const SUPABASE_URL   = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_KEY;
 const CHAT_DB_PATH   = path.join(os.homedir(), 'Library/Messages/chat.db');
+const ATTACH_DIR     = path.join(os.homedir(), 'Library/Messages/Attachments');
+const MEDIA_BUCKET   = 'inbound-media';
 const WATERMARK_FILE = path.join(__dirname, '.watermark');
 const PID_FILE       = path.join(__dirname, '.bridge.pid');
 const POLL_MS        = 5000;
@@ -107,24 +109,37 @@ console.log(`    DB     : ${CHAT_DB_PATH}`);
 console.log(`    Poll   : ${POLL_MS / 1000}s`);
 console.log('');
 
-// ─── SMS service UUID discovery ───────────────────────────────────────────────
+// ─── Service UUID discovery ───────────────────────────────────────────────────
 // On macOS 26+ the Messages AppleScript dictionary no longer exposes account names
-// or service types by index. We discover the SMS relay service UUID by querying
-// chat.db (which stores account_id on every chat row) and cache it for the
-// lifetime of this process. If no SMS chats exist yet, the UUID stays null and
-// SMS sends will fall back to graceful failure with a clear error.
-let SMS_SERVICE_UUID = null;
+// or service types by index. We discover service UUIDs by querying chat.db
+// (which stores account_id on every chat row) and cache them for the lifetime
+// of this process.
+let SMS_SERVICE_UUID      = null;
+let IMESSAGE_SERVICE_IDS  = []; // may be 2: one per Apple ID + one per phone number
+
 {
   const db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
   try {
-    const row = db.prepare(
+    // SMS relay UUID
+    const smsRow = db.prepare(
       "SELECT account_id FROM chat WHERE service_name = 'SMS' AND account_id IS NOT NULL LIMIT 1"
     ).get();
-    if (row) {
-      SMS_SERVICE_UUID = row.account_id;
-      console.log(`    SMS UUID : ${SMS_SERVICE_UUID}`);
+    if (smsRow) {
+      SMS_SERVICE_UUID = smsRow.account_id;
+      console.log(`    SMS UUID     : ${SMS_SERVICE_UUID}`);
     } else {
-      console.log('    SMS UUID : none yet (no SMS history in chat.db)');
+      console.log('    SMS UUID     : none yet (no SMS history in chat.db)');
+    }
+
+    // iMessage service IDs (can be multiple — one per registered identity)
+    const imsgRows = db.prepare(
+      "SELECT DISTINCT account_id FROM chat WHERE service_name = 'iMessage' AND account_id IS NOT NULL"
+    ).all();
+    IMESSAGE_SERVICE_IDS = imsgRows.map(r => r.account_id);
+    if (IMESSAGE_SERVICE_IDS.length > 0) {
+      console.log(`    iMessage IDs : ${IMESSAGE_SERVICE_IDS.join(', ')}`);
+    } else {
+      console.log('    iMessage IDs : none yet (no iMessage history in chat.db)');
     }
   } finally {
     db.close();
@@ -237,70 +252,65 @@ function runAppleScript(scriptPath, timeoutMs = 30000) {
 
 /**
  * Send a text message via Messages.app.
- * Tries iMessage first; if the number is not on iMessage (error -1728 / error 22),
- * falls back to SMS relay via the iPhone's Text Message Forwarding.
- * Returns 'imessage' or 'sms' indicating which service was used.
+ *
+ * On macOS 26+ Tahoe, `service type` and named service access are broken
+ * (-1728 / -10002). We bypass those entirely by using the service UUIDs
+ * discovered from chat.db at startup.
+ *
+ * Strategy:
+ *   1. Try each known iMessage service ID. If ANY succeeds → 'imessage'.
+ *   2. If all iMessage attempts fail with a "not an iMessage user" error
+ *      (-1728 or error 22), the number is an Android/SMS user.
+ *      Throw a structured error so the caller can route via Twilio.
+ *
+ * SMS relay via iPhone Text Message Forwarding is intentionally NOT attempted
+ * here — it is broken on macOS 26 Tahoe (error 4 on every attempt). Android
+ * numbers should be routed via Twilio at the Supabase / DCC layer instead.
+ *
+ * Returns 'imessage' on success.
  */
 function sendViaMessages(toPhone, body) {
   const escaped = body.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
-  // ── Attempt 1: iMessage ──────────────────────────────────────────────────────
-  const iMsgScript = `/tmp/dcc_send_${Date.now()}.applescript`;
-  fs.writeFileSync(iMsgScript, [
-    'tell application "Messages"',
-    `  set targetPhone to "${toPhone}"`,
-    '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
-    `  send "${escaped}" to targetBuddy`,
-    'end tell',
-  ].join('\n'));
-
-  try {
-    runAppleScript(iMsgScript);
-    return 'imessage';
-  } catch (err) {
-    // -1728 = "Can't get service type of participant" = number not on iMessage.
-    // Also catch the string "22" (apple_error 22 = not an iMessage user).
-    const notIMessage = err.message.includes('-1728') || err.message.includes('error 22');
-    if (!notIMessage) throw err; // real error — propagate up
-  }
-
-  // ── Attempt 2: SMS relay via iPhone Text Message Forwarding ──────────────────
-  // On macOS 26+ the AppleScript dictionary no longer lets us access accounts by
-  // name ("SMS") or by service type — both return -10002 / -1728.  The only
-  // working pattern is `participant phone of service id "UUID"` where the UUID
-  // is the SMS relay account identifier, discovered at startup from chat.db.
-  console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay`);
-
-  if (!SMS_SERVICE_UUID) {
+  // ── iMessage via discovered service UUIDs ────────────────────────────────────
+  if (IMESSAGE_SERVICE_IDS.length === 0) {
     throw new Error(
-      'SMS relay service UUID unknown — no SMS history in chat.db yet. ' +
-      'Once any SMS conversation appears in Messages.app the bridge will auto-learn the UUID.'
+      'No iMessage service IDs found in chat.db. ' +
+      'Make sure Messages.app is signed in and has at least one iMessage conversation.'
     );
   }
 
-  const smsScript = `/tmp/dcc_send_sms_${Date.now()}.applescript`;
-  fs.writeFileSync(smsScript, [
-    'tell application "Messages"',
-    `  set smsSvc to service id "${SMS_SERVICE_UUID}"`,
-    `  set p to participant "${toPhone}" of smsSvc`,
-    `  send "${escaped}" to p`,
-    'end tell',
-  ].join('\n'));
+  let lastErr = null;
+  for (const svcId of IMESSAGE_SERVICE_IDS) {
+    const iMsgScript = `/tmp/dcc_send_${Date.now()}.applescript`;
+    fs.writeFileSync(iMsgScript, [
+      'tell application "Messages"',
+      `  set imsvc to service id "${svcId}"`,
+      `  set p to participant "${toPhone}" of imsvc`,
+      `  send "${escaped}" to p`,
+      'end tell',
+    ].join('\n'));
 
-  try {
-    runAppleScript(smsScript);
-    return 'sms';
-  } catch (e) {
-    // error 4 = kIMMessageErrorCodeSMSForwardingNotAvailable
-    // This means Nathan's iPhone is not currently reachable for SMS relay.
-    if (e.message.includes('error 4') || e.message.includes('(-4)')) {
-      throw new Error(
-        `SMS relay unavailable (error 4): Nathan's iPhone must be on the same WiFi as the Mac Mini ` +
-        `with Text Message Forwarding enabled (iPhone Settings → Messages → Text Message Forwarding).`
-      );
+    try {
+      runAppleScript(iMsgScript);
+      return 'imessage'; // ✅ sent
+    } catch (err) {
+      // -1728 = participant not on this iMessage service
+      // error 22 = not an iMessage user at all
+      const notOnThisService = err.message.includes('-1728') || err.message.includes('error 22');
+      if (notOnThisService) {
+        lastErr = err;
+        continue; // try next service ID
+      }
+      throw err; // unexpected error — propagate
     }
-    throw e;
   }
+
+  // All iMessage services rejected this number → not an iMessage user
+  throw Object.assign(
+    new Error(`not_imessage: ${toPhone} is not on iMessage — route via Twilio for SMS delivery`),
+    { code: 'NOT_IMESSAGE' }
+  );
 }
 
 /** Download a remote URL to a temp file; returns the local path. */
@@ -328,40 +338,98 @@ function downloadMediaToTmp(url) {
   });
 }
 
-/** Send a local file (image/video) via Messages.app — iMessage first, SMS relay fallback. */
+/**
+ * Resolve an iMessage attachment row's on-disk path and upload it to Supabase
+ * Storage under `<dealId>/<uuid>.<ext>`. Returns the public URL or null on
+ * any failure (we never want an attachment miss to drop the whole message).
+ *
+ * chat.db's attachment.filename can be:
+ *   - "~/Library/Messages/Attachments/aa/01/...filename.ext"
+ *   - "/Users/<user>/Library/Messages/Attachments/..."  (already absolute)
+ *   - NULL while transfer_state ≠ 5 (transfer in flight or failed)
+ */
+async function uploadIMessageAttachment(att, dealId) {
+  try {
+    const rawPath = att.filename;
+    if (!rawPath) return null;            // transfer not complete
+    if (att.transfer_state !== undefined && att.transfer_state !== null && att.transfer_state !== 5) {
+      // 5 = "transferred". 0–4 are in-flight / failed states.
+      return null;
+    }
+    const absPath = rawPath.startsWith('~')
+      ? path.join(os.homedir(), rawPath.slice(1).replace(/^\/+/, ''))
+      : rawPath;
+
+    // Defensive: keep us inside the Messages Attachments tree.
+    if (!absPath.startsWith(ATTACH_DIR)) {
+      console.error(`⚠️  attachment outside ATTACH_DIR — skipping: ${absPath}`);
+      return null;
+    }
+    if (!fs.existsSync(absPath)) {
+      console.error(`⚠️  attachment file missing on disk: ${absPath}`);
+      return null;
+    }
+
+    const bytes = fs.readFileSync(absPath);
+    const mime  = att.mime_type || 'application/octet-stream';
+    // Prefer the file's actual extension over a MIME-derived one — iMessage
+    // sometimes stores HEIC images with image/jpeg content-type, etc.
+    const extFromPath = (path.extname(absPath) || '').replace(/^\./, '').toLowerCase();
+    const ext = extFromPath || 'bin';
+
+    const uuid = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const storagePath = `${dealId}/${uuid}.${ext}`;
+
+    const { error: upErr } = await sb.storage
+      .from(MEDIA_BUCKET)
+      .upload(storagePath, bytes, { contentType: mime, upsert: false });
+    if (upErr) {
+      console.error(`⚠️  attachment upload failed: ${upErr.message}`);
+      return null;
+    }
+
+    const { data: urlData } = sb.storage.from(MEDIA_BUCKET).getPublicUrl(storagePath);
+    return urlData?.publicUrl || null;
+  } catch (e) {
+    console.error('⚠️  uploadIMessageAttachment error:', e.message);
+    return null;
+  }
+}
+
+/** Send a local file (image/video) via Messages.app — iMessage only on Tahoe. */
 function sendFileViaMessages(toPhone, localPath) {
   const safePath = localPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 
-  const iMsgScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
-  fs.writeFileSync(iMsgScript, [
-    'tell application "Messages"',
-    `  set targetPhone to "${toPhone}"`,
-    '  set targetBuddy to participant targetPhone of service 1 whose service type = iMessage',
-    `  send POSIX file "${safePath}" to targetBuddy`,
-    'end tell',
-  ].join('\n'));
-
-  try {
-    runAppleScript(iMsgScript, 60000);
-    return 'imessage';
-  } catch (err) {
-    const notIMessage = err.message.includes('-1728') || err.message.includes('error 22');
-    if (!notIMessage) throw err;
+  if (IMESSAGE_SERVICE_IDS.length === 0) {
+    throw new Error('No iMessage service IDs found in chat.db.');
   }
 
-  console.log(`📱 ${toPhone}  not on iMessage — trying SMS relay for file`);
-  if (!SMS_SERVICE_UUID) throw new Error('SMS relay UUID unknown — no SMS history in chat.db');
-  const smsScript = `/tmp/dcc_send_file_sms_${Date.now()}.applescript`;
-  fs.writeFileSync(smsScript, [
-    'tell application "Messages"',
-    `  set smsSvc to service id "${SMS_SERVICE_UUID}"`,
-    `  set p to participant "${toPhone}" of smsSvc`,
-    `  send POSIX file "${safePath}" to p`,
-    'end tell',
-  ].join('\n'));
+  for (const svcId of IMESSAGE_SERVICE_IDS) {
+    const iMsgScript = `/tmp/dcc_send_file_${Date.now()}.applescript`;
+    fs.writeFileSync(iMsgScript, [
+      'tell application "Messages"',
+      `  set imsvc to service id "${svcId}"`,
+      `  set p to participant "${toPhone}" of imsvc`,
+      `  send POSIX file "${safePath}" to p`,
+      'end tell',
+    ].join('\n'));
 
-  runAppleScript(smsScript, 60000);
-  return 'sms';
+    try {
+      runAppleScript(iMsgScript, 60000);
+      return 'imessage';
+    } catch (err) {
+      const notOnThisService = err.message.includes('-1728') || err.message.includes('error 22');
+      if (notOnThisService) continue;
+      throw err;
+    }
+  }
+
+  throw Object.assign(
+    new Error(`not_imessage: ${toPhone} is not on iMessage — route via Twilio for SMS delivery`),
+    { code: 'NOT_IMESSAGE' }
+  );
 }
 
 /**
@@ -465,7 +533,13 @@ async function processPendingOutbound() {
       // No chat.db row yet (iMessage may still be in flight) → handed_off state
       await sb.from('messages_outbound').update({ status: 'handed_off_to_mac' }).eq('id', msg.id);
     } catch (err) {
-      if (err.message.includes('ETIMEDOUT')) {
+      if (err.code === 'NOT_IMESSAGE') {
+        // Number is not on iMessage — needs Twilio routing, not a bridge failure.
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: 'not_imessage: Android number — send via Twilio' })
+          .eq('id', msg.id);
+        console.log(`📵 NOT iMessage  ${msg.to_number}  → needs Twilio`);
+      } else if (err.message.includes('ETIMEDOUT')) {
         consecutiveOscriptTimeouts++;
         console.error(`⏱ TIMEOUT ${consecutiveOscriptTimeouts}/3  ${msg.to_number}`);
         if (consecutiveOscriptTimeouts >= 3) {
@@ -479,11 +553,11 @@ async function processPendingOutbound() {
         }
       } else {
         consecutiveOscriptTimeouts = 0;
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: err.message })
+          .eq('id', msg.id);
+        console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
       }
-      await sb.from('messages_outbound')
-        .update({ status: 'failed', error_message: err.message })
-        .eq('id', msg.id);
-      console.error(`❌ FAIL  ${msg.to_number}  ${err.message}`);
     } finally {
       sendingInFlight.delete(msg.id);
       // Clean up temp media file
@@ -508,8 +582,14 @@ async function syncFromChatDb() {
   let rows;
   // Map of chatIdentifier → [phone, ...] built while DB is still open
   const participantsByChatId = new Map();
+  // Map of message ROWID → [{ filename, mime_type, transfer_name }, ...]
+  // Populated while DB is open so we can upload after close.
+  const attachmentsByRowId = new Map();
 
   try {
+    // Allow inbound attachment-only rows (photo with no caption → text IS NULL).
+    // Keep the text-required filter for outbound to preserve the existing
+    // body-based dedup against DCC-originated 'handed_off_to_mac' rows.
     rows = db.prepare(`
       SELECT
         m.ROWID,
@@ -521,6 +601,7 @@ async function syncFromChatDb() {
         m.error           AS apple_error,      -- 0 = ok; 22 = not iMessage; non-zero = failure
         m.associated_message_type,
         m.associated_message_guid,
+        m.cache_has_attachments,               -- 1 = at least one row in message_attachment_join
         h.id              AS sender_handle,    -- who sent this specific message
         c.chat_identifier,                     -- phone for 1:1, Apple GUID for groups
         c.style           AS chat_style,       -- 43 = 1:1, 45 = group
@@ -530,11 +611,35 @@ async function syncFromChatDb() {
       LEFT JOIN chat              c   ON cmj.chat_id = c.ROWID
       LEFT JOIN handle            h   ON m.handle_id = h.ROWID
       WHERE m.ROWID > ?
-        AND m.text IS NOT NULL
-        AND m.text != ''
+        AND (
+          m.is_from_me = 0                       -- inbound: take any row (attachments may have null text)
+          OR (m.text IS NOT NULL AND m.text != '')  -- outbound: keep text-required for dedup
+        )
       ORDER BY m.ROWID ASC
       LIMIT 100
     `).all(watermark);
+
+    // Pre-fetch attachments for any row that has cache_has_attachments=1
+    const rowsWithAttachments = rows.filter(r => r.cache_has_attachments === 1).map(r => r.ROWID);
+    if (rowsWithAttachments.length > 0) {
+      const placeholders = rowsWithAttachments.map(() => '?').join(',');
+      const attachRows = db.prepare(`
+        SELECT
+          maj.message_id,
+          a.filename,
+          a.mime_type,
+          a.transfer_name,
+          a.transfer_state
+        FROM message_attachment_join maj
+        JOIN attachment a ON maj.attachment_id = a.ROWID
+        WHERE maj.message_id IN (${placeholders})
+        ORDER BY maj.message_id, a.ROWID
+      `).all(...rowsWithAttachments);
+      for (const a of attachRows) {
+        if (!attachmentsByRowId.has(a.message_id)) attachmentsByRowId.set(a.message_id, []);
+        attachmentsByRowId.get(a.message_id).push(a);
+      }
+    }
 
     // For group chats not yet cached, fetch participant list while DB is open.
     const unseenGroupIds = [...new Set(
@@ -600,13 +705,26 @@ async function syncFromChatDb() {
   let maxRowid = watermark;
 
   for (const row of rows) {
+    // Always advance the watermark, even if processing this row throws.
+    // Before 2026-05-13 a transient Supabase 5xx mid-loop would skip the
+    // saveWatermark() at the bottom, so the next tick re-processed the
+    // same rows — and because the upsert uses ignoreDuplicates:true,
+    // any media_url uploaded on a later retry got DROPPED on the floor.
+    // The try/catch + post-upsert backfill below close that hole.
     maxRowid = Math.max(maxRowid, row.ROWID);
 
+    try {
     const chatId    = row.chat_identifier;
     const isGroup   = row.chat_style === 45;
     const isInbound = row.is_from_me === 0;
     const guid      = `imsg_${row.guid}`;
     const reactType = REACTION_EMOJI[row.associated_message_type] || null;
+    const attachList = attachmentsByRowId.get(row.ROWID) || [];
+
+    // Skip rows that have neither text nor a usable attachment.
+    // (Attachment-only outbound rows are also filtered by the SQL WHERE.)
+    const hasText = !!(row.text && String(row.text).trim());
+    if (!hasText && attachList.length === 0) continue;
 
     let fromPhone, toPhone, dealId, threadKey;
 
@@ -642,10 +760,41 @@ async function syncFromChatDb() {
       threadKey = canonicalThreadKey(dealId, fromPhone, toPhone, null);
     }
 
+    // Upload the first attachment (if any) to inbound-media bucket and store
+    // the public URL on the row. v1 keeps a single media_url column; multi-
+    // attachment support is a future media_urls jsonb upgrade.
+    //
+    // Skip the upload if a row with this guid already exists in DB AND already
+    // has media_url set — that's the steady state after a successful prior
+    // upload, and re-uploading on every tick (when the watermark gets stuck)
+    // burns Supabase storage bandwidth for no benefit.
+    let mediaUrl = null;
+    let existingMediaUrl = null;
+    if (isInbound && attachList.length > 0) {
+      const { data: existingRow } = await sb
+        .from('messages_outbound')
+        .select('media_url')
+        .eq('twilio_sid', guid)
+        .maybeSingle();
+      existingMediaUrl = existingRow?.media_url || null;
+      if (existingMediaUrl) {
+        mediaUrl = existingMediaUrl;          // already uploaded — reuse
+      } else {
+        mediaUrl = await uploadIMessageAttachment(attachList[0], dealId);
+      }
+      if (attachList.length > 1) {
+        console.log(`📎 ${attachList.length} attachments on msg ${row.ROWID} — only first synced (v1 limitation)`);
+      }
+    }
+
+    const bodyText = reactType
+      ? `${reactType} reacted to: "${(row.text || '').replace(/^(Liked|Loved|Disliked|Emphasized|Questioned|Laughed at) "/, '').replace(/"$/, '')}"`
+      : (row.text || '');
+
     const msgData = {
       from_number:  fromPhone,
       to_number:    toPhone,
-      body:         reactType ? `${reactType} reacted to: "${row.text.replace(/^(Liked|Loved|Disliked|Emphasized|Questioned|Laughed at) "/, '').replace(/"$/, '')}"` : row.text,
+      body:         bodyText,
       direction:    isInbound ? 'inbound' : 'outbound',
       status:       isInbound ? 'received' : 'sent',
       channel:      'imessage',
@@ -653,6 +802,7 @@ async function syncFromChatDb() {
       created_at:   appleTs(row.date),
       deal_id:      dealId,
       thread_key:   threadKey,
+      media_url:    mediaUrl,
     };
 
     // For outbound (is_from_me) messages: check if a DCC-originated row already
@@ -710,20 +860,128 @@ async function syncFromChatDb() {
     if (error) {
       console.error(`⚠️  Supabase error (${guid}):`, error.message);
     } else {
-      const tag     = isGroup ? `GRP` : (isInbound ? '⬇ IN ' : '⬆ OUT');
-      const preview = msgData.body.length > 60 ? msgData.body.slice(0, 57) + '…' : msgData.body;
-      console.log(`${tag}  ${fromPhone || toPhone}  "${preview}"`);
+      const tag       = isGroup ? `GRP` : (isInbound ? '⬇ IN ' : '⬆ OUT');
+      const bodyStr   = msgData.body || '';
+      const preview   = bodyStr.length > 60 ? bodyStr.slice(0, 57) + '…' : bodyStr;
+      const mediaTag  = msgData.media_url ? ' 📎' : '';
+      console.log(`${tag}${mediaTag}  ${fromPhone || toPhone}  "${preview}"`);
+    }
+
+    // Backfill media_url on rows that were inserted earlier with null media_url
+    // (e.g. when the first upload attempt failed due to a transient Supabase
+    // 5xx). The upsert above uses ignoreDuplicates:true, which would otherwise
+    // silently drop the newly-successful upload on the floor.
+    if (isInbound && mediaUrl && !existingMediaUrl) {
+      const { error: updErr } = await sb.from('messages_outbound')
+        .update({ media_url: mediaUrl })
+        .eq('twilio_sid', guid)
+        .is('media_url', null);
+      if (updErr) console.error(`⚠️  media_url backfill failed (${guid}): ${updErr.message}`);
+    }
+    } catch (rowErr) {
+      // Per-row failure must NOT prevent saveWatermark from running. Log
+      // and continue — the next tick will retry this row (and the backfill
+      // path above will recover media_url if the row was already inserted).
+      console.error(`⚠️  row processing error ROWID=${row.ROWID}: ${rowErr.message}`);
     }
   }
 
   saveWatermark(maxRowid);
 }
 
+// ─── Delivery receipt polling ───────────────────────────────────────────────
+//
+// Once we mark a message 'sent' (= Apple servers accepted), iMessage delivers
+// asynchronously and updates the SAME chat.db row in place — `is_delivered`
+// flips from 0→1 when the recipient's device confirms receipt, and `is_read`
+// flips when they open it. We never re-read those flags, so the row stayed
+// at 'sent' forever even after real delivery.
+//
+// Per CLAUDE.md → "Action confirmation — close the loop on every external
+// side effect." Mirror of the Twilio StatusCallback wiring (PR #126) and
+// the Slybroadcast callback (PR #124) — same status semantics:
+//   sent       = handed off, awaiting confirmation
+//   delivered  = recipient's device confirmed receipt
+//   failed     = Apple rejected (sometimes flips after initial accept)
+//
+// Strategy: each tick, look at recent `messages_outbound` rows in 'sent'
+// state via this bridge (channel='imessage', from_number=NATHAN_NUMBER), and
+// re-query chat.db by guid (stored in twilio_sid as 'imsg_<guid>') for
+// fresh is_delivered / error state. Cap to last 24h to keep the workload
+// bounded — older sends that never reported delivery aren't going to.
+async function pollDeliveryReceiptsFromChatDb() {
+  const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: recent, error } = await sb
+    .from('messages_outbound')
+    .select('id, to_number, twilio_sid, created_at, status')
+    .eq('status', 'sent')
+    .eq('channel', 'imessage')
+    .eq('from_number', NATHAN_NUMBER)
+    .gte('created_at', sinceIso)
+    .limit(100);
+
+  if (error) {
+    console.error('⚠️  delivery-receipt sweep query error:', error.message);
+    return;
+  }
+  if (!recent || recent.length === 0) return;
+
+  let db;
+  try {
+    db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
+  } catch (err) {
+    console.error('⚠️  delivery sweep cannot open chat.db:', err.message);
+    return;
+  }
+
+  try {
+    const stmt = db.prepare(`
+      SELECT m.is_delivered, m.is_read, m.error, m.date_delivered, m.date_read
+      FROM message m
+      WHERE m.guid = ?
+      LIMIT 1
+    `);
+
+    for (const row of recent) {
+      const sid = row.twilio_sid || '';
+      if (!sid.startsWith('imsg_')) continue;
+      const guid = sid.slice(5);
+
+      const dbRow = stmt.get(guid);
+      if (!dbRow) continue; // chat.db hasn't seen the row yet (shouldn't happen post-sent)
+
+      // Apple sometimes flips error from 0 to non-zero AFTER initial accept
+      // (e.g. recipient blocked us, network failure mid-flight). Catch that.
+      if (dbRow.error && dbRow.error !== 0) {
+        const errMsg = `iMessage delivery error ${dbRow.error} (post-send)`;
+        await sb.from('messages_outbound')
+          .update({ status: 'failed', error_message: errMsg })
+          .eq('id', row.id);
+        console.error(`❌ POST-SEND FAIL  ${row.to_number}  apple_error=${dbRow.error}`);
+        continue;
+      }
+
+      if (dbRow.is_delivered === 1) {
+        await sb.from('messages_outbound')
+          .update({ status: 'delivered', error_message: null })
+          .eq('id', row.id);
+        console.log(`✓✓ DELIVERED  ${row.to_number}`);
+        // (We don't currently surface 'read' as a separate status — that's
+        // an engagement signal, not delivery. delivered is the canonical
+        // success state for now.)
+      }
+    }
+  } finally {
+    db.close();
+  }
+}
+
 // ─── Main loop ────────────────────────────────────────────────────────────────
 
 async function tick() {
-  await processPendingOutbound(); // send any queued DCC → Messages.app
-  await syncFromChatDb();         // pull new messages from Messages.app → DCC
+  await processPendingOutbound();           // send any queued DCC → Messages.app
+  await syncFromChatDb();                    // pull new messages from Messages.app → DCC
+  await pollDeliveryReceiptsFromChatDb();   // flip 'sent' → 'delivered' / 'failed' as iMessage confirms
 }
 
 (async () => {

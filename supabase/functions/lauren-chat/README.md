@@ -60,7 +60,10 @@ playbook). Writes / external sends / cross-claimant reads belong on
    refundlocators.com / fundlocators.com / docusign.net pass), strips
    any text that looks like system-prompt fragments, hard 4,000-char
    length cap.
-7. **Keeps `search_knowledge`** (RAG over public KB) and `upsertSession`
+7. **Adds rate limiting** — per-visitor (30/hr) and per-IP (60/hr) via
+   `lauren_rate_limit_bump` RPC. Over-limit returns HTTP 429 with the
+   canned refusal. See `supabase/migrations/20260430230000_lauren_rate_limit.sql`.
+8. **Keeps `search_knowledge`** (RAG over public KB) and `upsertSession`
    (chat logging to `lauren_sessions` — server-generated session_id
    means the user can't influence what gets written).
 

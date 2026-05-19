@@ -70,63 +70,133 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
-**Status:** Active — 2026-04-30 (afternoon)
-**Branch:** `chore/session-state-system` (this PR)
-**Working on:** Standing up the live session-state convention — restructuring
-`WORKING_ON.md`, creating `session_archives/`, updating `CLAUDE.md` so Nathan's
-and Erik's sessions can see what each Claude is doing in real time.
+**Status:** Active — 2026-05-13
+**Branch:** `claude/cranky-boyd-d5f84a` (worktree)
+**Working on:** Inbound MMS / iMessage attachment support — both the Twilio
+path (receive-sms edge fn) and the mac_bridge inbound path were dropping
+attachments and only persisting body text. Both now download the media,
+upload to a new public `inbound-media` Supabase bucket under
+`<deal_id>/<uuid>.<ext>`, and store the durable URL on
+`messages_outbound.media_url`. UI side already rendered images/video/audio
+from media_url — no app.jsx changes needed.
+
 **Recent decisions:**
-- A2P 10DLC + Quo + iMessage architecture finalized — Mac bridge stays primary
-  SMS, Twilio Brand parked, Quo voice-only, GHL/HighLevel transfer dropped.
-  Full archive: `session_archives/2026-04-30-a2p-quo-imessage-architecture.md`.
-**Touching:** `WORKING_ON.md`, `CLAUDE.md`, `session_archives/*`
-**Open follow-ups:**
-- Twilio Brand approval (1-3 days, parked state — no action)
-- Decline Quo SMS A2P upsell email
-- Erik onboarding (separate task)
+- 2026-05-13: New public storage bucket `inbound-media` (migration
+  20260513120000). Public-read for `<img src>` rendering to "just work";
+  privacy via random uuid filenames. Mirrors the `rvm-audio` pattern.
+- 2026-05-13: receive-sms now reads `NumMedia` + `MediaUrl0` /
+  `MediaContentType0`, fetches with Twilio Basic auth, uploads, stores
+  the public URL on the row. Edge fn deployed (v51, verify_jwt=false
+  preserved). Multi-attachment is deferred (only first stored in v1).
+- 2026-05-13: bridge.js now reads `message_attachment_join` + `attachment`
+  rows for cache_has_attachments=1 messages, resolves the on-disk
+  `~/Library/Messages/Attachments/...` path, uploads, and stamps
+  media_url. SQL WHERE relaxed for inbound to allow text-null
+  attachment-only rows; outbound kept text-required to preserve the
+  body-based dedup against pending DCC handoffs.
 
 ---
 
+**Previous (2026-05-07):** Shipping RVM (Slybroadcast + Fish Audio + 2-step UI) and built
+a CI migration-drift check (PR #121, merged). Cleanup of pre-existing drift
+surfaced 2 customer-facing email triggers that were committed-but-unapplied.
+
+**🚨 HEADS-UP FOR NATHAN — your client-notify triggers** (from PR ~2026-05-05):
+- I applied them tonight as part of drift cleanup, then realized they fire
+  customer emails with no human-in-the-loop approval. Justin called it: "we
+  don't need to be sending out emails without someone approving them."
+- **Action taken:** dropped both triggers (`tg_notify_client_status_change`
+  on `deals`, `tg_notify_client_docket_event` on `docket_events`). The
+  underlying functions `notify_client_status_change()` and
+  `notify_client_docket_event()` remain installed in prod for reuse.
+- **Migration files moved** from `supabase/migrations/` to
+  `supabase/migrations/_pending_review/` (with a README explaining why).
+  This keeps them out of the drift CI check until you've designed an
+  approval flow.
+- **What you need to decide:** queue + approval UI vs different design.
+  Re-attaching the triggers is one CREATE TRIGGER per file (sql in the
+  README of `_pending_review/`).
+
+**Recent decisions:**
+- 2026-05-07: RVM stack live with two-step Generate → Drop flow (PRs #117,
+  #118, #119, #120 — all merged). Slybroadcast API approved + secrets set.
+- 2026-05-07: Migration drift CI check live (PR #121). All 101 committed
+  migrations now applied/registered to prod. SUPABASE_PAT secret in repo.
+- 2026-05-07: Soft-delete migration that broke deals query was missing —
+  applied; that was the root cause of the "deal pages render Today
+  dashboard" bug we hit during RVM testing.
+
+**Touching:** `supabase/migrations/_pending_review/*`, `WORKING_ON.md`
+
+**Open follow-ups:**
+- Justin tests RVM full-flow drop to +14797196859 (preview → drop → verify
+  voicemail arrives)
+- Nathan + Justin design approval flow for client-notify triggers
+- Twilio Brand approval still parked
+
+---
+
+**Last updated:** 2026-05-07 evening
+
+**Last updated (auto):** 2026-05-14 20:12 UTC
+
 ## Nathan's session
 
-**Status:** Active as of 2026-04-29 evening. CSV importer cycle finished
-(B-leads CSV in DB, 30 deals). Cleaning up data fields + UX polish. New
-Claude Code session prep.
+**Status:** Active — 2026-05-08 evening — full-day audit + 8 migrations + system alert hardening
+**Branch:** main (all work merged)
 
-**Just finished (chronological)**:
-- Per-contact personalized URLs (`/s/charlottemorrow-katherine` etc.) with relationship-aware copy on the rendered page (refundlocators-next), OG image, and iMessage preview
-- Sale Date / Sale Price / Judgment Debt fields in Case Details (deal Overview) — admin-gated
-- 30-Days-to-Sale (`is_30dts`) + 🔥 badge
-- Deceased flag (`contacts.deceased` + UI toggle in contact editor) + 🕊️ pill on Comms tabs (with strikethrough)
-- Account Settings: phone made optional, owner-only (Nathan + Justin) Team Access section to promote VAs to Admin in one click
-- 📥 Import modal — CSV importer with three-way decision per row (Create / Merge audit / Skip), auto-dedup by case#/address/phone, handles GHL rich-export header signature, batched executes with progress + per-row error log
-- Date timezone bug fixed (`parseAuctionDate` is now manual regex, no `Date()` for date-only strings)
-- Family contact insert bug fixed (was spreading `relationship` into the `contacts` insert; column doesn't exist there)
-- Insert order refactored: contact → deal → contact_deals + cleanup-on-fail at every step (no more orphans)
-- Merge mode: re-uploading the CSV audits existing deals, fills any null fields, adds missing family contacts + GHL notes
-- Acknowledge ALL docket events RPC + UI (the modal button now bulk-clears 1811 events in one statement)
-- Tier-based name color on deal headers (A=green, B=red+🕊️, C=neutral)
-- Comprehensive Case Details card form fields — every CSV column has a corresponding editable input on the deal Overview, organized into Lead Classification / Case Identity / Financial / Sale & Timeline / Liens / Attorney & Fees / Links / Source
+**Tonight (2026-05-08) — what shipped**
 
-**Active gaps Eric is hand-cleaning**:
-- Sale dates on the first 22 imported deals are off by one day (TZ bug from older importer build). Eric is correcting them manually OR Nathan can clear `meta.saleDate` for `source='ghl-import'` and re-merge to backfill.
-- Family contact relationships are all `'other'` from import — Eric's labeling them as `child`, `spouse`, etc.
-- 0 family contacts on the 30 imports (the bug-era version dropped them silently). Re-uploading the same CSV in Merge mode will add them.
+Bug-fix marathon driven by Eric flagging multiple silent failures. Pattern that emerged: **contact data ↔ deal data drift** — facts on `contacts` that need to bridge to `deal.meta` for the auto-queue gate to see them. Hit it 4 times today, fixed each instance + the architectural pattern.
 
-**Up next**:
-- C-leads CSV import (queued — ready when Eric is)
-- Cloudflare audit completion (Pages project + Maps key restriction)
-- Obsidian vault v0 bootstrap
-- Phone-type detection (parked, not yet built)
+**Migrations applied** (8 today, all via SQL editor):
+1. `20260508130000_team_threads_dm_privacy_fix.sql` — Eric was reading my DMs with Justin (pre-Phase-3 DMs defaulted to thread_type='channel'). New RLS: if a thread has any `team_thread_participants` rows, only those participants read it. 247 contact_deals.relationship NULLs backfilled from contacts.kind in same pass.
+2. `20260508140000_backfill_ghl_family_relationship.sql` — historical GHL family-contacts from 4-29 + 5-1 imports were `relationship='other'`; backfilled to `'family'` (today's importer fix already changed the default).
+3. `20260508150000_homeowner_phone_sync.sql` — Charlotte Morrow / Richard Mikol / Trevor Mccain were silently skipped from outreach because their phones lived only on `contacts.phone`, not `deal.meta.homeownerPhone`. 6 deals affected; 3 prepped A-tier retroactively queued. Added 2 sync triggers: contact phone update → meta; contact_deals link → meta. Going forward this can't recur.
+4. `20260508160000_audit_remediation.sql` — fired 3 things in one paste: cancelled 2 deceased-homeowner outreach rows that would have texted dead people (Lindon Phillips, Leroy Turner Jr); cancelled 1 zombie pending row stuck 9 days; backfilled `meta.deceased=true` on 24 deals where the contact-level flag wasn't propagating; deceased-contact → meta sync triggers; `sweep_stale_outreach_queue()` function + pg_cron daily 09:00 UTC; deleted 20 orphan personalized_links (incl my own manual-test claim row).
+5. `20260508170000_personalized_link_views.sql` — per-view audit table because Eric's pushback caught me overclaiming engagement on Richard. Old `view_count` was just a counter — couldn't distinguish 1 person × 39 refreshes from 39 distinct viewers from team testing. New `personalized_link_views` table captures IP + user-agent + referer per page hit. Plus `v_personalized_link_engagement` view that exposes `distinct_external_fingerprints` and `external_views_*` (excludes is_team_view=true).
+6. `20260508180000_post_alerts_to_ops_chat.sql` — claim submissions and Lauren chat alerts now post to # Ops thread as `team_messages` with new `sender_kind='system'`. Third notification leg alongside Twilio SMS + Resend email. The chat post is the one we KNOW reaches the team because we're already in DCC.
 
-**Touching**: `src/app.jsx`, `supabase/migrations/`, `docs/IMPORTING_LEADS_FROM_GHL.md`, `TRANSFER_TO_NEW_CLAUDE_CODE.md`
+**Code shipped (commits dfd9d57 → 4463343, all on main)**:
+- GHL importer fix — read `Family N Name` from CSV; default `relationship='family'`
+- DCC `dealMetaPhone()` helper centralized — accepts 4 phone-key variants (`homeownerPhone | phone | contactPhone | homeowner_phone`)
+- Soft-delete on deals (admin-only, reason codes, restore view) — already shipped 5/7, used today on Joseph Mondello + Matthew Thomas
+- Tier-independent 🕊 deceased badge — appears on cards / detail header / Send Intro / Send Personalized Link
+- Dup-check on + New Deal modal (debounced live match against existing deals)
+- Bulk-queue C-tier admin button on Pipeline → Kanban (closes the "27 prepped C-tier sit in Ready forever" gap)
+- Engagement strip on every deal Overview (post-tonight) — reads v_personalized_link_engagement, color-codes signal (gray = no audited views, amber = 1-2 distinct, green = 3+ distinct = real interest)
+- 4 SOPs / docs to Eric in # Ops chat: SOP v2 written + delivered (audit miss on the 7 deceased-homeowner deals caught + retracted publicly)
 
-**Migrations applied 2026-04-29**:
-- `20260428090000_contacts_deceased.sql`
-- `20260428100000_profiles_phone_nullable.sql`
-- `20260429120000_acknowledge_all_docket_events.sql`
+**Eric's pushback caught 2 of my misclaims today**:
+- "Add a homeowner contact via Comms tab on the 7 prepped-no-homeowner deals" — would have texted 6 dead people. Eric correctly added heirs/relatives instead.
+- "Richard Mikol HOT lead — submitted claim, viewed today" — the "claim" was MY manual portal test on 4/28 (same fake AR phone 4794595671 as the deleted Nathan-Johnson orphan). Reset his fake `claim_submitted_at` + cancelled the bad Day-0 draft tonight.
 
-**Last updated:** 2026-04-29 evening.
+**Live state metrics (verified 2026-05-08)**:
+- 130 active deals, 132 total (2 soft-deleted)
+- 73 prepped, 22 outreach drafts queued
+- **4 outbound messages sent in 7 days** ← the launch bottleneck. Whole funnel points at a Send button that hasn't been clicked at scale.
+- 20 A-tier · 25 B-tier · 53 C-tier · 32 untiered
+- 147 personalized URLs minted (23 with any views — but real distinct visitors unknown until per-view audit fills)
+- 4 signed / 5 filed / 3 recovered
+
+**Open follow-ups (mostly unblocked, Nathan's choice when to fire)**:
+- Send the first real outbound on a queued A-tier draft to verify the mac-bridge end-to-end (the actual launch — 0 messages sent in 7 days while 22 drafts are waiting)
+- Cherry-pick portal commit `97c4747` from `nathan/lauren-returning-visitor-memory` to main (per-view tracking only kicks in once that branch deploys; migration already in prod)
+- Set `TEAM_VIEW_IPS` env var in Vercel (CSV of team IPs) — without this, all team views land in the audit table without is_team_view flag
+- 118 GHL family-contact orphans from 4-29 + 5-1 imports — re-link by name pattern OR wipe + re-import (re-link saves $177 in IDI Core spend)
+- Castle scraper health: butler + montgomery chronic 3 days; alert email_sent=false 5 days. Chronic alert path is dead. SSH defender-mini → restart launchctl daemons + investigate `castle-health-daily` EF Resend call.
+- Smoke-test the # Ops claim alert chain (submit fake claim on inactive token, watch chat) — verifies tonight's wiring
+- 4 _pending_review/ migrations (client_edit_requests, research_shadow_log, research_rejections, agent_room_actions) — apply when their consumers go live
+
+**Cross-session state**:
+- Justin: shipped RVM pipeline + DocuSign signing + delivery-callback wiring (Twilio + Resend + Slybroadcast) this week. Migration drift CI live. Parked 2 client-notify triggers under `_pending_review/` pending approval-flow design.
+- Ohio Intel: massive coverage push — 33 CV3 counties + 14 records-request snapshots + Tyler Cloud (Lucas/Licking/Medina) + Henschen (8 counties) + BenchmarkWeb (3) + Stark + ProWare Razor (Montgomery). Cuyahoga 720/720 cases enriched. Three-tab home rebuild. Auction status audit log. Address normalization via usaddress lib. Surplus floor 1K → 5K. Grade D added for underwater. Embedded Lauren panel.
+- Eric: 73 leads prepped through the workflow. Caught 3 audit misses (Charlotte phone, deceased-7 list, Richard "engagement"). Wrote prep-queue SOP for Inaam (now in Library v2 form).
+- Inaam: been doing NOD/30DTS work + categorization. Needs admin role bump (SQL ready in 2026-05-08 transcript) before he can see surplus fields and start the prep flow per the SOP.
+
+**Touching tonight**: `src/app.jsx` (engagement strip + earlier today's helpers), `WORKING_ON.md` (this update), 8 supabase migrations under `supabase/migrations/`, refundlocators-next portal page (per-view IP/UA capture, on `nathan/lauren-returning-visitor-memory` branch awaiting merge).
+
+**Last updated:** 2026-05-08 evening (post-audit, post-engagement-strip).
 
 ---
 

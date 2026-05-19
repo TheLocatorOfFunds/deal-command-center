@@ -14,8 +14,18 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const NATHAN_IPHONE = '+15135162306';
-const RING_SECONDS = 18;
+const RING_SECONDS = 30;
+
+// Single shared identity for all DCC browsers AND mobile clients.
+// Twilio rings EVERY registered Twilio.Device with this identity simultaneously,
+// so all team member browsers + mobile apps ring without any per-user configuration.
+// This matches the identity issued by twilio-token.
+const DCC_CLIENT_IDENTITIES = ['dcc-fundlocators'];
+
+// Nathan's Spectrum iPhone — always-on safety-net leg that rings in
+// parallel with the DCC clients. Screened by twilio-voice-screen so
+// voicemail can't "answer" the call and kill the other legs.
+const NATHAN_FALLBACK_NUMBER = '+15139982306';
 
 const normalizePhone = (p: string): string => {
   const digits = (p || '').replace(/\D/g, '');
@@ -61,18 +71,35 @@ Deno.serve(async (req: Request) => {
   }
 
   if (!dealId) {
-    // Fallback: homeowner phone lookup via RPC
+    // Fallback: homeowner phone lookup via RPC.
+    // find_deal_by_phone returns an array of rows [{id: "deal-id"}] when defined
+    // as RETURNS TABLE, or a plain string when RETURNS text. Handle both shapes.
     try {
       const { data } = await db.rpc('find_deal_by_phone', { phone_e164: from, phone_bare: from.replace('+', '') });
       if (data) {
-        dealId = data;
-        threadKey = `${dealId}:phone:${from}`;
+        if (typeof data === 'string') {
+          dealId = data;
+        } else if (Array.isArray(data) && data.length > 0) {
+          dealId = data[0]?.id ?? null;
+        } else if (typeof data === 'object' && data !== null) {
+          dealId = (data as any).id ?? null;
+        }
+        if (dealId) threadKey = `${dealId}:phone:${from}`;
       }
     } catch (_) {}
   }
 
+  // Resolve deal name for the browser overlay
+  let dealName: string | null = null;
+  if (dealId) {
+    try {
+      const { data: dealRow } = await db.from('deals').select('name').eq('id', dealId).single();
+      dealName = dealRow?.name || null;
+    } catch (_) {}
+  }
+
   // Log the call in 'ringing' state. The status callback will finalize it.
-  const { data: callRow } = await db.from('call_logs').insert({
+  const { data: callRow, error: insertError } = await db.from('call_logs').insert({
     deal_id: dealId,
     contact_id: contactId,
     thread_key: threadKey,
@@ -83,12 +110,37 @@ Deno.serve(async (req: Request) => {
     twilio_call_sid: callSid,
     started_at: new Date().toISOString(),
   }).select('id').single();
+  if (insertError) console.error('call_logs INSERT error:', JSON.stringify(insertError), {dealId, contactId, threadKey, from, to, callSid});
 
   // Edge Function URL for the status callback
   const projectRef = supabaseUrl.match(/https:\/\/([^.]+)/)?.[1] || '';
   const statusUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-status`;
+  const screenUrl = `https://${projectRef}.supabase.co/functions/v1/twilio-voice-screen`;
 
-  // TwiML: record the call, dial Nathan, hang up on no-answer after RING_SECONDS
+  // Build <Client> entries for every DCC team member browser.
+  // All registered browsers with these identities ring simultaneously.
+  const safeFrom    = from;  // E.164 — XML-safe
+  const safeDealId  = (dealId || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safeDealName = (dealName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const safeContactId = (contactId || '').replace(/&/g, '&amp;');
+
+  const clientElements = DCC_CLIENT_IDENTITIES.map(identity => `    <Client>
+      <Identity>${identity}</Identity>
+      <Parameter name="from" value="${safeFrom}"/>
+      <Parameter name="callerName" value="${safeFrom}"/>
+      <Parameter name="dealId" value="${safeDealId}"/>
+      <Parameter name="dealName" value="${safeDealName}"/>
+      <Parameter name="contactId" value="${safeContactId}"/>
+    </Client>`).join('\n');
+
+  // TwiML: ring ALL DCC clients (web + mobile) AND Nathan's 2306 in
+  // parallel. The <Number> leg is screened by twilio-voice-screen
+  // (press-1-to-accept), which prevents voicemail from "answering" the
+  // call and killing every other leg before a human picks up.
+  //
+  // First leg to confirm pickup wins; Twilio cancels the others.
+  // If nobody picks up in RING_SECONDS, statusUrl fires with no-answer
+  // and the existing missed-call flow handles it.
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Dial
@@ -99,7 +151,10 @@ Deno.serve(async (req: Request) => {
     recordingStatusCallback="${statusUrl}"
     recordingStatusCallbackMethod="POST"
     callerId="${to}"
-  >${NATHAN_IPHONE}</Dial>
+  >
+${clientElements}
+    <Number url="${screenUrl}" method="POST">${NATHAN_FALLBACK_NUMBER}</Number>
+  </Dial>
 </Response>`;
 
   return new Response(twiml, {

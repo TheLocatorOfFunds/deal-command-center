@@ -19,8 +19,11 @@ import { createClient } from 'jsr:@supabase/supabase-js@2'
 // the system is a typing assistant. Sender-reputation compliance lives at
 // the Twilio messaging-service config layer, not in this code.
 //
-// Nothing else in receive-sms changed. The existing matching/routing logic
-// (lines 36-101) is untouched.
+// 2026-05-13 (Justin): inbound MMS media support added — Twilio media URLs
+// require Basic auth + are short-lived, so we fetch the bytes, upload to
+// the public 'inbound-media' bucket under <deal>/<uuid>.<ext>, and store
+// the durable URL on messages_outbound.media_url. v1 = first attachment
+// only (MediaUrl0); multi-attachment is a future media_urls jsonb upgrade.
 // ────────────────────────────────────────────────────────────────────
 
 const STOP_KEYWORDS = new Set([
@@ -57,6 +60,7 @@ Deno.serve(async (req) => {
     const toRaw   = params.get('To')   ?? ''   // our Twilio/Nathan number
     const body    = params.get('Body') ?? ''
     const sid     = params.get('MessageSid') ?? ''
+    const numMedia = parseInt(params.get('NumMedia') ?? '0', 10)
 
     // Normalize to E.164
     const normalize = (p: string) => {
@@ -148,6 +152,56 @@ Deno.serve(async (req) => {
       return new Response('<Response/>', { headers: { 'Content-Type': 'text/xml' } })
     }
 
+    // ── MMS media → fetch from Twilio (Basic auth, ~24h URLs) → upload to
+    //    public inbound-media bucket → keep durable URL on the row.
+    //    v1 stores only the first attachment; multi-attachment is a future
+    //    upgrade to media_urls jsonb.
+    let mediaUrl: string | null = null
+    if (numMedia > 0) {
+      const twilioUrl = params.get('MediaUrl0')
+      const twilioCt  = params.get('MediaContentType0') ?? 'application/octet-stream'
+      if (twilioUrl) {
+        try {
+          const accountSid = Deno.env.get('TWILIO_ACCOUNT_SID') ?? ''
+          const authToken  = Deno.env.get('TWILIO_AUTH_TOKEN')  ?? ''
+          const auth       = btoa(`${accountSid}:${authToken}`)
+          // Twilio media URLs 302-redirect to S3 with auth scrubbed from the
+          // redirect target. fetch() follows redirects by default; the Basic
+          // auth header is dropped on cross-origin redirect, which is fine
+          // since the S3 signed URL doesn't need it.
+          const resp = await fetch(twilioUrl, { headers: { Authorization: `Basic ${auth}` } })
+          if (!resp.ok) throw new Error(`Twilio media fetch ${resp.status}`)
+          const bytes = new Uint8Array(await resp.arrayBuffer())
+
+          // Derive extension from MIME (Twilio's URL has no extension)
+          const extFromMime = (ct: string): string => {
+            const map: Record<string,string> = {
+              'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',
+              'image/gif': 'gif', 'image/webp': 'webp', 'image/heic': 'heic',
+              'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm',
+              'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/amr': 'amr', 'audio/ogg': 'ogg',
+              'application/pdf': 'pdf',
+            }
+            return map[ct.toLowerCase()] ?? 'bin'
+          }
+          const ext = extFromMime(twilioCt)
+          const uuid = crypto.randomUUID()
+          const path = `${dealId}/${uuid}.${ext}`
+
+          const { error: upErr } = await sb.storage
+            .from('inbound-media')
+            .upload(path, bytes, { contentType: twilioCt, upsert: false })
+          if (upErr) throw new Error(`Storage upload: ${upErr.message}`)
+
+          const { data: urlData } = sb.storage.from('inbound-media').getPublicUrl(path)
+          mediaUrl = urlData.publicUrl
+        } catch (e) {
+          // Don't drop the whole message — log and store text-only
+          console.error('MMS media handling failed:', (e as Error).message)
+        }
+      }
+    }
+
     // ── Store inbound message ─────────────────────────────────────────────────
     await sb.from('messages_outbound').insert({
       to_number:   from,      // contact's number (thread filter key)
@@ -160,6 +214,7 @@ Deno.serve(async (req) => {
       contact_id:  contactId,
       thread_key:  threadKey,
       channel:     'sms',
+      media_url:   mediaUrl,
     })
 
     // ── STOP keyword → silent DND (Nathan's directive 2026-04-25) ──

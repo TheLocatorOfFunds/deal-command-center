@@ -64,6 +64,58 @@ const btnGhostFallback = { background: 'transparent', color: '#a8a29e', border: 
 // ─── Helpers ────────────────────────────────────────────────────────
 const fmt = (n) => "$" + Math.round(n || 0).toLocaleString();
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// Defensive: strip a trailing "County" so concatenating ` County` later
+// can't produce "Butler County County". Source data is dirty for some
+// deals (Castle/ohio-intel saved `county = 'Butler County'`, others
+// saved `'Butler'`); we treat either as "Butler" for display purposes.
+// Mirror of the same helper in portal.html.
+const cleanCountyName = (s) => (s || '').replace(/\s*county\s*$/i, '').trim();
+
+// Convert plain text containing http(s) URLs into a mixed array of
+// strings + <a> elements so chat / note / message bodies render
+// clickable links instead of inert text. Per Nathan 2026-05-05 — Eric
+// posted a Jitsi meet URL into team chat and Nathan couldn't click it.
+//
+// Trailing punctuation is stripped from the link target so
+// "https://example.com." links to https://example.com (the period
+// stays as plain text after).
+//
+// Returns the original string when there's no URL to linkify (so the
+// caller can keep using {body} unchanged in the common case).
+const URL_RE = /(https?:\/\/[^\s<>"']+)/g;
+const linkifyText = (text) => {
+  if (!text || typeof text !== 'string') return text;
+  if (!text.includes('http')) return text;
+  const out = [];
+  let last = 0;
+  let match;
+  let i = 0;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(text)) !== null) {
+    if (match.index > last) out.push(text.slice(last, match.index));
+    let url = match[0];
+    let trailing = '';
+    while (url && /[.,;:!?)\]]/.test(url[url.length - 1])) {
+      trailing = url[url.length - 1] + trailing;
+      url = url.slice(0, -1);
+    }
+    out.push(
+      <a key={'lnk-' + i}
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        style={{ color: '#60a5fa', textDecoration: 'underline', wordBreak: 'break-all' }}>
+        {url}
+      </a>
+    );
+    if (trailing) out.push(trailing);
+    last = match.index + match[0].length;
+    i++;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out.length === 0 ? text : out;
+};
 
 const daysSince = (dateStr) => {
   if (!dateStr) return null;
@@ -97,8 +149,14 @@ const computeDealNet = (deal) => {
     const closingDollars = strategy === "wholesale" ? 0 : salePrice * closingPct + (m.flatFee || 0);
     return salePrice - (m.contractPrice || 0) - closingDollars;
   }
-  // surplus / wholesale / rental / other → use projected fee minus attorney fee
-  const projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
+  // surplus / wholesale / rental / other → use projected fee minus attorney fee.
+  // Cascade: estimatedSurplus (hand-entered / intel-main pushed) → estimated_surplus
+  // (snake) → estimatedAvailableEquity (pre-auction GHL key). Director fix
+  // 2026-05-19: top tiles previously only read estimatedSurplus, so post-auction
+  // leads with the equity figure populated showed "TBD" even when the math was
+  // there (e.g. McGruder: salePrice $220K − totalDebt $178K = $41,828 in
+  // estimatedAvailableEquity, estimatedSurplus null).
+  const projectedFee = (((m.estimatedSurplus || m.estimated_surplus || m.estimatedAvailableEquity) || 0) * (m.feePct || 0)) / 100;
   return projectedFee - (m.attorneyFee || 0);
 };
 const csvEscape = (v) => {
@@ -131,6 +189,37 @@ const LEAD_STATUSES = {
 };
 const ALL_LEAD_STATUSES = [...LEAD_STATUSES.flip, ...LEAD_STATUSES.surplus];
 const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes(deal.status);
+
+// Read a homeowner phone out of deal.meta — accepts the four key variants
+// the codebase has accumulated. The personalized-URL minter (~line 10532)
+// is the most permissive reader; this helper matches it so every gate
+// (prep-missing warning, hygiene check, bulk-queue eligibility, kanban
+// has_phone filter, auto-queue gate) reaches the same answer.
+//   - homeownerPhone  — canonical (DCC Case Details writes this)
+//   - phone           — legacy alias still on some older rows
+//   - contactPhone    — produced by certain intake paths
+//   - homeowner_phone — snake_case path (some imports / DB-shaped writes)
+// 2026-05-07: Eric flagged Charlotte Morrow showing "missing: phone" with
+// all 5 SOP criteria met — root cause was prepMissing checking only the
+// first two keys while the URL minter accepted all four. Centralizing
+// here so the same drift can't happen again.
+const dealMetaPhone = (meta) => {
+  const m = meta || {};
+  const v = m.homeownerPhone || m.phone || m.contactPhone || m.homeowner_phone;
+  return (v && String(v).trim()) ? String(v).trim() : null;
+};
+
+// Is the homeowner on this deal deceased? Tier-INDEPENDENT — Eric flagged
+// 2026-05-07 that C-tier deceased deals were visually indistinguishable
+// from living ones. Two truth sources we OR together:
+//   - deal.death_signal (column, fed by Castle scraper from docket signals)
+//   - deal.meta.deceased (jsonb, hand-set by Eric/Nathan via Case Details
+//     toggle when discovered manually)
+// Any reader that gates outreach behavior or renders a deceased indicator
+// should use this helper so the answer is consistent across cards,
+// kanban, detail header, compose flows, and the prep-queue gate.
+const isDeceased = (deal) => !!(deal?.death_signal || deal?.meta?.deceased);
+
 // What status to bump to when "converting" a lead → engaged deal.
 const POST_ENGAGEMENT_STATUS = { flip: "under-contract", surplus: "signed" };
 const STATUS_COLORS = {
@@ -140,6 +229,24 @@ const STATUS_COLORS = {
   "probate": "#ec4899", "awaiting-distribution": "#06b6d4", "recovered": "#10b981", "urgent": "#ef4444",
 };
 const EXPENSE_CATEGORIES = ["Acquisition","Inspection","Plumbing","Electrical","Well/Septic","Cleanup","Labor","Holding","Marketing","Setup","Site","Legal","Filing","Other"];
+
+// ─── Z-Index Scale ───────────────────────────────────────────────────
+// Keep all fixed/absolute layers here so nothing accidentally overlaps.
+//   100   sticky header bar
+//   200   sidebar (mobile slide-in)
+//   500   dropdown menus / popovers (phone popover, deal action menu)
+//   600   tooltip overlays
+//   999   (retired — use 10000 for overlays now)
+//  1000   (retired — use 10001 for panels now)
+//  1200   toast notification stack (top-right)
+//  1250   chat notification popover
+//  9999   call widgets: incoming-call ring + active-call overlay (bottom-right)
+// 10000   modal / panel backdrop overlay (dims everything incl. call widgets)
+// 10001   slide-over panels (RelayDealPanel, etc.) — must always beat 10000
+// RULE: nothing new should use a value already in this list. Add a new entry here first.
+// RULE: panels and their overlays must always be >= 10000 so they clear call/chat bubbles.
+// RULE: action buttons inside panels must have paddingBottom >= 80px on mobile
+//       to clear any persistent bottom-right widget (call bubble = ~56px + 24px gap).
 
 // ─── Styles ──────────────────────────────────────────────────────────
 const inputStyle = { width: "100%", background: "#0c0a09", border: "1px solid #44403c", color: "#fafaf9", padding: "8px 10px", borderRadius: 6, fontSize: 13, outline: "none" };
@@ -298,6 +405,156 @@ function SetNewPassword({ onDone }) {
   );
 }
 
+// ─── Notification chirp ──────────────────────────────────────────────
+// Singleton AudioContext + bell-like ding (A5 fundamental + E6 harmonic,
+// ~600ms decay). One context, resumed eagerly on every user gesture so
+// the autoplay policy doesn't suppress the first chirp after page load.
+// Console-warns on suppression so we have a signal when sound fails.
+let _notifyAudioCtx = null;
+let _notifyResumeBound = false;
+function _notifyEnsureAudioCtx() {
+  if (typeof window === 'undefined') return null;
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) {
+    console.warn('[notifications] Web Audio not supported in this browser — sound suppressed');
+    return null;
+  }
+  if (!_notifyAudioCtx) {
+    try { _notifyAudioCtx = new Ctx(); }
+    catch (e) { console.warn('[notifications] AudioContext create failed', e); return null; }
+  }
+  if (!_notifyResumeBound) {
+    _notifyResumeBound = true;
+    const resume = () => {
+      if (_notifyAudioCtx?.state === 'suspended') {
+        _notifyAudioCtx.resume().catch(err => console.warn('[notifications] AudioContext resume failed', err));
+      }
+    };
+    document.addEventListener('click', resume);
+    document.addEventListener('keydown', resume);
+    document.addEventListener('touchstart', resume, { passive: true });
+  }
+  return _notifyAudioCtx;
+}
+// Helper: schedule a list of tones in one batch.
+// Each tone = { freq, type, start (sec from now), dur, peak (gain 0..1) }.
+function _notifyPlayTones(ctx, tones) {
+  const baseTime = ctx.currentTime;
+  for (const t of tones) {
+    try {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = t.type || 'sine';
+      o.frequency.value = t.freq;
+      const startAt = baseTime + (t.start || 0);
+      g.gain.setValueAtTime(0.0001, startAt);
+      g.gain.exponentialRampToValueAtTime(t.peak, startAt + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, startAt + t.dur);
+      o.connect(g).connect(ctx.destination);
+      o.start(startAt); o.stop(startAt + t.dur + 0.05);
+    } catch (e) {
+      console.warn('[notifications] tone playback failed', e);
+    }
+  }
+}
+
+// Three distinct profiles so users can identify what just landed by ear:
+//   'chat' — gentle bell (A5 + E6 harmonic, ~600ms decay) — friendly, soft
+//   'sms'  — descending two-note pluck (A5 → F5, ~250ms, triangle wave) — punchy, brief
+//   'call' — old-phone "ring-ring" double dyad (C5+F5 twice, ~500ms) — urgent
+// Default = 'chat' for backward compatibility.
+function playNotifyChirp(type = 'chat') {
+  const ctx = _notifyEnsureAudioCtx();
+  if (!ctx) return;
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+  if (ctx.state !== 'running') {
+    console.warn('[notifications] AudioContext not running (state=' + ctx.state + ') — chirp suppressed; awaiting user gesture in tab');
+    return;
+  }
+  if (type === 'sms') {
+    _notifyPlayTones(ctx, [
+      { freq: 880, type: 'triangle', start: 0,    dur: 0.10, peak: 0.30 },
+      { freq: 698, type: 'triangle', start: 0.13, dur: 0.12, peak: 0.32 },
+    ]);
+  } else if (type === 'call') {
+    _notifyPlayTones(ctx, [
+      { freq: 523, type: 'sine', start: 0,    dur: 0.18, peak: 0.36 },
+      { freq: 698, type: 'sine', start: 0,    dur: 0.18, peak: 0.28 },
+      { freq: 523, type: 'sine', start: 0.30, dur: 0.18, peak: 0.36 },
+      { freq: 698, type: 'sine', start: 0.30, dur: 0.18, peak: 0.28 },
+    ]);
+  } else {
+    // 'chat' — bell-like ding (A5 fundamental + E6 harmonic, 600ms decay)
+    _notifyPlayTones(ctx, [
+      { freq: 880,  type: 'sine', start: 0, dur: 0.60, peak: 0.32 },
+      { freq: 1320, type: 'sine', start: 0, dur: 0.33, peak: 0.12 },
+    ]);
+  }
+}
+
+// ─── Favicon badge ───────────────────────────────────────────────────
+// Renders the DCC favicon to a canvas at 64×64 and overlays a red circle
+// with the count in the top-right (Gmail/Slack-style). Called whenever
+// the aggregate unread count changes.
+const _faviconBaseSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#0b1f3a"/>
+  <circle cx="256" cy="162" r="30" fill="#c9a24a"/>
+  <text x="256" y="350" font-family="Georgia, 'Times New Roman', serif" font-size="130" font-weight="700" fill="#c9a24a" text-anchor="middle" letter-spacing="-4">DCC</text>
+</svg>`;
+let _faviconImg = null;
+function _loadFaviconBase() {
+  if (_faviconImg) return Promise.resolve(_faviconImg);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => { _faviconImg = img; resolve(img); };
+    img.onerror = () => reject(new Error('favicon base load failed'));
+    img.src = 'data:image/svg+xml;base64,' + btoa(_faviconBaseSvg);
+  });
+}
+async function updateFaviconBadge(count) {
+  if (typeof document === 'undefined') return;
+  try {
+    const img = await _loadFaviconBase();
+    const size = 64;
+    const canvas = document.createElement('canvas');
+    canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, size, size);
+    if (count > 0) {
+      // Red badge — top-right corner
+      const cx = size - 16, cy = 16, r = 16;
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+      ctx.fill();
+      // Subtle white outline for legibility on any tab background
+      ctx.strokeStyle = '#fafaf9';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      // Count text
+      ctx.fillStyle = '#fafaf9';
+      const text = count > 99 ? '99+' : String(count);
+      ctx.font = 'bold ' + (text.length >= 3 ? 16 : 20) + 'px -apple-system, BlinkMacSystemFont, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, cx, cy + 1);
+    }
+    const url = canvas.toDataURL('image/png');
+    let link = document.querySelector('link[rel="icon"]');
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.type = 'image/png';
+    link.href = url;
+  } catch (e) {
+    console.warn('[favicon-badge] update failed', e);
+  }
+}
+
 // ─── Root: session gate ──────────────────────────────────────────────
 function Root() {
   const [session, setSession]       = useState(null);
@@ -328,6 +585,24 @@ function Root() {
   if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />;
   if (!session) return <Login />;
   if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
+  // Defense-in-depth: if a signed-in user is NOT on the team (i.e. they
+  // got role=client/attorney/pending), bounce them to portal.html /
+  // attorney-portal.html instead of rendering the DCC admin shell. RLS
+  // already protects the data, but rendering admin UI to a client is
+  // confusing and unsafe. Added 2026-05-12 after the Kemper Ansel leak:
+  // his role=user default (now fixed in handle_new_user) let him hit
+  // app.refundlocators.com directly. With this guard he'd have been
+  // redirected to portal.html on first load.
+  const isTeamRole = profile.role === 'admin' || profile.role === 'user' || profile.role === 'va';
+  if (!isTeamRole) {
+    if (profile.role === 'attorney') {
+      window.location.replace('/attorney-portal.html');
+    } else {
+      // client / pending / anything else → client portal
+      window.location.replace('/portal.html');
+    }
+    return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Redirecting…</div></Shell>;
+  }
   return <DealCommandCenter session={session} profile={profile} />;
 }
 
@@ -336,6 +611,22 @@ function DealCommandCenter({ session, profile }) {
   const [deals, setDeals] = useState([]);
 
   // ── Hash routing helpers ──────────────────────────────────────────
+  // Hash schemes:
+  //   #/deal/<id>/<tab>     — open a specific deal on a specific tab
+  //   #/view/<viewname>     — top-level view (today / outreach / inbox / etc.)
+  //   #/                    — defaults to "today"
+  // Per Nathan 2026-05-05: refresh must keep you on the tab you were on,
+  // not bounce back to Today. The deal-route was already hash-encoded;
+  // the view-route is new — was just ephemeral useState before, so
+  // any refresh while NOT on a deal reset to today.
+  const VALID_VIEWS = [
+    'today', 'attention', 'outreach', 'inbox', 'leads', 'forecast',
+    'active', 'flagged', 'hygiene', 'archive', 'pipeline', 'leads-phase',
+    'tasks', 'time', 'reports', 'analytics', 'traffic', 'team',
+    // Added 2026-05-15 per Justin: these were nav items but missing from
+    // the whitelist, so refresh on these views bounced you back to today.
+    'relay', 'calls', 'comms', 'va-queue',
+  ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
     let tab = parts[2] || 'overview';
@@ -346,7 +637,12 @@ function DealCommandCenter({ session, profile }) {
     if (tab === 'vendors') tab = 'contacts';
     if (tab === 'notes') tab = 'files';
     if (tab === 'documents') tab = 'files';
-    return { dealId: parts[0] === 'deal' && parts[1] ? parts[1] : null, tab };
+    const dealId = parts[0] === 'deal' && parts[1] ? parts[1] : null;
+    let view = null;
+    if (parts[0] === 'view' && parts[1] && VALID_VIEWS.includes(parts[1])) {
+      view = parts[1];
+    }
+    return { dealId, tab, view };
   };
 
   const [activeDealId, setActiveDealId] = useState(() => parseHash().dealId);
@@ -364,6 +660,16 @@ function DealCommandCenter({ session, profile }) {
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [unreadSmsCount, setUnreadSmsCount] = useState(0);
+  // Welcome-back unread banner. Hides after dismiss until a NEW message
+  // arrives (count rises above the dismissal floor). Click → opens chat.
+  const [chatBannerDismissedAt, setChatBannerDismissedAt] = useState(0);
+  // Chat-notification popover anchored under the header 💬 Chat button.
+  // Shows the actual unread messages (sender + preview + timestamp +
+  // thread label) so you can preview before opening. Per Nathan 2026-05-04,
+  // GHL-style: click "Mark all as read" to clear, or click a single message
+  // to jump to that thread.
+  const [showChatPopover, setShowChatPopover] = useState(false);
   // [{user_id, name, url, started_at}] — derived from recent team_messages
   // posts of the form "📹 X started a video call: https://meet.jit.si/..."
   const [activeCalls, setActiveCalls] = useState([]);
@@ -388,7 +694,26 @@ function DealCommandCenter({ session, profile }) {
   const [showImport, setShowImport] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
-  const [view, setView] = useState("today"); // "today" | "active" | "archive" | "flagged"
+  // Seed from hash so refresh keeps the user on the same view. Falls back
+  // to "today" when no #/view/<x> or deal route is present.
+  const [view, setView] = useState(() => parseHash().view || "today");
+
+  // ── Sidebar ────────────────────────────────────────────────────────────
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
+    typeof localStorage !== 'undefined' && localStorage.getItem('dcc-sidebar-collapsed') === '1'
+  );
+  React.useEffect(() => {
+    localStorage.setItem('dcc-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
+
+  // ── Phone popover (replaces bottom-right dialpad) ──────────────────────
+  const [showPhonePopover, setShowPhonePopover] = useState(false);
+  const [phoneTab, setPhoneTab] = useState('dial'); // 'dial' | 'recents'
+  const [recentCalls, setRecentCalls] = useState([]);
+  const [dialpadContact, setDialpadContact] = useState(null); // { name, phone, dealName, dealId }
+
+  // ── Notifications dropdown (aggregates header badges) ──────────────────
+  const [showNotifDropdown, setShowNotifDropdown] = useState(false);
 
   // App-level recording state — survives any deal/tab/section unmount.
   // null when not recording. {dealId, dealName} while modal/pill is up.
@@ -403,6 +728,290 @@ function DealCommandCenter({ session, profile }) {
     expand: () => setRecordingMinimized(false),
     close: () => { setRecordingDeal(null); setRecordingMinimized(false); },
   }), [recordingDeal, recordingMinimized]);
+
+  // ── Twilio Voice — global device (always registered, not deal-scoped) ────
+  // Device lives here so the phone rings even on the deals list, not just
+  // when the Comms tab of a specific deal is open.
+  //
+  // Auto-init: Device is created automatically when a team-member session
+  // loads. getUserMedia is attempted silently first — if mic was previously
+  // granted it resolves immediately, unlocking the AudioContext so the SDK's
+  // built-in ringtone works. If mic was never granted we still register; the
+  // incoming-call overlay + tab-title flash work without mic, and the user is
+  // prompted for mic when they click Answer.
+  //
+  // Token lifetime: tokens are 12 hours. The `tokenWillExpire` event fires
+  // ~3 min before expiry and we silently swap in a fresh token, so the Device
+  // stays registered indefinitely for open tabs. No manual "Enable phone"
+  // click is ever needed after the initial page load.
+  //
+  // The enablePhone callback remains as a retry mechanism for error states.
+  const [callStatus, setCallStatus]     = useState(null); // null|'connecting'|'ringing'|'in-progress'|'ended'
+  const [callContact, setCallContact]   = useState(null); // { name, phone }
+  const [callDuration, setCallDuration] = useState(0);
+  const [incomingCall, setIncomingCall] = useState(null);
+  const [callMuted, setCallMuted]       = useState(false);
+  const [showDialpad, setShowDialpad]   = useState(false);
+  const [dialpadNumber, setDialpadNumber] = useState('');
+  const [showKeypad, setShowKeypad]       = useState(false);
+  const [keypadBuffer, setKeypadBuffer]   = useState('');
+  const [callSid, setCallSid]             = useState(null);
+  const [addingToCall, setAddingToCall]   = useState(false);
+  const [addToCallNumber, setAddToCallNumber] = useState('');
+  const [addCallMsg, setAddCallMsg]       = useState(null); // { type: 'ok'|'error', text }
+  // 'idle' = not yet enabled (needs click) | 'initializing' | 'registered' | 'error'
+  const [twilioStatus, setTwilioStatus] = useState('idle');
+  const twilioDeviceRef = React.useRef(null);
+  const activeCallRef   = React.useRef(null);
+  const callTimerRef    = React.useRef(null);
+  const ringTitleRef    = React.useRef(null); // { interval, origTitle } for tab-title flash
+
+  // Initializes the Twilio Device. Must be called from within a user gesture
+  // (the "Enable phone" button click) so the browser allows AudioContext audio.
+  // getUserMedia is called BEFORE this to pre-grant mic and unlock AudioContext.
+  const initTwilioDevice = React.useCallback(async () => {
+    // Destroy any stale device before re-creating
+    if (twilioDeviceRef.current) {
+      try { twilioDeviceRef.current.destroy(); } catch (_) {}
+      twilioDeviceRef.current = null;
+    }
+    setTwilioStatus('initializing');
+    try {
+      const { data, error } = await sb.functions.invoke('twilio-token');
+      if (error || !data?.token) throw new Error(error?.message || 'No token');
+      console.log('[twilio-device] token identity:', data.identity);
+      const device = new window.Twilio.Device(data.token, {
+        codecPreferences: ['opus', 'pcmu'],
+        enableRingingState: true,
+        allowIncomingWhileBusy: false,
+      });
+      device.on('registered',   () => { console.log('[twilio-device] registered ✓'); setTwilioStatus('registered'); });
+      device.on('unregistered', () => { console.log('[twilio-device] unregistered'); setTwilioStatus('idle'); });
+      // Silent token refresh ~3 min before expiry — device stays registered indefinitely.
+      device.on('tokenWillExpire', async () => {
+        console.log('[twilio-device] token expiring — auto-refreshing…');
+        try {
+          const { data: td } = await sb.functions.invoke('twilio-token');
+          if (td?.token) { device.updateToken(td.token); console.log('[twilio-device] token refreshed ✓'); }
+        } catch (e) { console.error('[twilio-device] token refresh failed:', e); }
+      });
+      device.on('incoming', (call) => {
+        const getP = (key) => {
+          try {
+            const p = call.customParameters;
+            if (!p) return null;
+            const raw = typeof p.get === 'function' ? p.get(key) : p[key];
+            if (raw == null) return null;
+            const s = String(raw);
+            try { return decodeURIComponent(s); } catch { return s; }
+          } catch { return null; }
+        };
+        const from     = getP('from')     || call.parameters?.From || 'Unknown';
+        const dealId   = getP('dealId')   || null;
+        const dealName = getP('dealName') || null;
+        console.log('[incoming] from:', from, 'dealId:', dealId, 'dealName:', dealName);
+        setIncomingCall({ call, from, callerName: getP('callerName') || null, dealId, dealName });
+        // Flash tab title so call is visible even in background tabs
+        startTitleFlash();
+        // SDK plays its own ringtone automatically — no custom audio needed
+        call.on('cancel', () => { stopTitleFlash(); setIncomingCall(null); });
+      });
+      device.on('error', (err) => {
+        console.error('[twilio-device] error:', err.message, err.code);
+        setTwilioStatus('error');
+      });
+      await device.register();
+      twilioDeviceRef.current = device;
+      return device;
+    } catch (err) {
+      console.error('[twilio-device] init failed:', err);
+      setTwilioStatus('error');
+      return null;
+    }
+  }, []);
+
+  // Manual retry handler — shown in the header only when status === 'error'.
+  // Also used as the fallback if auto-init somehow fails on page load.
+  const enablePhone = React.useCallback(async () => {
+    setTwilioStatus('initializing');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach(t => t.stop());
+    } catch (e) {
+      console.error('[twilio-device] mic permission denied:', e);
+      setTwilioStatus('error');
+      return;
+    }
+    initTwilioDevice();
+  }, [initTwilioDevice]);
+
+  // Fetch the 20 most-recent call_logs for the phone popover Recents tab.
+  const fetchRecentCalls = React.useCallback(async () => {
+    const { data } = await sb.from('call_logs')
+      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, deal_id, contact_id, contacts(name), deals(name)')
+      .order('started_at', { ascending: false })
+      .limit(20);
+    if (data) setRecentCalls(data);
+  }, []);
+
+  // Live contact lookup as digits are typed into the dialpad.
+  React.useEffect(() => {
+    if (!dialpadNumber || dialpadNumber.replace(/\D/g,'').length < 4) { setDialpadContact(null); return; }
+    let cancelled = false;
+    const digits = dialpadNumber.replace(/\D/g,'');
+    (async () => {
+      // Match on trailing 10 digits so +1 prefix doesn't break the match
+      const tail = digits.slice(-10);
+      const { data } = await sb.from('contacts')
+        .select('id, name, phone, contact_deals(deal_id, deals(name, id))')
+        .ilike('phone', `%${tail}%`)
+        .limit(1);
+      if (cancelled) return;
+      const c = data?.[0];
+      if (c) {
+        const cd = c.contact_deals?.[0];
+        setDialpadContact({ name: c.name, phone: c.phone, dealName: cd?.deals?.name || null, dealId: cd?.deals?.id || cd?.deal_id || null });
+      } else {
+        setDialpadContact(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [dialpadNumber]);
+
+  const startCallTimer = React.useCallback(() => {
+    setCallDuration(0);
+    if (callTimerRef.current) clearInterval(callTimerRef.current);
+    callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+  }, []);
+
+  const stopCallTimer = React.useCallback(() => {
+    if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
+    setCallDuration(0);
+  }, []);
+
+  // Tab-title flash for incoming calls (reliable regardless of AudioContext state)
+  const startTitleFlash = React.useCallback(() => {
+    if (ringTitleRef.current) return;
+    const origTitle = document.title;
+    let flash = false;
+    ringTitleRef.current = {
+      interval: setInterval(() => { document.title = (flash = !flash) ? '📞 INCOMING CALL' : origTitle; }, 700),
+      origTitle,
+    };
+  }, []);
+
+  const stopTitleFlash = React.useCallback(() => {
+    if (!ringTitleRef.current) return;
+    clearInterval(ringTitleRef.current.interval);
+    document.title = ringTitleRef.current.origTitle;
+    ringTitleRef.current = null;
+  }, []);
+
+  // Keep backward-compat names used in answerIncoming / rejectIncoming / overlay dismiss
+  const startRingtone = startTitleFlash;
+  const stopRingtone  = stopTitleFlash;
+
+  const resetCallOverlayState = React.useCallback(() => {
+    setShowKeypad(false);
+    setKeypadBuffer('');
+    setAddingToCall(false);
+    setAddToCallNumber('');
+    setAddCallMsg(null);
+    setCallSid(null);
+  }, []);
+
+  const startCall = React.useCallback(async (contact) => {
+    if (callStatus) return;
+    setCallStatus('connecting');
+    setCallContact(contact);
+    setCallMuted(false);
+    resetCallOverlayState();
+    try {
+      const device = twilioDeviceRef.current || await initTwilioDevice();
+      if (!device) throw new Error('Phone not enabled — click "Enable phone" in the header first');
+      const call = await device.connect({
+        params: { To: contact.phone, CallerId: '+15139985440' },
+      });
+      activeCallRef.current = call;
+      call.on('ringing',    () => setCallStatus('ringing'));
+      call.on('accept',     () => {
+        setCallStatus('in-progress');
+        startCallTimer();
+        // Capture the call SID once the call is accepted
+        const sid = call.parameters?.CallSid || call.parameters?.callSid || null;
+        if (sid) setCallSid(sid);
+      });
+      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); resetCallOverlayState(); });
+      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+    } catch (err) {
+      console.error('startCall error:', err);
+      setCallStatus(null);
+      setCallContact(null);
+    }
+  }, [callStatus, initTwilioDevice, startCallTimer, stopCallTimer]);
+
+  const hangupCall = React.useCallback(() => {
+    if (activeCallRef.current) { activeCallRef.current.disconnect(); activeCallRef.current = null; }
+    stopCallTimer();
+    setCallStatus(null);
+    setCallContact(null);
+    setCallMuted(false);
+    resetCallOverlayState();
+  }, [stopCallTimer, resetCallOverlayState]);
+
+  const toggleMute = React.useCallback(() => {
+    if (!activeCallRef.current) return;
+    const muted = !callMuted;
+    activeCallRef.current.mute(muted);
+    setCallMuted(muted);
+  }, [callMuted]);
+
+  const answerIncoming = React.useCallback(async () => {
+    if (!incomingCall) return;
+    stopTitleFlash();
+    // Ensure mic is granted within this user gesture (Answer click).
+    // If already granted this resolves instantly; if not, browser shows prompt.
+    // Either way, call.accept() runs with mic ready.
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      stream.getTracks().forEach(t => t.stop());
+    } catch (_) { /* denied/unavailable — proceed; caller may still hear hold music */ }
+    try {
+      incomingCall.call.accept();
+      setCallStatus('in-progress');
+      setCallContact({ name: incomingCall.callerName || incomingCall.from, phone: incomingCall.from });
+      activeCallRef.current = incomingCall.call;
+      startCallTimer();
+      const sid = incomingCall.call.parameters?.CallSid || incomingCall.call.parameters?.callSid || null;
+      if (sid) setCallSid(sid);
+      incomingCall.call.on('disconnect', () => {
+        setCallStatus('ended');
+        stopCallTimer();
+        resetCallOverlayState();
+        setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
+      });
+    } catch (e) {
+      console.error('Failed to accept call:', e);
+    }
+    setIncomingCall(null);
+  }, [incomingCall, startCallTimer, stopCallTimer, stopTitleFlash, resetCallOverlayState]);
+
+  const rejectIncoming = React.useCallback(() => {
+    if (!incomingCall) return;
+    stopTitleFlash();
+    incomingCall.call.reject();
+    setIncomingCall(null);
+  }, [incomingCall, stopTitleFlash]);
+
+  // Cleanup on unmount only
+  React.useEffect(() => {
+    return () => {
+      if (twilioDeviceRef.current) { twilioDeviceRef.current.destroy(); twilioDeviceRef.current = null; }
+      stopCallTimer();
+      stopTitleFlash();
+    };
+  }, []);
 
   // Warn before navigating away if a recording is in progress (Eric lost
   // a recording when both tabs got refreshed mid-capture). beforeunload
@@ -421,10 +1030,32 @@ function DealCommandCenter({ session, profile }) {
   const userName = profile.name;
   const isAdmin = profile.role === 'admin' || profile.role === 'user';
   const isTeam = isAdmin || profile.role === 'va';
+  // Derived counts used by the sidebar badges (also computed in DealList
+  // but we need them here now that sidebar lives in DealCommandCenter).
+  const flaggedDeals = deals.filter(d => d.meta?.flagged);
   // Owner-only surfaces (Team Management, Lauren Control Center, role
   // changes) gate on email match against the OWNER_EMAILS set defined
   // module-scope. Currently Nathan + Justin only.
   const isOwner = !!session.user.email && OWNER_EMAILS.has(String(session.user.email).toLowerCase());
+
+  // Auto-init Twilio Device for team members on page load.
+  // Attempt getUserMedia silently first: if mic was previously granted it
+  // resolves immediately and unlocks the AudioContext so SDK ringtone works.
+  // If mic was never granted we skip it and register anyway — the incoming
+  // call overlay + tab-title flash work without audio, and the user gets the
+  // mic prompt when they actually click Answer.
+  React.useEffect(() => {
+    if (!isTeam) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        stream.getTracks().forEach(t => t.stop()); // unlock AudioContext only
+      } catch (_) { /* not yet granted — proceed, device can still register */ }
+      if (!cancelled) initTwilioDevice();
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // refundlocators.com/admin/lauren redirects here with ?openLauren=1.
   // Pop the modal once and strip the param so a reload doesn't re-open it.
@@ -444,6 +1075,20 @@ function DealCommandCenter({ session, profile }) {
   // and pings the user when one lands. Audio chirp if the tab is focused;
   // a browser Notification when it isn't (clicking it navigates to the
   // Team chat view). Skips messages the current user sent themselves.
+  //
+  // Audio reliability — 2026-05-04 hardening pass after Justin reported
+  // "sometimes we hear sounds when we get a notification, sometimes we don't."
+  // Root causes:
+  //   1. Old code created a fresh AudioContext per ding and closed it after
+  //      600ms. Chrome caps simultaneous AudioContexts at ~6; rapid-fire
+  //      messages would silently fail to allocate a new one.
+  //   2. AudioContext starts in 'suspended' state until any user gesture has
+  //      occurred in the tab. The first chirp after a fresh page load was
+  //      always silent.
+  //   3. No diagnostics — when audio failed, there was no console signal.
+  // Fix: singleton context, eager resume() on every user gesture, console
+  // warnings on suppression so we can tell whether the issue is autoplay
+  // policy or something else.
   useEffect(() => {
     if (!session?.user?.id) return;
     const myId = session.user.id;
@@ -452,33 +1097,6 @@ function DealCommandCenter({ session, profile }) {
     if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
-
-    // Web Audio API beep — short two-tone chirp, ~120ms total. No asset needed.
-    const playChirp = () => {
-      try {
-        const Ctx = window.AudioContext || window.webkitAudioContext;
-        if (!Ctx) return;
-        const ctx = new Ctx();
-        const now = ctx.currentTime;
-        const o1 = ctx.createOscillator();
-        const g1 = ctx.createGain();
-        o1.type = 'sine'; o1.frequency.value = 880;
-        g1.gain.setValueAtTime(0.0001, now);
-        g1.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
-        g1.gain.exponentialRampToValueAtTime(0.0001, now + 0.10);
-        o1.connect(g1).connect(ctx.destination);
-        o1.start(now); o1.stop(now + 0.11);
-        const o2 = ctx.createOscillator();
-        const g2 = ctx.createGain();
-        o2.type = 'sine'; o2.frequency.value = 1175;
-        g2.gain.setValueAtTime(0.0001, now + 0.06);
-        g2.gain.exponentialRampToValueAtTime(0.16, now + 0.07);
-        g2.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
-        o2.connect(g2).connect(ctx.destination);
-        o2.start(now + 0.06); o2.stop(now + 0.19);
-        setTimeout(() => ctx.close(), 300);
-      } catch {/* audio blocked or unsupported */}
-    };
 
     const ch = sb.channel('global-chat-notify')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_messages' }, async (payload) => {
@@ -498,16 +1116,60 @@ function DealCommandCenter({ session, profile }) {
           try {
             if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
               const n = new Notification(`💬 ${senderName}`, { body: preview, tag: 'dcc-team-chat' });
-              n.onclick = () => { window.focus(); setView('team'); n.close(); };
+              n.onclick = () => {
+                // Per-message engagement: jump to the specific thread, mark
+                // that thread (not all) as read. Per Nathan 2026-05-04, only
+                // the banner + popover "Mark all as read" should clear-all.
+                window.focus();
+                setActiveDealId(null);
+                setView('team');
+                setChatJumpThreadId(msg.thread_id);
+                n.close();
+              };
+            } else {
+              console.warn('[notifications] tab hidden, but Notification permission is', Notification.permission, '— message arrived silently');
             }
-          } catch {/* notification blocked */}
+          } catch (e) { console.warn('[notifications] browser Notification failed', e); }
         } else {
           // Tab focused but maybe not on Team view — chirp.
-          playChirp();
+          playNotifyChirp('chat');
         }
       })
       .subscribe();
-    return () => { sb.removeChannel(ch); };
+
+    // Inbound SMS replies — added 2026-05-04 in the notifications QA pass.
+    // Plays the same chirp + browser notification when an inbound reply
+    // lands while DCC is open. Skips messages already marked read.
+    const smsCh = sb.channel('global-sms-notify')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages_outbound' }, async (payload) => {
+        const msg = payload.new;
+        if (!msg || msg.direction !== 'inbound') return;
+        if (msg.read_by_team_at) return;
+        const fromNum = msg.from_number || 'unknown number';
+        const preview = (msg.body || '').slice(0, 140);
+        if (document.hidden) {
+          try {
+            if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+              const n = new Notification(`📲 SMS from ${fromNum}`, { body: preview, tag: 'dcc-inbound-sms-' + (msg.deal_id || msg.id) });
+              n.onclick = () => {
+                window.focus();
+                if (msg.deal_id) {
+                  setActiveDealId(msg.deal_id);
+                  window.location.hash = `#/deal/${msg.deal_id}/comms`;
+                } else {
+                  setView('outreach');
+                }
+                n.close();
+              };
+            }
+          } catch (e) { console.warn('[notifications] inbound-SMS Notification failed', e); }
+        } else {
+          playNotifyChirp('sms');
+        }
+      })
+      .subscribe();
+
+    return () => { sb.removeChannel(ch); sb.removeChannel(smsCh); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.id]);
 
@@ -538,6 +1200,49 @@ function DealCommandCenter({ session, profile }) {
     if (!uid) return;
     const { data } = await sb.rpc('team_unread_count', { p_user_id: uid });
     setUnreadChatCount(data || 0);
+  };
+
+  // Inbound-SMS unread count — counts messages_outbound where direction='inbound'
+  // and read_by_team_at IS NULL. Surfaces in the tab title + favicon badge so
+  // an SMS reply lighting up Outreach is visible from a background tab.
+  const loadUnreadSmsCount = async () => {
+    const { count } = await sb.from('messages_outbound')
+      .select('id', { count: 'exact', head: true })
+      .eq('direction', 'inbound')
+      .is('read_by_team_at', null);
+    setUnreadSmsCount(count || 0);
+  };
+
+  // Aggregate of every realtime-driven unread surface. Drives the tab
+  // title prefix (visible in the tab strip from any app) and the favicon
+  // badge (red circle + count over the DCC icon, Gmail/Slack-style).
+  const totalUnread = unreadChatCount + unreadSmsCount;
+  useEffect(() => {
+    const base = 'Deal Command Center · RefundLocators';
+    document.title = totalUnread > 0 ? `(${totalUnread}) ${base}` : base;
+    updateFaviconBadge(totalUnread);
+    return () => { document.title = base; };
+  }, [totalUnread]);
+
+  // Mark every team thread the user PARTICIPATES IN as read. Called when
+  // they engage with the banner or click "Mark all as read" in the
+  // popover. Per-message engagements (toast Reply, OS notification, single
+  // popover row) only mark that one thread — see PR comments 2026-05-04.
+  //
+  // Filters by team_thread_participants so we don't create stray reads
+  // for other users' threads (the previous version iterated all non-
+  // archived threads, which inflated team_message_reads + masked the
+  // team_unread_count overcount bug). Realtime sub picks this up and
+  // refreshes header badge + per-thread badges automatically.
+  const markAllChatRead = async () => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const { data: parts } = await sb.from('team_thread_participants')
+      .select('thread_id').eq('user_id', uid);
+    if (!parts || parts.length === 0) return;
+    const now = new Date().toISOString();
+    const rows = parts.map(p => ({ thread_id: p.thread_id, user_id: uid, last_read_at: now }));
+    await sb.from('team_message_reads').upsert(rows, { onConflict: 'thread_id,user_id' });
   };
 
   // Push a chat toast for a newly-arrived team_messages row. Skip own
@@ -576,6 +1281,11 @@ function DealCommandCenter({ session, profile }) {
   };
   const dismissChatToast = (id) => setChatToasts(prev => prev.filter(t => t.id !== id));
   const replyToChatToast = (toast) => {
+    // Per-message engagement: jump to the toast's thread, dismiss the
+    // toast. TeamView marks that thread as read on open. Don't markAll
+    // here — per-message clicks should only clear THAT thread per Nathan
+    // 2026-05-04. The banner + popover's "Mark all as read" remain the
+    // only aggregate-clear paths.
     setActiveDealId(null);
     setView('team');
     setChatJumpThreadId(toast.thread_id);
@@ -667,10 +1377,39 @@ function DealCommandCenter({ session, profile }) {
   }, []);
 
   const loadDeals = async () => {
-    const { data } = await sb.from('deals').select('*').order('created_at', { ascending: false });
+    // Excludes soft-deleted deals — those are loaded separately by the
+    // admin "Deleted Leads" modal. Per Nathan 2026-05-07: deleted deals
+    // must vanish from kanban / funnel / auto-queue / dashboards but
+    // stay in DB (sent SMS history, court PDFs, AI summaries,
+    // personalized URLs, activity log). See migration
+    // 20260507180000_deals_soft_delete.sql.
+    const { data } = await sb.from('deals').select('*').is('deleted_at', null).order('created_at', { ascending: false });
     setDeals(data || []);
     setLoaded(true);
   };
+
+  // ── Auto-refresh: keep `deals` fresh without a hard reload ────────
+  // Per Nathan 2026-05-05: "I want the DCC to have auto-refresh where
+  // the screen is continuously always refreshing." We refetch every
+  // 60s + whenever the tab becomes visible after being hidden (e.g.
+  // user comes back from another tab). Other views (Outreach, Inbox,
+  // Attention, Today) already have their own realtime subs, so this
+  // mainly keeps the deals array — which feeds every list/card view —
+  // fresh in case a realtime channel dropped a message.
+  useEffect(() => {
+    const REFRESH_MS = 60_000;
+    const tick = () => { loadDeals(); };
+    const id = setInterval(tick, REFRESH_MS);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') tick();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const loadTeam = async () => {
     const { data } = await sb.from('profiles').select('name').order('name');
     if (data) setTeamMembers(data.map(d => d.name));
@@ -680,7 +1419,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadActiveCalls(); loadSystemAlertCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -717,27 +1456,56 @@ function DealCommandCenter({ session, profile }) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, loadSystemAlertCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadUnreadSmsCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
 
+  // Self-heal the unread chat count against stale state. Realtime
+  // subscriptions occasionally silently drop events (Supabase reconnect
+  // gaps, network blips, browser putting the tab to sleep), which left
+  // the header showing "💬 Chat 2" while the DB was actually at 0 (per
+  // Nathan 2026-05-04 screenshot). Three safety nets:
+  //   1. Refresh on tab visibility change → user comes back to the tab
+  //   2. Refresh on window focus → user clicks back into the browser
+  //   3. Poll every 60 s as ultimate fallback
+  // RPC is cheap; over-refreshing is fine.
+  useEffect(() => {
+    if (!session?.user?.id) return;
+    const refresh = () => { loadUnreadChatCount(); };
+    const onVisibility = () => { if (!document.hidden) refresh(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', refresh);
+    const iv = setInterval(refresh, 60_000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', refresh);
+      clearInterval(iv);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id]);
+
   const activeDeal = deals.find(d => d.id === activeDealId);
 
-  // Sync activeDealId → hash (tab portion managed by DealDetail)
+  // Sync activeDealId / view → hash. When a deal is open, the hash
+  // encodes deal+tab. When NOT on a deal, the hash encodes the
+  // top-level view (today / outreach / etc.) so refresh restores it.
   useEffect(() => {
     if (activeDealId) {
       const { tab } = parseHash();
       window.location.hash = `#/deal/${activeDealId}/${tab}`;
     } else {
-      window.location.hash = '#/';
+      window.location.hash = `#/view/${view}`;
     }
-  }, [activeDealId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDealId, view]);
 
-  // Back/forward button support
+  // Back/forward button support — restore both deal and view from hash
   useEffect(() => {
     const onHashChange = () => {
-      const { dealId } = parseHash();
-      setActiveDealId(dealId);
+      const parsed = parseHash();
+      setActiveDealId(parsed.dealId);
+      if (!parsed.dealId && parsed.view) setView(parsed.view);
     };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
@@ -767,12 +1535,100 @@ function DealCommandCenter({ session, profile }) {
 
   if (!loaded) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading deals...</div></Shell>;
 
+  const fmtCallDuration = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
   return (
     <RecordingContext.Provider value={recordingValue}>
-    <Shell>
-      {/* Header */}
-      <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 24, paddingBottom: 20, borderBottom: "1px solid #292524" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+    <>
+    {/* ── App shell: sidebar + main column ─────────────────────────────── */}
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0c0a09' }}>
+
+      {/* ── Collapsible sidebar (desktop only — hidden on mobile via class) ── */}
+      <nav className="dcc-sidebar" style={{
+        width: sidebarCollapsed ? 52 : 220, minWidth: sidebarCollapsed ? 52 : 220,
+        background: '#111110', borderRight: '1px solid #1c1917',
+        display: 'flex', flexDirection: 'column',
+        position: 'sticky', top: 0, height: '100vh',
+        overflowY: 'auto', overflowX: 'hidden',
+        transition: 'width 0.18s, min-width 0.18s',
+        zIndex: 200, flexShrink: 0,
+      }}>
+        {/* Brand + collapse toggle */}
+        <div style={{ padding: sidebarCollapsed ? '14px 0' : '14px 14px', borderBottom: '1px solid #1c1917', display: 'flex', alignItems: 'center', justifyContent: sidebarCollapsed ? 'center' : 'space-between', minHeight: 52 }}>
+          {!sidebarCollapsed && <span style={{ fontSize: 10, fontWeight: 800, color: '#d97706', letterSpacing: '0.1em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>RefundLocators</span>}
+          <button onClick={() => setSidebarCollapsed(v => !v)} title={sidebarCollapsed ? 'Expand' : 'Collapse'}
+            style={{ background: 'transparent', border: 'none', color: '#44403c', fontSize: 14, cursor: 'pointer', padding: 4, lineHeight: 1, flexShrink: 0 }}>
+            {sidebarCollapsed ? '»' : '«'}
+          </button>
+        </div>
+        {/* Nav items */}
+        {(() => {
+          const navItem = (id, icon, label, opts = {}) => {
+            const { badge = 0, groupIds, onClick, adminOnly } = opts;
+            if (adminOnly && !isAdmin) return null;
+            const isActive = groupIds ? groupIds.includes(view) : view === id;
+            const handleClick = onClick || (() => { setActiveDealId(null); setView(id); });
+            return (
+              <button key={id} onClick={handleClick} title={sidebarCollapsed ? label : undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: sidebarCollapsed ? '10px 0' : '9px 14px',
+                  justifyContent: sidebarCollapsed ? 'center' : 'flex-start',
+                  background: isActive ? '#1c1917' : 'transparent',
+                  border: 'none', borderLeft: isActive ? '2px solid #d97706' : '2px solid transparent',
+                  color: isActive ? '#fafaf9' : '#78716c',
+                  cursor: 'pointer', fontFamily: 'inherit', width: '100%', textAlign: 'left',
+                  fontWeight: isActive ? 700 : 500, fontSize: 13,
+                  whiteSpace: 'nowrap', position: 'relative',
+                }}>
+                <span style={{ fontSize: 15, lineHeight: 1, flexShrink: 0 }}>{icon}</span>
+                {!sidebarCollapsed && <span style={{ flex: 1 }}>{label}</span>}
+                {!sidebarCollapsed && badge > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{badge > 99 ? '99+' : badge}</span>}
+                {sidebarCollapsed && badge > 0 && <span style={{ position: 'absolute', top: 6, right: 6, width: 7, height: 7, background: '#ef4444', borderRadius: '50%' }} />}
+              </button>
+            );
+          };
+          const div = () => <div key={Math.random()} style={{ height: 1, background: '#1c1917', margin: '4px 0' }} />;
+          return (
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
+              {navItem('today',    '📌', 'Today')}
+              {navItem('attention','⚡', 'Attention')}
+              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','inbox','leads','forecast'] })}
+              {navItem('relay',    '📡', 'Relay')}
+              {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {navItem('tasks',    '✅', 'Tasks')}
+              {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
+              {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
+              {div()}
+              {navItem('calls',    '📞', 'Calls')}
+              {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
+              {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
+              {isTeam && navItem('_docket',   '⚖',  'Docket',   { onClick: () => setShowDocket(true),  badge: unackDocketCount })}
+              {isTeam && navItem('_leads',    '📋', 'Leads',    { onClick: () => setShowLeads(true),   badge: newLeadCount })}
+              {div()}
+              {isAdmin && navItem('_import',  '📥', 'Import',   { onClick: () => setShowImport(true) })}
+              {isTeam && navItem('_library',  '📚', 'Library',  { onClick: () => setShowLibrary(true) })}
+            </div>
+          );
+        })()}
+        {/* Bottom: Account + Sign out */}
+        <div style={{ borderTop: '1px solid #1c1917', padding: sidebarCollapsed ? '6px 0' : '6px 8px' }}>
+          <button onClick={() => setShowAccount(true)} title="Account settings"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: sidebarCollapsed ? '8px 0' : '8px 10px', justifyContent: sidebarCollapsed ? 'center' : 'flex-start', background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontFamily: 'inherit', width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>
+            <span>⚙</span>{!sidebarCollapsed && 'Account'}
+          </button>
+          <button onClick={signOut} title="Sign out"
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: sidebarCollapsed ? '8px 0' : '8px 10px', justifyContent: sidebarCollapsed ? 'center' : 'flex-start', background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontFamily: 'inherit', width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>
+            <span>↩</span>{!sidebarCollapsed && 'Sign out'}
+          </button>
+        </div>
+      </nav>
+
+      {/* ── Main column (header + content) ─────────────────────────────── */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* ── Header ── */}
+      <div className="header-bar" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: '10px 20px', borderBottom: "1px solid #1c1917", background: '#111110', position: 'sticky', top: 0, zIndex: 100, gap: 16, minHeight: 52 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
           {activeDeal && (
             <button onClick={() => setActiveDealId(null)} style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "6px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: 'nowrap', flexShrink: 0 }}>
               ← All Deals
@@ -809,165 +1665,254 @@ function DealCommandCenter({ session, profile }) {
               const saveMeta = (patch) => updateDealMeta(activeDeal.id, { meta: { ...m, ...patch } });
               const saveAddress = (v) => updateDealMeta(activeDeal.id, { address: v || null });
               return (
-                <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                  <InlineEditableText value={courtCase} label="case #" placeholder="e.g. CV-25-116796" canEdit={isTeam} onSave={(v) => saveMeta({ courtCase: v || null })} />
-                  {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
-                  <InlineEditableText
-                    value={county ? `${county} County` : ''}
-                    label="county"
-                    placeholder="e.g. Cuyahoga"
-                    canEdit={isTeam}
-                    onSave={(v) => saveMeta({ county: v ? v.replace(/\s*County\s*$/i, '').trim() || null : null })}
-                  />
-                  {!isRedundantAddress && (
-                    <>
-                      {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
-                      <InlineEditableText value={address} label="address" placeholder="e.g. 121 Main St, Cleveland, OH" canEdit={isTeam} onSave={saveAddress} />
-                    </>
-                  )}
-                  {isRedundantAddress && isTeam && (
-                    <button
-                      onClick={() => saveAddress('')}
-                      title="Clear the redundant address (it just says the county again)"
-                      style={{ background: "transparent", border: "1px dashed #78350f", color: "#a5731c", padding: "1px 7px", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}
-                    >⚠ clear duplicate address</button>
-                  )}
-                </div>
+                <>
+                  <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 4, display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <InlineEditableText value={courtCase} label="case #" placeholder="e.g. CV-25-116796" canEdit={isTeam} onSave={(v) => saveMeta({ courtCase: v || null })} />
+                    {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
+                    <InlineEditableText
+                      value={county ? `${cleanCountyName(county)} County` : ''}
+                      label="county"
+                      placeholder="e.g. Cuyahoga"
+                      canEdit={isTeam}
+                      onSave={(v) => saveMeta({ county: v ? v.replace(/\s*County\s*$/i, '').trim() || null : null })}
+                    />
+                    {!isRedundantAddress && (
+                      <>
+                        {(courtCase || county) && <span style={{ color: "#44403c" }}>·</span>}
+                        <InlineEditableText value={address} label="address" placeholder="e.g. 121 Main St, Cleveland, OH" canEdit={isTeam} onSave={saveAddress} />
+                      </>
+                    )}
+                    {isRedundantAddress && isTeam && (
+                      <button
+                        onClick={() => saveAddress('')}
+                        title="Clear the redundant address (it just says the county again)"
+                        style={{ background: "transparent", border: "1px dashed #78350f", color: "#a5731c", padding: "1px 7px", borderRadius: 4, fontSize: 11, cursor: "pointer", fontFamily: "inherit" }}
+                      >⚠ clear duplicate address</button>
+                    )}
+                    <DeceasedBadge deal={activeDeal} size="sm" />
+                  </div>
+                </>
               );
             })()}
           </div>
         </div>
-        <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
-          <span style={{ fontSize: 9, color: "#10b981", padding: "3px 8px", border: `1px solid #10b981`, borderRadius: 4, fontWeight: 700, letterSpacing: "0.06em" }}>SHARED</span>
-          <span style={{ fontSize: 11, color: "#a8a29e" }}>{userName}</span>
-          {/* Search — icon-only, ⌘K shortcut shown on hover */}
-          <button onClick={() => setShowSearch(true)} title="Search (⌘K)" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>🔍</button>
-          {/* Docket — badge-only, just the count. Click opens the full modal. */}
-          {isTeam && (
-            <button onClick={() => setShowDocket(true)} title={`Docket events · ${unackDocketCount} unacked`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: unackDocketCount > 0 ? '#78350f' : '#44403c', color: unackDocketCount > 0 ? '#fbbf24' : '#78716c', display: 'flex', alignItems: 'center', gap: 4 }}>
-              ⚖ {unackDocketCount > 0 && <span style={{ background: '#f59e0b', color: '#0c0a09', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{unackDocketCount}</span>}
-            </button>
-          )}
-          {/* Leads — badge-only, only renders when there are new leads */}
-          {isTeam && newLeadCount > 0 && (
-            <button onClick={() => setShowLeads(true)} title={`Lead intake · ${newLeadCount} new`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#78350f', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: 4 }}>
-              📋 <span style={{ background: '#ef4444', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{newLeadCount}</span>
-            </button>
-          )}
-          {isTeam && pendingWalkthroughs.length > 0 && (
-            <button onClick={() => setShowWalkthroughs(true)} title="Investor walkthrough requests" style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#78350f", color: "#fbbf24" }}>
-              🏠 Walkthroughs <span style={{ display: "inline-block", marginLeft: 4, background: "#ef4444", color: "#fff", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingWalkthroughs.length}</span>
-            </button>
-          )}
-          {isTeam && pendingOffersCount > 0 && (
-            <button
-              onClick={() => {
-                // Find the first deal with a pending offer and jump to it; if user is on a deal already, do nothing.
-                if (activeDealId) return;
-                sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', { ascending: false }).limit(1).then(({ data }) => {
-                  if (data && data[0]) setActiveDealId(data[0].deal_id);
-                });
-              }}
-              title="Pending investor offers"
-              style={{ ...btnGhost, fontSize: 11, position: "relative", borderColor: "#065f46", color: "#6ee7b7" }}
-            >
-              💰 Offers <span style={{ display: "inline-block", marginLeft: 4, background: "#10b981", color: "#0c0a09", borderRadius: 8, padding: "0 6px", fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: "center" }}>{pendingOffersCount}</span>
-            </button>
-          )}
-          {isTeam && <button onClick={() => setShowContacts(true)} title="Contacts / CRM" style={{ ...btnGhost, fontSize: 11 }}>👥 Contacts</button>}
-          {isAdmin && <button onClick={() => setShowImport(true)} title="Import leads from a CSV (GoHighLevel export)" style={{ ...btnGhost, fontSize: 11 }}>📥 Import</button>}
-          {isTeam && (
-            <button onClick={() => { setActiveDealId(null); setView("team"); }}
-              title={unreadChatCount > 0 ? `${unreadChatCount} unread message${unreadChatCount === 1 ? '' : 's'} in team chat` : 'Team chat with Justin + Lauren'}
-              style={{ ...btnGhost, fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 6, ...(unreadChatCount > 0 ? { borderColor: '#7f1d1d', color: '#fca5a5' } : {}) }}>
-              💬 Chat
-              {unreadChatCount > 0 && (
-                <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>
-                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
-                </span>
-              )}
-            </button>
-          )}
-          {/* Active video call pills — one per teammate currently in a Jitsi
-              call (within the last 30 min). Click → join that room in a new
-              tab. Auto-disappear when the 30-min window lapses. */}
-          {isTeam && activeCalls.map(call => {
-            const minsAgo = Math.max(0, Math.round((Date.now() - new Date(call.started_at).getTime()) / 60_000));
+        <div className="header-right" style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {/* Universal search bar */}
+          <button onClick={() => setShowSearch(true)} title="Search deals, contacts, activity (⌘K)"
+            style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#1c1917', border: '1px solid #292524', borderRadius: 8, padding: '7px 14px', cursor: 'text', color: '#57534e', fontSize: 12, minWidth: 200 }}>
+            <span style={{ fontSize: 13 }}>🔍</span>
+            <span style={{ flex: 1, textAlign: 'left' }}>Search deals, contacts…</span>
+            <kbd style={{ fontSize: 10, color: '#44403c', background: '#0c0a09', border: '1px solid #292524', borderRadius: 4, padding: '1px 5px', fontFamily: 'inherit' }}>⌘K</kbd>
+          </button>
+
+          {/* Notifications bell — aggregates Docket, Leads, Walkthroughs, Offers, Alerts */}
+          {isTeam && (() => {
+            // Bell does NOT include unread chat — the red banner handles that separately
+            const totalNotifs = unackDocketCount + newLeadCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
             return (
-              <button key={call.user_id}
-                onClick={() => window.open(call.url, '_blank', 'noopener,noreferrer')}
-                title={`${call.name} started a video call ${minsAgo} min ago — click to join`}
-                style={{
-                  background: '#15803d', color: '#fff', border: '1px solid #16a34a',
-                  borderRadius: 6, padding: '4px 10px', fontSize: 11, fontWeight: 700,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  boxShadow: '0 0 0 1px rgba(22,163,74,0.3)',
-                }}>
-                <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#fff', animation: 'pulse 1.5s infinite', boxShadow: '0 0 6px rgba(255,255,255,0.7)' }} />
-                📹 Join {call.name}
-                <span style={{ color: '#bbf7d0', fontSize: 9, fontWeight: 500 }}>{minsAgo}m</span>
-              </button>
+              <div style={{ position: 'relative' }}>
+                <button onClick={() => setShowNotifDropdown(v => !v)}
+                  title={totalNotifs > 0 ? `${totalNotifs} notification${totalNotifs !== 1 ? 's' : ''}` : 'Notifications'}
+                  style={{ background: totalNotifs > 0 ? '#1c1917' : 'transparent', border: `1px solid ${totalNotifs > 0 ? '#78350f' : '#292524'}`, color: totalNotifs > 0 ? '#fbbf24' : '#78716c', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: 14, lineHeight: 1, position: 'relative', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit' }}>
+                  🔔
+                  {totalNotifs > 0 && <span style={{ fontSize: 10, fontWeight: 700 }}>{totalNotifs > 99 ? '99+' : totalNotifs}</span>}
+                </button>
+                {showNotifDropdown && (
+                  <div style={{ position: 'fixed', top: 52, right: 24, background: '#111110', border: '1px solid #292524', borderRadius: 10, minWidth: 260, boxShadow: '0 8px 24px rgba(0,0,0,0.6)', zIndex: 500, overflow: 'hidden' }}
+                    onClick={() => setShowNotifDropdown(false)}>
+                    <div style={{ padding: '10px 14px 6px', fontSize: 10, color: '#57534e', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', borderBottom: '1px solid #1c1917' }}>Notifications</div>
+                    {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
+                    {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
+                    {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
+                    {pendingWalkthroughs.length > 0 && <button onClick={() => setShowWalkthroughs(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🏠 <span style={{ flex: 1 }}>{pendingWalkthroughs.length} walkthrough{pendingWalkthroughs.length !== 1 ? 's' : ''}</span></button>}
+                    {pendingOffersCount > 0 && <button onClick={() => { sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', {ascending:false}).limit(1).then(({data}) => { if (data?.[0]) setActiveDealId(data[0].deal_id); }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#6ee7b7', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>💰 <span style={{ flex: 1 }}>{pendingOffersCount} investor offer{pendingOffersCount !== 1 ? 's' : ''}</span></button>}
+                    {isOwner && systemAlertCount > 0 && <button onClick={() => setShowSystemAlerts(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚠ <span style={{ flex: 1 }}>{systemAlertCount} system alert{systemAlertCount !== 1 ? 's' : ''}</span></button>}
+                    {isOwner && laurenFlaggedCount > 0 && <button onClick={() => setShowLaurenCC(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🤖 <span style={{ flex: 1 }}>{laurenFlaggedCount} Lauren flag{laurenFlaggedCount !== 1 ? 's' : ''}</span></button>}
+                  </div>
+                )}
+              </div>
             );
-          })}
-          {/* Owner-only: in-DCC monitoring badge. Renders only when there
-              are unacked alerts. Click → modal showing every system_alerts
-              row with severity / source / message / context + Acknowledge. */}
-          {isOwner && systemAlertCount > 0 && (
-            <button onClick={() => setShowSystemAlerts(true)}
-              title={`${systemAlertCount} unacknowledged system alert${systemAlertCount === 1 ? '' : 's'} — EF errors, cron failures, etc.`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#7f1d1d', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
-              ⚠ <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{systemAlertCount > 99 ? '99+' : systemAlertCount}</span>
-            </button>
-          )}
-          {/* Owner-only: Lauren badge with flagged-count. The Team modal +
-              Lauren Control Center moved into Account Settings → Owner Tools
-              per Nathan's audit, but the flagged-count needs an at-a-glance
-              indicator since flagged Lauren convos are time-sensitive. The
-              badge itself opens Lauren CC. Hidden from non-owners. */}
-          {isOwner && laurenFlaggedCount > 0 && (
-            <button onClick={() => setShowLaurenCC(true)}
-              title={`Lauren Control Center — ${laurenFlaggedCount} flagged conversation${laurenFlaggedCount === 1 ? '' : 's'}`}
-              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', borderColor: '#7f1d1d', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
-              🤖 <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{laurenFlaggedCount}</span>
-            </button>
-          )}
-          {/* More menu — collects infrequent surfaces (Library, Lead intake
-              form link, etc.). Hidden by default to keep the header clean. */}
-          {isTeam && (
-            <div style={{ position: 'relative' }}>
-              <button onClick={() => setShowMoreMenu(v => !v)} title="More" style={{ ...btnGhost, fontSize: 13, padding: '4px 10px' }}>⋯</button>
-              {showMoreMenu && (
-                <div style={{ position: 'absolute', top: '100%', right: 0, marginTop: 6, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, minWidth: 240, boxShadow: '0 8px 20px rgba(0,0,0,0.5)', zIndex: 1000, overflow: 'hidden' }}>
-                  <button onClick={() => { setShowLibrary(true); setShowMoreMenu(false); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-                    📚 <span>Library</span>
-                    <span style={{ marginLeft: 'auto', fontSize: 10, color: '#57534e' }}>templates · SOPs · legal</span>
-                  </button>
-                  <button onClick={() => { setShowLeads(true); setShowMoreMenu(false); }}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', borderTop: '1px solid #1c1917' }}>
-                    📋 <span>Lead intake pipeline</span>
-                    {newLeadCount > 0 && <span style={{ marginLeft: 'auto', background: '#ef4444', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700 }}>{newLeadCount}</span>}
-                  </button>
-                  <a href="https://app.refundlocators.com/lead-intake.html" target="_blank" rel="noopener noreferrer"
-                    onClick={() => setShowMoreMenu(false)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', color: '#a8a29e', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left', borderTop: '1px solid #1c1917', textDecoration: 'none' }}>
-                    🌱 <span>Public intake form</span>
-                    <span style={{ marginLeft: 'auto', fontSize: 10, color: '#57534e' }}>↗ open</span>
-                  </a>
-                </div>
-              )}
-            </div>
-          )}
-          <button onClick={() => setShowAccount(true)} title="Account settings" style={{ ...btnGhost, fontSize: 11 }}>⚙ Account</button>
-          <button onClick={signOut} style={{ ...btnGhost, fontSize: 11 }}>Sign out</button>
+          })()}
+
+          {/* Phone button → popover with Dial + Recents tabs */}
+          {isTeam && (() => {
+            const dotColor = twilioStatus === 'registered' ? '#10b981' : twilioStatus === 'error' ? '#ef4444' : '#f59e0b';
+            const fmtRecentNum = (num) => {
+              const d = (num || '').replace(/\D/g,'');
+              if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+              if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+              return num || '—';
+            };
+            const keys = [
+              { d: '1', s: '' }, { d: '2', s: 'ABC' }, { d: '3', s: 'DEF' },
+              { d: '4', s: 'GHI' }, { d: '5', s: 'JKL' }, { d: '6', s: 'MNO' },
+              { d: '7', s: 'PQRS' }, { d: '8', s: 'TUV' }, { d: '9', s: 'WXYZ' },
+              { d: '*', s: '' }, { d: '0', s: '+' }, { d: '#', s: '' },
+            ];
+            return (
+              <div style={{ position: 'relative' }}>
+                <button
+                  onClick={() => {
+                    if (twilioStatus === 'error') { enablePhone(); return; }
+                    const next = !showPhonePopover;
+                    setShowPhonePopover(next);
+                    if (next) { setPhoneTab('dial'); fetchRecentCalls(); }
+                  }}
+                  title={twilioStatus === 'registered' ? 'Dialpad + call history' : twilioStatus === 'error' ? 'Phone error — retry' : 'Phone connecting…'}
+                  style={{ display: 'flex', alignItems: 'center', gap: 6, background: showPhonePopover ? '#1c1917' : 'transparent', border: `1px solid ${showPhonePopover ? '#44403c' : '#292524'}`, color: dotColor, borderRadius: 8, padding: '7px 10px', cursor: twilioStatus === 'initializing' ? 'default' : 'pointer', fontFamily: 'inherit', fontSize: 12, whiteSpace: 'nowrap' }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: dotColor, display: 'inline-block', animation: twilioStatus === 'initializing' ? 'chatBadgePulse 1.6s ease-in-out infinite' : 'none' }} />
+                  Phone
+                  {twilioStatus === 'registered' && <span style={{ fontSize: 10, color: '#44403c' }}>⌨</span>}
+                </button>
+                {/* ── Phone popover ── */}
+                {showPhonePopover && (
+                  <div style={{
+                    position: 'fixed', top: 56, right: 16, zIndex: 600,
+                    background: '#1c1917', border: '1px solid #44403c', borderRadius: 12,
+                    width: 300, boxShadow: '0 12px 32px rgba(0,0,0,0.7)',
+                    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                  }}>
+                    {/* Dismiss backdrop */}
+                    <div style={{ position: 'fixed', inset: 0, zIndex: -1 }} onClick={() => setShowPhonePopover(false)} />
+                    {/* Tabs */}
+                    <div style={{ display: 'flex', borderBottom: '1px solid #292524' }}>
+                      {['dial', 'recents'].map(tab => (
+                        <button key={tab} onClick={() => { setPhoneTab(tab); if (tab === 'recents') fetchRecentCalls(); }}
+                          style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: `2px solid ${phoneTab === tab ? '#d97706' : 'transparent'}`, color: phoneTab === tab ? '#fafaf9' : '#78716c', padding: '10px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize', marginBottom: -1 }}>
+                          {tab === 'dial' ? '⌨ Dial' : '🕐 Recents'}
+                        </button>
+                      ))}
+                    </div>
+                    {phoneTab === 'dial' && (
+                      <div style={{ padding: '14px 14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {/* Contact match display */}
+                        {dialpadContact && (
+                          <div style={{ background: '#292524', border: '1px solid #3d3a37', borderRadius: 8, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                            <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{dialpadContact.name}</span>
+                            {dialpadContact.dealName && (
+                              <span style={{ fontSize: 10, color: '#d97706' }}>
+                                Deal: <button onClick={() => { setActiveDealId(dialpadContact.dealId); setShowPhonePopover(false); }}
+                                  style={{ background: 'none', border: 'none', color: '#d97706', textDecoration: 'underline', cursor: 'pointer', fontSize: 10, fontFamily: 'inherit', padding: 0 }}>{dialpadContact.dealName}</button>
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {/* Number input + backspace */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <input
+                            value={dialpadNumber}
+                            onChange={e => setDialpadNumber(e.target.value.replace(/[^0-9+*#\s]/g, ''))}
+                            placeholder="Enter number…"
+                            style={{ flex: 1, background: '#292524', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', fontSize: 18, fontFamily: "'DM Mono', monospace", padding: '8px 10px', outline: 'none', letterSpacing: '0.05em' }}
+                          />
+                          <button onClick={() => setDialpadNumber(n => n.slice(0, -1))}
+                            style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 8, color: '#a8a29e', fontSize: 15, cursor: 'pointer', padding: '8px 12px', lineHeight: 1 }}>⌫</button>
+                        </div>
+                        {/* Keypad */}
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                          {keys.map(({ d, s }) => (
+                            <button key={d} onClick={() => setDialpadNumber(n => n + d)}
+                              style={{ background: '#292524', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', cursor: 'pointer', padding: '10px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, fontFamily: 'inherit' }}>
+                              <span style={{ fontSize: 16, fontWeight: 600, lineHeight: 1 }}>{d}</span>
+                              {s && <span style={{ fontSize: 7, color: '#78716c', letterSpacing: '0.12em' }}>{s}</span>}
+                            </button>
+                          ))}
+                        </div>
+                        {/* Call button */}
+                        <button
+                          onClick={() => {
+                            if (!dialpadNumber) return;
+                            const raw = dialpadNumber.replace(/\s/g, '');
+                            const e164 = raw.startsWith('+') ? raw : raw.replace(/\D/g,'').length === 10 ? '+1' + raw.replace(/\D/g,'') : '+' + raw.replace(/\D/g,'');
+                            setShowPhonePopover(false);
+                            setDialpadNumber('');
+                            startCall(dialpadContact || { name: e164, phone: e164 });
+                          }}
+                          disabled={!dialpadNumber}
+                          style={{ background: dialpadNumber ? '#16a34a' : '#292524', border: 'none', color: dialpadNumber ? '#fff' : '#57534e', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: dialpadNumber ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                          📞 Call
+                        </button>
+                      </div>
+                    )}
+                    {phoneTab === 'recents' && (
+                      <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+                        {recentCalls.length === 0 && <div style={{ padding: '20px 16px', fontSize: 12, color: '#57534e', textAlign: 'center' }}>No recent calls</div>}
+                        {recentCalls.map(c => {
+                          const isInbound = c.direction === 'inbound';
+                          const displayNum = fmtRecentNum(isInbound ? c.from_number : c.to_number);
+                          const contactName = c.contacts?.name || null;
+                          const dealName = c.deals?.name || null;
+                          const statusColor = c.status === 'completed' ? '#10b981' : c.status === 'missed' ? '#ef4444' : '#78716c';
+                          const dur = c.duration_seconds ? `${Math.floor(c.duration_seconds/60)}:${String(c.duration_seconds%60).padStart(2,'0')}` : null;
+                          return (
+                            <div key={c.id} style={{ padding: '10px 14px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
+                              onClick={() => {
+                                const num = isInbound ? c.from_number : c.to_number;
+                                setDialpadNumber(num || '');
+                                setPhoneTab('dial');
+                              }}>
+                              <span style={{ fontSize: 14, flexShrink: 0, color: statusColor }}>{isInbound ? '↙' : '↗'}</span>
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{contactName || displayNum}</div>
+                                {contactName && <div style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{displayNum}</div>}
+                                {dealName && <div style={{ fontSize: 10, color: '#d97706' }}>{dealName}</div>}
+                              </div>
+                              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                                <div style={{ fontSize: 10, color: statusColor }}>{c.status}</div>
+                                {dur && <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{dur}</div>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                        <button onClick={() => { setActiveDealId(null); setView('calls'); setShowPhonePopover(false); }}
+                          style={{ width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', borderTop: '1px solid #292524', color: '#78716c', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          View full call history →
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <span style={{ width: 1, height: 18, background: '#292524', display: 'inline-block' }} />
+          <span style={{ fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap' }}>{userName}</span>
         </div>
       </div>
+      {/* ── end header ── */}
+      <div style={{ flex: 1, padding: '20px 24px', minWidth: 0, overflowY: 'auto' }}>
+
+      {/* Welcome-back unread chat banner. Persistent indicator that
+          messages are waiting — visible from EVERY view, not just the
+          chat tab. Click → opens chat. Dismisses on click or via the ×
+          button; reappears on the next new message (when unreadChatCount
+          climbs above the dismissal floor). Per Nathan 2026-05-01 — VAs
+          weren't noticing the small header badge when returning to DCC. */}
+      {isTeam && unreadChatCount > 0 && unreadChatCount > chatBannerDismissedAt && (
+        <div
+          onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); markAllChatRead(); }}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: 'rgba(220,38,38,0.12)',
+            borderLeft: '3px solid #dc2626',
+            padding: '7px 12px', marginBottom: 14, cursor: 'pointer',
+            animation: 'unreadBannerSlide 0.18s ease-out',
+          }}
+          title="Click to open chat"
+        >
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#fca5a5' }}>
+            💬 {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'} — click to open
+          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); setChatBannerDismissedAt(unreadChatCount); }}
+            style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
+          >×</button>
+        </div>
+      )}
 
       {showWalkthroughs && <WalkthroughRequestsModal onClose={() => setShowWalkthroughs(false)} userId={session.user.id} onJumpToDeal={(id) => { setActiveDealId(id); setShowWalkthroughs(false); }} />}
-      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} />}
+      {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} deals={deals} onOpenDeal={(id) => setActiveDealId(id)} />}
       {showLog && <ActivityLogModal onClose={() => setShowLog(false)} onJumpToDeal={(id) => { setActiveDealId(id); setShowLog(false); }} />}
       {showTeam && <TeamModal onClose={() => setShowTeam(false)} currentUserId={session.user.id} />}
       {showAccount && <AccountSettingsModal onClose={() => setShowAccount(false)} userId={session.user.id} userEmail={session.user.email} onOpenLaurenCC={() => { setShowAccount(false); setShowLaurenCC(true); }} />}
@@ -981,7 +1926,7 @@ function DealCommandCenter({ session, profile }) {
       {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
 
       {!activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -992,7 +1937,24 @@ function DealCommandCenter({ session, profile }) {
           // Pre-compute peer navigation (cycle through deals in the same
           // status). Lives at the parent so DealDetail can stay agnostic
           // about how peers are determined.
-          const peers = deals.filter(d => d.status === activeDeal.status);
+          //
+          // Per Eric 2026-05-12: navigating with the prev/next arrows
+          // from inside a Prep Queue deal walked through ALL new-leads
+          // (105 of them) instead of just the unprepped ones (the
+          // queue's actual scope). Fix: for lead-status deals, narrow
+          // the peer set by the prepped_at flag — so an unprepped deal
+          // peers with other unprepped leads (Prep Queue), and a
+          // prepped lead peers with other prepped leads (Ready).
+          // Non-lead deals continue to peer by status only.
+          const isLeadDeal = isLeadStatus(activeDeal);
+          const peers = deals.filter(d => {
+            if (d.status !== activeDeal.status) return false;
+            if (isLeadDeal) {
+              // Same prepped-state as the active deal:
+              return !!d.prepped_at === !!activeDeal.prepped_at;
+            }
+            return true;
+          });
           const peerIndex = peers.findIndex(d => d.id === activeDeal.id);
           const peerNav = {
             peerIndex,
@@ -1001,7 +1963,7 @@ function DealCommandCenter({ session, profile }) {
             nextDeal: peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null,
             onNav: setActiveDealId,
           };
-          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} />;
+          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
         })()
       )}
 
@@ -1040,12 +2002,14 @@ function DealCommandCenter({ session, profile }) {
         <Modal onClose={() => setShowMoreSheet(false)} title="More">
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[
+              { label: '📬 Inbox',      onClick: () => setView('inbox'),    count: 0 },
               { label: '⚑ Flagged',     onClick: () => setView('flagged'),  count: 0 },
               { label: '🩺 Hygiene',    onClick: () => setView('hygiene'),  count: 0 },
               { label: '📦 Closed',     onClick: () => setView('archive'),  count: 0 },
               ...(isAdmin ? [
                 { label: '📈 Reports',   onClick: () => setView('reports'),   count: 0 },
                 { label: '📊 Analytics', onClick: () => setView('analytics'), count: 0 },
+                { label: '💬 Comms',     onClick: () => setView('comms'),     count: 0 },
               ] : []),
               { sep: 'Quick access' },
               { label: '🤖 Chat with Lauren', onClick: () => window.dispatchEvent(new Event('dcc:open-lauren')), count: 0 },
@@ -1056,7 +2020,10 @@ function DealCommandCenter({ session, profile }) {
               { label: '🔍 Search',      onClick: () => setShowSearch(true),   count: 0 },
               ...(pendingWalkthroughs.length > 0 ? [{ label: '🏠 Walkthroughs', onClick: () => setShowWalkthroughs(true), count: pendingWalkthroughs.length }] : []),
               { sep: 'Account' },
-              ...(isAdmin ? [{ label: '👤 Team',        onClick: () => setShowTeam(true),     count: 0 }] : []),
+              ...(isAdmin ? [
+                { label: '👤 Team',         onClick: () => setShowTeam(true),                                count: 0 },
+                { label: '🤖 VA Queue',     onClick: () => { setActiveDealId(null); setView('va-queue'); }, count: 0 },
+              ] : []),
               { label: '↪ Sign out',     onClick: signOut, count: 0, destructive: true },
             ].filter(i => i.show !== false).map((item, idx) => {
               if (item.sep) {
@@ -1115,7 +2082,265 @@ function DealCommandCenter({ session, profile }) {
           onDismissAll={() => setChatToasts([])}
         />
       )}
-    </Shell>
+      {showChatPopover && (
+        <ChatNotificationPopover
+          currentUserId={session.user.id}
+          onClose={() => setShowChatPopover(false)}
+          onJumpToThread={(threadId) => {
+            // Per-message click: jump to that thread, dismiss banner +
+            // popover. TeamView will mark THAT thread as read on open;
+            // other unread threads stay unread (per Nathan's GHL-style
+            // ask 2026-05-04 — only "Mark all as read" clears all).
+            setActiveDealId(null);
+            setView('team');
+            if (threadId) setChatJumpThreadId(threadId);
+            setShowChatPopover(false);
+            setChatBannerDismissedAt(unreadChatCount);
+          }}
+          onMarkAllRead={() => {
+            markAllChatRead();
+            setShowChatPopover(false);
+            setChatBannerDismissedAt(unreadChatCount);
+          }}
+        />
+      )}
+      </div>{/* ── end content area ── */}
+      </div>{/* ── end main column ── */}
+    </div>{/* ── end outer flex ── */}
+
+    {/* ── Incoming call overlay — rendered at DCC level so it shows on every view ── */}
+    {incomingCall && (
+      <>
+        <style>{`
+          @keyframes ring-pulse {
+            0%   { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0.8); }
+            60%  { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 18px rgba(22,163,74,0);   }
+            100% { box-shadow: 0 8px 32px rgba(0,0,0,0.7), 0 0 0 0   rgba(22,163,74,0);    }
+          }
+        `}</style>
+        <div style={{
+          position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+          background: '#1c1917', border: '2px solid #16a34a', borderRadius: 16,
+          padding: '20px 24px', minWidth: 300,
+          animation: 'ring-pulse 1.4s ease-out infinite',
+          display: 'flex', flexDirection: 'column', gap: 14,
+        }}>
+          {/* X dismiss button — stops ring but does NOT reject (caller keeps hearing ringback) */}
+          <button onClick={() => { stopRingtone(); setIncomingCall(null); }} style={{
+            position: 'absolute', top: 10, right: 10,
+            background: 'transparent', border: 'none', color: '#57534e',
+            fontSize: 16, cursor: 'pointer', lineHeight: 1, padding: 4,
+          }} title="Dismiss notification">✕</button>
+
+          <div style={{ fontSize: 11, color: '#86efac', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>📞 Incoming call</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: '#fafaf9' }}>
+            {incomingCall.from}
+          </div>
+          {incomingCall.dealId && (
+            <div style={{ fontSize: 12, color: '#a8a29e', marginTop: -8 }}>
+              {incomingCall.dealName
+                ? <><span style={{ color: '#78716c' }}>Deal: </span>
+                    <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
+                      {incomingCall.dealName}
+                    </a>
+                  </>
+                : <><span style={{ color: '#78716c' }}>Deal: </span>
+                    <a href={`#/deal/${incomingCall.dealId}`} style={{ color: '#d97706', textDecoration: 'underline', cursor: 'pointer' }}>
+                      {incomingCall.dealId}
+                    </a>
+                  </>
+              }
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+            <button onClick={answerIncoming} style={{
+              flex: 1, background: '#16a34a', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              letterSpacing: '0.03em',
+            }}>✓ Answer</button>
+            <button onClick={rejectIncoming} style={{
+              flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+              borderRadius: 10, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: 'pointer',
+              letterSpacing: '0.03em',
+            }}>✕ Decline</button>
+          </div>
+        </div>
+      </>
+    )}
+
+    {/* ── Old standalone dialpad removed — dialpad now lives in the header Phone popover ── */}
+
+    {/* ── Active call overlay — rendered at DCC level so it shows on every view ── */}
+    {callStatus && callContact && (
+      <div style={{
+        position: 'fixed', bottom: 24, right: 24, zIndex: 9999,
+        background: '#1c1917', border: `2px solid ${callStatus === 'in-progress' ? '#16a34a' : callStatus === 'ended' ? '#ef4444' : '#d97706'}`,
+        borderRadius: 16, padding: '20px 24px', width: showKeypad ? 320 : 280, minWidth: 280,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+        display: 'flex', flexDirection: 'column', gap: 10,
+      }}>
+        <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+          {callStatus === 'connecting' ? '⏳ Connecting…' : callStatus === 'ringing' ? '🔔 Ringing…' : callStatus === 'in-progress' ? '📞 On call' : '📵 Call ended'}
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 700, color: '#fafaf9' }}>{callContact.name}</div>
+        <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{callContact.phone}</div>
+        {callStatus === 'in-progress' && (
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#16a34a', fontFamily: "'DM Mono', monospace" }}>{fmtCallDuration(callDuration)}</div>
+        )}
+        {callStatus !== 'ended' && (
+          <>
+            {/* Primary action row: Mute | Keypad | Add | End */}
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button onClick={toggleMute} style={{
+                flex: 1, background: callMuted ? '#7f1d1d' : '#292524', border: 'none', color: callMuted ? '#fca5a5' : '#a8a29e',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>{callMuted ? '🔇 Muted' : '🎤 Mute'}</button>
+              {callStatus === 'in-progress' && (
+                <button onClick={() => { setShowKeypad(v => !v); setAddingToCall(false); }} style={{
+                  flex: 1, background: showKeypad ? '#44403c' : '#292524', border: 'none', color: showKeypad ? '#fafaf9' : '#a8a29e',
+                  borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>⌨ {showKeypad ? 'Hide' : 'Keypad'}</button>
+              )}
+              {callStatus === 'in-progress' && (
+                <button onClick={() => { setAddingToCall(v => !v); setShowKeypad(false); }} style={{
+                  flex: 1, background: addingToCall ? '#44403c' : '#292524', border: 'none', color: addingToCall ? '#fafaf9' : '#a8a29e',
+                  borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>+ Add</button>
+              )}
+              <button onClick={hangupCall} style={{
+                flex: 1, background: '#dc2626', border: 'none', color: '#fff',
+                borderRadius: 10, padding: '8px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer',
+              }}>End</button>
+            </div>
+
+            {/* DTMF Keypad */}
+            {showKeypad && callStatus === 'in-progress' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                {/* Buffer display */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{
+                    flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8,
+                    padding: '6px 10px', fontFamily: "'DM Mono', monospace", fontSize: 14,
+                    color: keypadBuffer ? '#fafaf9' : '#57534e', letterSpacing: '0.15em', minHeight: 32,
+                  }}>{keypadBuffer || <span style={{ color: '#57534e' }}>—</span>}</div>
+                  <button onClick={() => setKeypadBuffer('')} style={{
+                    background: '#292524', border: 'none', color: '#78716c', borderRadius: 8,
+                    padding: '6px 10px', fontSize: 13, cursor: 'pointer', fontWeight: 700,
+                  }}>⌫</button>
+                </div>
+                {/* Digit grid */}
+                {[['1','2','3'],['4','5','6'],['7','8','9'],['*','0','#']].map((row, ri) => (
+                  <div key={ri} style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                    {row.map(digit => (
+                      <button key={digit} onClick={() => {
+                        if (activeCallRef.current) {
+                          try { activeCallRef.current.sendDigits(digit); } catch (_) {}
+                        }
+                        setKeypadBuffer(b => b + digit);
+                      }} style={{
+                        height: 40, background: '#292524', border: '1px solid #44403c',
+                        color: '#fafaf9', borderRadius: 8, fontSize: 16, fontWeight: 700,
+                        cursor: 'pointer', fontFamily: "'DM Mono', monospace",
+                      }}>{digit}</button>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add participant row */}
+            {addingToCall && callStatus === 'in-progress' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                <div style={{ fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Add to call</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input
+                    type="tel"
+                    value={addToCallNumber}
+                    onChange={e => setAddToCallNumber(e.target.value)}
+                    placeholder="+1 555 000 0000"
+                    style={{
+                      flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8,
+                      padding: '7px 10px', fontSize: 13, color: '#fafaf9', fontFamily: "'DM Mono', monospace",
+                      outline: 'none',
+                    }}
+                  />
+                  <button
+                    disabled={!addToCallNumber.trim()}
+                    onClick={async () => {
+                      if (!addToCallNumber.trim()) return;
+                      const sid = callSid;
+                      setAddCallMsg(null);
+                      try {
+                        const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                          body: { call_sid: sid, to_number: addToCallNumber.trim() },
+                        });
+                        if (error) throw new Error(error.message);
+                        if (!data?.ok) throw new Error(data?.error || 'Failed to add participant');
+                        setAddCallMsg({ type: 'ok', text: `Adding ${addToCallNumber.trim()}…` });
+                        setAddToCallNumber('');
+                        setAddingToCall(false);
+                        setTimeout(() => setAddCallMsg(null), 4000);
+                      } catch (e) {
+                        setAddCallMsg({ type: 'error', text: e.message });
+                      }
+                    }}
+                    style={{
+                      background: addToCallNumber.trim() ? '#16a34a' : '#292524',
+                      border: 'none', color: '#fff', borderRadius: 8,
+                      padding: '7px 14px', fontSize: 12, fontWeight: 700, cursor: addToCallNumber.trim() ? 'pointer' : 'default',
+                    }}>Call</button>
+                  <button onClick={() => { setAddingToCall(false); setAddToCallNumber(''); setAddCallMsg(null); }} style={{
+                    background: 'transparent', border: '1px solid #44403c', color: '#78716c',
+                    borderRadius: 8, padding: '7px 10px', fontSize: 12, cursor: 'pointer',
+                  }}>✕</button>
+                </div>
+                {/* Transfer row */}
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button
+                    disabled={!addToCallNumber.trim()}
+                    onClick={async () => {
+                      if (!addToCallNumber.trim()) return;
+                      const sid = callSid;
+                      setAddCallMsg(null);
+                      try {
+                        const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                          body: { call_sid: sid, to_number: addToCallNumber.trim(), action: 'transfer' },
+                        });
+                        if (error) throw new Error(error.message);
+                        if (!data?.ok) throw new Error(data?.error || 'Transfer failed');
+                        setAddCallMsg({ type: 'ok', text: `Transferring to ${addToCallNumber.trim()}…` });
+                        setAddToCallNumber('');
+                        setAddingToCall(false);
+                        setTimeout(() => { setAddCallMsg(null); hangupCall(); }, 3000);
+                      } catch (e) {
+                        setAddCallMsg({ type: 'error', text: e.message });
+                      }
+                    }}
+                    style={{
+                      flex: 1, background: addToCallNumber.trim() ? '#78350f' : '#292524',
+                      border: 'none', color: '#fff', borderRadius: 8,
+                      padding: '7px 0', fontSize: 11, fontWeight: 700, cursor: addToCallNumber.trim() ? 'pointer' : 'default',
+                    }}>Transfer (blind)</button>
+                </div>
+                {addCallMsg && (
+                  <div style={{ fontSize: 11, color: addCallMsg.type === 'ok' ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                    {addCallMsg.text}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Persistent add-call confirmation (shown after addingToCall panel closes) */}
+            {addCallMsg && !addingToCall && (
+              <div style={{ fontSize: 11, color: addCallMsg.type === 'ok' ? '#4ade80' : '#f87171', fontWeight: 600 }}>
+                {addCallMsg.text}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    )}
+    </>
     </RecordingContext.Provider>
   );
 }
@@ -1175,8 +2400,340 @@ function ChatToastStack({ toasts, onReply, onDismiss, onDismissAll }) {
   );
 }
 
+// ─── Chat Notification Popover ─────────────────────────────────────
+// Anchored under the header 💬 Chat button when there's unread + the
+// user clicks the button. Per Nathan 2026-05-04, modeled after GHL's
+// notification-center pattern: shows the actual unread messages with
+// sender name + preview + relative timestamp + thread label, plus a
+// "Mark all as read" link at the top and a "View all in chat →" link
+// at the bottom. Click any single message → jump to that thread (and
+// only that thread gets marked read by TeamView on open). Outside
+// click closes.
+function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMarkAllRead }) {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const popRef = useRef(null);
+
+  // Build the list: unread messages from threads I'm in, sender != me,
+  // newer than my last_read_at for that thread. Cap at 20 most recent.
+  const load = async () => {
+    if (!currentUserId) { setItems([]); setLoading(false); return; }
+    setLoading(true);
+    try {
+      // 1. Threads I participate in (RLS scopes this to me already, but
+      //    being explicit avoids surprises).
+      const { data: parts } = await sb.from('team_thread_participants')
+        .select('thread_id').eq('user_id', currentUserId);
+      const threadIds = (parts || []).map(p => p.thread_id);
+      if (!threadIds.length) { setItems([]); return; }
+
+      // 2. My last_read_at per thread.
+      const { data: reads } = await sb.from('team_message_reads')
+        .select('thread_id, last_read_at')
+        .eq('user_id', currentUserId).in('thread_id', threadIds);
+      const lastReadByThread = {};
+      (reads || []).forEach(r => { lastReadByThread[r.thread_id] = r.last_read_at; });
+
+      // 3. Pull most-recent messages across my threads. No date cutoff —
+      //    the previous "Math.min of last_reads" cutoff failed when a
+      //    thread had NO read row yet (the user was added after the
+      //    messages were posted), because the cutoff used existing reads
+      //    as a floor and excluded older messages from no-read threads.
+      //    The (thread_id, created_at) index + .limit(80) bounds the query.
+      //
+      //    Don't filter sender_id at the query level — supabase-js .neq()
+      //    excludes NULL rows, but Lauren messages have sender_id = NULL
+      //    (their sender_kind = 'lauren'). Match the team_unread_per_thread
+      //    RPC's "is distinct from" semantics by filtering client-side.
+      const { data: msgs } = await sb.from('team_messages')
+        .select('id, thread_id, sender_id, sender_kind, body, created_at')
+        .in('thread_id', threadIds)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(80);
+
+      // 4. Filter: not from me (treat NULL sender_id as "not me" — Lauren),
+      //    and created after my per-thread last_read.
+      const unread = (msgs || []).filter(m => {
+        if (m.sender_id === currentUserId) return false;
+        const lr = lastReadByThread[m.thread_id];
+        return !lr || new Date(m.created_at) > new Date(lr);
+      }).slice(0, 20);
+
+      if (!unread.length) { setItems([]); return; }
+
+      // 5. Hydrate sender names + thread labels.
+      const senderIds = [...new Set(unread.map(m => m.sender_id).filter(Boolean))];
+      const usedThreadIds = [...new Set(unread.map(m => m.thread_id))];
+      const [profilesRes, threadsRes, partsHydrate] = await Promise.all([
+        senderIds.length ? sb.from('profiles').select('id, name, display_name').in('id', senderIds) : Promise.resolve({ data: [] }),
+        sb.from('team_threads').select('id, title, thread_type').in('id', usedThreadIds),
+        // For DM titling, fetch other participants — title is canonical
+        // but DMs have less helpful auto-titles like "nathan <-> admin3".
+        sb.from('team_thread_participants').select('thread_id, user_id').in('thread_id', usedThreadIds),
+      ]);
+      const senderById = {};
+      (profilesRes.data || []).forEach(p => { senderById[p.id] = p; });
+      const threadById = {};
+      (threadsRes.data || []).forEach(t => { threadById[t.id] = t; });
+
+      const labelFor = (m) => {
+        const t = threadById[m.thread_id];
+        if (!t) return 'thread';
+        if (t.thread_type === 'lauren_dm') return '🤖 Lauren';
+        if (t.thread_type === 'lauren_room') return '🤖 ' + (t.title || 'Lauren room');
+        if (t.thread_type === 'dm') return 'DM';
+        if (t.thread_type === 'channel') return `#${t.title || 'channel'}`;
+        return t.title || 'thread';
+      };
+
+      setItems(unread.map(m => {
+        const senderProfile = senderById[m.sender_id];
+        const senderName = m.sender_kind === 'lauren'
+          ? 'Lauren'
+          : (senderProfile?.display_name || senderProfile?.name || 'Someone');
+        return {
+          id: m.id,
+          thread_id: m.thread_id,
+          sender_name: senderName,
+          thread_label: labelFor(m),
+          body: m.body || '',
+          created_at: m.created_at,
+        };
+      }));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // Refresh on new messages while popover is open
+    const ch = sb.channel('chat-popover-refresh')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'team_messages' }, () => load())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [currentUserId]);
+
+  // Outside-click closes. Defer attaching the listener to next tick so
+  // the click that OPENED the popover doesn't immediately close it.
+  useEffect(() => {
+    const onMouseDown = (e) => {
+      if (popRef.current && !popRef.current.contains(e.target)) onClose();
+    };
+    const t = setTimeout(() => document.addEventListener('mousedown', onMouseDown), 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', onMouseDown); };
+  }, [onClose]);
+
+  // Relative-time formatter for the right column. Goes to absolute date
+  // once older than ~6 days so the list still reads cleanly.
+  const relTime = (iso) => {
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60_000) return 'just now';
+    if (ms < 3600_000) return Math.floor(ms / 60_000) + 'm ago';
+    if (ms < 86400_000) return Math.floor(ms / 3600_000) + 'h ago';
+    if (ms < 6 * 86400_000) return Math.floor(ms / 86400_000) + 'd ago';
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <div ref={popRef} style={{
+      position: 'fixed', top: 70, right: 18, zIndex: 1250,
+      width: 380, maxWidth: 'calc(100vw - 36px)', maxHeight: 540,
+      display: 'flex', flexDirection: 'column',
+      background: '#1c1917', border: '1px solid #44403c', borderRadius: 10,
+      boxShadow: '0 14px 36px rgba(0,0,0,0.65)',
+      animation: 'unreadBannerSlide 0.18s ease-out',
+    }}>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', borderBottom: '1px solid #292524', flexShrink: 0 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: '#fafaf9', letterSpacing: '0.04em' }}>💬 Chat notifications</span>
+        {items.length > 0 && (
+          <button onClick={onMarkAllRead}
+            title="Mark every thread as read — clears the unread badges everywhere"
+            style={{ background: 'transparent', border: 'none', color: '#fbbf24', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: 0, fontFamily: 'inherit', textDecoration: 'underline' }}>
+            Mark all as read
+          </button>
+        )}
+      </div>
+
+      {/* Scrollable list */}
+      <div style={{ overflowY: 'auto', flex: 1 }}>
+        {loading && (
+          <div style={{ padding: 24, textAlign: 'center', color: '#78716c', fontSize: 12 }}>
+            Loading…
+          </div>
+        )}
+        {!loading && items.length === 0 && (
+          <div style={{ padding: 24, textAlign: 'center', color: '#78716c', fontSize: 12 }}>
+            No unread messages.
+          </div>
+        )}
+        {!loading && items.map(it => (
+          <button
+            key={it.id}
+            onClick={() => onJumpToThread(it.thread_id)}
+            title="Open this thread"
+            style={{
+              display: 'block', width: '100%', textAlign: 'left',
+              background: 'transparent', border: 'none',
+              borderBottom: '1px solid #292524',
+              padding: '12px 14px', cursor: 'pointer',
+              color: '#fafaf9', fontFamily: 'inherit',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = '#292524'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, marginBottom: 3 }}>
+              <span style={{ fontSize: 12, fontWeight: 800, color: '#fbbf24' }}>{it.sender_name}</span>
+              <span style={{ fontSize: 10, color: '#78716c', flexShrink: 0 }}>{relTime(it.created_at)}</span>
+            </div>
+            <div style={{ fontSize: 10, color: '#a8a29e', marginBottom: 5, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {it.thread_label}
+            </div>
+            <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', wordBreak: 'break-word' }}>
+              {it.body}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {/* Footer */}
+      <button
+        onClick={() => onJumpToThread(null)}
+        title="Open the team chat view (without marking anything read)"
+        style={{
+          flexShrink: 0,
+          display: 'block', width: '100%', textAlign: 'center',
+          background: '#0c0a09', borderTop: '1px solid #292524', border: 'none',
+          color: '#fbbf24', fontSize: 11, fontWeight: 700,
+          padding: '11px 14px', cursor: 'pointer', fontFamily: 'inherit',
+          letterSpacing: '0.04em',
+          borderBottomLeftRadius: 10, borderBottomRightRadius: 10,
+        }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = '#1c1917'; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = '#0c0a09'; }}
+      >
+        View all in chat →
+      </button>
+    </div>
+  );
+}
+
+// ─── Call History View ───────────────────────────────────────────────
+// Full call log table — inbound + outbound, contact/deal linked, filterable.
+function CallHistoryView({ onSelect }) {
+  const [calls, setCalls] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [filter, setFilter] = useState('all'); // 'all' | 'inbound' | 'outbound' | 'missed'
+
+  const loadCalls = async () => {
+    setLoaded(false);
+    const { data } = await sb.from('call_logs')
+      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, ended_at, deal_id, contact_id, contacts(name), deals(name)')
+      .order('started_at', { ascending: false })
+      .limit(100);
+    setCalls(data || []);
+    setLoaded(true);
+  };
+
+  React.useEffect(() => { loadCalls(); }, []);
+
+  const fmtNum = (num) => {
+    const d = (num || '').replace(/\D/g,'');
+    if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+    return num || '—';
+  };
+  const fmtDur = (s) => s ? `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}` : '—';
+  const fmtTime = (iso) => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = (now - d) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+    if (diff < 7*86400) return `${Math.floor(diff/86400)}d ago`;
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  const filtered = calls.filter(c => {
+    if (filter === 'inbound') return c.direction === 'inbound';
+    if (filter === 'outbound') return c.direction === 'outbound';
+    if (filter === 'missed') return c.status === 'missed';
+    return true;
+  });
+
+  const statusColor = (s) => s === 'completed' ? '#10b981' : s === 'missed' ? '#ef4444' : s === 'ringing' ? '#f59e0b' : '#78716c';
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#d97706', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 4 }}>Phone</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', letterSpacing: '-0.02em' }}>Call History</div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {['all','inbound','outbound','missed'].map(f => (
+            <button key={f} onClick={() => setFilter(f)}
+              style={{ background: filter === f ? '#292524' : 'transparent', border: `1px solid ${filter === f ? '#44403c' : 'transparent'}`, color: filter === f ? '#fafaf9' : '#78716c', padding: '5px 12px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', textTransform: 'capitalize' }}>
+              {f}
+            </button>
+          ))}
+          <button onClick={loadCalls} style={{ background: 'transparent', border: '1px solid #292524', color: '#78716c', padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>↻</button>
+        </div>
+      </div>
+
+      {!loaded && <div style={{ textAlign: 'center', padding: 40, color: '#57534e' }}>Loading…</div>}
+      {loaded && filtered.length === 0 && <div style={{ textAlign: 'center', padding: 40, color: '#57534e', border: '1px dashed #292524', borderRadius: 10 }}>No calls found</div>}
+      {loaded && filtered.length > 0 && (
+        <div style={{ background: '#111110', border: '1px solid #1c1917', borderRadius: 10, overflow: 'hidden' }}>
+          {filtered.map((c, i) => {
+            const isInbound = c.direction === 'inbound';
+            const displayNum = fmtNum(isInbound ? c.from_number : c.to_number);
+            const contactName = c.contacts?.name || null;
+            const dealName = c.deals?.name || null;
+            return (
+              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderBottom: i < filtered.length-1 ? '1px solid #1c1917' : 'none', cursor: 'default' }}>
+                {/* Direction indicator */}
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#1c1917', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 14 }}>
+                  {isInbound ? '↙' : '↗'}
+                </div>
+                {/* Contact + deal */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {contactName || displayNum}
+                  </div>
+                  {contactName && <div style={{ fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{displayNum}</div>}
+                  {dealName && (
+                    <button onClick={() => onSelect(c.deal_id)} style={{ background: 'none', border: 'none', color: '#d97706', fontSize: 10, cursor: 'pointer', padding: 0, fontFamily: 'inherit', textDecoration: 'underline' }}>
+                      {dealName}
+                    </button>
+                  )}
+                </div>
+                {/* Status */}
+                <div style={{ textAlign: 'center', flexShrink: 0, minWidth: 64 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: statusColor(c.status), textTransform: 'uppercase', letterSpacing: '0.06em' }}>{c.status || '—'}</div>
+                  <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{fmtDur(c.duration_seconds)}</div>
+                </div>
+                {/* Time */}
+                <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 60 }}>
+                  <div style={{ fontSize: 11, color: '#57534e' }}>{fmtTime(c.started_at)}</div>
+                  <div style={{ fontSize: 10, color: '#44403c', textTransform: 'capitalize' }}>{c.direction}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, chatJumpThreadId, onChatJumpConsumed }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
@@ -1184,6 +2741,23 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // deals with no lead_tier set yet (the long tail of older imports).
   const [tierFilter, setTierFilter] = useState("all");
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
+  // Soft-delete admin recovery modal (added 2026-05-07).
+  const [showDeletedLeads, setShowDeletedLeads] = useState(false);
+  // Per Eric 2026-05-12: he was expecting to find deals in Deleted Leads
+  // that he'd actually marked dead / closed / recovered via status change
+  // (not soft-delete). Added a separate "Recently Hidden" view so anything
+  // out of sight in the last 30 days is one click away regardless of
+  // which mechanism was used.
+  const [showRecentlyHidden, setShowRecentlyHidden] = useState(false);
+  // Advanced filters — same modal Pipeline uses. Per Eric 2026-05-11:
+  // Leads / Deal-list views need tag + money + date + boolean filters
+  // (he tried filtering by `nod` / `need-more-info` tags and the UI
+  // didn't exist on the leads-phase view). Reusing SalesPipeline's
+  // ADVANCED_FILTERS_DEFAULT + applyAdvancedFilters() + the same
+  // AdvancedFiltersModal — no duplication.
+  const [advancedFilters, setAdvancedFilters] = useState(ADVANCED_FILTERS_DEFAULT);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const advancedFilterCount = countActiveAdvancedFilters(advancedFilters);
 
   const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
   // "Active" excludes both archived (closed/recovered/dead) AND lead-phase
@@ -1220,6 +2794,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       const t = (d.lead_tier || '').toUpperCase();
       if (tierFilter === "untiered" ? ['A','B','C'].includes(t) : t !== tierFilter) return false;
     }
+    if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
@@ -1285,37 +2860,71 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
   return (
     <div>
-      {/* Portfolio summary */}
-      <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
-        {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
-        <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
-        <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
-        {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
-        <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
-      </div>
-
-      <div className="view-controls" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 4, alignItems: "center", background: "#1c1917", borderRadius: 8, padding: 3, border: "1px solid #292524" }}>
-          {viewBtn("today", "📌 Today", 0)}
-          {viewBtn("attention", "🔔 Attention", 0)}
-          {groupBtn("outreach", "🎯 Outreach", ["outreach", "leads", "forecast"], 0)}
-          {groupBtn("active", "🏠 Deals", ["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"], flaggedDeals.length)}
-          {viewBtn("tasks", "✓ Tasks", 0)}
-          {isAdmin && groupBtn("reports", "📊 Insights", ["reports", "analytics", "traffic"], 0)}
+      {/* Portfolio summary — Insights only */}
+      {["reports", "analytics", "traffic"].includes(view) && (
+        <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+          {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
+          <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
+          <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
+          {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
+          <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+      )}
+
+      {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads +
+          Recently Hidden. Only shown on deal-list views. */}
+      {["active","flagged","hygiene","archive","pipeline","leads-phase"].includes(view) && (
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
+          {isAdmin && (
+            <button
+              onClick={() => setShowRecentlyHidden(true)}
+              style={{ ...btnGhost, color: '#a8a29e' }}
+              title="Deals marked dead / closed / recovered in the last 30 days. Status changes hide them from active views but they're not deleted — click to find or revive one."
+            >
+              🪦 Recently hidden
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => setShowDeletedLeads(true)}
+              style={{ ...btnGhost, color: '#a8a29e' }}
+              title="View soft-deleted deals (admin only). Restore from here."
+            >
+              🗑 Deleted leads
+            </button>
+          )}
           <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
           <button className="desktop-new-deal" onClick={onNew} style={btnPrimary}>+ New Deal</button>
         </div>
-      </div>
+      )}
+      {showDeletedLeads && (
+        <DeletedLeadsModal
+          onClose={() => setShowDeletedLeads(false)}
+          onRestored={() => { /* realtime sub on `deals` will refresh the list */ }}
+        />
+      )}
+      {showRecentlyHidden && (
+        <RecentlyHiddenModal
+          onClose={() => setShowRecentlyHidden(false)}
+          onRestored={() => { /* realtime sub on `deals` will refresh the list */ }}
+        />
+      )}
+      {showAdvancedFilters && (
+        <AdvancedFiltersModal
+          value={advancedFilters}
+          onApply={setAdvancedFilters}
+          onClose={() => setShowAdvancedFilters(false)}
+        />
+      )}
 
-      {/* Hub sub-chips — second-level nav inside the consolidated tabs.
-          Outreach hub:  drafts/replies · leads · forecast
-          Deals hub:     active · flagged · hygiene · closed · kanban
-          Insights hub:  reports · analytics · traffic */}
-      {["outreach", "leads", "forecast"].includes(view) && (
+      {/* Hub sub-chips — second-level nav inside sidebar sections.
+          Outreach:  Drafts & Replies · Inbox · Leads · Forecast
+          Deals:     New Leads · Active · Flagged · Hygiene · Closed · Kanban
+          Insights:  Reports · Analytics · Traffic */}
+      {["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("outreach", "🤖 Drafts & Replies")}
+          {chipBtn("inbox", "📬 Inbox")}
           {chipBtn("leads", "📨 Leads")}
           {chipBtn("forecast", "📅 Forecast")}
         </div>
@@ -1330,11 +2939,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("pipeline", "🧭 Kanban")}
         </div>
       )}
-      {isAdmin && ["reports", "analytics", "traffic"].includes(view) && (
+      {isAdmin && ["reports", "analytics", "traffic", "comms"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("reports", "📈 Reports")}
           {chipBtn("analytics", "📊 Analytics")}
           {chipBtn("traffic", "🌐 Traffic")}
+          {chipBtn("comms", "💬 Comms")}
         </div>
       )}
 
@@ -1369,7 +2979,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "va-queue" && view !== "comms" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -1391,6 +3001,24 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {DEAL_STATUSES.surplus.map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
             </optgroup>
           </select>
+          <button
+            onClick={() => setShowAdvancedFilters(true)}
+            title={advancedFilterCount > 0 ? `${advancedFilterCount} advanced filter${advancedFilterCount === 1 ? '' : 's'} active — click to edit` : 'Filter by tags, status, money, dates, attorney, phone presence, and more'}
+            style={{
+              fontSize: 12, padding: '6px 12px', borderRadius: 6,
+              border: '1px solid ' + (advancedFilterCount > 0 ? '#d97706' : '#44403c'),
+              background: advancedFilterCount > 0 ? '#78350f' : '#1c1917',
+              color: advancedFilterCount > 0 ? '#fbbf24' : '#a8a29e',
+              fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}>
+            🎚 Filters{advancedFilterCount > 0 ? <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 10, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{advancedFilterCount}</span> : null}
+          </button>
+          {advancedFilterCount > 0 && (
+            <button onClick={() => setAdvancedFilters(ADVANCED_FILTERS_DEFAULT)}
+              title="Clear all advanced filters"
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', color: '#78716c' }}>↺ Clear</button>
+          )}
           <div style={{ marginLeft: "auto", display: "flex", gap: 4, background: "#1c1917", borderRadius: 6, padding: 2, border: "1px solid #292524" }}>
             <button onClick={() => setLayoutMode("cards")} style={{ background: layoutMode === "cards" ? "#292524" : "transparent", color: layoutMode === "cards" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Cards</button>
             <button onClick={() => setLayoutMode("kanban")} style={{ background: layoutMode === "kanban" ? "#292524" : "transparent", color: layoutMode === "kanban" ? "#fafaf9" : "#78716c", border: "none", padding: "5px 12px", borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>Kanban</button>
@@ -1398,14 +3026,29 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team") ? "1fr" : "1fr 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "1fr" : "1fr 320px", gap: 20 }}>
         <div>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
+          ) : view === "calls" ? (
+            <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
+          ) : view === "relay" ? (
+            <RelayView
+              supabase={sb}
+              onOpenDeal={(id) => {
+                // When drilling in from Relay, the user almost always wants to
+                // look at the Comms thread for that deal — that's where the
+                // pending message and full conversation context live. Skip
+                // Overview and route straight there.
+                window.location.hash = `#/deal/${id}/comms`;
+              }}
+            />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} />
+          ) : view === "inbox" ? (
+            <InboxView deals={deals} onSelect={onSelect} />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
           ) : view === "leads" ? (
@@ -1419,11 +3062,17 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "hygiene" ? (
             <HygieneDashboard deals={deals} onSelect={onSelect} />
           ) : view === "pipeline" ? (
-            <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} />
+            <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "time" ? (
+            <TimeTrackingView userId={userId} isAdmin={isAdmin} />
           ) : view === "team" ? (
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
+          ) : view === "va-queue" ? (
+            isAdmin ? <VaQueueView userId={userId} /> : null
+          ) : view === "comms" ? (
+            isAdmin ? <CommsAnalyticsView /> : null
           ) : layoutMode === "kanban" ? (
             <div>
               {flips.length > 0 && (
@@ -1466,7 +3115,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && view !== "comms" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -1545,9 +3194,10 @@ const TIER_META = {
 function TierBadge({ deal }) {
   const t = deal.lead_tier;
   if (!t || !TIER_META[t]) return null;
-  // Override label for deceased B-leads OR any tier with a death signal
+  // Override label for deceased B-leads OR any tier where deceased is
+  // signaled (death_signal column OR meta.deceased hand-flag).
   const meta = TIER_META[t];
-  const finalLabel = (t !== 'B' && deal.death_signal) ? (meta.label + ' · estate') : meta.label;
+  const finalLabel = (t !== 'B' && isDeceased(deal)) ? (meta.label + ' · estate') : meta.label;
   return (
     <span
       title={meta.title}
@@ -1563,6 +3213,35 @@ function TierBadge({ deal }) {
         whiteSpace: 'nowrap',
       }}
     >{finalLabel}</span>
+  );
+}
+
+// Tier-INDEPENDENT deceased indicator. Renders a 🕊 pill on any deal
+// where isDeceased() returns true, regardless of A/B/C tier. Per Eric
+// 2026-05-07: the existing "B · estate" tier label is the only visual
+// cue today, so C-tier deceased homeowners look identical to living
+// ones — outreach risk. Surface this in every spot a deal renders.
+function DeceasedBadge({ deal, size = 'md' }) {
+  if (!isDeceased(deal)) return null;
+  const sm = size === 'sm';
+  return (
+    <span
+      title="Owner deceased — outreach goes to estate / heirs only, never the homeowner directly"
+      style={{
+        fontSize: sm ? 9 : 10,
+        fontWeight: 700,
+        padding: sm ? '2px 6px' : '3px 8px',
+        borderRadius: 3,
+        background: '#5b21b6',
+        color: '#fafaf9',
+        letterSpacing: '0.06em',
+        textTransform: 'uppercase',
+        whiteSpace: 'nowrap',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+      }}
+    >🕊 deceased</span>
   );
 }
 
@@ -1648,8 +3327,13 @@ function DealStatusBadges({ deal }) {
   );
 
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap' }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
       <TierBadge tier={tier} />
+      {/* Tier-INDEPENDENT deceased indicator — shows on A/B/C alike when
+          isDeceased(deal) returns true. Per Eric 2026-05-07: C-tier
+          deceased homeowners were visually indistinguishable from
+          living ones, leading to incorrect outreach approach risk. */}
+      <DeceasedBadge deal={deal} size="sm" />
       {isPostAuction && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
       {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
       {verified && <Pill label="✓ CLEAN" title="Verified — Eric has cleaned this lead's data" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
@@ -1662,7 +3346,10 @@ function DealStatusBadges({ deal }) {
 // for deceased leads where the handoff wants heir-focused framing.
 function DealCardName({ deal }) {
   const first = (deal.name || '').split(' - ')[0] || deal.name || 'Unnamed';
-  const isEstate = deal.death_signal || deal.lead_tier === 'B';
+  // "Estate of …" prefix fires for ANY deceased deal (tier-independent
+  // per Eric 2026-05-07) plus tier B (which is deceased by definition
+  // even when meta hasn't caught up to that fact).
+  const isEstate = isDeceased(deal) || deal.lead_tier === 'B';
   return (
     <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, color: '#fafaf9' }}>
       {isEstate ? <span style={{ color: '#c4b5fd' }}>Estate of </span> : null}
@@ -1687,6 +3374,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const [me, setMe] = useState({ id: null, name: '', role: 'admin' });
   const [pendingAttachments, setPendingAttachments] = useState([]);  // [{name, size, type, path, url}]
   const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [showNewThreadModal, setShowNewThreadModal] = useState(false);
@@ -1703,19 +3391,15 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const dragDepth = useRef(0);
   const messagesEndRef = useRef(null);
+  const messagesScrollRef = useRef(null);  // the actual scrollable container
   const composerRef = useRef(null);
   const fileInputRef = useRef(null);
 
   // Ensure the current user has their Lauren DM (Hub mode). Idempotent RPC.
-  // Runs once on TeamView mount; if the user has no Lauren DM yet, one is
-  // auto-created and shows up in the thread list on next loadThreads().
-  useEffect(() => {
-    sb.rpc('lauren_get_or_create_dm').then(({ error }) => {
-      // Migration may not be applied yet — fail silently and let the rest
-      // of TeamView work without the Lauren DM thread.
-      if (error) console.debug('[lauren_get_or_create_dm]', error);
-    });
-  }, []);
+  // NOTE: lauren_get_or_create_dm is intentionally NOT called here.
+  // The Lauren FAB (LaurenDCC component) creates/finds the DM on demand.
+  // Calling it from TeamView caused duplicate Lauren threads to accumulate
+  // and re-appear every time the Chat tab was opened, even after deletion.
 
   // Load current user + initial threads + their profile names
   const loadThreads = async () => {
@@ -1862,10 +3546,36 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
     // eslint-disable-next-line
   }, [activeThreadId, me.id]);
 
-  // Auto-scroll to bottom on new messages
+  // Snap to bottom of the message list whenever messages change or
+  // the active thread changes. Per Nathan 2026-05-12 (3rd revision —
+  // "no scroll or roll, just start at the bottom"):
+  //   - Direct scrollTop=scrollHeight on the container (no animation)
+  //   - No smooth-scroll branch — even new arrivals snap instantly
+  //   - Double rAF to wait for React commit + browser layout before
+  //     measuring scrollHeight (otherwise we measure before the new
+  //     rows are in the DOM and land short of the actual bottom)
+  //   - Bonus: re-snap on image load events so GIFs/photos that push
+  //     content height after they decode don't leave us mid-list
   useEffect(() => {
-    if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length]);
+    const snap = () => {
+      const el = messagesScrollRef.current;
+      if (el) el.scrollTop = el.scrollHeight;
+    };
+    requestAnimationFrame(() => requestAnimationFrame(snap));
+    // Re-snap after every image inside the container finishes loading
+    // (GIFs/pasted screenshots resize after decode).
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    const imgs = el.querySelectorAll('img');
+    const handlers = [];
+    imgs.forEach(img => {
+      if (img.complete) return;
+      const h = () => snap();
+      img.addEventListener('load', h, { once: true });
+      handlers.push([img, h]);
+    });
+    return () => { handlers.forEach(([img, h]) => img.removeEventListener('load', h)); };
+  }, [messages.length, activeThreadId]);
 
   // Load + subscribe to reactions for the active thread's messages.
   useEffect(() => {
@@ -2070,7 +3780,15 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
     if ((!trimmed && pendingAttachments.length === 0) || sending || !me.id || !activeThreadId) return;
     setSending(true);
     // Strip the URL field — signed URLs expire; we re-sign on render
-    const attachmentsForDb = pendingAttachments.map(({ path, name, size, type }) => ({ path, name, size, type }));
+    // Preserve `url` + `source` + `giphy_id` for external attachments
+    // (GIPHY GIFs picked via the in-chat picker). These have path=null
+    // and the renderer needs the url to display them. Pre-fix this only
+    // kept path/name/size/type and the url got dropped → GIFs rendered
+    // forever-loading for both sender and other team members.
+    const attachmentsForDb = pendingAttachments.map(({ path, name, size, type, url, source, giphy_id }) => ({
+      path, name, size, type,
+      ...(path ? {} : { url, source, giphy_id }),  // only persist url for external attachments
+    }));
     const { error } = await sb.from('team_messages').insert({
       thread_id: activeThreadId,
       sender_id: me.id,
@@ -2185,7 +3903,30 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
           </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: 6 }}>
-          {threads.map(t => {
+          {/* ── Permanent Jitsi video rooms — always at top of thread list ── */}
+          <div style={{ padding: '6px 6px 4px' }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#57534e', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 5, paddingLeft: 2 }}>📹 Video Rooms</div>
+            <div style={{ display: 'flex', gap: 5 }}>
+              {[
+                { label: 'Eric', url: 'https://meet.jit.si/DCC-Eric-Room' },
+                { label: 'Anam', url: 'https://meet.jit.si/DCC-Anam-Room' },
+                { label: 'Nathan', url: 'https://meet.jit.si/DCC-Nathan-Room' },
+                { label: 'Justin', url: 'https://meet.jit.si/DCC-Justin-Room' },
+              ].map(room => (
+                <button key={room.url}
+                  onClick={() => window.open(room.url, '_blank', 'noopener,noreferrer')}
+                  title={`Join ${room.label}'s room on Jitsi`}
+                  style={{ flex: 1, background: '#14532d', color: '#86efac', border: '1px solid #16a34a', borderRadius: 6, padding: '6px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  📹 {room.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ height: 1, background: '#1c1917', margin: '4px 0 6px' }} />
+          {/* Lauren threads filtered out — they live in the Lauren FAB.
+              Showing them here creates confusing duplicates; they auto-recreate
+              on every TeamView mount so deleting them is futile. */}
+          {threads.filter(t => t.thread_type !== 'lauren_dm' && t.thread_type !== 'lauren_room').map(t => {
             const icon = t.thread_type === 'dm' ? '💬' : t.thread_type === 'deal' ? '🏠' : '#';
             let label = t.title;
             if (t.thread_type === 'dm') {
@@ -2366,7 +4107,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
             </div>
 
             {/* Message list */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
+            <div ref={messagesScrollRef} style={{ flex: 1, overflowY: 'auto', padding: '14px 18px' }}>
               {messages.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: 40, color: '#57534e', fontSize: 13 }}>
                   No messages yet. Say hi 👋
@@ -2443,7 +4184,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                       ) : (
                         m.body && (
                           <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-                            {m.body}
+                            {linkifyText(m.body)}
                           </div>
                         )
                       )}
@@ -2588,7 +4329,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                 }}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, gap: 8 }}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', position: 'relative' }}>
                   <input ref={fileInputRef} type="file" multiple style={{ display: 'none' }} onChange={onPickFiles} />
                   <button
                     onClick={() => fileInputRef.current && fileInputRef.current.click()}
@@ -2596,9 +4337,23 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
                     style={{ ...btnGhost, fontSize: 12, padding: '6px 10px' }}
                     title="Attach files (or drag onto the message area)"
                   >📎 Attach</button>
+                  <button
+                    onClick={() => setShowGifPicker(v => !v)}
+                    style={{ ...btnGhost, fontSize: 12, padding: '6px 10px' }}
+                    title="Search GIPHY"
+                  >🎬 GIF</button>
                   <span style={{ fontSize: 10, color: '#57534e' }}>
                     Files, photos, videos · HEIC auto-converts
                   </span>
+                  {showGifPicker && (
+                    <GifPickerPopover
+                      onSelect={(gif) => {
+                        setPendingAttachments(prev => [...prev, gif]);
+                        setShowGifPicker(false);
+                      }}
+                      onClose={() => setShowGifPicker(false)}
+                    />
+                  )}
                 </div>
                 <button
                   onClick={send}
@@ -3046,8 +4801,141 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
   );
 }
 
+// ─── GIF Picker (GIPHY) ─────────────────────────────────────────────
+// Per Nathan 2026-05-12: team chat needs a GIF button. Uses Nathan's
+// GIPHY developer API key (free tier). On select, the attachment is
+// added with `path: null` and a direct GIPHY CDN url. TeamAttachments
+// handles that case (use a.url directly instead of creating a signed
+// storage URL).
+//
+// Note: GIPHY API keys are client-side credentials by design (like
+// Google Maps keys) — they're embedded in app.js and visible to anyone
+// who views source on app.refundlocators.com. That's GIPHY's intended
+// usage. For extra safety, restrict the key to specific domains in
+// the GIPHY developer dashboard.
+const GIPHY_API_KEY = '0btoI3X8C1qh2m0JnpCHGSCxfcZ0Cet1';
+const GIPHY_SEARCH_URL = 'https://api.giphy.com/v1/gifs/search';
+const GIPHY_TRENDING_URL = 'https://api.giphy.com/v1/gifs/trending';
+
+function GifPickerPopover({ onSelect, onClose }) {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const inputRef = useRef(null);
+
+  // Auto-focus search input on mount.
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 50); }, []);
+
+  // Initial load: trending. Debounced search: 250ms.
+  useEffect(() => {
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setErr(null);
+      const url = query.trim()
+        ? `${GIPHY_SEARCH_URL}?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query.trim())}&limit=24&rating=pg-13`
+        : `${GIPHY_TRENDING_URL}?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`GIPHY HTTP ${resp.status}`);
+        const json = await resp.json();
+        if (!cancelled) setResults(json.data || []);
+      } catch (e) {
+        if (!cancelled) setErr(e.message || 'Failed to load GIFs');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, query.trim() ? 250 : 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [query]);
+
+  // Click-outside to close.
+  const popoverRef = useRef(null);
+  useEffect(() => {
+    const handler = (e) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target)) onClose();
+    };
+    setTimeout(() => document.addEventListener('mousedown', handler), 50);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
+
+  return (
+    <div ref={popoverRef} style={{
+      position: 'absolute', bottom: '100%', left: 0, marginBottom: 8,
+      width: 380, maxHeight: 460,
+      background: '#0c0a09', border: '1px solid #44403c', borderRadius: 10,
+      boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+      display: 'flex', flexDirection: 'column', zIndex: 1000,
+    }}>
+      <div style={{ padding: 10, borderBottom: '1px solid #292524', display: 'flex', gap: 6 }}>
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={e => setQuery(e.target.value)}
+          placeholder="Search GIPHY… (or browse trending)"
+          style={{
+            flex: 1, background: '#1c1917', color: '#fafaf9',
+            border: '1px solid #44403c', borderRadius: 6,
+            padding: '6px 10px', fontSize: 12, outline: 'none', fontFamily: 'inherit',
+          }}
+        />
+        <button onClick={onClose} title="Close"
+          style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '0 10px', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>×</button>
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+        {loading && results.length === 0 && (
+          <div style={{ padding: 30, textAlign: 'center', color: '#78716c', fontSize: 11 }}>Loading…</div>
+        )}
+        {err && (
+          <div style={{ padding: 12, color: '#fca5a5', fontSize: 11 }}>GIPHY error: {err}</div>
+        )}
+        {!loading && !err && results.length === 0 && (
+          <div style={{ padding: 30, textAlign: 'center', color: '#78716c', fontSize: 11 }}>
+            No GIFs found{query ? ` for "${query}"` : ''}.
+          </div>
+        )}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+          {results.map(g => {
+            const thumb = g.images?.fixed_height_small?.url || g.images?.fixed_height_downsampled?.url || g.images?.fixed_height?.url;
+            const full  = g.images?.fixed_height?.url || g.images?.original?.url;
+            return (
+              <button
+                key={g.id}
+                onClick={() => onSelect({
+                  path: null,
+                  name: (g.slug || g.id) + '.gif',
+                  size: 0,
+                  type: 'image/gif',
+                  url: full,
+                  source: 'giphy',
+                  giphy_id: g.id,
+                })}
+                title={g.title || g.slug || ''}
+                style={{
+                  background: '#1c1917', border: '1px solid #292524', borderRadius: 6,
+                  padding: 0, cursor: 'pointer', overflow: 'hidden',
+                  aspectRatio: '1 / 1', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                {thumb && <img src={thumb} alt={g.title || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ padding: '6px 10px', borderTop: '1px solid #292524', fontSize: 9, color: '#57534e', textAlign: 'center' }}>
+        Powered by GIPHY
+      </div>
+    </div>
+  );
+}
+
 // Renders attachments in a team_messages row. Re-signs URLs on render
 // (signed URLs in the DB would expire) so we always have fresh links.
+//
+// Attachments with `path: null` are external URLs (e.g. GIPHY GIFs sent
+// via the in-chat picker). For those we skip the storage signed-URL
+// flow and just use `a.url` directly when rendering.
 function TeamAttachments({ attachments, onLightbox }) {
   const [resolved, setResolved] = useState({});
   useEffect(() => {
@@ -3055,7 +4943,7 @@ function TeamAttachments({ attachments, onLightbox }) {
     (async () => {
       const out = {};
       await Promise.all(attachments.map(async (a) => {
-        if (!a.path) return;
+        if (!a.path) return;  // external (GIPHY etc.) — handled at render time via a.url
         const { data } = await sb.storage.from('team-chat').createSignedUrl(a.path, 3600);
         if (data?.signedUrl) out[a.path] = data.signedUrl;
       }));
@@ -3070,7 +4958,9 @@ function TeamAttachments({ attachments, onLightbox }) {
   return (
     <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
       {attachments.map((a, i) => {
-        const url = resolved[a.path];
+        // For storage-backed attachments, use the resolved signed URL.
+        // For external (GIPHY GIFs, etc.), use the URL stored in the DB directly.
+        const url = a.path ? resolved[a.path] : a.url;
         const isImage = /^image\//.test(a.type) || /\.(jpg|jpeg|png|webp|gif)$/i.test(a.name);
         const isVideo = /^video\//.test(a.type) || /\.(mp4|mov|m4v|webm)$/i.test(a.name);
         if (isImage) {
@@ -3227,10 +5117,11 @@ function GlobalTasksView({ deals, onJumpToDeal }) {
           <div key={t.id} style={{ marginBottom: 8, padding: "10px 14px", background: '#1c1917', border: '1px solid ' + (t.isOverdue ? '#7f1d1d' : '#292524'), borderLeft: '3px solid ' + (t.isOverdue ? '#ef4444' : d?.lead_tier === 'A' ? '#d8b560' : d?.is_30dts ? '#ef4444' : d?.lead_tier === 'B' ? '#8b5cf6' : '#44403c'), borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <input type="checkbox" checked={!!t.done} onChange={e => markDone(t, e.target.checked)} disabled={updating === t.id} style={{ flexShrink: 0 }} />
             <div style={{ flex: 1, minWidth: 200 }}>
-              <div style={{ fontSize: 13, color: t.done ? '#78716c' : '#fafaf9', textDecoration: t.done ? 'line-through' : 'none', marginBottom: 2 }}>{t.title}</div>
+              <div style={{ fontSize: 13, color: t.done ? '#78716c' : '#fafaf9', textDecoration: t.done ? 'line-through' : 'none', marginBottom: 2 }}>{t.title || t.label || '(untitled task)'}</div>
               <div style={{ fontSize: 10, color: '#78716c', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
                 {d && <span style={{ color: '#d6d3d1', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => onJumpToDeal(d.id)}>{(d.name || '').split(' - ')[0]}</span>}
                 {d && d.lead_tier && <TierBadge deal={d} />}
+                {d && <DeceasedBadge deal={d} size="sm" />}
                 {d && d.is_30dts && <DTSCountdown days={d.days_to_sale} />}
                 {t.assigned_to && <span style={{ color: '#a8a29e' }}>· {t.assigned_to}</span>}
                 {t.due_date && <span style={{ color: t.isOverdue ? '#ef4444' : '#a8a29e', fontFamily: "'DM Mono', monospace", fontWeight: t.isOverdue ? 700 : 400 }}>· {t.isOverdue ? 'OVERDUE ' : ''}due {new Date(t.due_date + 'T00:00:00').toLocaleDateString()}</span>}
@@ -3281,8 +5172,9 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
   const firstName = ((m.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there';
   const token = deal.refundlocators_token;
   const url = `https://refundlocators.com/s/${token}`;
-  const phone = m.homeownerPhone || m.phone || '';
+  const phone = dealMetaPhone(m) || '';
   const email = m.homeownerEmail || m.email || '';
+  const deceased = isDeceased(deal);
 
   const [smsBody, setSmsBody] = useState(`Hi ${firstName}, this is Nathan from RefundLocators. I put together a quick page on your case with the details: ${url}`);
   const [emailSubject, setEmailSubject] = useState(`Your RefundLocators case page`);
@@ -3329,6 +5221,11 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
 
   return (
     <Modal onClose={onClose} title="🔗 Send personalized link">
+      {deceased && (
+        <div style={{ marginBottom: 14, padding: '10px 14px', background: '#1a0e1f', border: '1px solid #5b21b6', borderRadius: 6, color: '#c4b5fd', fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>
+          🕊 <strong style={{ color: '#fafaf9' }}>Owner deceased.</strong> Send to estate / heirs only — never the homeowner directly. Confirm the recipient is a family member or representative before sending.
+        </div>
+      )}
       <div style={{ marginBottom: 14 }}>
         <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>The URL</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, fontFamily: "'DM Mono', monospace", fontSize: 12, color: '#fbbf24', overflow: 'hidden' }}>
@@ -3414,7 +5311,7 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
   const [phoneNumbers, setPhoneNumbers] = useState([]);
 
   const m = deal.meta || {};
-  const toNumber = m.homeownerPhone;
+  const toNumber = dealMetaPhone(m);
   const firstName = ((m.homeownerName || deal.name || '').split(' - ')[0].split(' ')[0]) || 'there';
   const ownerName = (m.homeownerName || deal.name || '').split(' - ')[0];
   const county = m.county || '';
@@ -3497,10 +5394,16 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
 
   return (
     <Modal onClose={onClose} title="💬 Send Intro Text" wide>
+      {isDeceased(deal) && (
+        <div style={{ marginBottom: 12, padding: '10px 14px', background: '#1a0e1f', border: '1px solid #5b21b6', borderRadius: 6, color: '#c4b5fd', fontSize: 12, fontWeight: 600, lineHeight: 1.5 }}>
+          🕊 <strong style={{ color: '#fafaf9' }}>Owner deceased.</strong> Outreach should go to estate / heirs only — never the homeowner directly. Confirm the recipient below is a family member or representative before sending.
+        </div>
+      )}
       <div style={{ marginBottom: 12, fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>
         Sending to <b style={{ color: '#fbbf24' }}>{ownerName || 'homeowner'}</b>
         {toNumber && <> at <span style={{ fontFamily: "'DM Mono', monospace", color: '#d6d3d1' }}>{toNumber}</span></>}
         {deal.lead_tier && <> · <TierBadge deal={deal} /></>}
+        <DeceasedBadge deal={deal} size="sm" />
         {deal.is_30dts && <> · <DTSCountdown days={deal.days_to_sale} /></>}
       </div>
 
@@ -3567,28 +5470,33 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
 // AutomationsQueue on Today / Outreach view, Nathan reviews + clicks
 // Send for each. After the first send, the cadence engine takes over
 // (Day 1 → Day 3 → Day 5 → weekly through Day 90).
-function BulkOutreachButton({ candidates }) {
+function BulkOutreachButton({ candidates, tiers = ['A', 'B'], tierLabel = 'A/B', requirePrepped = false }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const alive = useAliveRef();
 
-  const eligible = candidates.filter(d => (d.lead_tier === 'A' || d.lead_tier === 'B'));
-  const eligibleWithPhone = eligible.filter(d => d.meta?.homeownerPhone || d.meta?.phone);
+  const eligible = candidates.filter(d => {
+    if (!tiers.includes(d.lead_tier)) return false;
+    if (requirePrepped && !d.prepped_at) return false;
+    return true;
+  });
+  const eligibleWithPhone = eligible.filter(d => dealMetaPhone(d.meta));
 
   const handleClick = async () => {
     if (busy) return;
     if (eligibleWithPhone.length === 0) {
-      setResult({ type: 'info', text: 'No A/B-tier deals with a phone number in current view.' });
+      setResult({ type: 'info', text: `No ${tierLabel}-tier deals with a phone number in current view.` });
       return;
     }
-    if (!window.confirm(`Queue first-text outreach for ${eligibleWithPhone.length} A/B-tier deal${eligibleWithPhone.length === 1 ? '' : 's'}?\n\nEach gets one cadence_day=0 draft. You'll review + send each from the Outreach view. After you send, the cadence engine handles Day 1/3/5 + weekly drip automatically.`)) return;
+    const preppedNote = requirePrepped ? ' prepped' : '';
+    if (!window.confirm(`Queue first-text outreach for ${eligibleWithPhone.length}${preppedNote} ${tierLabel}-tier deal${eligibleWithPhone.length === 1 ? '' : 's'}?\n\nEach gets one cadence_day=0 draft. You'll review + send each from the Outreach view. After you send, the cadence engine handles Day 1/3/5 + weekly drip automatically.`)) return;
 
     setBusy(true); setResult(null);
     let queued = 0, skipped = 0, failed = 0;
     const reasons = { no_phone: 0, already_active: 0, dnd: 0, error: 0 };
 
     for (const d of eligible) {
-      const phone = d.meta?.homeownerPhone || d.meta?.phone;
+      const phone = dealMetaPhone(d.meta);
       if (!phone) { skipped++; reasons.no_phone++; continue; }
 
       try {
@@ -3647,7 +5555,7 @@ function BulkOutreachButton({ candidates }) {
       <button
         onClick={handleClick}
         disabled={busy}
-        title={`Queue first-text outreach for ${eligibleWithPhone.length} A/B-tier deal${eligibleWithPhone.length === 1 ? '' : 's'} with a phone number in current view`}
+        title={`Queue first-text outreach for ${eligibleWithPhone.length} ${tierLabel}-tier deal${eligibleWithPhone.length === 1 ? '' : 's'} with a phone number in current view`}
         style={{
           fontSize: 11, fontWeight: 700, padding: '6px 14px', borderRadius: 5,
           background: busy ? '#1c1917' : '#78350f',
@@ -3658,13 +5566,305 @@ function BulkOutreachButton({ candidates }) {
           fontFamily: 'inherit',
           whiteSpace: 'nowrap',
         }}>
-        {busy ? '⏳ Queuing…' : `🚀 Queue outreach · ${eligibleWithPhone.length} A/B`}
+        {busy ? '⏳ Queuing…' : `🚀 Queue outreach · ${eligibleWithPhone.length} ${tierLabel}`}
       </button>
     </div>
   );
 }
 
-function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
+// ─── Advanced Filters ──────────────────────────────────────────────
+// Per Nathan 2026-05-04 — GHL-style multi-field filter modal so the
+// pipeline / deal lists can be sliced by any combo of common fields.
+// Empty controls = no filter on that field. AND across all fields.
+//
+// v1 covers ~18 fields. Extensions tracked in PR description:
+//   - Operator picker per field (contains/equals/before/after/between)
+//   - Saved filter presets ("My A-tier surplus")
+//   - JOIN filters (e.g. "has docket event of type 'motion-distribution'")
+//   - OR / nested logic
+//   - Apply across other deal-list views, not just SalesPipeline
+
+const ADVANCED_FILTERS_DEFAULT = {
+  // Multi-select
+  status: [],
+  type: [],
+  source: [],
+  tags: [],  // free-form labels, populated dynamically from existing deals
+  // Text contains (case-insensitive)
+  county: '',
+  case_number: '',
+  address: '',
+  homeowner_name: '',
+  attorney: '',
+  // Number ranges (min / max)
+  surplus_estimate: { min: '', max: '' },
+  sale_price: { min: '', max: '' },
+  judgment_amount: { min: '', max: '' },
+  total_debt: { min: '', max: '' },
+  // Date ranges (from / to in YYYY-MM-DD)
+  sale_date: { from: '', to: '' },
+  confirmation_of_sale_date: { from: '', to: '' },
+  redemption_deadline: { from: '', to: '' },
+  // Boolean (any | yes | no)
+  is_30dts: 'any',
+  has_phone: 'any',
+  has_url: 'any',
+  has_attorney: 'any',
+  deceased: 'any',
+};
+
+function countActiveAdvancedFilters(f) {
+  if (!f) return 0;
+  let n = 0;
+  if (f.status?.length) n++;
+  if (f.type?.length) n++;
+  if (f.source?.length) n++;
+  if (f.tags?.length) n++;
+  if ((f.county || '').trim()) n++;
+  if ((f.case_number || '').trim()) n++;
+  if ((f.address || '').trim()) n++;
+  if ((f.homeowner_name || '').trim()) n++;
+  if ((f.attorney || '').trim()) n++;
+  if (f.surplus_estimate?.min !== '' || f.surplus_estimate?.max !== '') n++;
+  if (f.sale_price?.min !== '' || f.sale_price?.max !== '') n++;
+  if (f.judgment_amount?.min !== '' || f.judgment_amount?.max !== '') n++;
+  if (f.total_debt?.min !== '' || f.total_debt?.max !== '') n++;
+  if (f.sale_date?.from || f.sale_date?.to) n++;
+  if (f.confirmation_of_sale_date?.from || f.confirmation_of_sale_date?.to) n++;
+  if (f.redemption_deadline?.from || f.redemption_deadline?.to) n++;
+  if (f.is_30dts && f.is_30dts !== 'any') n++;
+  if (f.has_phone && f.has_phone !== 'any') n++;
+  if (f.has_url && f.has_url !== 'any') n++;
+  if (f.has_attorney && f.has_attorney !== 'any') n++;
+  if (f.deceased && f.deceased !== 'any') n++;
+  return n;
+}
+
+function applyAdvancedFilters(d, f) {
+  if (!f || countActiveAdvancedFilters(f) === 0) return true;
+  const m = d.meta || {};
+
+  // Multi-select
+  if (f.status?.length && !f.status.includes(d.status)) return false;
+  if (f.type?.length && !f.type.includes(d.type)) return false;
+  if (f.source?.length && !f.source.includes(m.source || '')) return false;
+  if (f.tags?.length) {
+    const dealTags = d.tags || [];
+    if (!f.tags.some(t => dealTags.includes(t))) return false; // ANY-of semantics
+  }
+
+  // Text contains
+  const matchText = (val, q) => !q || (val == null ? '' : String(val)).toLowerCase().includes(String(q).toLowerCase());
+  if (!matchText(m.county, f.county)) return false;
+  if (!matchText(m.courtCase || m.caseNumber || m.case_number, f.case_number)) return false;
+  if (!matchText(d.address, f.address)) return false;
+  if (!matchText(d.name, f.homeowner_name)) return false;
+  if (!matchText(m.attorney, f.attorney)) return false;
+
+  // Number ranges
+  const inNumRange = (v, r) => {
+    if (!r || (r.min === '' && r.max === '')) return true;
+    const n = Number(v);
+    if (Number.isNaN(n)) return false; // missing number rejected when range is set
+    if (r.min !== '' && n < Number(r.min)) return false;
+    if (r.max !== '' && n > Number(r.max)) return false;
+    return true;
+  };
+  if (!inNumRange(m.estimatedSurplus ?? m.estimated_surplus, f.surplus_estimate)) return false;
+  if (!inNumRange(m.salePrice ?? m.sale_price, f.sale_price)) return false;
+  if (!inNumRange(m.judgmentAmount ?? m.judgment_amount, f.judgment_amount)) return false;
+  if (!inNumRange(m.totalDebt ?? m.total_debt, f.total_debt)) return false;
+
+  // Date ranges (YYYY-MM-DD lexical compare works because format is sortable)
+  const inDateRange = (v, r) => {
+    if (!r || (!r.from && !r.to)) return true;
+    if (!v) return false;
+    const s = String(v).slice(0, 10);
+    if (r.from && s < r.from) return false;
+    if (r.to && s > r.to) return false;
+    return true;
+  };
+  if (!inDateRange(m.saleDate || m.sale_date, f.sale_date)) return false;
+  if (!inDateRange(m.confirmationOfSaleDate || m.confirmation_of_sale_date, f.confirmation_of_sale_date)) return false;
+  if (!inDateRange(m.redemptionDeadline || m.redemption_deadline, f.redemption_deadline)) return false;
+
+  // Booleans (any | yes | no)
+  const matchBool = (v, want) => {
+    if (!want || want === 'any') return true;
+    return want === 'yes' ? !!v : !v;
+  };
+  if (!matchBool(d.is_30dts, f.is_30dts)) return false;
+  if (!matchBool(dealMetaPhone(m), f.has_phone)) return false;
+  if (!matchBool(d.refundlocators_token, f.has_url)) return false;
+  if (!matchBool(m.attorney, f.has_attorney)) return false;
+  if (!matchBool(d.death_signal || m.deceased, f.deceased)) return false;
+
+  return true;
+}
+
+// Helpers for AdvancedFiltersModal — defined OUTSIDE the modal function
+// so that React doesn't see a fresh component identity per parent render
+// and remount the inputs (which yanks focus on every keystroke). Per
+// Nathan 2026-05-04: typing in the County / Case Number / Attorney
+// fields kicked focus after one letter — that's this exact bug.
+//
+// Each helper takes primitive value + onChange callbacks instead of
+// reaching into a `draft` closure so the modal stays the only place
+// holding state.
+function FilterSection({ label, children }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#a5731c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #292524' }}>{label}</div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>{children}</div>
+    </div>
+  );
+}
+function FilterField({ label, children, span2 }) {
+  return (
+    <div style={{ gridColumn: span2 ? 'span 2' : 'span 1' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.06em', textTransform: 'uppercase', marginBottom: 4 }}>{label}</div>
+      {children}
+    </div>
+  );
+}
+function FilterTextInput({ value, onChange, placeholder }) {
+  return <input type="text" value={value || ''} onChange={e => onChange(e.target.value)} placeholder={placeholder} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '100%' }} />;
+}
+function FilterNumRange({ min, max, onMinChange, onMaxChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input type="number" placeholder="min" value={min ?? ''} onChange={e => onMinChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+      <input type="number" placeholder="max" value={max ?? ''} onChange={e => onMaxChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+    </div>
+  );
+}
+function FilterDateRange({ from, to, onFromChange, onToChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      <input type="date" value={from || ''} onChange={e => onFromChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+      <input type="date" value={to || ''} onChange={e => onToChange(e.target.value)} style={{ ...inputStyle, fontSize: 12, padding: '5px 8px', width: '50%' }} />
+    </div>
+  );
+}
+function FilterTriBool({ value, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 4 }}>
+      {['any', 'yes', 'no'].map(opt => (
+        <button key={opt} onClick={() => onChange(opt)}
+          style={{
+            flex: 1, fontSize: 11, padding: '5px 8px', borderRadius: 4,
+            border: '1px solid ' + (value === opt ? '#d97706' : '#292524'),
+            background: value === opt ? '#78350f' : 'transparent',
+            color: value === opt ? '#fbbf24' : '#78716c',
+            cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
+          }}>{opt}</button>
+      ))}
+    </div>
+  );
+}
+function FilterMultiSelect({ values, onChange, options }) {
+  const arr = values || [];
+  const toggle = (opt) => {
+    const next = arr.includes(opt) ? arr.filter(x => x !== opt) : [...arr, opt];
+    onChange(next);
+  };
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {options.map(opt => {
+        const on = arr.includes(opt);
+        return (
+          <button key={opt} onClick={() => toggle(opt)}
+            style={{
+              fontSize: 10, padding: '4px 9px', borderRadius: 4,
+              border: '1px solid ' + (on ? '#d97706' : '#292524'),
+              background: on ? '#78350f' : 'transparent',
+              color: on ? '#fbbf24' : '#78716c',
+              cursor: 'pointer', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', fontFamily: 'inherit',
+            }}>{opt}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AdvancedFiltersModal({ value, onApply, onClose }) {
+  // Local draft so user can build up the filter set then commit on Apply.
+  const [draft, setDraft] = useState(value || ADVANCED_FILTERS_DEFAULT);
+
+  const set = (patch) => setDraft(d => ({ ...d, ...patch }));
+  const setRange = (key, sub, val) => setDraft(d => ({ ...d, [key]: { ...d[key], [sub]: val } }));
+  const reset = () => setDraft(ADVANCED_FILTERS_DEFAULT);
+
+  const ALL_STATUSES = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
+  const SOURCES = ['ghl-import', 'castle', 'dcc-manual', 'lead-intake', 'manual'];
+
+  // Tags are free-form — load every tag from the persistent
+  // tag_library so removing a tag from every deal doesn't drop it
+  // from the autocomplete list. Per Eric 2026-05-04. Sorted alpha.
+  const [tagOptions, setTagOptions] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('tag_library').select('name').order('name');
+      if (cancelled) return;
+      setTagOptions((data || []).map(r => r.name));
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const activeCount = countActiveAdvancedFilters(draft);
+
+  return (
+    <Modal onClose={onClose} title="🎚 Advanced filters" wide>
+      <FilterSection label="Classification">
+        <FilterField label="Status (any of)"><FilterMultiSelect values={draft.status} onChange={v => set({ status: v })} options={ALL_STATUSES} /></FilterField>
+        <FilterField label="Deal type (any of)"><FilterMultiSelect values={draft.type} onChange={v => set({ type: v })} options={['flip','surplus','wholesale','rental','other']} /></FilterField>
+        <FilterField label="Source (any of)"><FilterMultiSelect values={draft.source} onChange={v => set({ source: v })} options={SOURCES} /></FilterField>
+        <FilterField label="30 days to sale"><FilterTriBool value={draft.is_30dts} onChange={v => set({ is_30dts: v })} /></FilterField>
+        {tagOptions.length > 0 && (
+          <FilterField label="Tags (any of)" span2>
+            <FilterMultiSelect values={draft.tags} onChange={v => set({ tags: v })} options={tagOptions} />
+          </FilterField>
+        )}
+      </FilterSection>
+      <FilterSection label="Identity">
+        <FilterField label="Homeowner name (contains)"><FilterTextInput value={draft.homeowner_name} onChange={v => set({ homeowner_name: v })} placeholder="e.g. Phillips" /></FilterField>
+        <FilterField label="Property address (contains)"><FilterTextInput value={draft.address} onChange={v => set({ address: v })} placeholder="e.g. Main St" /></FilterField>
+        <FilterField label="County (contains)"><FilterTextInput value={draft.county} onChange={v => set({ county: v })} placeholder="e.g. Hamilton" /></FilterField>
+        <FilterField label="Case number (contains)"><FilterTextInput value={draft.case_number} onChange={v => set({ case_number: v })} placeholder="e.g. A2304" /></FilterField>
+        <FilterField label="Attorney (contains)"><FilterTextInput value={draft.attorney} onChange={v => set({ attorney: v })} placeholder="e.g. Kainiz" /></FilterField>
+        <FilterField label="Has assigned attorney"><FilterTriBool value={draft.has_attorney} onChange={v => set({ has_attorney: v })} /></FilterField>
+      </FilterSection>
+      <FilterSection label="Money (range)">
+        <FilterField label="Estimated surplus $"><FilterNumRange min={draft.surplus_estimate?.min} max={draft.surplus_estimate?.max} onMinChange={v => setRange('surplus_estimate', 'min', v)} onMaxChange={v => setRange('surplus_estimate', 'max', v)} /></FilterField>
+        <FilterField label="Sale price $"><FilterNumRange min={draft.sale_price?.min} max={draft.sale_price?.max} onMinChange={v => setRange('sale_price', 'min', v)} onMaxChange={v => setRange('sale_price', 'max', v)} /></FilterField>
+        <FilterField label="Judgment amount $"><FilterNumRange min={draft.judgment_amount?.min} max={draft.judgment_amount?.max} onMinChange={v => setRange('judgment_amount', 'min', v)} onMaxChange={v => setRange('judgment_amount', 'max', v)} /></FilterField>
+        <FilterField label="Total debt $"><FilterNumRange min={draft.total_debt?.min} max={draft.total_debt?.max} onMinChange={v => setRange('total_debt', 'min', v)} onMaxChange={v => setRange('total_debt', 'max', v)} /></FilterField>
+      </FilterSection>
+      <FilterSection label="Dates (range)">
+        <FilterField label="Sale date"><FilterDateRange from={draft.sale_date?.from} to={draft.sale_date?.to} onFromChange={v => setRange('sale_date', 'from', v)} onToChange={v => setRange('sale_date', 'to', v)} /></FilterField>
+        <FilterField label="Confirmation of sale"><FilterDateRange from={draft.confirmation_of_sale_date?.from} to={draft.confirmation_of_sale_date?.to} onFromChange={v => setRange('confirmation_of_sale_date', 'from', v)} onToChange={v => setRange('confirmation_of_sale_date', 'to', v)} /></FilterField>
+        <FilterField label="Redemption deadline"><FilterDateRange from={draft.redemption_deadline?.from} to={draft.redemption_deadline?.to} onFromChange={v => setRange('redemption_deadline', 'from', v)} onToChange={v => setRange('redemption_deadline', 'to', v)} /></FilterField>
+      </FilterSection>
+      <FilterSection label="Outreach readiness">
+        <FilterField label="Has phone"><FilterTriBool value={draft.has_phone} onChange={v => set({ has_phone: v })} /></FilterField>
+        <FilterField label="Has personalized URL"><FilterTriBool value={draft.has_url} onChange={v => set({ has_url: v })} /></FilterField>
+        <FilterField label="Homeowner deceased"><FilterTriBool value={draft.deceased} onChange={v => set({ deceased: v })} /></FilterField>
+      </FilterSection>
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: '1px solid #292524', paddingTop: 14, marginTop: 4, position: 'sticky', bottom: -24, background: '#1c1917', paddingBottom: 4 }}>
+        <button onClick={reset} style={{ ...btnGhost, fontSize: 11 }}>↺ Reset all</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: '#78716c' }}>{activeCount} active filter{activeCount === 1 ? '' : 's'}</span>
+          <button onClick={onClose} style={{ ...btnGhost, fontSize: 11 }}>Cancel</button>
+          <button onClick={() => { onApply(draft); onClose(); }} style={{ ...btnPrimary, fontSize: 11 }}>Apply</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function SalesPipeline({ deals, onSelect, onUpdateDeal, isAdmin }) {
   const [track, setTrack] = useState('surplus'); // 'surplus' | '30dts'
   const [tierFilter, setTierFilter] = useState({ A: true, B: true, C: true, other: true });
   const [countyFilter, setCountyFilter] = useState('');
@@ -3672,6 +5872,9 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   const [dragId, setDragId] = useState(null);
   const [dragOverStage, setDragOverStage] = useState(null);
   const [textingDeal, setTextingDeal] = useState(null);
+  const [advancedFilters, setAdvancedFilters] = useState(ADVANCED_FILTERS_DEFAULT);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  const advancedFilterCount = countActiveAdvancedFilters(advancedFilters);
 
   const stageField = track === 'surplus' ? 'sales_stage' : 'sales_stage_30dts';
   const stages = track === 'surplus' ? SURPLUS_STAGES : DTS_STAGES;
@@ -3679,8 +5882,16 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
   // Filter candidate deals for this track. A deal in the 30DTS track is
   // ANY deal with is_30dts=true regardless of sales_stage_30dts — so newly-
   // flagged ones land in "new" automatically via the seeding migration.
+  //
+  // Per Eric 2026-05-04 — flip deals don't belong on the SURPLUS pipeline
+  // (they have their own acquisition lifecycle: lead → under-contract →
+  // rehab → listing → closed, not the surplus stages). They were
+  // sneaking onto the kanban because they had sales_stage set, and
+  // since flips don't have a tier UI, they perpetually counted as
+  // "unscored" (e.g. sf-jennings-moa9iqzt + flip-mnys0fz1kh5r).
   const candidates = deals.filter(d => {
     if (['closed', 'dead', 'recovered'].includes(d.status)) return false;
+    if (d.type === 'flip') return false;
     if (track === '30dts') return d.is_30dts === true;
     // Surplus track excludes 30DTS deals to avoid duplication
     return d.is_30dts !== true && d.sales_stage != null;
@@ -3688,15 +5899,23 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
 
   const counties = [...new Set(candidates.map(d => d.meta?.county).filter(Boolean))].sort();
 
+  // Per Eric 2026-05-04 — if no tier pills are selected, treat that as
+  // "no tier constraint" rather than "exclude every tier". Tiers stack
+  // ON TOP OF the other filters; they shouldn't gate them. With every
+  // pill off, advanced filters / search / county still return matches
+  // across all tiers.
+  const anyTierSelected = Object.values(tierFilter).some(Boolean);
+
   const filtered = candidates.filter(d => {
     const tier = d.lead_tier || 'other';
-    if (!tierFilter[tier]) return false;
+    if (anyTierSelected && !tierFilter[tier]) return false;
     if (countyFilter && (d.meta?.county || '') !== countyFilter) return false;
     if (search) {
       const q = search.toLowerCase();
       const hay = [d.name, d.address, d.meta?.county, d.meta?.courtCase, d.id].filter(Boolean).join(' ').toLowerCase();
       if (!hay.includes(q)) return false;
     }
+    if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
   });
 
@@ -3824,9 +6043,44 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
             {counties.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name / address / case #" style={{ ...inputStyle, fontSize: 11, padding: '4px 10px', maxWidth: 260, background: '#0c0a09' }} />
+          <button
+            onClick={() => setShowAdvancedFilters(true)}
+            title={advancedFilterCount > 0 ? `${advancedFilterCount} advanced filter${advancedFilterCount === 1 ? '' : 's'} active — click to edit` : 'Filter by status, money, dates, attorney, phone presence, and more'}
+            style={{
+              fontSize: 11, padding: '4px 10px', borderRadius: 5,
+              border: '1px solid ' + (advancedFilterCount > 0 ? '#d97706' : '#44403c'),
+              background: advancedFilterCount > 0 ? '#78350f' : 'transparent',
+              color: advancedFilterCount > 0 ? '#fbbf24' : '#a8a29e',
+              fontWeight: 700, letterSpacing: '0.04em', cursor: 'pointer', fontFamily: 'inherit',
+              display: 'inline-flex', alignItems: 'center', gap: 6,
+            }}>
+            🎚 Filters{advancedFilterCount > 0 ? <span style={{ background: '#dc2626', color: '#fff', borderRadius: 8, padding: '0 6px', fontSize: 9, fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{advancedFilterCount}</span> : null}
+          </button>
+          {advancedFilterCount > 0 && (
+            <button onClick={() => setAdvancedFilters(ADVANCED_FILTERS_DEFAULT)}
+              title="Clear all advanced filters"
+              style={{ ...btnGhost, fontSize: 11, padding: '4px 8px', color: '#78716c' }}>↺</button>
+          )}
           <BulkOutreachButton candidates={filtered} />
+          {/* Admin-only C-tier batch — closes the "27 prepped C-tier sit
+              in Ready forever" gap surfaced by the 2026-05-08 audit.
+              Mark Prepped doesn't auto-queue C-tier (capacity rule), so
+              this lets admin batch-fire prepped C-tier when there's
+              capacity. requirePrepped=true so we never queue an
+              un-prepped C-tier by accident. */}
+          {isAdmin && (
+            <BulkOutreachButton candidates={filtered} tiers={['C']} tierLabel="C" requirePrepped={true} />
+          )}
         </div>
       </div>
+
+      {showAdvancedFilters && (
+        <AdvancedFiltersModal
+          value={advancedFilters}
+          onApply={setAdvancedFilters}
+          onClose={() => setShowAdvancedFilters(false)}
+        />
+      )}
 
       {/* Unassigned warning */}
       {unassigned.length > 0 && (
@@ -3882,11 +6136,12 @@ function SalesPipeline({ deals, onSelect, onUpdateDeal }) {
                           <DealCardName deal={d} />
                           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                             {d.is_30dts && <DTSCountdown days={d.days_to_sale} />}
+                            <DeceasedBadge deal={d} size="sm" />
                             <TierBadge deal={d} />
                           </div>
                         </div>
                         <div style={{ fontSize: 10, color: '#78716c', marginBottom: 6, lineHeight: 1.4 }}>
-                          {d.meta?.county && <>{d.meta.county} County</>}
+                          {d.meta?.county && <>{cleanCountyName(d.meta.county)} County</>}
                           {d.address && <> · <span title={d.address}>{(d.address.length > 40 ? d.address.slice(0, 40) + '…' : d.address)}</span></>}
                         </div>
                         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -4875,6 +7130,773 @@ function ForecastLoading() {
   return <div style={{ fontSize: 11, color: '#78716c', padding: 14 }}>Loading…</div>;
 }
 
+// ─── Relay Deal Detail Panel ─────────────────────────────────────
+// Slide-over panel shown when reviewing a lead before approving.
+// touch is the outreach_queue row (null when opened from enrollments table).
+// Fetches comms, docket, contacts, and files on mount.
+function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, supabase }) {
+  const [comms, setComms]       = React.useState(null)   // null = loading
+  const [docket, setDocket]     = React.useState(null)
+  const [contacts, setContacts] = React.useState(null)
+  const [docs, setDocs]         = React.useState(null)
+
+  React.useEffect(() => {
+    if (!deal?.id || !supabase) return
+    const id = deal.id
+
+    // Comms: last 15 SMS + last 10 calls, merged and sorted newest-first
+    Promise.all([
+      supabase.from('messages_outbound')
+        .select('id, direction, body, created_at, status')
+        .eq('deal_id', id)
+        .order('created_at', { ascending: false })
+        .limit(15),
+      supabase.from('call_logs')
+        .select('id, direction, status, started_at, duration_seconds, from_number, to_number')
+        .eq('deal_id', id)
+        .order('started_at', { ascending: false })
+        .limit(10),
+    ]).then(([smsRes, callRes]) => {
+      const sms   = (smsRes.data || []).map(m => ({ ...m, _type: 'sms',  _ts: m.created_at }))
+      const calls = (callRes.data || []).map(c => ({ ...c, _type: 'call', _ts: c.started_at }))
+      const merged = [...sms, ...calls].sort((a, b) => new Date(b._ts) - new Date(a._ts))
+      setComms(merged)
+    })
+
+    // Docket: last 3 events
+    supabase.from('docket_events')
+      .select('id, event_type, event_date, description, received_at')
+      .eq('deal_id', id)
+      .order('received_at', { ascending: false })
+      .limit(3)
+      .then(({ data }) => setDocket(data || []))
+
+    // Contacts/vendors
+    supabase.from('vendors')
+      .select('id, name, role, phone, email')
+      .eq('deal_id', id)
+      .order('created_at')
+      .then(({ data }) => setContacts(data || []))
+
+    // Documents
+    supabase.from('documents')
+      .select('id, name, path, size, created_at')
+      .eq('deal_id', id)
+      .order('created_at', { ascending: false })
+      .limit(20)
+      .then(({ data }) => setDocs(data || []))
+  }, [deal?.id])
+
+  if (!deal) return null
+
+  // Surplus display: actual verified > estimatedSurplus > estimatedAvailableEquity (pre-auction fallback)
+  const isPostAuction = deal.meta?.isPostAuction === true || deal.meta?.isPostAuction === 'true'
+  const salePrice     = deal.meta?.salePrice ? parseFloat(deal.meta.salePrice) : null
+  const rawSurplus    = deal.surplus_estimate
+    ? parseFloat(deal.surplus_estimate)
+    : deal.meta?.estimatedSurplus
+      ? parseInt(deal.meta.estimatedSurplus)
+      : null
+  const equity        = deal.meta?.estimatedAvailableEquity ? parseInt(deal.meta.estimatedAvailableEquity) : null
+
+  // What to show + label
+  const surplusValue = rawSurplus ?? equity
+  const surplusLabel = rawSurplus
+    ? (isPostAuction ? 'Surplus' : 'Est. Surplus')
+    : equity
+      ? 'Est. Available Equity'
+      : null
+  const surplus = surplusValue
+    ? surplusValue.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+    : null
+
+  const saleDate = deal.meta?.saleDate
+    ? new Date(deal.meta.saleDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null
+
+  const phone    = deal.meta?.homeownerPhone || ''
+  const county   = deal.meta?.county || ''
+  const caseNum  = deal.meta?.courtCase || ''
+  const attorney = deal.meta?.attorney || ''
+  const caseIntel = deal.meta?.case_intel_summary || null
+  const deceased = deal.meta?.deceased === 'true' || deal.meta?.deceased === true
+  const tierColors = { A: '#16a34a', B: '#d97706', C: '#64748b' }
+  const tierColor  = tierColors[deal.lead_tier] || '#64748b'
+  const displayName = deal.meta?.homeownerName || deal.name || deal.id
+
+  // Section header helper
+  const SectionHead = ({ label }) => (
+    <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.1em', marginTop: 20, marginBottom: 8, paddingBottom: 4, borderBottom: '1px solid #1e293b' }}>
+      {label}
+    </div>
+  )
+
+  const Row = ({ label, value, accent }) => value ? (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '7px 0', borderBottom: '1px solid #0f1929' }}>
+      <span style={{ fontSize: 12, color: '#64748b', minWidth: 110, flexShrink: 0 }}>{label}</span>
+      <span style={{ fontSize: 13, color: accent || '#e2e8f0', textAlign: 'right', fontWeight: accent ? 700 : 400 }}>{value}</span>
+    </div>
+  ) : null
+
+  function fmtTime(iso) {
+    if (!iso) return ''
+    const d = new Date(iso)
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
+
+  function fmtDuration(sec) {
+    if (!sec) return ''
+    const m = Math.floor(sec / 60), s = sec % 60
+    return m > 0 ? `${m}m ${s}s` : `${s}s`
+  }
+
+  async function openDoc(doc) {
+    if (!supabase) return
+    const { data } = await supabase.storage.from('deal-docs').createSignedUrl(doc.path, 3600)
+    if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  return (
+    <div style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 440, background: '#0a0f1e', borderLeft: '1px solid #1e293b', zIndex: 10001, display: 'flex', flexDirection: 'column', boxShadow: '-8px 0 40px rgba(0,0,0,0.6)' }}>
+
+      {/* Header */}
+      <div style={{ padding: '16px 20px 14px', borderBottom: '1px solid #1e293b', flexShrink: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5, flexWrap: 'wrap' }}>
+              {deal.lead_tier && (
+                <span style={{ fontSize: 10, fontWeight: 700, color: tierColor, background: tierColor + '22', padding: '2px 7px', borderRadius: 4 }}>
+                  Tier {deal.lead_tier}
+                </span>
+              )}
+              {deceased && <span style={{ fontSize: 10, color: '#94a3b8', background: '#1e293b', padding: '2px 7px', borderRadius: 4 }}>Deceased</span>}
+              <span style={{ fontSize: 10, color: '#475569', background: '#1e293b', padding: '2px 7px', borderRadius: 4, textTransform: 'uppercase' }}>{deal.status}</span>
+            </div>
+            {/* Name - clickable to open full deal */}
+            {onOpenDeal ? (
+              <button
+                onClick={() => { onOpenDeal(deal.id); onClose(); }}
+                style={{ background: 'none', border: 'none', padding: 0, fontSize: 17, fontWeight: 700, color: '#93c5fd', cursor: 'pointer', textAlign: 'left', lineHeight: 1.3, textDecoration: 'underline', textDecorationColor: '#1e4080' }}
+              >
+                {displayName}
+              </button>
+            ) : (
+              <div style={{ fontSize: 17, fontWeight: 700, color: '#f1f5f9', lineHeight: 1.3 }}>{displayName}</div>
+            )}
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>{deal.address}</div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: '2px 0 0 12px', flexShrink: 0 }}>✕</button>
+        </div>
+      </div>
+
+      {/* Scrollable body */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 24px' }}>
+
+        {/* Pending message - shown at top when reviewing */}
+        {touch && (
+          <div style={{ marginTop: 16, padding: '12px 14px', background: '#0d1f3c', border: '1px solid #1e4080', borderRadius: 8 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#d97706', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
+              Step {touch.relay_step_number} - Pending Message
+            </div>
+            <div style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.6, fontFamily: 'inherit' }}>
+              {touch.draft_body}
+            </div>
+            <div style={{ fontSize: 11, color: '#475569', marginTop: 6 }}>
+              Sending to: <span style={{ color: '#93c5fd' }}>{touch.contact_phone}</span>
+            </div>
+          </div>
+        )}
+
+        {/* Case snapshot */}
+        <SectionHead label="Case Details" />
+        {surplus && surplusLabel && <Row label={surplusLabel} value={surplus} accent={rawSurplus ? '#16a34a' : '#d97706'} />}
+        {salePrice && <Row label="Sale Price" value={salePrice.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })} accent="#93c5fd" />}
+        <Row label="Sale Date"    value={saleDate} />
+        <Row label="County"       value={county} />
+        <Row label="Case Number"  value={caseNum} />
+        <Row label="Phone"        value={phone} accent="#93c5fd" />
+        <Row label="Attorney"     value={attorney} />
+        {deal.meta?.judgmentAmount   && <Row label="Judgment"   value={'$' + parseInt(deal.meta.judgmentAmount).toLocaleString()} />}
+        {deal.meta?.minimumBidAmount && <Row label="Min Bid"    value={'$' + parseInt(deal.meta.minimumBidAmount).toLocaleString()} />}
+        {deal.meta?.totalDebt        && <Row label="Total Debt" value={'$' + parseInt(deal.meta.totalDebt).toLocaleString()} />}
+        {deal.days_to_sale != null   && <Row label="Days to Sale" value={deal.days_to_sale < 0 ? `${Math.abs(deal.days_to_sale)} days ago` : `${deal.days_to_sale} days away`} />}
+
+        {/* Case intelligence summary.
+            caseIntel is stored as a Claude response object — {text, generated_at,
+            input_tokens, output_tokens} — but older rows may have it as a plain
+            string. Render whichever form we got, never the bare object (that's
+            the React #31 crash). */}
+        {(() => {
+          const intelText = typeof caseIntel === 'string'
+            ? caseIntel
+            : (caseIntel?.text || '')
+          if (!intelText) return null
+          return (
+            <>
+              <SectionHead label="Case Intelligence" />
+              <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.65, background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '10px 12px', whiteSpace: 'pre-wrap' }}>
+                {intelText}
+              </div>
+            </>
+          )
+        })()}
+
+        {/* Communications */}
+        <SectionHead label={`Communications${comms ? ` (${comms.length})` : ''}`} />
+        {comms === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : comms.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No messages or calls on record</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {comms.map(item => item._type === 'sms' ? (
+              <div key={item.id} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 10, color: item.direction === 'inbound' ? '#34d399' : '#93c5fd', fontWeight: 700, minWidth: 44, paddingTop: 2 }}>
+                  {item.direction === 'inbound' ? 'IN' : 'OUT'}
+                </span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, color: '#e2e8f0', lineHeight: 1.5, wordBreak: 'break-word' }}>{item.body}</div>
+                  <div style={{ fontSize: 10, color: '#475569', marginTop: 2 }}>{fmtTime(item.created_at)}</div>
+                </div>
+              </div>
+            ) : (
+              <div key={item.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontSize: 10, color: '#a78bfa', fontWeight: 700, minWidth: 44 }}>
+                  {item.direction === 'inbound' ? '📞 IN' : '📞 OUT'}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <span style={{ fontSize: 12, color: item.status === 'completed' ? '#e2e8f0' : '#64748b' }}>
+                    {item.status}{item.duration_seconds ? ` - ${fmtDuration(item.duration_seconds)}` : ''}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#475569', marginLeft: 8 }}>{fmtTime(item._ts)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Docket */}
+        <SectionHead label="Docket (last 3)" />
+        {docket === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : docket.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No docket events</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {docket.map(ev => (
+              <div key={ev.id} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 6, padding: '8px 10px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 3 }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{ev.event_type?.replace(/_/g, ' ')}</span>
+                  <span style={{ fontSize: 10, color: '#475569' }}>{ev.event_date ? new Date(ev.event_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : fmtTime(ev.received_at)}</span>
+                </div>
+                {ev.description && <div style={{ fontSize: 12, color: '#cbd5e1', lineHeight: 1.5 }}>{ev.description}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Contacts */}
+        <SectionHead label="Contacts" />
+        {contacts === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : contacts.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No contacts on file</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {contacts.map(c => (
+              <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', padding: '6px 0', borderBottom: '1px solid #0f1929' }}>
+                <div>
+                  <span style={{ fontSize: 13, color: '#e2e8f0', fontWeight: 500 }}>{c.name}</span>
+                  {c.role && <span style={{ fontSize: 11, color: '#64748b', marginLeft: 8 }}>{c.role}</span>}
+                </div>
+                {c.phone && <span style={{ fontSize: 12, color: '#93c5fd', fontFamily: 'monospace' }}>{c.phone}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Files */}
+        <SectionHead label={`Files${docs ? ` (${docs.length})` : ''}`} />
+        {docs === null ? (
+          <div style={{ fontSize: 12, color: '#475569', padding: '8px 0' }}>Loading...</div>
+        ) : docs.length === 0 ? (
+          <div style={{ fontSize: 12, color: '#475569', fontStyle: 'italic', padding: '6px 0' }}>No files uploaded</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {docs.map(doc => (
+              <div key={doc.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #0f1929' }}>
+                <button
+                  onClick={() => openDoc(doc)}
+                  style={{ background: 'none', border: 'none', padding: 0, fontSize: 12, color: '#93c5fd', cursor: 'pointer', textAlign: 'left', textDecoration: 'underline', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {doc.name}
+                </button>
+                {doc.size && <span style={{ fontSize: 10, color: '#475569', flexShrink: 0, marginLeft: 8 }}>{(doc.size / 1024).toFixed(0)} KB</span>}
+              </div>
+            ))}
+          </div>
+        )}
+
+      </div>
+
+      {/* Action buttons */}
+      {touch && (
+        <div style={{ padding: '14px 20px', paddingBottom: 'max(80px, calc(64px + env(safe-area-inset-bottom, 0px)))', borderTop: '1px solid #1e293b', display: 'flex', gap: 10, flexShrink: 0 }}>
+          <button
+            onClick={() => { onApprove(touch.id); onClose(); }}
+            style={{ flex: 1, padding: '11px 0', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 8, cursor: 'pointer', fontSize: 15, fontWeight: 700 }}
+          >
+            Approve
+          </button>
+          <button
+            onClick={() => { onSkip(touch.id); onClose(); }}
+            style={{ padding: '11px 24px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 8, cursor: 'pointer', fontSize: 14 }}
+          >
+            Skip
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Relay View ──────────────────────────────────────────────────
+function RelayView({ supabase, onOpenDeal }) {
+  const [enrollments, setEnrollments] = React.useState([])
+  const [sequences, setSequences] = React.useState({})
+  const [pendingTouches, setPendingTouches] = React.useState([])
+  const [deals, setDeals] = React.useState({})
+  const [loading, setLoading] = React.useState(true)
+  const [scanning, setScanning] = React.useState(false)
+  const [scanResult, setScanResult] = React.useState(null)
+  const [reviewPanel, setReviewPanel] = React.useState(null) // { deal, touch|null }
+  // Per-touch coach note + regen state — keyed by touch.id.
+  // Coach notes are the actual training data; persisted to outreach_queue.coach_note
+  // by generate-outreach Edge Function so we can mine them later.
+  const [coachByTouch, setCoachByTouch] = React.useState({})
+  const [regenByTouch, setRegenByTouch] = React.useState({})
+  const [regenErrByTouch, setRegenErrByTouch] = React.useState({})
+
+  React.useEffect(() => {
+    loadData()
+  }, [])
+
+  async function loadData() {
+    setLoading(true)
+    try {
+      const [enrollRes, seqRes, pendingRes] = await Promise.all([
+        supabase.from('relay_enrollments').select('*').order('enrolled_at', { ascending: false }).limit(100),
+        supabase.from('relay_sequences').select('id, name'),
+        supabase.from('outreach_queue')
+          .select('*')
+          .not('relay_enrollment_id', 'is', null)
+          .eq('status', 'pending')
+          .order('scheduled_for', { ascending: true })
+          .limit(50),
+      ])
+
+      const enrollmentList = enrollRes.data || []
+      setEnrollments(enrollmentList)
+
+      const seqMap = {}
+      for (const s of (seqRes.data || [])) seqMap[s.id] = s.name
+      setSequences(seqMap)
+
+      const pending = pendingRes.data || []
+      setPendingTouches(pending)
+
+      const dealIds = [...new Set([
+        ...enrollmentList.map(e => e.deal_id).filter(Boolean),
+        ...pending.map(p => p.deal_id).filter(Boolean),
+      ])]
+      if (dealIds.length) {
+        const { data: dealRows } = await supabase.from('deals').select('id, name, address').in('id', dealIds)
+        const dealMap = {}
+        for (const d of (dealRows || [])) dealMap[d.id] = d
+        setDeals(dealMap)
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleApprove(queueId) {
+    await supabase.from('outreach_queue').update({ status: 'approved', updated_at: new Date().toISOString() }).eq('id', queueId)
+    setPendingTouches(prev => prev.filter(t => t.id !== queueId))
+  }
+
+  async function handleSkip(queueId) {
+    await supabase.from('outreach_queue').update({ status: 'cancelled', skipped_reason: 'manually skipped in Relay view', updated_at: new Date().toISOString() }).eq('id', queueId)
+    setPendingTouches(prev => prev.filter(t => t.id !== queueId))
+  }
+
+  async function handleRegenerate(touchId) {
+    const note = (coachByTouch[touchId] || '').trim()
+    if (!note) return
+    const touch = pendingTouches.find(t => t.id === touchId)
+    setRegenByTouch(prev => ({ ...prev, [touchId]: true }))
+    setRegenErrByTouch(prev => ({ ...prev, [touchId]: null }))
+    try {
+      const { data: sess } = await supabase.auth.getSession()
+      const token = sess?.session?.access_token
+      const r = await fetch(SUPABASE_URL + '/functions/v1/generate-outreach', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'apikey': SUPABASE_KEY,
+          'Authorization': 'Bearer ' + (token || SUPABASE_KEY),
+        },
+        body: JSON.stringify({ queue_id: touchId, coach_note: note }),
+      })
+      const j = await r.json()
+      if (!r.ok) throw new Error(j.error || 'Generation failed')
+      // Pull the fresh draft so the row updates in place.
+      const { data: fresh } = await supabase
+        .from('outreach_queue').select('*').eq('id', touchId).single()
+      if (fresh) {
+        setPendingTouches(prev => prev.map(t => t.id === touchId ? { ...t, ...fresh } : t))
+      }
+      // Durable training record — every coach note we use to regenerate is
+      // captured in agent_feedback too, with the previous draft for context.
+      logCoachNote({
+        note,
+        dealId: touch?.deal_id,
+        outreachQueueId: touchId,
+        previousDraft: touch?.draft_body,
+        newDraft: fresh?.draft_body,
+        surface: 'relay_view_regenerate',
+      })
+      // Clear the coach input so it's ready for a follow-up nudge.
+      setCoachByTouch(prev => ({ ...prev, [touchId]: '' }))
+    } catch (e) {
+      setRegenErrByTouch(prev => ({ ...prev, [touchId]: e.message || 'Regenerate failed' }))
+    } finally {
+      setRegenByTouch(prev => ({ ...prev, [touchId]: false }))
+    }
+  }
+
+  // Save a coach note without regenerating — for feedback that isn't about
+  // the message itself (e.g. "wrong tier — homeowner deceased", "this lead
+  // is bad in general", or any free-form training input).
+  async function handleLogCoachNote(touchId) {
+    const note = (coachByTouch[touchId] || '').trim()
+    if (!note) return
+    const touch = pendingTouches.find(t => t.id === touchId)
+    setRegenByTouch(prev => ({ ...prev, [touchId]: true }))
+    setRegenErrByTouch(prev => ({ ...prev, [touchId]: null }))
+    try {
+      await logCoachNote({
+        note,
+        dealId: touch?.deal_id,
+        outreachQueueId: touchId,
+        previousDraft: touch?.draft_body,
+        newDraft: null,
+        surface: 'relay_view_log_only',
+      })
+      setCoachByTouch(prev => ({ ...prev, [touchId]: '' }))
+    } catch (e) {
+      setRegenErrByTouch(prev => ({ ...prev, [touchId]: e.message || 'Log failed' }))
+    } finally {
+      setRegenByTouch(prev => ({ ...prev, [touchId]: false }))
+    }
+  }
+
+  // Shared coach-note writer — used by both regenerate and log-only paths.
+  async function logCoachNote({ note, dealId, outreachQueueId, previousDraft, newDraft, surface }) {
+    try {
+      const { data: authData } = await supabase.auth.getUser()
+      await supabase.from('agent_feedback').insert({
+        kind: 'coach',
+        deal_id: dealId || null,
+        outreach_queue_id: outreachQueueId || null,
+        user_id: authData?.user?.id || null,
+        signal: null,
+        reason: note,
+        suggested_correction: newDraft || null,
+        context: { previous_draft: previousDraft || null, surface },
+      })
+    } catch (e) {
+      // Best-effort — don't block the user flow on the training log.
+      console.warn('[coach] agent_feedback insert failed', e)
+    }
+  }
+
+  async function openReview(dealId, touch = null) {
+    // If we already have basic deal data, enrich it with full meta
+    const { data: fullDeal } = await supabase
+      .from('deals')
+      .select('id, name, address, status, lead_tier, type, surplus_estimate, days_to_sale, meta')
+      .eq('id', dealId)
+      .single()
+    if (fullDeal) setReviewPanel({ deal: fullDeal, touch })
+  }
+
+  async function handleScanNow() {
+    setScanning(true)
+    setScanResult(null)
+    try {
+      const { data, error } = await supabase.functions.invoke('relay-auto-enroll', {
+        method: 'POST',
+        body: {},
+      })
+      if (error) {
+        setScanResult({ ok: false, message: error.message || 'Scan failed' })
+      } else {
+        const pre = data?.preauction || {}
+        const sur = data?.surplus || {}
+        const total = (pre.enrolled || 0) + (sur.enrolled || 0)
+        const errs = data?.errors || 0
+        setScanResult({
+          ok: true,
+          message: total > 0
+            ? `Enrolled ${total} lead${total !== 1 ? 's' : ''} (${pre.enrolled || 0} pre-auction, ${sur.enrolled || 0} post-auction)${errs ? ` - ${errs} error${errs !== 1 ? 's' : ''}` : ''}`
+            : `Scan complete - no new eligible leads found${errs ? ` (${errs} error${errs !== 1 ? 's' : ''})` : ''}`,
+        })
+        if (total > 0) await loadData()
+      }
+    } catch (e) {
+      setScanResult({ ok: false, message: e.message || 'Scan failed' })
+    } finally {
+      setScanning(false)
+    }
+  }
+
+  const activeCount = enrollments.filter(e => e.status === 'active').length
+  const statusColors = {
+    active: '#16a34a',
+    paused: '#d97706',
+    completed: '#6b7280',
+    opted_out: '#dc2626',
+    undeliverable: '#dc2626',
+    manual_hold: '#d97706',
+  }
+
+  if (loading) return (
+    <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Loading Relay...</div>
+  )
+
+  return (
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
+
+      {/* Status bar */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#16a34a' }} />
+          <span style={{ fontWeight: 600, fontSize: 15, color: '#16a34a' }}>Running</span>
+        </div>
+        <div style={{ color: '#94a3b8', fontSize: 13 }}>
+          {enrollments.length} enrollments, {activeCount} active, {pendingTouches.length} pending approval
+          {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
+        </div>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {scanResult && (
+            <span style={{ fontSize: 12, color: scanResult.ok ? '#16a34a' : '#dc2626' }}>
+              {scanResult.message}
+            </span>
+          )}
+          <button
+            onClick={handleScanNow}
+            disabled={scanning}
+            style={{ padding: '6px 14px', background: scanning ? '#1e293b' : '#0f3460', color: scanning ? '#475569' : '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: scanning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
+          >
+            {scanning ? 'Scanning...' : 'Scan Now'}
+          </button>
+          <button
+            onClick={loadData}
+            style={{ padding: '6px 12px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {/* Pending approvals */}
+      <div style={{ marginBottom: 32 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+          Pending Approval ({pendingTouches.length})
+        </div>
+        {pendingTouches.length === 0 ? (
+          <div style={{ padding: '20px 16px', background: '#0f172a', borderRadius: 8, color: '#475569', fontSize: 14, textAlign: 'center' }}>
+            No messages waiting for approval
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {pendingTouches.map(touch => {
+              const deal = deals[touch.deal_id]
+              const scheduledDate = touch.scheduled_for ? new Date(touch.scheduled_for).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'now'
+              return (
+                <div key={touch.id} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 12, color: '#d97706', fontWeight: 600 }}>
+                        Step {touch.relay_step_number}
+                      </span>
+                      {deal && touch.deal_id && (
+                        <button
+                          onClick={() => onOpenDeal && onOpenDeal(touch.deal_id)}
+                          style={{ background: 'none', border: 'none', padding: '0 0 0 8px', fontSize: 12, color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline' }}
+                        >
+                          {deal.address || deal.name || touch.deal_id}
+                        </button>
+                      )}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#475569' }}>Scheduled {scheduledDate}</span>
+                  </div>
+                  <div
+                    onClick={() => touch.deal_id && onOpenDeal && onOpenDeal(touch.deal_id)}
+                    style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.5, marginBottom: 12, padding: '10px 12px', background: '#162032', borderRadius: 6, fontFamily: 'inherit', cursor: touch.deal_id ? 'pointer' : 'default' }}
+                    title={touch.deal_id ? 'Open deal' : undefined}
+                  >
+                    {touch.draft_body}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => touch.deal_id ? openReview(touch.deal_id, touch) : handleApprove(touch.id)}
+                      style={{ padding: '6px 16px', background: '#0f3460', color: '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                    >
+                      Quick Look
+                    </button>
+                    <button
+                      onClick={() => handleApprove(touch.id)}
+                      style={{ padding: '6px 16px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      onClick={() => handleSkip(touch.id)}
+                      style={{ padding: '6px 16px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+                    >
+                      Skip
+                    </button>
+                  </div>
+                  {/* Coach field — type anything: a correction for the message,
+                      a note on the lead tier ("wrong tier, homeowner deceased"),
+                      or general training input. Two save paths:
+                        ↺ Regenerate — regenerate the draft using the note + log it
+                        💾 Log — just log it (no regen), for non-message feedback
+                      Both write to agent_feedback (kind='coach') for training. */}
+                  {touch.deal_id && touch.draft_body && (() => {
+                    const note = (coachByTouch[touch.id] || '').trim()
+                    const busy = !!regenByTouch[touch.id]
+                    const enabled = !!note && !busy
+                    return (
+                      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <input
+                          type="text"
+                          value={coachByTouch[touch.id] || ''}
+                          onChange={e => setCoachByTouch(prev => ({ ...prev, [touch.id]: e.target.value }))}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && enabled) handleRegenerate(touch.id)
+                          }}
+                          disabled={busy}
+                          placeholder='Coach: about the message, the tier, the contact, anything…'
+                          style={{ flex: 1, minWidth: 200, background: '#0c0a09', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', padding: '7px 10px', fontSize: 12, outline: 'none' }}
+                        />
+                        <button
+                          onClick={() => handleRegenerate(touch.id)}
+                          disabled={!enabled}
+                          title="Regenerate draft using this note"
+                          style={{ padding: '7px 12px', background: enabled ? '#1e293b' : '#0f172a', border: '1px solid #334155', borderRadius: 6, color: enabled ? '#93c5fd' : '#475569', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          {busy ? 'Working…' : '↺ Regenerate'}
+                        </button>
+                        <button
+                          onClick={() => handleLogCoachNote(touch.id)}
+                          disabled={!enabled}
+                          title="Save note for training without regenerating"
+                          style={{ padding: '7px 12px', background: 'transparent', border: '1px solid #334155', borderRadius: 6, color: enabled ? '#cbd5e1' : '#475569', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          💾 Log
+                        </button>
+                      </div>
+                    )
+                  })()}
+                  {regenErrByTouch[touch.id] && (
+                    <div style={{ marginTop: 6, fontSize: 11, color: '#fca5a5' }}>⚠ {regenErrByTouch[touch.id]}</div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Enrollments table */}
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+          Enrollments ({enrollments.length})
+        </div>
+        {enrollments.length === 0 ? (
+          <div style={{ padding: '20px 16px', background: '#0f172a', borderRadius: 8, color: '#475569', fontSize: 14, textAlign: 'center' }}>
+            No enrollments yet
+          </div>
+        ) : (
+          <div style={{ background: '#0f172a', borderRadius: 8, overflow: 'hidden', border: '1px solid #1e293b' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #1e293b' }}>
+                  {['Phone', 'Deal', 'Sequence', 'Step', 'Status', 'Enrolled', ''].map(h => (
+                    <th key={h} style={{ padding: '10px 14px', textAlign: 'left', color: '#64748b', fontWeight: 500 }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {enrollments.map((e, i) => {
+                  const deal = deals[e.deal_id]
+                  const phone = e.contact_phone ? '****' + e.contact_phone.replace(/\D/g, '').slice(-4) : 'unknown'
+                  const enrolledDate = e.enrolled_at ? new Date(e.enrolled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : ''
+                  return (
+                    <tr
+                      key={e.id}
+                      style={{ borderBottom: i < enrollments.length - 1 ? '1px solid #1e293b' : 'none', cursor: e.deal_id ? 'pointer' : 'default' }}
+                      onClick={() => e.deal_id && onOpenDeal && onOpenDeal(e.deal_id)}
+                    >
+                      <td style={{ padding: '10px 14px', color: '#e2e8f0', fontFamily: 'monospace' }}>{phone}</td>
+                      <td style={{ padding: '10px 14px', color: '#93c5fd', maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {deal ? (deal.address || deal.name || e.deal_id) : (e.deal_id || 'manual')}
+                      </td>
+                      <td style={{ padding: '10px 14px', color: '#94a3b8' }}>{sequences[e.sequence_id] || e.sequence_id}</td>
+                      <td style={{ padding: '10px 14px', color: '#e2e8f0', textAlign: 'center' }}>{e.current_step}</td>
+                      <td style={{ padding: '10px 14px' }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: statusColors[e.status] || '#94a3b8', background: (statusColors[e.status] || '#94a3b8') + '22', padding: '2px 8px', borderRadius: 4, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                          {e.status}
+                        </span>
+                      </td>
+                      <td style={{ padding: '10px 14px', color: '#475569' }}>{enrolledDate}</td>
+                      <td style={{ padding: '10px 14px' }}>
+                        {e.deal_id && (
+                          <span style={{ fontSize: 11, color: '#475569' }}>View</span>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Deal review panel */}
+      {reviewPanel && (
+        <>
+          <div
+            onClick={() => setReviewPanel(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10000 }}
+          />
+          <RelayDealPanel
+            deal={reviewPanel.deal}
+            touch={reviewPanel.touch}
+            onApprove={handleApprove}
+            onSkip={handleSkip}
+            onClose={() => setReviewPanel(null)}
+            onOpenDeal={onOpenDeal}
+            supabase={supabase}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
 // ─── Outreach View ───────────────────────────────────────────────
 // Workspace for "today's drip + replies + escalations." Top-level nav.
 // Reuses Justin's AutomationsQueue (drafts ready to send) + a new
@@ -4955,6 +7977,257 @@ function OutreachView({ deals, onSelect }) {
 
       <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
         <b style={{ color: '#a8a29e' }}>How this hub works:</b> Drafts come from <code style={{ color: '#a8a29e' }}>outreach_queue</code> — Justin's AI auto-drafts the intro + each cadence-day follow-up the moment a deal is queued. You review + send. Replies surface from <code style={{ color: '#a8a29e' }}>messages_outbound</code> where direction='inbound' and read_by_team_at is null. Realtime — new replies pop in without refresh. Once Lauren intake-and-classify lands (Justin), some replies will auto-escalate or auto-draft responses for your review.
+      </div>
+    </div>
+  );
+}
+
+// ─── InboxView — unified cross-deal inbound feed ─────────────────────
+// Aggregates inbound SMS (messages_outbound), inbound calls (call_logs),
+// and inbound emails (emails) into a single chronological stream so
+// Nathan/Eric can see "what came in today" without bouncing between
+// Comms tabs deal-by-deal. Filters: all / sms / calls / email / unread.
+// Window: rolling 7 days (toggleable to 30). Click any row to open the
+// originating deal's Comms tab.
+function InboxView({ deals, onSelect }) {
+  const [items, setItems] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [days, setDays] = useState(7);
+  const alive = useAliveRef();
+
+  const load = React.useCallback(async () => {
+    if (!deals || deals.length === 0) { setItems([]); return; }
+    const ids = deals.map(d => d.id);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const [smsRes, callsRes, emailsRes] = await Promise.all([
+      sb.from('messages_outbound')
+        .select('id, deal_id, body, from_number, created_at, read_by_team_at')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(300),
+      sb.from('call_logs')
+        .select('id, deal_id, direction, status, started_at, duration_seconds, from_number, recording_url')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('started_at', since)
+        .order('started_at', { ascending: false })
+        .limit(200),
+      sb.from('emails')
+        .select('id, deal_id, subject, from_email, body_text, created_at')
+        .eq('direction', 'inbound')
+        .in('deal_id', ids)
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(200),
+    ]);
+
+    if (!alive.current) return;
+    const dealsById = Object.fromEntries(deals.map(d => [d.id, d]));
+
+    const sms = (smsRes.data || []).map(r => ({
+      kind: 'sms',
+      key: 'sms-' + r.id,
+      raw: r,
+      ts: r.created_at,
+      deal: dealsById[r.deal_id] || null,
+      sender: r.from_number || 'Unknown',
+      preview: r.body || '',
+      unread: !r.read_by_team_at,
+    }));
+    const calls = (callsRes.data || []).map(r => {
+      const dur = r.duration_seconds || 0;
+      const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : '';
+      const statusStr = r.status === 'missed' || r.status === 'no-answer'
+        ? 'Missed call'
+        : r.status === 'completed' && dur > 0
+          ? `Call · ${durStr}`
+          : `Call · ${r.status}`;
+      return {
+        kind: 'call',
+        key: 'call-' + r.id,
+        raw: r,
+        ts: r.started_at,
+        deal: dealsById[r.deal_id] || null,
+        sender: r.from_number || 'Unknown',
+        preview: statusStr + (r.recording_url ? ' · 🎙 recording' : ''),
+        unread: false,
+      };
+    });
+    const emails = (emailsRes.data || []).map(r => ({
+      kind: 'email',
+      key: 'email-' + r.id,
+      raw: r,
+      ts: r.created_at,
+      deal: dealsById[r.deal_id] || null,
+      sender: r.from_email || 'Unknown',
+      preview: r.subject || (r.body_text ? r.body_text.slice(0, 120) : '(no subject)'),
+      unread: false,
+    }));
+
+    const merged = [...sms, ...calls, ...emails].sort((a, b) =>
+      new Date(b.ts).getTime() - new Date(a.ts).getTime()
+    );
+    setItems(merged);
+  }, [deals, days, alive]);
+
+  const loadRef = useRef(load); loadRef.current = load;
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('inbox-view-feed')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, () => loadRef.current())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'emails' }, () => loadRef.current())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const markSmsSeen = async (id) => {
+    const { error } = await sb.from('messages_outbound')
+      .update({ read_by_team_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) { alert('Could not mark seen: ' + error.message); return; }
+    await load();
+  };
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm ago';
+    if (m < 1440) return (m / 60).toFixed(1) + 'h ago';
+    return Math.floor(m / 1440) + 'd ago';
+  };
+
+  const filtered = !items ? null : items.filter(i => {
+    if (filter === 'all') return true;
+    if (filter === 'unread') return i.unread;
+    return i.kind === filter;
+  });
+
+  const counts = !items ? { all: 0, sms: 0, call: 0, email: 0, unread: 0 } : {
+    all: items.length,
+    sms: items.filter(i => i.kind === 'sms').length,
+    call: items.filter(i => i.kind === 'call').length,
+    email: items.filter(i => i.kind === 'email').length,
+    unread: items.filter(i => i.unread).length,
+  };
+
+  const KIND_META = {
+    sms:   { icon: '📱', label: 'SMS',   stripe: '#3b82f6' },
+    call:  { icon: '☎',  label: 'Call',  stripe: '#10b981' },
+    email: { icon: '📧', label: 'Email', stripe: '#a78bfa' },
+  };
+
+  const ChipBtn = ({ id, label, count, color }) => (
+    <button onClick={() => setFilter(id)}
+      style={{
+        background: filter === id ? '#292524' : 'transparent',
+        color: filter === id ? '#fafaf9' : '#a8a29e',
+        border: filter === id ? `1px solid ${color || '#44403c'}` : '1px solid transparent',
+        padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+        cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6
+      }}>
+      {label}
+      <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{count}</span>
+    </button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 18 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          📬 Inbox
+          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· every inbound SMS, call &amp; email across every deal</span>
+        </h2>
+      </div>
+
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18, padding: 6, background: '#1c1917', border: '1px solid #292524', borderRadius: 8 }}>
+        <ChipBtn id="all"    label="All"    count={counts.all} />
+        <ChipBtn id="sms"    label="📱 SMS"    count={counts.sms} color="#3b82f6" />
+        <ChipBtn id="call"   label="☎ Calls"  count={counts.call} color="#10b981" />
+        <ChipBtn id="email"  label="📧 Email"  count={counts.email} color="#a78bfa" />
+        <ChipBtn id="unread" label="🔴 Unread" count={counts.unread} color="#ef4444" />
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700 }}>Window</span>
+          <button onClick={() => setDays(7)} style={{ background: days === 7 ? '#292524' : 'transparent', color: days === 7 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>7d</button>
+          <button onClick={() => setDays(30)} style={{ background: days === 30 ? '#292524' : 'transparent', color: days === 30 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>30d</button>
+        </div>
+      </div>
+
+      {filtered === null && (
+        <div style={{ fontSize: 12, color: '#78716c', padding: 18 }}>Loading inbox…</div>
+      )}
+      {filtered && filtered.length === 0 && (
+        <div style={{ fontSize: 12, color: '#78716c', padding: 24, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
+          {filter === 'all'
+            ? `No inbound activity in the last ${days} days. Replies, calls, and emails will appear here in real time.`
+            : `No ${filter === 'unread' ? 'unread items' : filter + ' items'} in the last ${days} days.`}
+        </div>
+      )}
+
+      {filtered && filtered.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {filtered.map(it => {
+            const meta = KIND_META[it.kind];
+            return (
+              <div key={it.key}
+                onClick={() => it.deal && onSelect && onSelect(it.deal.id)}
+                style={{
+                  background: '#0c0a09',
+                  border: '1px solid #292524',
+                  borderLeft: `3px solid ${meta.stripe}`,
+                  borderRadius: 7,
+                  padding: '10px 12px',
+                  cursor: it.deal ? 'pointer' : 'default',
+                  display: 'grid',
+                  gridTemplateColumns: '28px 1fr auto',
+                  gap: 10,
+                  alignItems: 'start',
+                }}>
+                <div style={{ fontSize: 18, lineHeight: 1, marginTop: 2 }}>{meta.icon}</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
+                      {it.deal?.name || '(unmatched)'}
+                    </span>
+                    {it.deal?.lead_tier && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.05em' }}>
+                        TIER {it.deal.lead_tier}
+                      </span>
+                    )}
+                    {it.unread && (
+                      <span style={{ fontSize: 9, fontWeight: 700, background: '#7f1d1d', color: '#fca5a5', padding: '1px 6px', borderRadius: 3, letterSpacing: '0.05em' }}>
+                        UNREAD
+                      </span>
+                    )}
+                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {it.sender}</span>
+                  </div>
+                  <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, fontStyle: it.kind === 'sms' ? 'italic' : 'normal', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                    {it.kind === 'sms' ? `"${it.preview}"` : it.preview}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                  <span style={{ fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>
+                    {fmtAge(it.ts)}
+                  </span>
+                  {it.kind === 'sms' && it.unread && (
+                    <button onClick={(e) => { e.stopPropagation(); markSmsSeen(it.raw.id); }}
+                      style={{ ...btnGhost, fontSize: 10, padding: '2px 7px', color: '#a8a29e' }}>
+                      Mark seen
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
+        <b style={{ color: '#a8a29e' }}>What's here:</b> Every inbound SMS (<code style={{ color: '#a8a29e' }}>messages_outbound</code> direction=inbound), inbound call (<code style={{ color: '#a8a29e' }}>call_logs</code> direction=inbound), and inbound email (<code style={{ color: '#a8a29e' }}>emails</code> direction=inbound) across every deal you can access, sorted newest first. Click any row to jump to that deal's Comms tab. Realtime — new inbound items pop in without refresh.
       </div>
     </div>
   );
@@ -5255,6 +8528,641 @@ async function mintPersonalizedLinkSlug(firstName, lastName) {
   return randomNanoid();
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// Comms / Conversation Analytics — admin-only
+//
+// Pulls from messages_outbound (SMS in/out), outreach_queue (drafts +
+// scheduled), personalized_link_views (engagement on /s/<token> pages),
+// personalized_links (link metadata + claim_submitted_at), and
+// lauren_conversations (web chat — usually empty until refundlocators.com
+// chat starts driving traffic).
+//
+// Two ways to read this view:
+//   1. KPI tiles — last 30d snapshot of activity + response + conversion
+//   2. Per-deal digest — which deals need follow-up vs are progressing
+// ─────────────────────────────────────────────────────────────────────
+function CommsAnalyticsView() {
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({});
+  const [perDeal, setPerDeal] = useState([]);
+  const [filter, setFilter] = useState("all"); // all | needs_followup | engaged | converted
+  const alive = useAliveRef();
+
+  const fmtCount = (n) => Number(n || 0).toLocaleString("en-US");
+  const fmtPct = (n, d) => d > 0 ? `${Math.round((n / d) * 100)}%` : "—";
+  const fmtRel = (iso) => {
+    if (!iso) return "—";
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.round(sec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const since30 = new Date(Date.now() - 30 * 86400_000).toISOString();
+    const since7  = new Date(Date.now() - 7  * 86400_000).toISOString();
+
+    // Run reads in parallel.
+    const [
+      outbound30,
+      inbound30,
+      pendingDrafts,
+      sent30,
+      linksTotal,
+      linksClaimed,
+      linkViewsExternal,
+      linkViewsDistinctVisitors,
+      laurenConvs30,
+      laurenConvsClaimed,
+      laurenConvsBySurface,
+    ] = await Promise.all([
+      sb.from("messages_outbound").select("id", { count: "exact", head: true })
+        .eq("direction", "outbound").gte("created_at", since30),
+      sb.from("messages_outbound").select("id", { count: "exact", head: true })
+        .eq("direction", "inbound").gte("created_at", since30),
+      sb.from("outreach_queue").select("id", { count: "exact", head: true })
+        .eq("status", "pending"),
+      sb.from("outreach_queue").select("id", { count: "exact", head: true })
+        .eq("status", "sent").gte("sent_at", since30),
+      sb.from("personalized_links").select("token", { count: "exact", head: true }),
+      sb.from("personalized_links").select("token", { count: "exact", head: true })
+        .not("claim_submitted_at", "is", null),
+      sb.from("personalized_link_views").select("id", { count: "exact", head: true })
+        .eq("is_team_view", false).gte("viewed_at", since30),
+      // distinct visitor_ids isn't a head:exact-friendly query; fetch + dedupe client-side
+      sb.from("personalized_link_views").select("visitor_id")
+        .eq("is_team_view", false).gte("viewed_at", since30).limit(2000),
+      sb.from("v_lauren_all_conversations").select("source_id", { count: "exact", head: true })
+        .gte("started_at", since30),
+      sb.from("v_lauren_all_conversations").select("source_id", { count: "exact", head: true })
+        .eq("submitted_claim", true).gte("started_at", since30),
+      // Break down conversations by surface for the tile sub-line.
+      sb.from("v_lauren_all_conversations")
+        .select("surface")
+        .gte("started_at", since30),
+    ]);
+
+    const distinctVisitors = (linkViewsDistinctVisitors.data || [])
+      .map((r) => r.visitor_id)
+      .filter(Boolean);
+    const distinctVisitorCount = new Set(distinctVisitors).size;
+
+    // Per-surface counts from v_lauren_all_conversations (unified view).
+    const surfaceCounts = (laurenConvsBySurface.data || []).reduce((acc, r) => {
+      acc[r.surface] = (acc[r.surface] || 0) + 1;
+      return acc;
+    }, {});
+
+    if (!alive.current) return;
+    setStats({
+      outbound_30d: outbound30.count || 0,
+      inbound_30d: inbound30.count || 0,
+      pending_drafts: pendingDrafts.count || 0,
+      sent_30d: sent30.count || 0,
+      links_total: linksTotal.count || 0,
+      links_claimed: linksClaimed.count || 0,
+      link_views_external_30d: linkViewsExternal.count || 0,
+      link_views_distinct_30d: distinctVisitorCount,
+      lauren_convs_30d: laurenConvs30.count || 0,
+      lauren_convs_claimed_30d: laurenConvsClaimed.count || 0,
+      lauren_convs_by_surface: surfaceCounts,
+    });
+
+    // Per-deal digest — for each deal with any outreach activity in the
+    // last 30 days, surface: last outbound, last inbound, sent count,
+    // pending draft? signed engagement?
+    const { data: dealRollup } = await sb.rpc("comms_per_deal_30d_rollup").maybeSingle();
+    // Fallback if the RPC doesn't exist: roll up client-side from raw rows.
+    let rolled = [];
+    if (dealRollup) {
+      rolled = Array.isArray(dealRollup) ? dealRollup : [];
+    } else {
+      // Client-side rollup. Pull last 30d of messages + queue rows + deal info.
+      const [{ data: msgs }, { data: queue }, { data: deals }] = await Promise.all([
+        sb.from("messages_outbound").select("deal_id, direction, body, created_at")
+          .gte("created_at", since30).limit(2000),
+        sb.from("outreach_queue").select("deal_id, status, sent_at, created_at, draft_body, channel")
+          .gte("created_at", since30).limit(2000),
+        sb.from("deals").select("id, name, status, type, meta").in("type", ["surplus","flip"]).limit(1000),
+      ]);
+      const dealMap = new Map((deals || []).map((d) => [d.id, d]));
+      const rollMap = new Map();
+      const upsert = (id) => {
+        if (!rollMap.has(id)) {
+          rollMap.set(id, {
+            deal_id: id,
+            outbound_count: 0,
+            inbound_count: 0,
+            last_outbound_at: null,
+            last_inbound_at: null,
+            pending_drafts: 0,
+            sent_count: 0,
+          });
+        }
+        return rollMap.get(id);
+      };
+      for (const m of msgs || []) {
+        if (!m.deal_id) continue;
+        const r = upsert(m.deal_id);
+        if (m.direction === "outbound") {
+          r.outbound_count += 1;
+          if (!r.last_outbound_at || m.created_at > r.last_outbound_at) r.last_outbound_at = m.created_at;
+        } else {
+          r.inbound_count += 1;
+          if (!r.last_inbound_at || m.created_at > r.last_inbound_at) r.last_inbound_at = m.created_at;
+        }
+      }
+      for (const q of queue || []) {
+        if (!q.deal_id) continue;
+        const r = upsert(q.deal_id);
+        if (q.status === "pending") r.pending_drafts += 1;
+        if (q.status === "sent") r.sent_count += 1;
+      }
+      rolled = Array.from(rollMap.values()).map((r) => {
+        const d = dealMap.get(r.deal_id);
+        return {
+          ...r,
+          deal_name: d?.name || r.deal_id,
+          deal_status: d?.status || "—",
+          deal_type: d?.type || "—",
+          county: d?.meta?.county || null,
+          surplus_estimated: d?.meta?.estimatedSurplus || null,
+          deceased: !!d?.meta?.deceased,
+          do_not_contact: !!d?.meta?.do_not_contact,
+        };
+      });
+    }
+    // Sort: pending drafts first (need attention), then deals with no
+    // recent inbound after outbound (need follow-up), then engaged.
+    rolled.sort((a, b) => {
+      const aFollow = a.last_outbound_at && (!a.last_inbound_at || a.last_inbound_at < a.last_outbound_at);
+      const bFollow = b.last_outbound_at && (!b.last_inbound_at || b.last_inbound_at < b.last_outbound_at);
+      if ((b.pending_drafts > 0) !== (a.pending_drafts > 0)) return b.pending_drafts - a.pending_drafts;
+      if (aFollow !== bFollow) return aFollow ? -1 : 1;
+      return (b.last_outbound_at || "").localeCompare(a.last_outbound_at || "");
+    });
+    setPerDeal(rolled);
+    setLoading(false);
+  }, [alive]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filteredDeals = perDeal.filter((d) => {
+    if (filter === "all") return true;
+    if (filter === "needs_followup") {
+      return d.last_outbound_at && (!d.last_inbound_at || d.last_inbound_at < d.last_outbound_at) && d.inbound_count === 0;
+    }
+    if (filter === "engaged") return d.inbound_count > 0;
+    if (filter === "pending_draft") return d.pending_drafts > 0;
+    return true;
+  });
+
+  const tile = (label, value, sub, color) => (
+    <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: color || "#fafaf9", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "#78716c", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fafaf9", margin: 0 }}>Comms analytics</h2>
+        <p style={{ marginTop: 4, marginBottom: 0, color: "#a8a29e", fontSize: 13 }}>
+          Last 30 days of outreach throughput, response funnel, link engagement, and per-deal status. Use the filter to surface deals needing follow-up.
+        </p>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#78716c" }}>Loading…</div>
+      ) : (
+        <>
+          {/* KPI tiles */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+            {tile("Outbound sent · 30d", fmtCount(stats.outbound_30d),
+              `${fmtCount(stats.sent_30d)} via outreach queue`)}
+            {tile("Inbound replies · 30d", fmtCount(stats.inbound_30d),
+              `${fmtPct(stats.inbound_30d, stats.outbound_30d)} response rate`,
+              stats.inbound_30d > 0 ? "#86efac" : null)}
+            {tile("Pending drafts", fmtCount(stats.pending_drafts),
+              `awaiting your review on Today`,
+              stats.pending_drafts > 0 ? "#fcd34d" : null)}
+            {tile("Lauren conversations · 30d", fmtCount(stats.lauren_convs_30d),
+              (() => {
+                const s = stats.lauren_convs_by_surface || {};
+                const parts = [
+                  s.website_homeowner ? `${s.website_homeowner} site` : null,
+                  s.edge_homeowner ? `${s.edge_homeowner} edge-home` : null,
+                  s.edge_internal ? `${s.edge_internal} internal` : null,
+                  s.team_thread ? `${s.team_thread} team` : null,
+                ].filter(Boolean);
+                return parts.length ? parts.join(" · ") : "across all surfaces";
+              })())}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 28 }}>
+            {tile("Personalized links", fmtCount(stats.links_total),
+              `${fmtCount(stats.links_claimed)} claimed lifetime · ${fmtPct(stats.links_claimed, stats.links_total)} conversion`)}
+            {tile("Link views · 30d (external)", fmtCount(stats.link_views_external_30d),
+              `${fmtCount(stats.link_views_distinct_30d)} distinct visitors`)}
+            {tile("Conversion rate", fmtPct(stats.lauren_convs_claimed_30d, stats.lauren_convs_30d),
+              `Lauren chats → claim, last 30d`)}
+            {tile("Echo ratio", fmtPct(stats.inbound_30d, stats.outbound_30d),
+              `inbound ÷ outbound (lower = colder)`,
+              stats.inbound_30d / Math.max(stats.outbound_30d, 1) >= 0.1 ? "#86efac" : "#fcd34d")}
+          </div>
+
+          {/* Per-deal digest */}
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: 12 }}>
+            <h3 style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", margin: 0, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+              Per-deal digest · {filteredDeals.length}
+            </h3>
+            <div style={{ display: "flex", gap: 4, background: "#0c0a09", border: "1px solid #292524", borderRadius: 6, padding: 3 }}>
+              {[
+                ["all", "All"],
+                ["needs_followup", "Needs follow-up"],
+                ["engaged", "Engaged"],
+                ["pending_draft", "Has draft pending"],
+              ].map(([k, label]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setFilter(k)}
+                  style={{
+                    background: filter === k ? "#1c1917" : "transparent",
+                    color: filter === k ? "#fafaf9" : "#78716c",
+                    border: "none",
+                    borderRadius: 4,
+                    padding: "5px 10px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ overflow: "hidden", borderRadius: 10, border: "1px solid #292524" }}>
+            <table style={{ width: "100%", fontSize: 13, borderCollapse: "collapse" }}>
+              <thead style={{ background: "#0c0a09", color: "#78716c", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Deal</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Status</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>Out</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>In</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Last out</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Last in</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>Drafts</th>
+                  <th style={{ textAlign: "right", padding: "10px 12px" }}>Surplus</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredDeals.length === 0 ? (
+                  <tr><td colSpan={9} style={{ padding: 30, textAlign: "center", color: "#78716c" }}>No deals match this filter.</td></tr>
+                ) : filteredDeals.slice(0, 200).map((d) => {
+                  const followNeeded = d.last_outbound_at && (!d.last_inbound_at || d.last_inbound_at < d.last_outbound_at) && d.inbound_count === 0;
+                  return (
+                    <tr key={d.deal_id} style={{ borderTop: "1px solid #1c1917" }}>
+                      <td style={{ padding: "8px 12px", color: "#fafaf9", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 }}>
+                        {d.deal_name}
+                        <div style={{ color: "#78716c", fontSize: 10 }}>{d.county || "—"}</div>
+                      </td>
+                      <td style={{ padding: "8px 12px", color: "#a8a29e", fontSize: 12 }}>{d.deal_status}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: "#d6d3d1", fontVariantNumeric: "tabular-nums" }}>{d.outbound_count}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: d.inbound_count > 0 ? "#86efac" : "#78716c", fontVariantNumeric: "tabular-nums" }}>{d.inbound_count}</td>
+                      <td style={{ padding: "8px 12px", color: "#a8a29e", fontSize: 12 }}>{fmtRel(d.last_outbound_at)}</td>
+                      <td style={{ padding: "8px 12px", color: d.inbound_count > 0 ? "#86efac" : "#78716c", fontSize: 12 }}>{fmtRel(d.last_inbound_at)}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: d.pending_drafts > 0 ? "#fcd34d" : "#78716c" }}>{d.pending_drafts || "—"}</td>
+                      <td style={{ padding: "8px 12px", textAlign: "right", color: "#d6d3d1", fontVariantNumeric: "tabular-nums" }}>
+                        {d.surplus_estimated ? `$${Math.round(Number(d.surplus_estimated) / 1000)}k` : "—"}
+                      </td>
+                      <td style={{ padding: "8px 12px", display: "flex", gap: 4, fontSize: 10 }}>
+                        {followNeeded && <span style={{ background: "#78350f30", color: "#fcd34d", padding: "2px 6px", borderRadius: 4 }}>follow-up</span>}
+                        {d.deceased && <span style={{ background: "#7f1d1d30", color: "#fca5a5", padding: "2px 6px", borderRadius: 4 }}>🕊️</span>}
+                        {d.do_not_contact && <span style={{ background: "#7f1d1d30", color: "#fca5a5", padding: "2px 6px", borderRadius: 4 }}>DNC</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// VA work queue review — Phase 3 of Lauren-on-top
+//
+// Admin-only view for reviewing actions that VA-audience Lauren has
+// queued (records-request, outreach-draft, case-flag). Pending rows
+// at the top with Approve / Reject buttons + optional reviewer note;
+// completed rows below in read-only form.
+//
+// Approval is a pure status flip today — no auto-execution. Owner
+// reviews the request, hits Approve, then performs the actual
+// records request / outreach drafting manually. The audit trail is
+// the queue row itself (who requested, when, what, reason; who
+// reviewed, when, note).
+// ─────────────────────────────────────────────────────────────────────
+function VaQueueView({ userId }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showHistory, setShowHistory] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [noteInputs, setNoteInputs] = useState({}); // queue_id → note text
+  const alive = useAliveRef();
+
+  const fmtRel = (iso) => {
+    if (!iso) return "—";
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return `${sec}s ago`;
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.round(sec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  };
+
+  const TOOL_LABELS = {
+    queue_records_request: "Records request",
+    queue_outreach_draft:  "Outreach draft",
+    queue_case_flag:       "Case flag",
+  };
+  const TOOL_ICONS = {
+    queue_records_request: "📂",
+    queue_outreach_draft:  "✉️",
+    queue_case_flag:       "🚩",
+  };
+
+  const STATUS_PILL = {
+    pending:   { label: "Pending",   bg: "#78350f30", color: "#fcd34d" },
+    approved:  { label: "Approved",  bg: "#065f4630", color: "#86efac" },
+    rejected:  { label: "Rejected",  bg: "#7f1d1d30", color: "#fca5a5" },
+    executed:  { label: "Executed",  bg: "#1e3a8a30", color: "#93c5fd" },
+    cancelled: { label: "Cancelled", bg: "#3f3f4630", color: "#a8a29e" },
+    failed:    { label: "Failed",    bg: "#7f1d1d30", color: "#fca5a5" },
+  };
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await sb
+      .from("va_work_queue")
+      .select("*, requester:requested_by_id(id, name, display_name), reviewer:reviewed_by_id(id, name, display_name)")
+      .order("status", { ascending: true })  // pending sorts before others alphabetically too
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (!alive.current) return;
+    if (error) {
+      console.error("va_work_queue load failed", error);
+      setRows([]);
+    } else {
+      setRows(data || []);
+    }
+    setLoading(false);
+  }, [alive]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setStatus = async (id, nextStatus) => {
+    setBusyId(id);
+    const note = (noteInputs[id] || "").trim() || null;
+    const { error } = await sb
+      .from("va_work_queue")
+      .update({
+        status: nextStatus,
+        reviewer_note: note,
+        reviewed_by_id: userId,
+        reviewed_at: new Date().toISOString(),
+      })
+      .eq("id", id);
+    if (error) {
+      alert(`Couldn't update: ${error.message}`);
+      setBusyId(null);
+      return;
+    }
+    if (alive.current) {
+      setNoteInputs((n) => { const next = { ...n }; delete next[id]; return next; });
+      await load();
+    }
+    setBusyId(null);
+  };
+
+  const pending = rows.filter((r) => r.status === "pending");
+  const completed = rows.filter((r) => r.status !== "pending");
+
+  const renderRow = (r, kind /* 'pending' | 'history' */) => {
+    const args = r.tool_args || {};
+    const name = TOOL_LABELS[r.tool_name] || r.tool_name;
+    const icon = TOOL_ICONS[r.tool_name] || "📌";
+    const reqName = r.requester?.display_name || r.requester?.name || "(unknown VA)";
+    const revName = r.reviewer?.display_name || r.reviewer?.name || null;
+    const pill = STATUS_PILL[r.status] || STATUS_PILL.pending;
+    return (
+      <div key={r.id} style={{
+        background: "#1c1917",
+        border: kind === "pending" ? "1px solid #d97706" : "1px solid #292524",
+        borderRadius: 10,
+        padding: 16,
+        marginBottom: 12,
+        opacity: kind === "pending" ? 1 : 0.85,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 18 }} aria-hidden>{icon}</span>
+          <span style={{ fontSize: 14, fontWeight: 600, color: "#fafaf9" }}>{name}</span>
+          <span style={{
+            background: pill.bg, color: pill.color,
+            padding: "2px 8px", borderRadius: 999,
+            fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
+          }}>{pill.label}</span>
+          <span style={{ marginLeft: "auto", fontSize: 11, color: "#78716c" }}>
+            {reqName} · {fmtRel(r.created_at)}
+          </span>
+        </div>
+
+        {r.reason && (
+          <div style={{
+            background: "#0c0a09",
+            border: "1px solid #292524",
+            borderRadius: 6,
+            padding: "10px 12px",
+            marginBottom: 8,
+            fontSize: 13,
+            color: "#d6d3d1",
+            lineHeight: 1.5,
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>VA's reason</div>
+            {r.reason}
+          </div>
+        )}
+
+        {Object.keys(args).length > 0 && (
+          <details style={{ marginBottom: 8 }}>
+            <summary style={{ cursor: "pointer", fontSize: 11, color: "#a8a29e", padding: "4px 0" }}>
+              Request details ({Object.keys(args).length} fields)
+            </summary>
+            <pre style={{
+              background: "#0c0a09",
+              border: "1px solid #292524",
+              borderRadius: 6,
+              padding: 10,
+              marginTop: 4,
+              fontSize: 11,
+              color: "#a8a29e",
+              fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
+              whiteSpace: "pre-wrap",
+              maxHeight: 200,
+              overflow: "auto",
+            }}>{JSON.stringify(args, null, 2)}</pre>
+          </details>
+        )}
+
+        {r.reviewer_note && (
+          <div style={{
+            fontSize: 12,
+            color: "#d6d3d1",
+            padding: "8px 0",
+            borderTop: "1px dashed #292524",
+            marginTop: 8,
+          }}>
+            <span style={{ fontWeight: 600 }}>{revName || "Reviewer"}</span>: {r.reviewer_note}
+            <span style={{ color: "#78716c", marginLeft: 8 }}>· {fmtRel(r.reviewed_at)}</span>
+          </div>
+        )}
+
+        {kind === "pending" && (
+          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
+            <input
+              type="text"
+              value={noteInputs[r.id] || ""}
+              onChange={(e) => setNoteInputs({ ...noteInputs, [r.id]: e.target.value })}
+              placeholder="Optional note for the VA…"
+              disabled={busyId === r.id}
+              style={{
+                flex: 1, minWidth: 200,
+                background: "#0c0a09",
+                border: "1px solid #44403c",
+                borderRadius: 6,
+                color: "#fafaf9",
+                padding: "8px 10px",
+                fontSize: 13,
+              }}
+            />
+            <button
+              type="button"
+              disabled={busyId === r.id}
+              onClick={() => setStatus(r.id, "approved")}
+              style={{
+                background: "#10b981",
+                color: "#0c0a09",
+                border: "none",
+                borderRadius: 6,
+                padding: "8px 14px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: busyId === r.id ? "default" : "pointer",
+                opacity: busyId === r.id ? 0.6 : 1,
+              }}
+            >
+              {busyId === r.id ? "…" : "Approve"}
+            </button>
+            <button
+              type="button"
+              disabled={busyId === r.id}
+              onClick={() => setStatus(r.id, "rejected")}
+              style={{
+                background: "transparent",
+                color: "#fca5a5",
+                border: "1px solid #7f1d1d",
+                borderRadius: 6,
+                padding: "8px 14px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: busyId === r.id ? "default" : "pointer",
+                opacity: busyId === r.id ? 0.6 : 1,
+              }}
+            >
+              Reject
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ marginBottom: 24 }}>
+        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fafaf9", margin: 0 }}>
+          VA Queue
+        </h2>
+        <p style={{ marginTop: 4, marginBottom: 0, color: "#a8a29e", fontSize: 13 }}>
+          Action requests from VA-audience Lauren. Approve to clear; manual execution still needed for now.
+        </p>
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: "#78716c" }}>Loading…</div>
+      ) : (
+        <>
+          {pending.length === 0 ? (
+            <div style={{
+              background: "#0c0a09",
+              border: "1px dashed #292524",
+              borderRadius: 10,
+              padding: 40,
+              textAlign: "center",
+              color: "#78716c",
+              fontSize: 14,
+              marginBottom: 20,
+            }}>
+              No pending requests. VAs queue actions through Lauren and they land here.
+            </div>
+          ) : (
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
+                Pending review · {pending.length}
+              </div>
+              {pending.map((r) => renderRow(r, "pending"))}
+            </div>
+          )}
+
+          {completed.length > 0 && (
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowHistory((s) => !s)}
+                style={{
+                  background: "transparent",
+                  border: "1px solid #292524",
+                  borderRadius: 6,
+                  color: "#a8a29e",
+                  padding: "6px 12px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  marginBottom: 12,
+                }}
+              >
+                {showHistory ? "▾" : "▸"} History · {completed.length}
+              </button>
+              {showHistory && completed.map((r) => renderRow(r, "history"))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // Manual entry form for ad-hoc personalized_links rows.
 // Token comes from mintPersonalizedLinkSlug() — name-based slug per
 // Nathan's 2026-04-28 call. source='dcc-manual', expires_at=+90d.
@@ -5514,7 +9422,7 @@ function EditLeadModal({ row, onClose, onSaved }) {
 // Cross-deal "messages_outbound where direction='inbound' and not yet
 // seen by the team." Oldest unread first. Click to jump to the deal's
 // Comms tab. Closes Castle's gap-analysis Tier 1 #2.
-function ReplyInbox({ onSelect, limit = 30 }) {
+function ReplyInbox({ onSelect, limit = 100 }) {
   const [rows, setRows] = useState(null);
   const alive = useAliveRef();
 
@@ -6826,7 +10734,7 @@ function useOutreachQueue() {
     if (ids.length === 0) return;
     const { data: dealRows } = await sb
       .from('deals')
-      .select('id, name, address, meta, lead_tier')
+      .select('id, name, address, meta, lead_tier, type, status, is_30dts')
       .in('id', ids);
     if (dealRows) {
       setDeals(prev => {
@@ -6890,11 +10798,148 @@ function btnStyle(variant) {
   return base;
 }
 
+// ─── Training-loop feedback widget — text drafts AND research grading ────────
+// Writes to public.agent_feedback (migration 20260513000000). Compact two-row
+// widget: signal buttons + reason capture on thumbs-down. Per Justin + Nathan
+// 2026-05-13 meeting — every AI surface that humans review should support
+// thumbs-up/down + structured "what it should have been" so we can train.
+//
+// Props:
+//   kind             — 'text_draft' or 'research_grade'
+//   label            — short string shown next to the buttons
+//   dealId           — required for both kinds
+//   outreachQueueId  — required for 'text_draft', null for 'research_grade'
+//   context          — jsonb snapshot (draft body, lead_tier at time, meta, etc.)
+//   suggestionPrompt — placeholder for the "should have been" textarea
+//   suggestionLabel  — label above the suggestion field
+function AgentFeedbackWidget({ kind, label, dealId, outreachQueueId, context, suggestionPrompt, suggestionLabel }) {
+  const [signal, setSignal]               = React.useState(null);   // 'up' | 'down' | null
+  const [submittedAt, setSubmittedAt]     = React.useState(null);
+  const [reason, setReason]               = React.useState('');
+  const [suggestion, setSuggestion]       = React.useState('');
+  const [submitting, setSubmitting]       = React.useState(false);
+  const [error, setError]                 = React.useState(null);
+
+  async function submit(nextSignal) {
+    if (submitting || submittedAt) return;
+    // Both signals open the inputs first — thumbs-up's notes are optional,
+    // thumbs-down's reason is required. Toggling on first click; the second
+    // click (from inside the inputs, via the "Log feedback" button) does the
+    // actual insert.
+    if (signal !== nextSignal) {
+      setSignal(nextSignal);
+      return;
+    }
+    // Thumbs-down can only be saved with a non-empty reason
+    if (nextSignal === 'down' && !reason.trim()) return;
+    setSubmitting(true); setError(null);
+    try {
+      const { data: authData } = await sb.auth.getUser();
+      const payload = {
+        kind,
+        deal_id: dealId,
+        outreach_queue_id: outreachQueueId || null,
+        user_id: authData?.user?.id || null,
+        signal: nextSignal,
+        reason: reason.trim() || null,
+        suggested_correction: suggestion.trim() || null,
+        context: context || null,
+      };
+      const { error: insErr } = await sb.from('agent_feedback').insert(payload);
+      if (insErr) throw new Error(insErr.message);
+      setSignal(nextSignal);
+      setSubmittedAt(new Date());
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  // Already submitted → render a quiet confirmation
+  if (submittedAt) {
+    return (
+      <div style={{ padding: '6px 14px', fontSize: 10, color: '#78716c', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ color: signal === 'up' ? '#6ee7b7' : '#fbbf24' }}>{signal === 'up' ? '👍' : '👎'}</span>
+        <span>{label} feedback logged · thanks</span>
+      </div>
+    );
+  }
+
+  const btnStyle = (kind, active) => ({
+    padding: '3px 8px',
+    background: active ? (kind === 'up' ? '#064e3b' : '#7f1d1d') : '#1c1917',
+    border: '1px solid ' + (active ? (kind === 'up' ? '#10b981' : '#dc2626') : '#44403c'),
+    borderRadius: 4,
+    color: active ? (kind === 'up' ? '#6ee7b7' : '#fca5a5') : '#a8a29e',
+    fontSize: 11,
+    cursor: 'pointer',
+    fontWeight: 600,
+  });
+
+  return (
+    <div style={{ padding: '6px 14px', borderTop: '1px solid #292524', background: '#161412' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 10, color: '#78716c', fontWeight: 600, letterSpacing: '0.04em' }}>{label}</span>
+        <button onClick={() => submit('up')} disabled={submitting} style={btnStyle('up', signal === 'up')} title="Looks right">👍</button>
+        <button onClick={() => submit('down')} disabled={submitting} style={btnStyle('down', signal === 'down')} title="Needs correction">👎</button>
+        {error && <span style={{ fontSize: 10, color: '#fca5a5' }}>⚠ {error}</span>}
+      </div>
+      {(signal === 'down' || signal === 'up') && !submittedAt && (
+        <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <input
+            type="text"
+            value={reason}
+            onChange={e => setReason(e.target.value)}
+            placeholder={signal === 'up'
+              ? 'What worked about this one? (optional)'
+              : "What's wrong with it?"}
+            style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '5px 8px', fontSize: 11, outline: 'none' }}
+          />
+          <input
+            type="text"
+            value={suggestion}
+            onChange={e => setSuggestion(e.target.value)}
+            placeholder={
+              signal === 'up'
+                ? 'Anything we should do more of? (optional)'
+                : (suggestionPrompt || (suggestionLabel ? suggestionLabel + ' (optional)' : 'What should it have been? (optional)'))
+            }
+            style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '5px 8px', fontSize: 11, outline: 'none' }}
+          />
+          <div style={{ display: 'flex', gap: 6 }}>
+            {(() => {
+              // Up: always enabled (notes are optional). Down: gated on reason.
+              const canSave = signal === 'up' || (signal === 'down' && reason.trim());
+              const accent = signal === 'up' ? '#10b981' : '#dc2626';
+              const accentBg = signal === 'up' ? '#064e3b' : '#7f1d1d';
+              const accentText = signal === 'up' ? '#6ee7b7' : '#fca5a5';
+              return (
+                <button
+                  onClick={() => submit(signal)}
+                  disabled={submitting || !canSave}
+                  style={{ padding: '4px 10px', background: canSave ? accentBg : '#1c1917', border: '1px solid ' + (canSave ? accent : '#44403c'), borderRadius: 4, color: canSave ? accentText : '#57534e', fontSize: 11, cursor: canSave ? 'pointer' : 'default', fontWeight: 600 }}>
+                  {submitting ? 'Saving…' : 'Log feedback'}
+                </button>
+              );
+            })()}
+            <button onClick={() => { setSignal(null); setReason(''); setSuggestion(''); }} style={{ padding: '4px 10px', background: 'transparent', border: '1px solid #44403c', borderRadius: 4, color: '#78716c', fontSize: 11, cursor: 'pointer' }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Full draft approval panel — lives inside Comms tab ───────────────────────
 function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const [coachNote, setCoachNote] = React.useState('');
   const [isGen, setIsGen]         = React.useState(false);
   const [isSend, setIsSend]       = React.useState(false);
+  const [isLogging, setIsLogging] = React.useState(false);
+  const [logToast, setLogToast]   = React.useState(null);
   const [editMode, setEditMode]   = React.useState(false);
   const sendingRef                = React.useRef(false);
   const [editBody, setEditBody]   = React.useState('');
@@ -6902,6 +10947,46 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const [phoneNums, setPhoneNums] = React.useState([]);
   const [error, setError]         = React.useState(null);
   const [sentInfo, setSentInfo]   = React.useState(null);
+
+  // Log a coach note to agent_feedback without regenerating — for non-message
+  // feedback like "wrong tier, person is deceased" or general training input.
+  async function logCoachNote(note, { regenerated = false, newDraft = null } = {}) {
+    if (!note || !item?.id) return;
+    try {
+      const { data: authData } = await sb.auth.getUser();
+      await sb.from('agent_feedback').insert({
+        kind: 'coach',
+        deal_id: item.deal_id || null,
+        outreach_queue_id: item.id,
+        user_id: authData?.user?.id || null,
+        signal: null,
+        reason: note,
+        suggested_correction: newDraft,
+        context: {
+          previous_draft: item?.draft_body || null,
+          cadence_day: item?.cadence_day ?? null,
+          lead_tier: deal?.lead_tier || null,
+          surface: regenerated ? 'comms_draft_panel_regenerate' : 'comms_draft_panel_log_only',
+        },
+      });
+    } catch (e) {
+      console.warn('[coach] agent_feedback insert failed', e);
+    }
+  }
+
+  async function handleLogFeedback() {
+    const note = coachNote.trim();
+    if (!note || isLogging || isGen) return;
+    setIsLogging(true);
+    try {
+      await logCoachNote(note, { regenerated: false });
+      setCoachNote('');
+      setLogToast('Logged');
+      setTimeout(() => setLogToast(null), 1800);
+    } finally {
+      setIsLogging(false);
+    }
+  }
 
   const meta      = deal?.meta || {};
   const firstName = ((meta.homeownerName || deal?.name || '').split(' - ')[0].split(' ')[0]) || 'them';
@@ -6933,6 +11018,11 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || 'Generation failed');
+      // Log the coach note alongside the regenerated draft so we have a
+      // permanent training record (previous draft → coach note → new draft).
+      if (note && note.trim()) {
+        logCoachNote(note.trim(), { regenerated: true, newDraft: j?.draft_body || null });
+      }
     } catch (e) { setError(e.message); } finally { setIsGen(false); }
   }
 
@@ -7099,25 +11189,42 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
         })()}
       </div>
 
-      {/* Coach note + regenerate */}
-      {!isLoading && (
-        <div style={{ padding: '0 14px 10px', display: 'flex', gap: 8 }}>
-          <input
-            type="text"
-            value={coachNote}
-            onChange={e => setCoachNote(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && coachNote.trim()) { callGenerate(coachNote); setCoachNote(''); } }}
-            placeholder='Coach: "make it shorter", "mention the auction date", "friendlier tone"…'
-            style={{ flex: 1, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#e7e5e4', padding: '7px 10px', fontSize: 12, outline: 'none' }}
-          />
-          <button
-            onClick={() => { if (coachNote.trim()) { callGenerate(coachNote); setCoachNote(''); } }}
-            disabled={!coachNote.trim() || isGen}
-            style={{ padding: '7px 12px', background: coachNote.trim() ? '#292524' : '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: coachNote.trim() ? '#e7e5e4' : '#57534e', fontSize: 12, cursor: coachNote.trim() ? 'pointer' : 'default', whiteSpace: 'nowrap' }}>
-            ↺ Regenerate
-          </button>
-        </div>
-      )}
+      {/* Coach field — type anything: a correction for the message, a note
+          on the lead tier ("wrong tier, homeowner deceased"), or general
+          training input. Two save paths:
+            ↺ Regenerate — regenerate the draft using the note + log it
+            💾 Log       — just log it for training (no regen) */}
+      {!isLoading && (() => {
+        const enabled = !!coachNote.trim() && !isGen && !isLogging;
+        return (
+          <div style={{ padding: '0 14px 10px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <input
+              type="text"
+              value={coachNote}
+              onChange={e => setCoachNote(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && enabled) { callGenerate(coachNote); setCoachNote(''); } }}
+              disabled={isGen || isLogging}
+              placeholder='Coach: about the message, the tier, the contact, anything…'
+              style={{ flex: 1, minWidth: 200, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#e7e5e4', padding: '7px 10px', fontSize: 12, outline: 'none' }}
+            />
+            <button
+              onClick={() => { if (enabled) { callGenerate(coachNote); setCoachNote(''); } }}
+              disabled={!enabled}
+              title="Regenerate the draft using this note"
+              style={{ padding: '7px 12px', background: enabled ? '#292524' : '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: enabled ? '#e7e5e4' : '#57534e', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+              {isGen ? 'Regenerating…' : '↺ Regenerate'}
+            </button>
+            <button
+              onClick={handleLogFeedback}
+              disabled={!enabled}
+              title="Save note for training without regenerating"
+              style={{ padding: '7px 12px', background: 'transparent', border: '1px solid #44403c', borderRadius: 6, color: enabled ? '#a8a29e' : '#57534e', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
+              {isLogging ? 'Saving…' : '💾 Log'}
+            </button>
+            {logToast && <span style={{ fontSize: 11, color: '#6ee7b7', alignSelf: 'center' }}>✓ {logToast}</span>}
+          </div>
+        );
+      })()}
 
       {error && <div style={{ padding: '0 14px 8px', fontSize: 12, color: '#fca5a5' }}>⚠ {error}</div>}
 
@@ -7143,6 +11250,13 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
           )}
         </div>
       )}
+
+      {/* All training signal is now captured through the coach field above —
+          message corrections, lead-tier feedback, contact notes ("deceased"),
+          general training input — all flow into agent_feedback with
+          kind='coach'. Combined with implicit signal from sent-as-is vs
+          edited vs skipped, that's enough to train without a separate
+          thumbs widget. */}
     </div>
   );
 }
@@ -7174,25 +11288,66 @@ function AutomationsQueue({ onSelectDeal }) {
   const firedRef = React.useRef(new Set());
   const cancelledRef = React.useRef(new Set());
 
-  // Per Nathan 2026-04-30: drafts for deals past lead phase shouldn't show
-  // (e.g. Kemper Ansel is FILED — Day 0 Intro language is wrong for him).
-  // Filter the visible list AND auto-cancel the underlying queue rows so
-  // they don't keep coming back on Today / Outreach for anyone.
+  // Phase 1 scope lock (Justin + Nathan, 2026-05-13 meeting):
+  // Auto-outreach fires ONLY on Verified A-tier surplus leads.
+  // Everything else gets auto-cancelled with a reason so the queue
+  // self-cleans and the team isn't reviewing drafts we shouldn't send.
+  //
+  // The verified flag is meta.walkerVerified — populated by intel-main's
+  // /api/cron/sync-deal-updates writeback (30-min cron, started 2026-05-13).
+  // If walkerVerified hasn't propagated to a deal yet, that row sits in
+  // 'queued' status until the next sync stamps it (or gets cancelled
+  // by the explicit-out-of-scope rules below).
+  //
+  // Out of Phase 1 (auto-cancel):
+  //   - past lead phase (already filed/etc.) → 'deal_past_lead_phase'
+  //   - not a surplus deal (flip/wholesale/rental) → 'phase1_not_surplus'
+  //   - 30-DTS pre-auction → 'phase1_pre_auction'
+  //   - tier B/C/D or unscored → 'phase1_not_a_tier'
+  //   - explicitly post-auction but walker_verified=false → 'phase1_unverified'
+  //
+  // Stays queued (waiting on sync):
+  //   - A-tier surplus, not 30-DTS, walkerVerified not yet set
+  //   - unknown deal (no row joined yet) — keep, don't touch
   const items = React.useMemo(() => {
+    function cancel(itemId, reason) {
+      if (cancelledRef.current.has(itemId)) return;
+      cancelledRef.current.add(itemId);
+      sb.from('outreach_queue')
+        .update({ status: 'cancelled', skipped_reason: reason })
+        .eq('id', itemId);
+    }
+
     return (rawItems || []).filter(item => {
       const d = deals[item.deal_id];
-      if (!d) return true;        // unknown deal — keep, don't cancel
-      if (isLeadStatus(d)) return true;
-      // Past lead phase → cancel once + hide
-      if (!cancelledRef.current.has(item.id)) {
-        cancelledRef.current.add(item.id);
-        sb.from('outreach_queue')
-          .update({ status: 'cancelled', skipped_reason: 'deal_past_lead_phase' })
-          .eq('id', item.id);
-      }
-      return false;
+      if (!d) return true;                       // unknown deal — keep
+      if (!isLeadStatus(d)) { cancel(item.id, 'deal_past_lead_phase'); return false; }
+
+      // Phase 1: surplus only
+      if (d.type && d.type !== 'surplus') { cancel(item.id, 'phase1_not_surplus'); return false; }
+
+      // Phase 1: not 30-DTS
+      if (d.is_30dts === true) { cancel(item.id, 'phase1_pre_auction'); return false; }
+
+      // Phase 1: A-tier only (no B/C/D, no unscored)
+      if (d.lead_tier !== 'A') { cancel(item.id, 'phase1_not_a_tier'); return false; }
+
+      // Phase 1: verified only. Walker-verified is the strict gate.
+      // If walkerVerified=false (explicit), cancel. If undefined, keep
+      // the row queued and wait for intel-main's next 30-min sync.
+      const m = d.meta || {};
+      if (m.walkerVerified === false) { cancel(item.id, 'phase1_unverified'); return false; }
+
+      return true;
     });
   }, [rawItems, deals]);
+
+  // Auto-fire generation only runs on items that pass the Phase 1 gate
+  // above (so we don't burn Claude tokens drafting texts for leads we
+  // wouldn't send). Items that fall through to 'unknown deal' or
+  // 'walkerVerified undefined' also pass — we draft optimistically and
+  // either the next sync confirms verified (draft was useful) or the
+  // sync stamps verified=false and the next render cancels.
 
   // Auto-fire generation for any 'queued' items the moment they appear in Today view
   React.useEffect(() => {
@@ -7225,9 +11380,14 @@ function AutomationsQueue({ onSelectDeal }) {
 
   return (
     <div style={{ marginBottom: 24 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 10, fontWeight: 700, color: '#d8b560', textTransform: 'uppercase', letterSpacing: '0.08em' }}>🤖 Automations</span>
         <span style={{ fontSize: 10, background: '#292524', color: '#d8b560', borderRadius: 10, padding: '1px 7px', fontWeight: 700 }}>{items.length}</span>
+        <span
+          title="Phase 1 scope (locked 2026-05-13): only A-tier verified surplus leads auto-draft. Out-of-scope rows in outreach_queue auto-cancel with skipped_reason."
+          style={{ fontSize: 9, background: '#1c1917', color: '#86efac', border: '1px solid #14532d', borderRadius: 10, padding: '1px 6px', fontWeight: 700, letterSpacing: '0.06em', cursor: 'help' }}>
+          PHASE 1 · A-TIER VERIFIED SURPLUS
+        </span>
         <span style={{ fontSize: 11, color: '#57534e', marginLeft: 2 }}>· tap a deal to review &amp; send</span>
       </div>
       {items.map(item => {
@@ -7356,6 +11516,80 @@ function EodReportsToday() {
 }
 
 // ─── Today View ────────────────────────────────────────────────────────────────
+// ─── Conversion Funnel ─────────────────────────────────────────────
+// Per Nathan 2026-05-04 — at-a-glance view of where deals are stuck
+// in the pipeline. Five cells: Prep → Ready → Texted (7d) →
+// Responded (7d) → Signed (7d). Each click navigates to the most
+// relevant view for that stage. Refreshes every 60s.
+function ConversionFunnel({ deals, setView }) {
+  const [counts, setCounts] = useState({ prep: 0, ready: 0, texted: 0, responded: 0, signed: 0 });
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const sevenDaysAgo = new Date(Date.now() - 7 * 86400 * 1000).toISOString();
+      const isLead = (d) => isLeadStatus(d);
+      const isOpen = (d) => !['closed', 'dead', 'recovered'].includes(d.status);
+      const prep = deals.filter(d => isLead(d) && !d.prepped_at && isOpen(d)).length;
+      const ready = deals.filter(d => isLead(d) && d.prepped_at && isOpen(d)).length;
+      const signed = deals.filter(d => d.status === 'signed' && d.updated_at && d.updated_at > sevenDaysAgo).length;
+      const [textedRes, respondedRes] = await Promise.all([
+        sb.from('outreach_queue').select('id', { count: 'exact', head: true })
+          .eq('status', 'sent').eq('cadence_day', 0).gt('sent_at', sevenDaysAgo),
+        sb.from('messages_outbound').select('id', { count: 'exact', head: true })
+          .eq('direction', 'inbound').gt('created_at', sevenDaysAgo),
+      ]);
+      if (cancelled) return;
+      setCounts({
+        prep, ready, signed,
+        texted: textedRes.count || 0,
+        responded: respondedRes.count || 0,
+      });
+    };
+    load();
+    const iv = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [deals]);
+
+  const Cell = ({ icon, label, count, onClick, color }) => (
+    <button onClick={onClick}
+      title={`${label} — click to open the relevant view`}
+      style={{
+        flex: 1, minWidth: 0,
+        background: '#1c1917', border: '1px solid ' + color,
+        borderRadius: 8, padding: '10px 8px',
+        cursor: 'pointer', fontFamily: 'inherit',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+      }}>
+      <div style={{ fontSize: 14 }}>{icon}</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1.2 }}>{count}</div>
+      <div style={{ fontSize: 9, fontWeight: 700, color: '#a8a29e', letterSpacing: '0.06em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>{label}</div>
+    </button>
+  );
+  const Arrow = () => (
+    <span style={{ alignSelf: 'center', color: '#44403c', fontSize: 18, padding: '0 2px' }}>→</span>
+  );
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <div style={{ fontSize: 9, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>
+        Pipeline funnel
+      </div>
+      <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+        <Cell icon="📥" label="Prep" count={counts.prep} onClick={() => setView && setView('today')} color="#3b82f6" />
+        <Arrow />
+        <Cell icon="✅" label="Ready" count={counts.ready} onClick={() => setView && setView('pipeline')} color="#06b6d4" />
+        <Arrow />
+        <Cell icon="💬" label="Texted · 7d" count={counts.texted} onClick={() => setView && setView('outreach')} color="#d97706" />
+        <Arrow />
+        <Cell icon="📞" label="Responded · 7d" count={counts.responded} onClick={() => setView && setView('outreach')} color="#10b981" />
+        <Arrow />
+        <Cell icon="✍" label="Signed · 7d" count={counts.signed} onClick={() => setView && setView('active')} color="#f59e0b" />
+      </div>
+    </div>
+  );
+}
+
 function TodayView({ deals, onSelect, isAdmin, setView }) {
   const now = new Date();
   const year = now.getFullYear();
@@ -7412,7 +11646,124 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
     return last && daysSince(last) > 5;
   });
 
-  const hasAny = urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
+  // Per Nathan 2026-05-04 — Prep Queue: leads that landed in DCC but
+  // haven't been prepped yet (phone confirmed, contacts labeled, tier
+  // set, surplus est verified, personalized URL minted). prepped_at
+  // is NULL until Eric clicks "Mark prepped" on the row.
+  // Optimistic-removal set. When the user clicks "Mark prepped" on a
+  // row, we drop it from the visible queue immediately rather than
+  // waiting for the realtime sub on `deals` to fire loadDeals — that
+  // round-trip can be ~500ms-2s and Nathan flagged the lag (2026-05-04).
+  // After 5s we clear the local set; by then realtime has caught up
+  // and the deal naturally falls out via prepped_at being non-null.
+  const [recentlyPrepped, setRecentlyPrepped] = useState(new Set());
+  const [prepQueueExpanded, setPrepQueueExpanded] = useState(false);
+  const PREP_QUEUE_COLLAPSED_LIMIT = 3;
+
+  const prepQueueAll = deals
+    .filter(d => isLeadStatus(d) && !d.prepped_at && !["closed", "dead", "recovered"].includes(d.status))
+    .filter(d => !recentlyPrepped.has(d.id))
+    .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  // What's shown depends on the collapse state. Default = first 3.
+  const prepQueueVisible = prepQueueExpanded
+    ? prepQueueAll
+    : prepQueueAll.slice(0, PREP_QUEUE_COLLAPSED_LIMIT);
+
+  // What this deal is missing relative to "ready for outreach". Eric
+  // sees this as a dim line under each prep-queue row.
+  //
+  // History (all 2026-05-13):
+  //   - 89ee41c: drop URL + surplus est for is_30dts/future-saleDate
+  //     pre-auction leads. Worked for 30DTS.
+  //   - 8874b12: broadened to inferred pre-sale (no cosDate/flags/
+  //     salePrice → pre-sale). Caught NOD too. Worked briefly.
+  //   - c5cc467: Justin's DTMF feat committed off a stale src/app.jsx
+  //     and accidentally reverted both fixes. Both regressed.
+  //   - THIS rev: re-apply, but drop salePrice from the post-sale
+  //     signal entirely. intel-main's sale_price writeback cron
+  //     (shipped same day in b01d74c) populates salePrice on
+  //     scheduled-but-unsold leads, so it's not a reliable "sold"
+  //     signal anymore. Trust only cosDate / explicit isPostAuction
+  //     flag — same canonical signal DealStatusBadges uses (line
+  //     ~3167).
+  //
+  // Net: pre-sale leads (NOD, 30DTS, scheduled, unclassified) only
+  // need phone/tier/county/case#. URL + surplus est are gated on a
+  // confirmed-sold signal (cosDate or explicit isPostAuction flag).
+  const prepMissing = (d) => {
+    const m = d.meta || {};
+    const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
+    const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
+
+    const missing = [];
+    if (!dealMetaPhone(m)) missing.push('phone');
+    if (!d.lead_tier) missing.push('tier');
+    if (!m.county) missing.push('county');
+    if (!m.courtCase) missing.push('case #');
+    if (isPostSale) {
+      if (!d.refundlocators_token) missing.push('URL');
+      if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
+    }
+    return missing;
+  };
+
+  const markPrepped = async (dealId) => {
+    // Optimistic: pull it out of the visible queue immediately.
+    setRecentlyPrepped(prev => { const n = new Set(prev); n.add(dealId); return n; });
+    const { error } = await sb.from('deals').update({ prepped_at: new Date().toISOString() }).eq('id', dealId);
+    if (error) {
+      // Roll back the optimistic removal if the write failed.
+      setRecentlyPrepped(prev => { const n = new Set(prev); n.delete(dealId); return n; });
+      alert('Could not mark prepped: ' + error.message);
+      return;
+    }
+
+    // Auto-queue Day-0 outreach for tier-A/B deals — closes the prep →
+    // outreach loop per Nathan 2026-05-04. Mirrors BulkOutreachButton's
+    // gating: tier A/B, has phone, status not closed/dead/recovered, no
+    // existing active outreach_queue row, phone not on a DND contact.
+    // Anything that fails the check just doesn't queue — Mark Prepped
+    // still succeeded, the deal just stays in "ready" state for manual
+    // queueing via the Pipeline Queue Outreach button.
+    try {
+      const deal = deals.find(d => d.id === dealId);
+      if (!deal) return;
+      const tier = deal.lead_tier;
+      if (tier !== 'A' && tier !== 'B') return;
+      if (['closed', 'dead', 'recovered'].includes(deal.status)) return;
+      const phone = dealMetaPhone(deal.meta);
+      if (!phone) return;
+      const { data: dnc } = await sb.from('contacts')
+        .select('id').eq('phone', phone).eq('do_not_text', true).limit(1).maybeSingle();
+      if (dnc) return;
+      const { data: existing } = await sb.from('outreach_queue')
+        .select('id').eq('deal_id', dealId)
+        .not('status', 'in', '(skipped,cancelled,failed,sent)')
+        .limit(1).maybeSingle();
+      if (existing) return;
+      await sb.from('outreach_queue').insert({
+        deal_id: dealId,
+        contact_phone: phone,
+        cadence_day: 0,
+        status: 'queued',
+        scheduled_for: new Date().toISOString(),
+      });
+    } catch (e) {
+      // Auto-queue is best-effort — don't break Mark Prepped if the
+      // queue insert errors. Nathan can still hit Bulk Queue manually.
+      console.error('[markPrepped auto-queue]', e);
+    }
+
+    // Clear the optimistic flag after a few seconds — by then realtime
+    // sub has fired loadDeals() and the deal's prepped_at is non-null,
+    // so it naturally drops out of prepQueueAll on its own.
+    setTimeout(() => {
+      setRecentlyPrepped(prev => { const n = new Set(prev); n.delete(dealId); return n; });
+    }, 5000);
+  };
+
+  const hasAny = prepQueueAll.length + urgent.length + stale.length + bonusesOwed.length + unfiledSurplus.length > 0;
 
   const Row = ({ deal, right, tone }) => {
     const m = deal.meta || {};
@@ -7441,6 +11792,9 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
         <PortfolioStat onClick={() => setView && setView("active")}  label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
       </div>
 
+      {/* Conversion funnel — Prep → Ready → Texted → Responded → Signed */}
+      <ConversionFunnel deals={deals} setView={setView} />
+
       {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
       <AutomationsQueue onSelectDeal={onSelect} />
 
@@ -7453,6 +11807,77 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       {!hasAny && (
         <div style={{ textAlign: "center", padding: 60, color: "#78716c", border: "1px dashed #292524", borderRadius: 10 }}>
           Nothing urgent. Go make some money.
+        </div>
+      )}
+
+      {/* Prep queue — new leads that haven't been worked yet. Each row
+          shows what's missing (phone / tier / URL / etc.) so Eric can
+          see at a glance what each deal needs. "✓ Mark prepped" pulls
+          it out of the queue when he's done. Collapsed by default to
+          first 3 rows so it doesn't drown the rest of the page. */}
+      {prepQueueAll.length > 0 && (
+        <div style={{ marginBottom: 22 }}>
+          <SectionLabel icon="📥" label={`Prep Queue · new leads to work (${prepQueueAll.length})`} />
+          {prepQueueVisible.map(d => {
+            const m = d.meta || {};
+            const missing = prepMissing(d);
+            const src = m.source || (d.id.startsWith('flip-') ? 'manual' : 'unknown');
+            return (
+              <div key={d.id} style={{
+                display: "flex", alignItems: "center", gap: 12,
+                padding: "10px 14px",
+                background: "#1c1917", border: "1px solid #292524",
+                borderRadius: 8, marginBottom: 6,
+              }}>
+                <span style={{ fontSize: 14 }}>📥</span>
+                <div onClick={() => onSelect(d.id)} style={{ flex: 1, minWidth: 0, cursor: "pointer" }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {d.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#78716c", marginTop: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {d.address || "—"}{m.county ? ` · ${m.county}` : ""}{src ? ` · src: ${src}` : ""}
+                  </div>
+                  {missing.length > 0 && (
+                    <div style={{ fontSize: 10, color: "#a5731c", marginTop: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      ⚠ missing: {missing.join(", ")}
+                    </div>
+                  )}
+                </div>
+                <button
+                  onClick={(e) => { e.stopPropagation(); markPrepped(d.id); }}
+                  title="Mark prepped — pulls this lead out of the queue. Use only when phone is confirmed, contacts are labeled, tier is set, and the URL is minted."
+                  style={{
+                    background: missing.length === 0 ? '#065f46' : 'transparent',
+                    color: missing.length === 0 ? '#6ee7b7' : '#a8a29e',
+                    border: '1px solid ' + (missing.length === 0 ? '#10b981' : '#44403c'),
+                    borderRadius: 5, padding: '5px 11px',
+                    fontSize: 10, fontWeight: 700, letterSpacing: '0.04em',
+                    cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0,
+                  }}
+                >
+                  ✓ Mark prepped
+                </button>
+              </div>
+            );
+          })}
+          {/* Show more / show less toggle. Only renders when there are
+              more leads in the queue than the collapsed-view limit. */}
+          {prepQueueAll.length > PREP_QUEUE_COLLAPSED_LIMIT && (
+            <button
+              onClick={() => setPrepQueueExpanded(prev => !prev)}
+              style={{
+                display: 'block', width: '100%', textAlign: 'center',
+                background: 'transparent', border: '1px dashed #44403c',
+                color: '#a8a29e', borderRadius: 6,
+                padding: '8px 12px', fontSize: 11, fontWeight: 700,
+                letterSpacing: '0.04em', cursor: 'pointer',
+                fontFamily: 'inherit', marginTop: 2,
+              }}>
+              {prepQueueExpanded
+                ? `▲ Show less (collapse to top ${PREP_QUEUE_COLLAPSED_LIMIT})`
+                : `▼ Show all ${prepQueueAll.length} (currently showing ${PREP_QUEUE_COLLAPSED_LIMIT})`}
+            </button>
+          )}
         </div>
       )}
 
@@ -7562,7 +11987,7 @@ function HygieneDashboard({ deals, onSelect }) {
     const attorneyNamed = !!(m.attorney && String(m.attorney).trim());
 
     const checks = [
-      { key: 'phone',    label: HYGIENE_LABELS.phone,    passed: !!(m.homeownerPhone && String(m.homeownerPhone).trim()),  severity: 'high' },
+      { key: 'phone',    label: HYGIENE_LABELS.phone,    passed: !!dealMetaPhone(m),  severity: 'high' },
       { key: 'email',    label: HYGIENE_LABELS.email,    passed: !!(m.homeownerEmail && String(m.homeownerEmail).trim()),  severity: 'high' },
       { key: 'portal',   label: HYGIENE_LABELS.portal,   passed: ca.some(r => r.enabled),                                  severity: 'high' },
       { key: 'case',     label: HYGIENE_LABELS.case,     passed: !!(m.courtCase && String(m.courtCase).trim()),            severity: 'high' },
@@ -7965,7 +12390,7 @@ function MiniStat({ label, value }) {
 }
 
 // ─── New Deal Modal ──────────────────────────────────────────────────
-function NewDealModal({ onAdd, onClose, teamMembers }) {
+function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
   const [type, setType] = useState("flip");
   const [name, setName] = useState("");
   const [address, setAddress] = useState("");
@@ -7973,6 +12398,50 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
   const [deadline, setDeadline] = useState("");
   const [filedAt, setFiledAt] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
+  // Possible-duplicate matches against existing deals — recomputed on
+  // every name/address change with a 250ms debounce. Closes the gap
+  // Nathan flagged 2026-05-08: CSV import already runs sophisticated
+  // dup-detection, but the manual + New Deal modal had none, so a
+  // typo'd re-create of an existing deal would silently double up.
+  const [dupHits, setDupHits] = useState([]);
+
+  // Match against the parent's already-loaded `deals` array — that's
+  // the active list (loadDeals filters out soft-deleted). No DB
+  // roundtrip per keystroke. Soft-deleted dups aren't surfaced here;
+  // admin can check the Deleted Leads modal separately if uncertain.
+  useEffect(() => {
+    const nameNorm = (name || '').trim().toLowerCase();
+    const addrNorm = (address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (nameNorm.length < 4 && addrNorm.length < 4) { setDupHits([]); return; }
+    const t = setTimeout(() => {
+      const hits = [];
+      const seen = new Set();
+      for (const d of (deals || [])) {
+        if (seen.has(d.id)) continue;
+        const dAddrNorm = (d.address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const dNameNorm = (d.name || '').trim().toLowerCase();
+        let reason = null;
+        // Address normalized exact match — strongest signal. Same logic
+        // the CSV importer's findDuplicates uses.
+        if (addrNorm.length >= 4 && dAddrNorm && dAddrNorm === addrNorm) {
+          reason = 'address match';
+        } else if (nameNorm.length >= 6 && dNameNorm) {
+          // Name substring (either direction) catches "Joseph Mondello"
+          // typing matching "Estate of Joseph Mondello" in the DB.
+          // 6-char floor avoids "John" matching every John.
+          if (dNameNorm === nameNorm) reason = 'name exact match';
+          else if (dNameNorm.includes(nameNorm) || nameNorm.includes(dNameNorm)) reason = 'name partial match';
+        }
+        if (reason) {
+          hits.push({ deal: d, reason });
+          seen.add(d.id);
+        }
+        if (hits.length >= 5) break;
+      }
+      setDupHits(hits);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [name, address, deals]);
 
   const create = () => {
     if (!name) return;
@@ -8019,9 +12488,48 @@ function NewDealModal({ onAdd, onClose, teamMembers }) {
           {(teamMembers || []).map(m => <option key={m} value={m}>{m}</option>)}
         </select>
       </Field>
-      <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end" }}>
+      {dupHits.length > 0 && (
+        <div style={{ marginTop: 14, padding: '10px 14px', background: '#1f1408', border: '1px solid #78350f', borderRadius: 6 }}>
+          <div style={{ fontSize: 12, color: '#fbbf24', fontWeight: 700, marginBottom: 8, letterSpacing: '0.04em' }}>
+            ⚠ Possible duplicate{dupHits.length > 1 ? `s (${dupHits.length})` : ''} — review before creating
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {dupHits.map(({ deal: d, reason }, i) => (
+              <div key={d.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', padding: '8px 0', borderTop: i === 0 ? 'none' : '1px solid #44403c' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {d.name || d.id}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a8a29e' }}>
+                    {d.address || '—'}
+                    {d.meta?.courtCase ? ` · ${d.meta.courtCase}` : ''}
+                    {d.meta?.county ? ` · ${d.meta.county}` : ''}
+                    {' · '}<span style={{ color: '#fbbf24' }}>{reason}</span>
+                  </div>
+                </div>
+                {onOpenDeal && (
+                  <button
+                    onClick={() => { onOpenDeal(d.id); onClose(); }}
+                    style={{ background: '#0c0a09', border: '1px solid #44403c', color: '#fbbf24', padding: '6px 12px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}
+                  >
+                    Open existing →
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 10, marginTop: 20, justifyContent: "flex-end", alignItems: 'center' }}>
+        {dupHits.some(h => h.reason === 'address match') && (
+          <span style={{ fontSize: 11, color: '#fbbf24', flex: 1 }}>
+            Address matches an existing deal — confirm you want a separate row.
+          </span>
+        )}
         <button onClick={onClose} style={btnGhost}>Cancel</button>
-        <button onClick={create} style={btnPrimary}>Create Deal</button>
+        <button onClick={create} style={btnPrimary}>
+          {dupHits.length > 0 ? 'Create anyway' : 'Create Deal'}
+        </button>
       </div>
     </Modal>
   );
@@ -8044,6 +12552,346 @@ function Modal({ onClose, title, children, wide }) {
         {children}
       </div>
     </div>
+  );
+}
+
+// ─── Soft-delete: DeleteDealModal + DeletedLeadsModal ───────────────
+// Per Nathan 2026-05-07: deals that turn out not-real (sale unwound,
+// data error, judgment paid pre-sale, etc.) need to disappear from
+// kanban / funnel / dashboards without losing the artifacts attached
+// (sent SMS, court PDFs, AI summaries, personalized URLs, activity).
+//
+// Mechanism:
+//   - DeleteDealModal soft-deletes via deals.deleted_at + reason +
+//     deleted_by, cancels any pending outreach_queue rows for that
+//     deal so we don't text the homeowner after delete, logs activity.
+//   - DeletedLeadsModal (admin-only) lists soft-deleted deals, lets
+//     admin restore (UPDATE deals SET deleted_at=NULL, etc.).
+//
+// Status `dead` stays distinct: that's "we worked it, didn't pan out."
+// Soft-delete is "this lead shouldn't have entered the system at all."
+
+const DELETE_REASONS = [
+  { code: 'sale_unwound',           label: 'Sale unwound / set aside' },
+  { code: 'judgment_paid_pre_sale', label: 'Judgment paid before sale' },
+  { code: 'owner_reinstated',       label: 'Owner reinstated / cured' },
+  { code: 'duplicate',              label: 'Duplicate of another deal' },
+  { code: 'data_error',             label: 'Data error (not a foreclosure / bad import)' },
+  { code: 'bankruptcy_filed',       label: 'Bankruptcy filed by owner' },
+  { code: 'no_surplus',             label: 'No surplus after deeper review' },
+  { code: 'other',                  label: 'Other (specify)' },
+];
+
+function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
+  const [reason, setReason] = useState('sale_unwound');
+  const [detail, setDetail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const otherRequired = reason === 'other' && !detail.trim();
+
+  const submit = async () => {
+    if (busy || otherRequired) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      // 1. Mark the deal soft-deleted. Done first so anything that races
+      //    on the realtime update sees the tombstone.
+      const { error: dErr } = await sb.from('deals').update({
+        deleted_at: new Date().toISOString(),
+        deleted_reason: reason,
+        deleted_by: userId,
+      }).eq('id', deal.id);
+      if (dErr) throw dErr;
+
+      // 2. Cancel any pending outreach_queue rows. We must NOT text the
+      //    homeowner on a deal we just removed from active work. Leaves
+      //    already-sent rows alone — those are history.
+      await sb.from('outreach_queue')
+        .update({ status: 'cancelled' })
+        .eq('deal_id', deal.id)
+        .in('status', ['queued', 'pending', 'generating']);
+
+      // 3. Log to the deal's activity feed. Even though the deal is
+      //    deleted, the audit trail is still readable from the
+      //    Deleted Leads view if anyone restores it.
+      const reasonLabel = DELETE_REASONS.find(r => r.code === reason)?.label || reason;
+      const detailSuffix = detail.trim() ? ` — ${detail.trim()}` : '';
+      await sb.from('activity').insert({
+        deal_id: deal.id,
+        user_id: userId,
+        action: `Deal soft-deleted · reason: ${reasonLabel}${detailSuffix}`,
+        visibility: ['team'],
+      });
+
+      onDeleted?.();
+    } catch (e) {
+      setErr(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal onClose={busy ? () => {} : onClose} title="Delete this deal">
+      <div style={{ fontSize: 13, color: '#d6d3d1', lineHeight: 1.55, marginBottom: 16 }}>
+        <strong style={{ color: '#fafaf9' }}>{deal.name || deal.id}</strong>
+        <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+          {deal.address || '—'}
+          {deal.meta?.courtCase ? ` · ${deal.meta.courtCase}` : ''}
+        </div>
+      </div>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: 12, marginBottom: 16, fontSize: 12, color: '#a8a29e', lineHeight: 1.55 }}>
+        This <strong style={{ color: '#fafaf9' }}>does not destroy</strong> sent SMS history,
+        uploaded court PDFs, AI case summaries, personalized URLs, or the activity log.
+        The deal disappears from kanban / funnel / dashboards and any pending outreach
+        is cancelled. Admin can restore from the Deleted Leads view.
+      </div>
+      <div style={{ marginBottom: 14 }}>
+        <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Reason</label>
+        <select value={reason} onChange={e => setReason(e.target.value)} disabled={busy} style={{ ...inputStyle, padding: '8px 10px' }}>
+          {DELETE_REASONS.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+        </select>
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Detail {reason === 'other' ? <span style={{ color: '#fca5a5' }}>(required)</span> : <span style={{ color: '#57534e' }}>(optional)</span>}
+        </label>
+        <textarea
+          value={detail}
+          onChange={e => setDetail(e.target.value)}
+          disabled={busy}
+          placeholder={reason === 'other' ? 'Why is this deal being deleted?' : 'Anything else worth knowing for the audit log…'}
+          rows={3}
+          style={{ ...inputStyle, resize: 'vertical' }}
+        />
+      </div>
+      {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
+        <button
+          onClick={submit}
+          disabled={busy || otherRequired}
+          style={{ ...btnPrimary, background: busy || otherRequired ? '#44403c' : '#dc2626', color: '#fafaf9', cursor: busy || otherRequired ? 'not-allowed' : 'pointer' }}
+        >
+          {busy ? 'Deleting…' : '🗑 Delete deal'}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function DeletedLeadsModal({ onClose, onRestored }) {
+  const [rows, setRows] = useState(null);  // null = loading, [] = empty, [...] = data
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    const { data, error } = await sb.from('deals')
+      .select('id, name, address, type, status, lead_tier, deleted_at, deleted_reason, deleted_by, meta')
+      .not('deleted_at', 'is', null)
+      .order('deleted_at', { ascending: false });
+    if (error) { setErr(error.message); setRows([]); return; }
+    setRows(data || []);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const restore = async (row) => {
+    if (busyId) return;
+    if (!confirm(`Restore "${row.name}"?\n\nIt will reappear in the active list at status: ${row.status}.`)) return;
+    setBusyId(row.id);
+    const { error } = await sb.from('deals').update({
+      deleted_at: null,
+      deleted_reason: null,
+      deleted_by: null,
+    }).eq('id', row.id);
+    setBusyId(null);
+    if (error) { alert('Restore failed: ' + error.message); return; }
+    // Log restore on the deal's activity feed for audit.
+    const { data: { user } } = await sb.auth.getUser();
+    if (user) {
+      await sb.from('activity').insert({
+        deal_id: row.id,
+        user_id: user.id,
+        action: `Deal restored from soft-delete (was: ${row.deleted_reason || 'unknown reason'})`,
+        visibility: ['team'],
+      });
+    }
+    await load();
+    onRestored?.();
+  };
+
+  const reasonLabel = (code) => DELETE_REASONS.find(r => r.code === code)?.label || code || '—';
+  const fmtDate = (ts) => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+  return (
+    <Modal onClose={onClose} title="🗑 Deleted Leads" wide>
+      {rows === null && <div style={{ color: '#78716c', fontSize: 13, padding: 20, textAlign: 'center' }}>Loading…</div>}
+      {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
+      {rows && rows.length === 0 && (
+        <div style={{ color: '#78716c', fontSize: 13, padding: 30, textAlign: 'center', fontStyle: 'italic' }}>
+          No deleted leads. Nothing to restore.
+        </div>
+      )}
+      {rows && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 11, color: '#78716c', marginBottom: 4 }}>
+            {rows.length} deleted {rows.length === 1 ? 'lead' : 'leads'}. Children (contacts, documents, activity, sent SMS) are preserved.
+          </div>
+          {rows.map(r => (
+            <div key={r.id} style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {r.name || r.id}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#a8a29e', marginBottom: 6 }}>
+                    {r.address || '—'}
+                    {r.meta?.courtCase ? ` · ${r.meta.courtCase}` : ''}
+                    {r.meta?.county ? ` · ${r.meta.county}` : ''}
+                    {r.lead_tier ? ` · Tier ${r.lead_tier}` : ''}
+                  </div>
+                  <div style={{ fontSize: 11, color: '#fbbf24' }}>
+                    {reasonLabel(r.deleted_reason)} · {fmtDate(r.deleted_at)}
+                  </div>
+                </div>
+                <button
+                  onClick={() => restore(r)}
+                  disabled={busyId === r.id}
+                  style={{ ...btnPrimary, background: busyId === r.id ? '#44403c' : '#10b981', color: '#0c0a09', cursor: busyId === r.id ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+                >
+                  {busyId === r.id ? 'Restoring…' : '↩ Restore'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── RecentlyHiddenModal ────────────────────────────────────────────
+// Per Eric 2026-05-12: he was looking in Deleted Leads for things he
+// thought he'd deleted, but they were actually status-changed to
+// dead / closed / recovered (which hides them from active views but
+// is NOT soft-delete). This modal surfaces those.
+//
+// Distinct from DeletedLeadsModal:
+//   - DeletedLeadsModal = `deleted_at IS NOT NULL` (true soft-delete)
+//   - RecentlyHiddenModal = `deleted_at IS NULL AND status IN ('dead',
+//     'closed','recovered') AND updated_at >= now() - 30d` (status-
+//     based archive within recent memory)
+//
+// Restore here = flipping status back to a working value. We don't
+// know which status it was BEFORE archive, so the restore button
+// puts it back at 'engaged' (a safe active-pipeline starting point);
+// the team can then move it to the right stage.
+function RecentlyHiddenModal({ onClose, onRestored }) {
+  const [rows, setRows] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = async () => {
+    setErr(null);
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    const { data, error } = await sb.from('deals')
+      .select('id, name, address, type, status, lead_tier, updated_at, closed_at, meta')
+      .is('deleted_at', null)
+      .in('status', ['dead', 'closed', 'recovered'])
+      .gte('updated_at', cutoff)
+      .order('updated_at', { ascending: false });
+    if (error) { setErr(error.message); setRows([]); return; }
+    setRows(data || []);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const restore = async (row) => {
+    if (busyId) return;
+    if (!window.confirm(`Move "${row.name}" back into the active pipeline?\n\nCurrent status: ${row.status.toUpperCase()}\nNew status: ENGAGED (you can change it from the deal page).`)) return;
+    setBusyId(row.id);
+    const { error } = await sb.from('deals').update({
+      status: 'engaged',
+      closed_at: null,
+    }).eq('id', row.id);
+    setBusyId(null);
+    if (error) { alert('Restore failed: ' + error.message); return; }
+    const { data: { user } } = await sb.auth.getUser();
+    if (user) {
+      await sb.from('activity').insert({
+        deal_id: row.id,
+        user_id: user.id,
+        action: `Deal moved back to active pipeline from Recently Hidden (was: ${row.status})`,
+        visibility: ['team'],
+      });
+    }
+    await load();
+    onRestored?.();
+  };
+
+  const statusLabel = (s) => ({
+    dead:      { label: 'Dead',      color: '#78716c' },
+    closed:    { label: 'Closed',    color: '#10b981' },
+    recovered: { label: 'Recovered', color: '#10b981' },
+  })[s] || { label: s, color: '#a8a29e' };
+  const fmtDate = (ts) => ts ? new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+  return (
+    <Modal onClose={onClose} title="🪦 Recently Hidden Deals" wide>
+      <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 14, lineHeight: 1.55 }}>
+        Deals marked <strong>dead</strong>, <strong>closed</strong>, or <strong>recovered</strong> in the last 30 days. These aren't soft-deleted — they're status-archived, hidden from active views, but the data is intact. Restoring puts them back at status <strong>engaged</strong>.
+      </div>
+      {rows === null && <div style={{ color: '#78716c', fontSize: 13, padding: 20, textAlign: 'center' }}>Loading…</div>}
+      {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
+      {rows && rows.length === 0 && (
+        <div style={{ color: '#78716c', fontSize: 13, padding: 30, textAlign: 'center', fontStyle: 'italic' }}>
+          No deals hidden in the last 30 days.
+        </div>
+      )}
+      {rows && rows.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 11, color: '#78716c', marginBottom: 4 }}>
+            {rows.length} hidden {rows.length === 1 ? 'deal' : 'deals'} (status-based archive, NOT soft-deleted).
+          </div>
+          {rows.map(r => {
+            const meta = statusLabel(r.status);
+            return (
+              <div key={r.id} style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.name || r.id}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#a8a29e', marginBottom: 6 }}>
+                      {r.address || '—'}
+                      {r.meta?.courtCase ? ` · ${r.meta.courtCase}` : ''}
+                      {r.meta?.county ? ` · ${r.meta.county}` : ''}
+                      {r.lead_tier ? ` · Tier ${r.lead_tier}` : ''}
+                    </div>
+                    <div style={{ fontSize: 11, display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ padding: '2px 8px', borderRadius: 10, background: '#1c1917', color: meta.color, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', fontSize: 10 }}>
+                        {meta.label}
+                      </span>
+                      <span style={{ color: '#78716c' }}>Hidden {fmtDate(r.updated_at)}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => restore(r)}
+                    disabled={busyId === r.id}
+                    style={{ ...btnPrimary, background: busyId === r.id ? '#44403c' : '#10b981', color: '#0c0a09', cursor: busyId === r.id ? 'not-allowed' : 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    {busyId === r.id ? 'Restoring…' : '↩ Move to active'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -8169,9 +13017,451 @@ function PersonalizedUrlControl({ deal, reload, logAct }) {
 }
 
 // ─── Deal Detail ─────────────────────────────────────────────────────
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav }) {
+// ─── Deal Tags Bar ─────────────────────────────────────────────────
+// Per Eric (relayed via Nathan, 2026-05-04): tag deals with free-form
+// labels for filtering + flagging unusual cases. Removable like GHL's.
+//
+// Renders as a row of gold chips above the deal-detail tabs. Each chip
+// has × to remove. "+ Add tag" opens an inline input — type then Enter
+// (comma-separates for multi-add). When adding, we surface the top-12
+// most-used tags as quick-add buttons so VAs converge on a vocabulary
+// instead of every deal getting a unique misspelling.
+// Tag color palette — six allowlisted values matching the
+// tag_library_color_check constraint. Each maps to a chip BG / text /
+// border. Order matters for the cycle button (next-color goes in this
+// order). Per Nathan 2026-05-04 — visual signal so "wait" stands out
+// red, "high-equity" is green, etc., instead of every tag being gold.
+const TAG_COLORS = {
+  gold:   { bg: '#78350f', fg: '#fbbf24', border: '#d97706' },
+  red:    { bg: '#7f1d1d', fg: '#fca5a5', border: '#dc2626' },
+  green:  { bg: '#065f46', fg: '#6ee7b7', border: '#10b981' },
+  blue:   { bg: '#1e3a8a', fg: '#93c5fd', border: '#3b82f6' },
+  purple: { bg: '#3b0764', fg: '#d8b4fe', border: '#7e22ce' },
+  gray:   { bg: '#292524', fg: '#a8a29e', border: '#57534e' },
+};
+const TAG_COLOR_ORDER = ['gold', 'red', 'green', 'blue', 'purple', 'gray'];
+
+function DealTagsBar({ deal, canEdit, onSave }) {
+  const [adding, setAdding] = useState(false);
+  const [input, setInput] = useState('');
+  const [libraryTags, setLibraryTags] = useState([]);  // [{ name, color }]
+  const tags = deal.tags || [];
+
+  // Load the persistent tag_library on every mount + on add-mode open.
+  // Per Eric 2026-05-04: tags should survive even when no deal currently
+  // has them. Now also loads `color` so chips render in their assigned
+  // visual category. Realtime sub keeps it fresh.
+  const loadLibrary = async () => {
+    const { data } = await sb.from('tag_library').select('name, color').order('name');
+    setLibraryTags(data || []);
+  };
+  useEffect(() => { loadLibrary(); /* eslint-disable-next-line */ }, [deal.id]);
+  useEffect(() => {
+    const ch = sb.channel('tag-library-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tag_library' }, loadLibrary)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [deal.id]);
+
+  // Map tag name → color. Defaults to 'gold' if the tag isn't in the
+  // library yet (e.g. just added on this client; trigger hasn't fired
+  // its sync yet).
+  const colorFor = (name) => {
+    const row = libraryTags.find(t => t.name === name);
+    return row?.color && TAG_COLORS[row.color] ? row.color : 'gold';
+  };
+
+  // Cycle a tag to the next color in TAG_COLOR_ORDER. Updates the
+  // tag_library row directly — that's the canonical color storage.
+  // Realtime sub will refresh libraryTags + every other mounted
+  // DealTagsBar's chips.
+  //
+  // Two failure modes this guards against:
+  //   1. RLS blocks the update → PostgREST returns 0 rows, no error.
+  //      Without `.select()` we'd never see it. Eric hit this 2026-05-07
+  //      because the original migration shipped without an UPDATE policy
+  //      (fix: 20260507120000_tag_library_update_policy.sql).
+  //   2. The library row doesn't exist yet (rare race: tag was just
+  //      added on this client; tg_sync_tag_library hasn't fired). In
+  //      that case the UPDATE silently affects 0 rows; we INSERT it
+  //      with the next color so the click feels like it did something.
+  const cycleColor = async (name) => {
+    const current = colorFor(name);
+    const idx = TAG_COLOR_ORDER.indexOf(current);
+    const next = TAG_COLOR_ORDER[(idx + 1) % TAG_COLOR_ORDER.length];
+    const { data, error } = await sb
+      .from('tag_library')
+      .update({ color: next })
+      .eq('name', name)
+      .select('name, color');
+    if (error) { alert('Could not change tag color: ' + error.message); return; }
+    if (!data || data.length === 0) {
+      // No row matched — try inserting the library row at the next color.
+      // (Covers the "tag exists on the deal but not in tag_library yet" case.)
+      const { error: insErr } = await sb
+        .from('tag_library')
+        .insert({ name, color: next });
+      if (insErr) {
+        alert(
+          "Tag color didn't update. If you just signed in, refresh and " +
+          "try again. If it keeps happening, the tag_library UPDATE policy " +
+          "may be missing — apply migration 20260507120000_tag_library_update_policy.sql."
+        );
+      }
+    }
+  };
+
+  const normalize = (t) => (t || '').trim().toLowerCase().replace(/\s+/g, '-');
+
+  const addTag = (raw) => {
+    const t = normalize(raw);
+    if (!t) return;
+    if (tags.includes(t)) return;
+    onSave({ tags: [...tags, t] });
+  };
+  const removeTag = (t) => onSave({ tags: tags.filter(x => x !== t) });
+
+  const commitInput = () => {
+    const parts = (input || '').split(',').map(p => p.trim()).filter(Boolean);
+    let next = [...tags];
+    parts.forEach(p => {
+      const norm = normalize(p);
+      if (norm && !next.includes(norm)) next.push(norm);
+    });
+    if (next.length !== tags.length) onSave({ tags: next });
+    setInput('');
+    setAdding(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitInput(); }
+    else if (e.key === 'Escape') { setAdding(false); setInput(''); }
+  };
+
+  // Filter library suggestions by what the user has typed so far.
+  // Empty input → first 12 alphabetically. Non-empty → every match
+  // (substring, case-insensitive), capped at 30 so the row stays sane.
+  // Excludes tags already on this deal.
+  const inputNorm = normalize(input);
+  const suggestions = (() => {
+    const candidates = libraryTags.filter(t => !tags.includes(t.name));
+    if (!inputNorm) return candidates.slice(0, 12);
+    return candidates.filter(t => t.name.toLowerCase().includes(inputNorm)).slice(0, 30);
+  })();
+  const exactMatch = inputNorm && libraryTags.some(t => t.name === inputNorm);
+
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
+      marginBottom: 14, padding: '8px 12px',
+      background: '#1c1917', border: '1px solid #292524', borderRadius: 8,
+    }}>
+      <span style={{ fontSize: 9, fontWeight: 800, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginRight: 4 }}>🏷 Tags</span>
+      {tags.map(t => {
+        const c = TAG_COLORS[colorFor(t)];
+        return (
+          <span key={t} style={{
+            display: 'inline-flex', alignItems: 'center', gap: 4,
+            background: c.bg, color: c.fg,
+            padding: '3px 8px', borderRadius: 4,
+            fontSize: 11, fontWeight: 700,
+          }}>
+            {t}
+            {canEdit && (
+              <>
+                <button onClick={() => cycleColor(t)} title={`Color: ${colorFor(t)} — click to cycle`}
+                  style={{ background: 'transparent', border: 'none', color: c.fg, cursor: 'pointer', fontSize: 10, padding: '0 0 0 4px', lineHeight: 1, opacity: 0.6 }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '0.6')}
+                >🎨</button>
+                <button onClick={() => removeTag(t)} title="Remove tag"
+                  style={{ background: 'transparent', border: 'none', color: c.fg, cursor: 'pointer', fontSize: 13, padding: '0 0 0 2px', lineHeight: 1, opacity: 0.7 }}
+                  onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+                  onMouseLeave={e => (e.currentTarget.style.opacity = '0.7')}
+                >×</button>
+              </>
+            )}
+          </span>
+        );
+      })}
+      {tags.length === 0 && !adding && (
+        <span style={{ fontSize: 11, color: '#57534e', fontStyle: 'italic' }}>
+          none — add a tag to flag this deal
+        </span>
+      )}
+      {canEdit && !adding && (
+        <button onClick={() => setAdding(true)}
+          style={{ background: 'transparent', border: '1px dashed #44403c', color: '#a8a29e', padding: '3px 9px', borderRadius: 4, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+          + Add tag
+        </button>
+      )}
+      {adding && (
+        <>
+          <input
+            autoFocus
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="type tag, Enter to add (comma-separate for multiple)"
+            style={{ ...inputStyle, fontSize: 11, padding: '3px 8px', minWidth: 220, flex: 1 }}
+          />
+          <button onClick={commitInput} style={{ ...btnPrimary, fontSize: 10, padding: '3px 10px' }}>Add</button>
+          <button onClick={() => { setAdding(false); setInput(''); }} style={{ ...btnGhost, fontSize: 10, padding: '3px 8px' }}>Cancel</button>
+          <div style={{ width: '100%', marginTop: 4, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+            {suggestions.length > 0 && (
+              <>
+                <span style={{ fontSize: 9, color: '#57534e', marginRight: 4 }}>
+                  {inputNorm ? `matches in library (${suggestions.length}):` : 'from library:'}
+                </span>
+                {suggestions.map(t => {
+                  const c = TAG_COLORS[t.color || 'gold'] || TAG_COLORS.gold;
+                  return (
+                    <button key={t.name} onClick={() => addTag(t.name)}
+                      title={`Add "${t.name}" to this deal (color: ${t.color || 'gold'})`}
+                      style={{ background: 'transparent', border: '1px solid ' + c.border, color: c.fg, padding: '2px 7px', borderRadius: 3, fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                      + {t.name}
+                    </button>
+                  );
+                })}
+              </>
+            )}
+            {inputNorm && !exactMatch && suggestions.length === 0 && (
+              <span style={{ fontSize: 9, color: '#a5731c', fontStyle: 'italic' }}>
+                no library match — Enter creates "{inputNorm}" as a new tag
+              </span>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Notes Drawer ───────────────────────────────────────────────────
+// Per Nathan 2026-05-04 (GHL pattern): notes moved out of inline
+// rendering on the deal Overview and into a slide-out right-side
+// drawer. Only opens when the user clicks the floating 📝 Notes pill
+// on the right edge — keeps the main scroll lean.
+//
+// Shows ALL notes for the deal (no 5-cap like the old QuickNotes).
+// Add via the textarea at the top. Search filters client-side once
+// you have more than a handful. Realtime sub keeps the list in sync.
+// Outside-click closes.
+function NotesDrawer({ dealId, userId, isOpen, onClose }) {
+  const [notes, setNotes] = useState([]);
+  const [draft, setDraft] = useState('');
+  const [search, setSearch] = useState('');
+  const [adding, setAdding] = useState(false);
+  const drawerRef = useRef(null);
+
+  const load = async () => {
+    const { data } = await sb.from('deal_notes')
+      .select('id, title, body, author_id, created_at, updated_at')
+      .eq('deal_id', dealId)
+      .order('updated_at', { ascending: false });
+    setNotes(data || []);
+  };
+  useEffect(() => { if (isOpen) load(); /* eslint-disable-next-line */ }, [dealId, isOpen]);
+  useEffect(() => {
+    const ch = sb.channel('notes-drawer-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${dealId}` }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [dealId]);
+
+  // Outside-click close (only while open). Defer attach so the click
+  // that opened the drawer doesn't immediately close it.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onMouseDown = (e) => {
+      if (drawerRef.current && !drawerRef.current.contains(e.target)) {
+        // Allow clicks on the trigger button (which has role=open-notes-drawer)
+        // to toggle without immediately re-closing.
+        if (e.target.closest && e.target.closest('[data-notes-trigger]')) return;
+        onClose();
+      }
+    };
+    const t = setTimeout(() => document.addEventListener('mousedown', onMouseDown), 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', onMouseDown); };
+  }, [isOpen, onClose]);
+
+  const add = async () => {
+    const body = draft.trim();
+    if (!body || adding) return;
+    setAdding(true);
+    const { error } = await sb.from('deal_notes').insert({ deal_id: dealId, body, author_id: userId || null });
+    setAdding(false);
+    if (error) { alert('Could not save note: ' + error.message); return; }
+    setDraft('');
+  };
+  const remove = async (id) => {
+    if (!window.confirm('Delete this note? This cannot be undone.')) return;
+    await sb.from('deal_notes').delete().eq('id', id);
+  };
+
+  const fmtWhen = (iso) => {
+    const d = new Date(iso);
+    const diffMin = Math.round((Date.now() - d.getTime()) / 60000);
+    if (diffMin < 1) return 'just now';
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const hrs = Math.round(diffMin / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.round(hrs / 24);
+    return days < 7 ? `${days}d ago` : d.toLocaleDateString();
+  };
+
+  if (!isOpen) return null;
+
+  const filtered = !search.trim() ? notes : notes.filter(n => {
+    const q = search.toLowerCase();
+    return (n.body || '').toLowerCase().includes(q) || (n.title || '').toLowerCase().includes(q);
+  });
+
+  return (
+    <div ref={drawerRef} style={{
+      position: 'fixed', top: 0, right: 0, bottom: 0,
+      width: 400, maxWidth: '92vw',
+      background: '#1c1917', borderLeft: '1px solid #44403c',
+      boxShadow: '-12px 0 32px rgba(0,0,0,0.55)',
+      zIndex: 1300,
+      display: 'flex', flexDirection: 'column',
+      animation: 'notesDrawerSlide 0.22s ease-out',
+    }}>
+      {/* Header */}
+      <div style={{ padding: '13px 16px', borderBottom: '1px solid #292524', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 800, color: '#fafaf9', letterSpacing: '0.04em' }}>
+          📝 Notes <span style={{ fontWeight: 600, color: '#78716c' }}>· {notes.length}</span>
+        </span>
+        <button onClick={onClose} title="Close (Esc)"
+          style={{ ...btnGhost, fontSize: 16, padding: '4px 10px' }}>×</button>
+      </div>
+
+      {/* Add input */}
+      <div style={{ padding: '10px 14px', borderBottom: '1px solid #292524', flexShrink: 0 }}>
+        <textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') add(); }}
+          placeholder="Quick note — observations, reminders…  (⌘+Enter to save)"
+          rows={2}
+          style={{ ...inputStyle, width: '100%', fontFamily: 'inherit', resize: 'vertical', fontSize: 13, lineHeight: 1.5, padding: '8px 10px' }}
+        />
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
+          <button onClick={add} disabled={!draft.trim() || adding}
+            style={{
+              background: (draft.trim() && !adding) ? '#d97706' : '#292524',
+              color: (draft.trim() && !adding) ? '#0c0a09' : '#57534e',
+              border: 'none', borderRadius: 6, padding: '6px 14px',
+              fontSize: 11, fontWeight: 700, cursor: (draft.trim() && !adding) ? 'pointer' : 'default',
+              fontFamily: 'inherit',
+            }}>
+            {adding ? 'Saving…' : '+ Add note'}
+          </button>
+        </div>
+      </div>
+
+      {/* Search (only if there's enough to bother filtering) */}
+      {notes.length > 5 && (
+        <div style={{ padding: '8px 14px', borderBottom: '1px solid #292524', flexShrink: 0 }}>
+          <input type="text" placeholder="🔍 Search notes…" value={search} onChange={e => setSearch(e.target.value)}
+            style={{ ...inputStyle, width: '100%', fontSize: 12, padding: '6px 10px' }} />
+        </div>
+      )}
+
+      {/* List */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 14px' }}>
+        {filtered.length === 0 && (
+          <div style={{ fontSize: 12, color: '#57534e', fontStyle: 'italic', padding: '14px 4px', textAlign: 'center' }}>
+            {search ? 'No notes match your search.' : 'No notes yet — use the input above to add the first one.'}
+          </div>
+        )}
+        {filtered.map(n => (
+          <div key={n.id} style={{ padding: '10px 0', borderBottom: '1px solid #292524' }}>
+            {n.title && <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9', marginBottom: 3 }}>{n.title}</div>}
+            <div style={{ fontSize: 12, color: '#d6d3d1', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>{n.body}</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
+              <span style={{ fontSize: 9, color: '#57534e' }}>{fmtWhen(n.updated_at || n.created_at)}</span>
+              <button onClick={() => remove(n.id)} title="Delete note"
+                style={{ background: 'transparent', border: 'none', color: '#57534e', fontSize: 14, padding: '2px 4px', cursor: 'pointer', lineHeight: 1 }}
+                onMouseEnter={e => (e.currentTarget.style.color = '#fca5a5')}
+                onMouseLeave={e => (e.currentTarget.style.color = '#57534e')}>×</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Floating right-edge pill that opens the NotesDrawer. Only rendered
+// when a deal is open — lives at the DealDetail level. Vertical
+// orientation so it sits in the page margin without consuming
+// horizontal space.
+function NotesDrawerTrigger({ count, onClick, isOpen }) {
+  if (isOpen) return null; // hide trigger while drawer is open
+  return (
+    <button onClick={onClick}
+      data-notes-trigger
+      title={`Notes${count > 0 ? ` · ${count}` : ' · empty'}`}
+      style={{
+        position: 'fixed', top: '50%', right: 0, transform: 'translateY(-50%)',
+        background: count > 0 ? '#78350f' : '#1c1917',
+        color: count > 0 ? '#fbbf24' : '#a8a29e',
+        border: '1px solid ' + (count > 0 ? '#d97706' : '#44403c'),
+        borderRight: 'none',
+        borderRadius: '8px 0 0 8px',
+        padding: '14px 10px',
+        fontSize: 11, fontWeight: 800, letterSpacing: '0.08em',
+        cursor: 'pointer', fontFamily: 'inherit',
+        writingMode: 'vertical-rl', textOrientation: 'mixed',
+        zIndex: 1100,
+        boxShadow: '-4px 4px 14px rgba(0,0,0,0.4)',
+        display: 'inline-flex', alignItems: 'center', gap: 6,
+      }}>
+      <span>📝 Notes</span>
+      {count > 0 && (
+        <span style={{
+          background: '#dc2626', color: '#fff', borderRadius: 8,
+          padding: '0 6px', fontSize: 9, fontWeight: 700,
+          minWidth: 14, textAlign: 'center',
+          writingMode: 'horizontal-tb',
+        }}>{count}</span>
+      )}
+    </button>
+  );
+}
+
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav, startCall, callStatus }) {
   const [tab, setTab] = useState(initialTab || "overview");
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
+  const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
+  const [notesCount, setNotesCount] = useState(0);
+
+  // Light count poll for the floating Notes pill so it surfaces "there are
+  // N notes" without opening the drawer. Realtime sub keeps it live as
+  // notes are added / removed elsewhere.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const { count } = await sb.from('deal_notes').select('id', { count: 'exact', head: true }).eq('deal_id', deal.id);
+      if (active) setNotesCount(count || 0);
+    };
+    load();
+    const ch = sb.channel('notes-count-' + deal.id)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes', filter: `deal_id=eq.${deal.id}` }, load)
+      .subscribe();
+    return () => { active = false; sb.removeChannel(ch); };
+  }, [deal.id]);
+
+  // Esc closes the notes drawer
+  useEffect(() => {
+    if (!notesDrawerOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setNotesDrawerOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [notesDrawerOpen]);
 
   // Compute unread counts per tab based on this user's last_seen_at per tab.
   // Docket = non-backfill events received after last docket view.
@@ -8232,6 +13522,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
   const [showPostUpdate, setShowPostUpdate] = useState(false);
   const [showSendIntro, setShowSendIntro] = useState(false);
   const [showOverflow, setShowOverflow] = useState(false);
+  const [showDeleteDeal, setShowDeleteDeal] = useState(false);
 
   const loadAll = async () => {
     setLoaded(false);
@@ -8292,7 +13583,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
     netProfit = salePrice - (m.contractPrice || 0) - closingDollars - totalExpenses;
   }
   let projectedFee = 0;
-  if (!isFlip) projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
+  // See note above on the surplus cascade. Match here so the Our-Fee tile
+  // doesn't show TBD when only estimatedAvailableEquity is populated.
+  if (!isFlip) projectedFee = (((m.estimatedSurplus || m.estimated_surplus || m.estimatedAvailableEquity) || 0) * (m.feePct || 0)) / 100;
 
   const tasksDone = tasks.filter(t => t.done).length;
   const tasksHigh = tasks.filter(t => !t.done && t.priority === "high").length;
@@ -8449,6 +13742,18 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
                     >
                       $ {deal.meta?.bonus_due ? "Clear bonus due" : "Mark bonus due"}
                     </button>
+                    {/* Soft-delete — separated visually so it's harder to mis-click. */}
+                    <div style={{ borderTop: "1px solid #292524", marginTop: 4, paddingTop: 4 }}>
+                      <button
+                        onClick={() => { setShowOverflow(false); setShowDeleteDeal(true); }}
+                        style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", color: "#fca5a5", padding: "8px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", borderRadius: 4, fontFamily: "inherit" }}
+                        onMouseEnter={e => e.currentTarget.style.background = "#7f1d1d"}
+                        onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                        title="Soft-delete this deal — keeps everything in DB so it can be restored from Deleted Leads"
+                      >
+                        🗑 Delete deal…
+                      </button>
+                    </div>
                   </div>
                 </>
               )}
@@ -8456,6 +13761,14 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           </>
         )}
       </div>
+      {showDeleteDeal && (
+        <DeleteDealModal
+          deal={deal}
+          userId={userId}
+          onClose={() => setShowDeleteDeal(false)}
+          onDeleted={() => setShowDeleteDeal(false)}
+        />
+      )}
 
       {isAdmin ? (
         <div className={isFlip ? "metric-grid-4" : "metric-grid-3"} style={{ display: "grid", gridTemplateColumns: isFlip ? "repeat(4, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
@@ -8465,7 +13778,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <Metric label={strategy === "wholesale" ? "Wholesale Price" : "List Price"} value={fmt(salePrice)} sub={strategy === "wholesale" ? "Assignment exit" : (deal.status === "listing" ? "Active listing" : "Target")} color="#3b82f6" />
             <Metric label="Projected Net" value={fmt(netProfit)} sub={strategy === "wholesale" ? "As wholesale" : (netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative")} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
           </>) : (<>
-            <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? m.county + " County" : "—"} color="#3b82f6" />
+            <Metric label="Est. Surplus" value={(() => { const v = m.estimatedSurplus || m.estimated_surplus || m.estimatedAvailableEquity; return v > 0 ? fmt(v) : "TBD"; })()} sub={m.county ? cleanCountyName(m.county) + " County" : "—"} color="#3b82f6" />
             <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
             <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
           </>)}
@@ -8477,6 +13790,12 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.filed_at || deal.filed_at ? `Filed ${daysSince(m.filed_at || deal.filed_at)}d ago` : "Not yet filed"} color="#f59e0b" />
         </div>
       )}
+
+      <DealTagsBar
+        deal={deal}
+        canEdit={true}
+        onSave={(patch) => onUpdateDeal(patch)}
+      />
 
       <div className="detail-tabs" style={{ display: "flex", gap: 2, marginBottom: 20, borderBottom: "1px solid #292524", overflowX: "auto" }}>
         {tabs.map(id => (
@@ -8505,7 +13824,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         <ErrorBoundary label="comms">
           <div>
             <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
-            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} />
+            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} />
             <div style={{ marginTop: 20 }}>
               <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
             </div>
@@ -8582,6 +13901,13 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
           onSent={async () => { await loadAll(); }}
         />
       )}
+
+      {/* Notes drawer — slide-out from the right. Trigger pill sits on
+          the right edge of the viewport whenever a deal is open. Both
+          live at the DealDetail level so they're available regardless
+          of which tab is active. */}
+      <NotesDrawerTrigger count={notesCount} isOpen={notesDrawerOpen} onClick={() => setNotesDrawerOpen(true)} />
+      <NotesDrawer dealId={deal.id} userId={userId} isOpen={notesDrawerOpen} onClose={() => setNotesDrawerOpen(false)} />
     </div>
   );
 }
@@ -8661,8 +13987,11 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
 
   return (
     <div>
-      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
-      <QuickNotes dealId={deal.id} userId={userId} onJumpToTab={onJumpToTab} />
+      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
+      {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
+          NotesDrawer rendered at the DealDetail level. The drawer
+          handles all reads + writes; this overview no longer plasters
+          notes inline. */}
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         {isAdmin && <Card title="Live P&L Waterfall">
@@ -8926,15 +14255,67 @@ function ClientPortalCard({ deal, logAct }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [editRequests, setEditRequests] = useState([]);
 
   const load = async () => {
     setLoading(true);
-    const { data } = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true });
-    setAccessList(data || []);
+    // deal_claimants RPC: returns client_access rows with email resolved via
+    // coalesce(client_access.email, auth.users.email). Fixes the "row shows
+    // 'Client' instead of email" bug when client_access.email is NULL post-signup.
+    // Falls back to a direct table select if the RPC isn't deployed yet.
+    let accessData;
+    const rpcRes = await sb.rpc('deal_claimants', { p_deal_id: deal.id });
+    if (rpcRes.error) {
+      const direct = await sb.from('client_access').select('*').eq('deal_id', deal.id).order('created_at', { ascending: true });
+      accessData = direct.data;
+    } else {
+      accessData = rpcRes.data;
+    }
+    const { data: editData } = await sb.from('client_edit_requests')
+      .select('*').eq('deal_id', deal.id).eq('status', 'pending')
+      .order('requested_at', { ascending: true });
+    setAccessList(accessData || []);
+    setEditRequests(editData || []);
     setLoading(false);
   };
 
   useEffect(() => { load(); }, [deal.id]);
+
+  const approveEdit = async (req) => {
+    setBusy(true); setMsg(null);
+    try {
+      if (req.field === 'email') {
+        await sb.from('client_access').update({ email: req.new_value }).eq('id', req.client_access_id);
+      } else if (req.field === 'phone') {
+        // Fetch current prefs then merge
+        const { data: caRow } = await sb.from('client_access').select('prefs').eq('id', req.client_access_id).single();
+        const newPrefs = { ...(caRow?.prefs || {}), notify_phone: req.new_value };
+        await sb.from('client_access').update({ prefs: newPrefs }).eq('id', req.client_access_id);
+      }
+      await sb.from('client_edit_requests').update({ status: 'approved', reviewed_at: new Date().toISOString() }).eq('id', req.id);
+      if (logAct) await logAct(`Client contact info updated (${req.field}: ${req.new_value}) — request approved`);
+      setMsg({ type: 'success', text: `${req.field === 'email' ? 'Email' : 'Phone'} updated to ${req.new_value}` });
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const rejectEdit = async (req) => {
+    setBusy(true); setMsg(null);
+    try {
+      await sb.from('client_edit_requests').update({ status: 'rejected', reviewed_at: new Date().toISOString() }).eq('id', req.id);
+      if (logAct) await logAct(`Client ${req.field} change request rejected (requested: ${req.new_value})`);
+      setMsg({ type: 'success', text: 'Request declined.' });
+      await load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const invite = async () => {
     if (!email) return;
@@ -9052,9 +14433,16 @@ function ClientPortalCard({ deal, logAct }) {
                 <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                   {row.enabled && row.email && (
                     <>
-                      <button onClick={() => copyInviteLink(row)} disabled={busy} title="Copy a one-tap invite link for iMessage/SMS. Client taps it → portal auto-sends them the magic-link email." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy invite link</button>
-                      <button onClick={() => resend(row)} disabled={busy} title="Email the magic-link sign-in email to this claimant right now." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>📧 Email now</button>
+                      <button onClick={() => copyInviteLink(row)} disabled={busy} title="Copy a one-tap invite link. Pasting into iMessage/SMS or your own Gmail. Client taps it → portal auto-sends them the magic-link email." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy invite link</button>
+                      <button onClick={() => {
+                        navigator.clipboard.writeText(row.email);
+                        setMsg({ type: 'success', text: `Email copied: ${row.email}` });
+                      }} disabled={busy} title="Copy this claimant's email to paste into Gmail 'To:' field." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>✉️ Copy email</button>
+                      <button onClick={() => resend(row)} disabled={busy} title="Email the magic-link sign-in email to this claimant right now (uses Supabase Auth — may fail silently if Auth SMTP is broken)." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>📧 Send magic link</button>
                     </>
+                  )}
+                  {row.enabled && !row.email && (
+                    <button onClick={copyUrl} disabled={busy} title="No email on this row — copying the bare portal URL. Tell the claimant to sign in with their email at this link." style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", borderColor: "#92400e", color: "#fbbf24" }}>📋 Copy portal URL</button>
                   )}
                   <button onClick={() => toggleEnabled(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px" }}>{row.enabled ? 'Disable' : 'Enable'}</button>
                   <button onClick={() => remove(row)} disabled={busy} style={{ ...btnGhost, fontSize: 11, padding: "4px 10px", color: "#ef4444" }}>Remove</button>
@@ -10642,13 +16030,19 @@ function QuickNotes({ dealId, userId, userName, onJumpToTab }) {
   );
 }
 
-function CaseIntelligence({ dealId, deal, onJumpToTab }) {
+function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const [docs, setDocs] = useState([]);
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(deal?.meta?.case_intel_summary || null);
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [summaryErr, setSummaryErr] = useState(null);
+  // Per-row "Skip" persistence — rows the user explicitly skipped on this
+  // deal don't reappear until the user re-promotes via "Show all again".
+  // Stored in deal.meta.case_intel_skipped (array of meta-keys / 'address').
+  const [showSkipped, setShowSkipped] = useState(false);
+  const [applying, setApplying] = useState(null); // null | 'all' | <metaKey>
+  const skippedKeys = (deal?.meta?.case_intel_skipped || []);
 
   const load = async () => {
     const [docsRes, eventsRes] = await Promise.all([
@@ -10708,9 +16102,24 @@ function CaseIntelligence({ dealId, deal, onJumpToTab }) {
   // Aggregate extracted fields across all docs — take the first non-null value.
   // Docs are sorted newest-first so recent wins, but judgment/appraised rarely
   // change so stability is fine.
-  const aggregate = (keys) => {
+  //
+  // Optional `docTypeFilter` (string | string[]) narrows which doc types we
+  // pull from. Needed for surplus_amount where:
+  //   - sheriff_sale_confirmation + surplus_distribution_order → AUTHORITATIVE
+  //     (court-confirmed math)
+  //   - engagement_agreement.surplus_amount_estimated → just Eric's sales-time
+  //     estimate, not the actual surplus
+  // Without the filter, the unrestricted aggregator was picking the engagement
+  // estimate when it was the most recent doc, and proposing it as if it were
+  // verified. Per Eric 2026-05-15 — surfaced via $359k AI proposal vs $226k
+  // actual on a case he'd researched manually.
+  const aggregate = (keys, docTypeFilter) => {
     const list = Array.isArray(keys) ? keys : [keys];
+    const types = docTypeFilter
+      ? (Array.isArray(docTypeFilter) ? docTypeFilter : [docTypeFilter])
+      : null;
     for (const doc of docs) {
+      if (types && !types.includes(doc.extracted?.document_type)) continue;
       for (const k of list) {
         const v = doc.extracted?.fields?.[k];
         if (v != null && v !== '' && !Number.isNaN(v)) return v;
@@ -10719,17 +16128,39 @@ function CaseIntelligence({ dealId, deal, onJumpToTab }) {
     return null;
   };
 
-  const judgment     = aggregate('judgment_amount');
-  const appraised    = aggregate('appraised_value');
-  const salePrice    = aggregate('sale_price');
-  const minBid       = aggregate('minimum_bid');
-  const surplus      = aggregate(['surplus_amount', 'surplus_amount_estimated']);
-  const caseNumber   = aggregate('case_number') || deal.meta?.courtCase;
-  const county       = aggregate('county') || deal.meta?.county;
-  const plaintiff    = aggregate(['plaintiff_name', 'firm_name']);
-  const defendant    = aggregate(['defendant_name', 'client_name']);
-  const propertyAddr = aggregate('property_address') || deal.address;
-  const judge        = aggregate('judge_name');
+  // Prefer the value Nathan edited in Case Details over the AI-extracted
+  // value. Per Nathan 2026-05-05: he updated John Dunn's judgment from
+  // the AI's $910,262.26 to the correct $1,004,005.32 and the display
+  // tiles still showed the old AI number. Source-of-truth is now meta.
+  // Each variable still falls back to AI extraction so brand-new deals
+  // (no manual edits yet) still surface what the docs say.
+  const m = deal?.meta || {};
+  const aiJudgment   = aggregate('judgment_amount');
+  const aiAppraised  = aggregate('appraised_value');
+  const aiSalePrice  = aggregate('sale_price');
+  const aiMinBid     = aggregate('minimum_bid');
+  // surplus: only trust court-authoritative docs. surplus_amount_estimated
+  // from engagement_agreement is a sales-time guess, not a verified amount.
+  // Per Eric 2026-05-15 — was getting $359k AI proposal vs $226k actual
+  // because the engagement-agreement estimate was being treated as truth.
+  const aiSurplus    = aggregate(
+    'surplus_amount',
+    ['surplus_distribution_order', 'sheriff_sale_confirmation']
+  );
+  const judgment     = m.judgmentAmount       ?? aiJudgment;
+  const appraised    = m.courtAppraisalValue  ?? aiAppraised;
+  const salePrice    = m.salePrice            ?? aiSalePrice;
+  const minBid       = m.minimumBidAmount     ?? aiMinBid;
+  // Surplus tile: verifiedSurplus (court-confirmed) > estimatedSurplus
+  // (Nathan's manual estimate) > AI machine-extracted. The order matters:
+  // verified is gospel, manual is reviewed-by-Nathan, AI is best-guess.
+  const surplus      = m.verifiedSurplus      ?? m.estimatedSurplus ?? aiSurplus;
+  const caseNumber   = m.courtCase            || aggregate('case_number');
+  const county       = m.county               || aggregate('county');
+  const plaintiff    = m.plaintiff            || aggregate(['plaintiff_name', 'firm_name']);
+  const defendant    = m.defendant            || aggregate(['defendant_name', 'client_name']);
+  const propertyAddr = deal.address           || aggregate('property_address');
+  const judge        = m.judgeName            || aggregate('judge_name');
 
   // Derived: Ohio statute sets minimum bid at 2/3 of appraised value
   const derivedMinBid = !minBid && appraised ? Math.round((appraised * 2) / 3) : null;
@@ -10821,7 +16252,7 @@ function CaseIntelligence({ dealId, deal, onJumpToTab }) {
       {(caseNumber || county || judge) && (
         <div style={{ fontSize: 10, color: "#78716c", marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {caseNumber && <span>Case {caseNumber}</span>}
-          {county && <>{caseNumber && <span>·</span>}<span>{county} County</span></>}
+          {county && <>{caseNumber && <span>·</span>}<span>{cleanCountyName(county)} County</span></>}
           {judge && <><span>·</span><span>Judge {judge}</span></>}
         </div>
       )}
@@ -10844,6 +16275,227 @@ function CaseIntelligence({ dealId, deal, onJumpToTab }) {
           }
         </div>
       )}
+
+      {/* ── Promote-to-Case-Details panel ────────────────────────────────
+          Per Nathan 2026-05-05: Case Intelligence already aggregates 8-10
+          structured fields from documents.extracted.fields. Surface what's
+          NOT yet in deal.meta as one-click apply rows. Conflict detection
+          on money fields (>10% delta vs current value) flags ⚠ instead
+          of silently overwriting Nathan's manual estimates. */}
+      {(() => {
+        if (!onUpdateDeal) return null;
+        const toNum = (v) => {
+          if (v == null) return null;
+          if (typeof v === 'number') return v;
+          const n = parseFloat(String(v).replace(/[^0-9.-]/g, ''));
+          return Number.isNaN(n) ? null : n;
+        };
+        const moneyDelta = (a, b) => {
+          const na = toNum(a), nb = toNum(b);
+          if (na == null || nb == null || nb === 0) return 0;
+          return Math.abs(na - nb) / Math.max(Math.abs(na), Math.abs(nb));
+        };
+        const textDiff = (a, b) => {
+          if (a == null || b == null) return false;
+          return String(a).trim().toLowerCase() !== String(b).trim().toLowerCase();
+        };
+        // Field map: AI-extracted value → which meta key it lands in.
+        // - kind: 'money' | 'text' | 'address' (address writes to deal.address column, not meta)
+        // - aiValue: what came out of the doc-OCR aggregator above
+        // - existing: what's currently stored
+        // - apply(): write the value to deals row (via onUpdateDeal)
+        // Target meta keys must match what the Case Details form on the
+        // Overview tab uses — otherwise Apply lands the value somewhere
+        // the form never reads, and the user thinks nothing happened.
+        // See SurplusOverview ~13802 for the canonical key names.
+        const candidates = [
+          { key: 'salePrice',           label: 'Sale price',         kind: 'money', aiValue: aiSalePrice, existing: m.salePrice },
+          { key: 'judgmentAmount',      label: 'Judgment debt',      kind: 'money', aiValue: aiJudgment,  existing: m.judgmentAmount },
+          { key: 'courtAppraisalValue', label: 'Court appraisal',    kind: 'money', aiValue: aiAppraised, existing: m.courtAppraisalValue },
+          { key: 'minimumBidAmount',    label: 'Minimum bid',        kind: 'money', aiValue: aiMinBid,    existing: m.minimumBidAmount },
+          { key: 'verifiedSurplus',     label: 'Verified surplus (court-confirmed)',
+                                                                     kind: 'money', aiValue: aiSurplus,   existing: m.verifiedSurplus,
+            // Cross-check against (a) the math (sale - judgment) which is
+            // deterministic, and (b) Nathan/Eric's manual estimate. The
+            // math wins when it's available — surplus is a deterministic
+            // computation, not a guess. Per Eric 2026-05-15: AI was
+            // proposing $359k from an engagement_agreement estimate vs
+            // $226k actual math. Now if AI and math disagree by >10% we
+            // flag it explicitly with the math value as the cross-check.
+            secondaryCompare: (() => {
+              const math = (salePrice != null && judgment != null)
+                ? Math.max(0, salePrice - judgment)
+                : null;
+              if (math != null) return { value: math, label: 'math (sale − judgment)' };
+              if (m.estimatedSurplus != null) return { value: m.estimatedSurplus, label: 'manual est.' };
+              return null;
+            })() },
+          { key: 'courtCase',           label: 'Case number',        kind: 'text',  aiValue: aggregate('case_number'),                  existing: m.courtCase },
+          { key: 'county',              label: 'County',             kind: 'text',  aiValue: aggregate('county'),                       existing: m.county },
+          { key: 'plaintiff',           label: 'Plaintiff',          kind: 'text',  aiValue: aggregate(['plaintiff_name', 'firm_name']), existing: m.plaintiff },
+          { key: 'defendant',           label: 'Defendant',          kind: 'text',  aiValue: aggregate(['defendant_name', 'client_name']), existing: m.defendant },
+          { key: 'judgeName',           label: 'Judge',              kind: 'text',  aiValue: aggregate('judge_name'),                    existing: m.judgeName },
+          // Address goes on the deal row itself, not meta. Special-case below.
+          { key: 'address', metaKey: null, label: 'Property address', kind: 'address', aiValue: aggregate('property_address'), existing: deal.address },
+        ];
+
+        // Compute the rows to show: AI has a value AND (no existing OR conflict)
+        const isEmpty = (v, kind) => {
+          if (v == null || v === '') return true;
+          if (kind === 'money') {
+            const n = toNum(v);
+            return n == null || n === 0;
+          }
+          return false;
+        };
+        const rows = candidates.filter(c => {
+          if (c.aiValue == null || c.aiValue === '') return false;
+          if (!showSkipped && skippedKeys.includes(c.key)) return false;
+          if (isEmpty(c.existing, c.kind)) return true;                        // missing → suggest
+          if (c.kind === 'money')   return moneyDelta(c.aiValue, c.existing) > 0.01; // any gap shows as conflict
+          return textDiff(c.aiValue, c.existing);                              // text differs
+        }).map(c => {
+          let conflict = false, conflictNote = null;
+          if (!isEmpty(c.existing, c.kind)) {
+            if (c.kind === 'money' && moneyDelta(c.aiValue, c.existing) > 0.10) {
+              conflict = true;
+              conflictNote = `current: ${fmtMoney(c.existing)} (${Math.round(moneyDelta(c.aiValue, c.existing) * 100)}% gap)`;
+            } else if (c.kind !== 'money') {
+              conflict = true;
+              conflictNote = `current: "${c.existing}"`;
+            }
+          }
+          // Cross-check secondary value (e.g. machine surplus vs manual estimate)
+          if (!conflict && c.secondaryCompare?.value != null && c.kind === 'money') {
+            const d = moneyDelta(c.aiValue, c.secondaryCompare.value);
+            if (d > 0.10) {
+              conflict = true;
+              conflictNote = `${c.secondaryCompare.label}: ${fmtMoney(c.secondaryCompare.value)} (${Math.round(d * 100)}% gap)`;
+            }
+          }
+          return { ...c, conflict, conflictNote };
+        });
+
+        if (rows.length === 0 && skippedKeys.length === 0) return null;
+
+        const apply = async (row) => {
+          setApplying(row.key);
+          try {
+            const patch = row.kind === 'address'
+              ? { address: row.aiValue }
+              : { meta: { ...m, [row.key]: row.aiValue } };
+            await onUpdateDeal(patch);
+          } finally {
+            setApplying(null);
+          }
+        };
+        const skip = async (row) => {
+          const next = Array.from(new Set([...(skippedKeys || []), row.key]));
+          await onUpdateDeal({ meta: { ...m, case_intel_skipped: next } });
+        };
+        const unskip = async (row) => {
+          const next = (skippedKeys || []).filter(k => k !== row.key);
+          await onUpdateDeal({ meta: { ...m, case_intel_skipped: next } });
+        };
+        const applyAllNonConflict = async () => {
+          setApplying('all');
+          try {
+            const safeRows = rows.filter(r => !r.conflict);
+            if (safeRows.length === 0) { setApplying(null); return; }
+            // Build one combined patch so we don't fire 8 sequential updates.
+            const metaPatches = {};
+            const dealPatches = {};
+            for (const r of safeRows) {
+              if (r.kind === 'address') dealPatches.address = r.aiValue;
+              else                       metaPatches[r.key] = r.aiValue;
+            }
+            const patch = {
+              ...dealPatches,
+              ...(Object.keys(metaPatches).length ? { meta: { ...m, ...metaPatches } } : {}),
+            };
+            await onUpdateDeal(patch);
+          } finally {
+            setApplying(null);
+          }
+        };
+
+        const safeCount = rows.filter(r => !r.conflict).length;
+
+        return (
+          <div style={{ background: '#0f0d0c', border: '1px solid #292524', borderLeft: '2px solid #10b981', borderRadius: 6, padding: '12px 14px', marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: rows.length ? 10 : 0 }}>
+              <div>
+                <span style={{ fontSize: 9, fontWeight: 700, color: '#10b981', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📥 Apply to Case Details</span>
+                <span style={{ fontSize: 11, color: '#a8a29e', marginLeft: 8 }}>
+                  {rows.length === 0
+                    ? 'All AI-found facts already match Case Details.'
+                    : `${rows.length} fact${rows.length === 1 ? '' : 's'} the AI found that aren't in Case Details yet${rows.some(r => r.conflict) ? ` (${rows.filter(r => r.conflict).length} flagged ⚠)` : ''}.`}
+                </span>
+              </div>
+              {safeCount > 1 && (
+                <button onClick={applyAllNonConflict} disabled={applying === 'all'}
+                  style={{ background: applying === 'all' ? '#1c1917' : '#065f46', color: applying === 'all' ? '#78716c' : '#6ee7b7', border: '1px solid ' + (applying === 'all' ? '#44403c' : '#10b981'), borderRadius: 6, padding: '4px 11px', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', cursor: applying === 'all' ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                  {applying === 'all' ? '⏳ Applying…' : `✓ Apply all ${safeCount} (no conflicts)`}
+                </button>
+              )}
+              {skippedKeys.length > 0 && (
+                <button onClick={() => setShowSkipped(s => !s)}
+                  style={{ background: 'transparent', color: '#78716c', border: '1px dashed #44403c', borderRadius: 6, padding: '4px 11px', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                  {showSkipped ? '× hide skipped' : `+ show ${skippedKeys.length} skipped`}
+                </button>
+              )}
+            </div>
+            {rows.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {rows.map(r => {
+                  const isSkipped = skippedKeys.includes(r.key);
+                  const displayValue = r.kind === 'money' ? fmtMoney(r.aiValue) : String(r.aiValue);
+                  return (
+                    <div key={r.key} style={{
+                      display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: 10, alignItems: 'center',
+                      padding: '8px 10px', background: r.conflict ? '#1c0f00' : '#0c0a09',
+                      border: '1px solid ' + (r.conflict ? '#7c2d12' : '#1c1917'),
+                      borderLeft: '2px solid ' + (r.conflict ? '#f59e0b' : '#10b981'),
+                      borderRadius: 5,
+                      opacity: isSkipped ? 0.5 : 1,
+                    }}>
+                      <div style={{ fontSize: 11, color: '#a8a29e', fontWeight: 600 }}>
+                        {r.conflict && <span style={{ marginRight: 4 }}>⚠</span>}
+                        {r.label}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: r.conflict ? '#fbbf24' : '#fafaf9', fontFamily: r.kind === 'money' ? "'DM Mono', monospace" : 'inherit', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {displayValue}
+                        </div>
+                        {r.conflictNote && <div style={{ fontSize: 10, color: '#a8a29e', marginTop: 1 }}>{r.conflictNote}</div>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {isSkipped ? (
+                          <button onClick={() => unskip(r)}
+                            style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 5, padding: '3px 9px', fontSize: 10, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
+                            Restore
+                          </button>
+                        ) : (
+                          <>
+                            <button onClick={() => apply(r)} disabled={applying != null}
+                              style={{ background: applying === r.key ? '#1c1917' : (r.conflict ? '#78350f' : '#065f46'), color: applying === r.key ? '#78716c' : (r.conflict ? '#fbbf24' : '#6ee7b7'), border: 'none', borderRadius: 5, padding: '3px 11px', fontSize: 10, fontWeight: 700, letterSpacing: '0.04em', cursor: applying != null ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                              {applying === r.key ? '…' : (r.conflict ? 'Apply anyway' : 'Apply')}
+                            </button>
+                            <button onClick={() => skip(r)} disabled={applying != null}
+                              style={{ background: 'transparent', color: '#78716c', border: '1px solid #292524', borderRadius: 5, padding: '3px 9px', fontSize: 10, fontWeight: 600, cursor: applying != null ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+                              Skip
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {docs.length > 0 && (() => {
         // Doc type distribution so Nathan sees the shape of the file at a glance
@@ -10938,23 +16590,162 @@ function SubLabel({ children }) {
   );
 }
 
+// Engagement strip — distinct browser fingerprints + external view counts
+// from the personalized_link_views audit table (added 2026-05-08). Reads
+// v_personalized_link_engagement which excludes is_team_view=true rows.
+//
+// Why this exists: prior to per-view tracking, view_count was just a
+// counter incremented on every page hit. 39 views could be 1 person ×
+// 39 refreshes, 39 people × 1 visit, or — as Eric's audit pushback
+// caught — a mix of team testing and homeowner curiosity. This strip
+// shows the metric that actually distinguishes real homeowner
+// engagement from team noise: distinct external fingerprints.
+//
+// Empty state: deals minted before 2026-05-08 won't have audit data
+// until somebody hits their URL again. Pre-existing view_count is
+// preserved on personalized_links.view_count and shown as fallback.
+function EngagementStrip({ deal }) {
+  const [engagement, setEngagement] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const token = deal?.refundlocators_token;
+
+  useEffect(() => {
+    if (!token) { setLoading(false); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('v_personalized_link_engagement')
+        .select('*').eq('token', token).maybeSingle();
+      // Also grab the legacy view_count for fallback display on pre-audit deals.
+      const { data: pl } = await sb.from('personalized_links')
+        .select('view_count, first_viewed_at, last_viewed_at')
+        .eq('token', token).maybeSingle();
+      if (cancelled) return;
+      setEngagement({ ...(data || {}), legacy_view_count: pl?.view_count || 0,
+                      legacy_last_viewed: pl?.last_viewed_at,
+                      legacy_first_viewed: pl?.first_viewed_at });
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  if (!token) return null; // No URL minted → nothing to track
+  if (loading) return null;
+
+  const e = engagement || {};
+  const externalDistinct = e.distinct_external_fingerprints || 0;
+  const externalViews = e.external_views || 0;
+  const externalLast = e.last_external_viewed_at;
+  const external24h = e.external_views_last_24h || 0;
+  const external7d = e.external_views_last_7d || 0;
+  const totalAudited = e.total_views || 0;
+  const legacyCount = e.legacy_view_count || 0;
+  const legacyLast = e.legacy_last_viewed;
+  const auditCoversAll = totalAudited >= legacyCount && totalAudited > 0;
+
+  // Engagement signal color (real homeowner attention, not team).
+  // Honest framing: team views can't be definitively excluded until
+  // TEAM_VIEW_IPS env var is set on the portal Vercel. For now,
+  // distinct_external_fingerprints is the best proxy.
+  let signalColor = '#78716c'; // gray
+  let signalLabel = 'no audited engagement yet';
+  if (externalDistinct >= 3) {
+    signalColor = '#10b981'; // green
+    signalLabel = `${externalDistinct} distinct browsers · likely real interest`;
+  } else if (externalDistinct === 2) {
+    signalColor = '#fbbf24'; // amber
+    signalLabel = `2 distinct browsers · could be homeowner + family`;
+  } else if (externalDistinct === 1) {
+    signalColor = '#fbbf24';
+    signalLabel = `1 distinct browser · single viewer (could be team)`;
+  } else if (legacyCount > 0 && totalAudited === 0) {
+    signalColor = '#78716c';
+    signalLabel = `${legacyCount} legacy views · audit started 2026-05-08, awaiting new traffic`;
+  }
+
+  const fmtTime = (iso) => {
+    if (!iso) return null;
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 60000) return 'just now';
+    if (ms < 3600000) return Math.round(ms/60000) + 'm ago';
+    if (ms < 86400000) return Math.round(ms/3600000) + 'h ago';
+    return Math.round(ms/86400000) + 'd ago';
+  };
+  const lastViewLabel = fmtTime(externalLast || legacyLast);
+
+  return (
+    <div style={{
+      margin: '12px 0 16px',
+      padding: '10px 14px',
+      background: '#0c0a09',
+      border: '1px solid #1c1917',
+      borderLeft: `3px solid ${signalColor}`,
+      borderRadius: 6,
+      display: 'flex',
+      alignItems: 'center',
+      gap: 16,
+      flexWrap: 'wrap',
+      fontSize: 11,
+    }}>
+      <span style={{ fontSize: 9, fontWeight: 800, color: '#a8a29e', letterSpacing: '0.12em', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+        👁 Engagement
+      </span>
+      <span style={{ color: signalColor, fontWeight: 600 }}>{signalLabel}</span>
+      <span style={{ color: '#57534e' }}>·</span>
+      <span style={{ color: '#a8a29e' }}>
+        Views: <b style={{ color: '#d6d3d1' }}>{externalViews}</b> external
+        {totalAudited > externalViews && <span style={{ color: '#78716c' }}> ({totalAudited} total inc. team)</span>}
+      </span>
+      {(external24h > 0 || external7d > 0) && (
+        <>
+          <span style={{ color: '#57534e' }}>·</span>
+          <span style={{ color: '#a8a29e' }}>
+            <b style={{ color: '#d6d3d1' }}>{external24h}</b>/24h · <b style={{ color: '#d6d3d1' }}>{external7d}</b>/7d
+          </span>
+        </>
+      )}
+      {!auditCoversAll && legacyCount > 0 && (
+        <>
+          <span style={{ color: '#57534e' }}>·</span>
+          <span style={{ color: '#78716c', fontStyle: 'italic' }}>
+            {legacyCount} legacy views (pre-audit, source unknown)
+          </span>
+        </>
+      )}
+      {lastViewLabel && (
+        <>
+          <span style={{ color: '#57534e' }}>·</span>
+          <span style={{ color: '#a8a29e' }}>last view: <b style={{ color: '#d6d3d1' }}>{lastViewLabel}</b></span>
+        </>
+      )}
+    </div>
+  );
+}
+
 function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
   const m = deal.meta || {};
   const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
   return (
     <div>
-      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} />
-      <QuickNotes dealId={deal.id} userId={userId} onJumpToTab={onJumpToTab} />
+      <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
+      <EngagementStrip deal={deal} />
+      {/* Notes moved to a slide-out drawer per Nathan 2026-05-04 — see
+          NotesDrawer rendered at the DealDetail level. The drawer
+          handles all reads + writes; this overview no longer plasters
+          notes inline. */}
     <div className="overview-grid" style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 20 }}>
       <div>
         <Card title="Case Details">
           {/* Lead classification — Eric grades A/B/C here. Tier and is_30dts
               live as columns on the deal (not meta), so use onUpdateDeal
-              directly. Deceased status comes from the homeowner contact
-              and is editable from the contact card; surfaced read-only here
-              for context. */}
+              directly. The Deceased toggle (added 2026-05-07 per Eric's
+              flag) writes meta.deceased — tier-INDEPENDENT so C-tier
+              deceased deals get the same visual treatment as B-tier
+              estate cases. Hand-flag here when discovered manually
+              (obituary, family text, etc.); the scraper-fed
+              death_signal column also feeds isDeceased() for
+              auto-detected cases. */}
           <SubLabel>Lead Classification</SubLabel>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <Field label="Lead Tier">
               <select value={deal.lead_tier || ''} onChange={e => onUpdateDeal({ lead_tier: e.target.value || null })} style={{ ...inputStyle, padding: '8px 10px' }}>
                 <option value="">—</option>
@@ -10975,6 +16766,12 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
                 <span style={{ fontSize: 12 }}>{m.verified ? '✓ verified' : 'not verified'}</span>
               </label>
             </Field>
+            <Field label="Deceased">
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: m.deceased ? '#1a0e1f' : '#0c0a09', border: '1px solid ' + (m.deceased ? '#5b21b6' : '#44403c'), borderRadius: 6, height: 22, cursor: 'pointer' }}>
+                <input type="checkbox" checked={!!m.deceased} onChange={e => updateMeta({ deceased: e.target.checked, deceased_at: e.target.checked ? (m.deceased_at || new Date().toISOString()) : null })} style={{ accentColor: '#a855f7' }} />
+                <span style={{ fontSize: 12, color: m.deceased ? '#c4b5fd' : undefined }}>{m.deceased ? '🕊 deceased' : 'owner alive'}</span>
+              </label>
+            </Field>
           </div>
 
           <SubLabel>Case Identity</SubLabel>
@@ -10993,7 +16790,6 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               <Field label="Verified Surplus (court-confirmed)"><input type="number" value={m.verifiedSurplus ?? ""} onChange={e => updateMeta({ verifiedSurplus: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Judgment Debt"><input type="number" value={m.judgmentAmount ?? ""} onChange={e => updateMeta({ judgmentAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Total Debt"><input type="number" value={m.totalDebt ?? ""} onChange={e => updateMeta({ totalDebt: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Estimated Loan Balance"><input type="number" value={m.estimatedLoanBalance ?? ""} onChange={e => updateMeta({ estimatedLoanBalance: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Mortgage Balance 1"><input type="number" value={m.mortgageBalance1 ?? ""} onChange={e => updateMeta({ mortgageBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
               <Field label="Lien Balance 1"><input type="number" value={m.lienBalance1 ?? ""} onChange={e => updateMeta({ lienBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
             </div>
@@ -11230,16 +17026,31 @@ function Expenses({ items, dealId, userId, logAct, reload }) {
 function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ label: "", due: "", owner: teamMembers[0] || "", priority: "med" });
+  // Inline edit state. editingId === task.id when editing one.
+  // Per Nathan 2026-05-05: needed to see + edit open tasks. Lauren's
+  // proposed tasks land via the `title` column (lauren_execute_action),
+  // while manual UI tasks use `label`. Without title-fallback rendering
+  // they showed blank.
+  const [editingId, setEditingId] = useState(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editDue, setEditDue] = useState("");
+  const [editPriority, setEditPriority] = useState("med");
 
   // Show the partner-visible toggle column only when this deal could have a
   // JV partner attached (flip or wholesale). Avoids cluttering the row for
   // surplus / rental / other deals where it'd never apply.
   const isJvCapable = deal && (deal.type === 'flip' || deal.type === 'wholesale');
 
+  // Read helper — task title can be in either `label` (manual UI) or
+  // `title` (Lauren / docket triggers / migration backfills).
+  const taskText = (t) => t.label || t.title || "(untitled task)";
+  // Same idea for due date — `due` (manual) or `due_date` (Lauren/SQL).
+  const taskDue = (t) => t.due || t.due_date || null;
+
   const toggle = async (id) => {
     const it = items.find(i => i.id === id);
     await sb.from('tasks').update({ done: !it.done }).eq('id', id);
-    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${it.label || it.title}`);
+    await logAct(`${!it.done ? "Completed" : "Reopened"}: ${taskText(it)}`);
     reload();
   };
 
@@ -11259,7 +17070,34 @@ function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
   const del = async (id) => {
     const it = items.find(i => i.id === id);
     await sb.from('tasks').delete().eq('id', id);
-    await logAct(`Deleted task: ${it?.label}`);
+    await logAct(`Deleted task: ${taskText(it)}`);
+    reload();
+  };
+
+  const startEdit = (t) => {
+    setEditingId(t.id);
+    setEditLabel(taskText(t) === "(untitled task)" ? "" : taskText(t));
+    setEditDue(taskDue(t) || "");
+    setEditPriority(t.priority || "med");
+  };
+  const cancelEdit = () => { setEditingId(null); setEditLabel(""); setEditDue(""); setEditPriority("med"); };
+  const saveEdit = async () => {
+    if (!editingId) return;
+    const trimmed = editLabel.trim();
+    if (!trimmed) { alert('Task title cannot be empty.'); return; }
+    // Write to BOTH columns so future renders agree regardless of which
+    // path created the task. Update due_date too if column exists.
+    const patch = { label: trimmed, title: trimmed, due: editDue || null, priority: editPriority };
+    // Try with due_date first; if that column doesn't exist on this schema,
+    // PostgREST returns 400 — fall back to without it.
+    let { error } = await sb.from('tasks').update({ ...patch, due_date: editDue || null }).eq('id', editingId);
+    if (error) {
+      const r2 = await sb.from('tasks').update(patch).eq('id', editingId);
+      error = r2.error;
+    }
+    if (error) { alert('Could not save: ' + error.message); return; }
+    await logAct(`Edited task: ${trimmed}`);
+    cancelEdit();
     reload();
   };
 
@@ -11277,35 +17115,77 @@ function Tasks({ items, dealId, userId, teamMembers, logAct, reload, deal }) {
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {sorted.map(t => (
-          <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", background: t.done ? "#0c0a09" : "#1c1917", border: `1px solid ${t.done ? "#1c1917" : "#292524"}`, borderRadius: 8, opacity: t.done ? 0.45 : 1 }}>
-            <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706" }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none" }}>{t.label}</div>
-              <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
-                <span>{t.owner}</span>{t.due && <span>· Due {t.due}</span>}
+        {sorted.map(t => {
+          const isEditing = editingId === t.id;
+          const due = taskDue(t);
+          return (
+            <div key={t.id} style={{ display: "flex", alignItems: isEditing ? "flex-start" : "center", gap: 12, padding: "10px 12px", background: t.done ? "#0c0a09" : "#1c1917", border: `1px solid ${isEditing ? '#d97706' : (t.done ? "#1c1917" : "#292524")}`, borderRadius: 8, opacity: t.done ? 0.45 : 1 }}>
+              {!isEditing && (
+                <input type="checkbox" checked={t.done} onChange={() => toggle(t.id)} style={{ width: 18, height: 18, cursor: "pointer", accentColor: "#d97706", flexShrink: 0 }} />
+              )}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                {isEditing ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 110px", gap: 8, alignItems: "end" }}>
+                    <Field label="Task">
+                      <input value={editLabel} autoFocus onChange={e => setEditLabel(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') saveEdit(); if (e.key === 'Escape') cancelEdit(); }}
+                        style={inputStyle} placeholder="What needs done?" />
+                    </Field>
+                    <Field label="Due">
+                      <input type="date" value={editDue || ""} onChange={e => setEditDue(e.target.value)} style={inputStyle} />
+                    </Field>
+                    <Field label="Priority">
+                      <select value={editPriority} onChange={e => setEditPriority(e.target.value)} style={inputStyle}>
+                        <option value="high">High</option><option value="med">Med</option><option value="low">Low</option>
+                      </select>
+                    </Field>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, fontWeight: 500, textDecoration: t.done ? "line-through" : "none", color: taskText(t) === "(untitled task)" ? "#78716c" : "#fafaf9", fontStyle: taskText(t) === "(untitled task)" ? "italic" : "normal" }}>{taskText(t)}</div>
+                    <div style={{ fontSize: 11, color: "#78716c", marginTop: 2, display: "flex", gap: 10 }}>
+                      {(t.owner || t.assigned_to) && <span>{t.owner || t.assigned_to}</span>}
+                      {due && <span>· Due {due}</span>}
+                    </div>
+                  </>
+                )}
               </div>
+              {!isEditing && <PriorityBadge p={t.priority} />}
+              {!isEditing && isJvCapable && (
+                <button
+                  onClick={() => togglePartner(t.id, !!t.partner_visible)}
+                  title={t.partner_visible ? "Visible to JV partner — click to hide" : "Hidden from JV partner — click to expose"}
+                  style={{
+                    ...btnGhost,
+                    fontSize: 10,
+                    padding: "3px 8px",
+                    color: t.partner_visible ? "#fbbf24" : "#57534e",
+                    borderColor: t.partner_visible ? "#92400e" : "#292524",
+                    background: t.partner_visible ? "#78350f22" : "transparent"
+                  }}
+                >
+                  🤝 JV
+                </button>
+              )}
+              {isEditing ? (
+                <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
+                  <button onClick={saveEdit} style={{ ...btnPrimary, padding: "6px 12px", fontSize: 12 }}>Save</button>
+                  <button onClick={cancelEdit} style={{ ...btnGhost, padding: "6px 12px", fontSize: 12 }}>Cancel</button>
+                </div>
+              ) : (
+                <>
+                  <button onClick={() => startEdit(t)} title="Edit task" style={{ ...btnGhost, padding: "3px 8px", fontSize: 13 }}>✏</button>
+                  <button onClick={() => del(t.id)} title="Delete task" style={btnGhost}>×</button>
+                </>
+              )}
             </div>
-            <PriorityBadge p={t.priority} />
-            {isJvCapable && (
-              <button
-                onClick={() => togglePartner(t.id, !!t.partner_visible)}
-                title={t.partner_visible ? "Visible to JV partner — click to hide" : "Hidden from JV partner — click to expose"}
-                style={{
-                  ...btnGhost,
-                  fontSize: 10,
-                  padding: "3px 8px",
-                  color: t.partner_visible ? "#fbbf24" : "#57534e",
-                  borderColor: t.partner_visible ? "#92400e" : "#292524",
-                  background: t.partner_visible ? "#78350f22" : "transparent"
-                }}
-              >
-                🤝 JV
-              </button>
-            )}
-            <button onClick={() => del(t.id)} style={btnGhost}>×</button>
+          );
+        })}
+        {sorted.length === 0 && (
+          <div style={{ fontSize: 12, color: "#78716c", padding: 18, textAlign: "center", border: "1px dashed #292524", borderRadius: 8 }}>
+            No tasks yet. Click + Add to create one.
           </div>
-        ))}
+        )}
       </div>
     </Card>
   );
@@ -12690,6 +18570,11 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   const [pins, setPins] = useState([]);
   const [envelopes, setEnvelopes] = useState([]);
   const [showDocuSign, setShowDocuSign] = useState(false);
+  const [resendEnv, setResendEnv] = useState(null); // envelope to pre-populate on resend
+  // Parallel eSignatures.com pipeline (added 2026-05-14 — kept separate from DocuSign)
+  const [esigContracts, setEsigContracts] = useState([]);
+  const [showEsig, setShowEsig] = useState(false);
+  const [resendEsig, setResendEsig] = useState(null);
   const fileRef = useRef(null);
 
   // Drag-drop upload state. dragDepth tracks nested dragenter/dragleave so
@@ -12786,6 +18671,22 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
   useEffect(() => {
     const ch = sb.channel('ds-envelopes-' + dealId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docusign_envelopes', filter: `deal_id=eq.${dealId}` }, loadEnvelopes)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [dealId]);
+
+  // Parallel eSignatures.com pipeline — same realtime pattern, different table
+  const loadEsigContracts = async () => {
+    const { data } = await sb.from('esignatures_contracts')
+      .select('*, library_documents(title)')
+      .eq('deal_id', dealId)
+      .order('created_at', { ascending: false });
+    setEsigContracts(data || []);
+  };
+  useEffect(() => { loadEsigContracts(); }, [dealId]);
+  useEffect(() => {
+    const ch = sb.channel('esig-contracts-' + dealId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'esignatures_contracts', filter: `deal_id=eq.${dealId}` }, loadEsigContracts)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [dealId]);
@@ -13224,7 +19125,10 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
       <Card title={`Documents (${items.length}${pins.length > 0 ? ' · ' + pins.length + ' pinned' : ''})`} action={
       <div style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
         <button onClick={() => setShowDocuSign(true)} title="Send a library template via DocuSign for e-signature (email + optional SMS)" style={{ ...btnGhost, fontSize: 11, color: "#d97706", borderColor: "#78350f" }}>
-          📝 Send for signature
+          📝 Send via DocuSign
+        </button>
+        <button onClick={() => setShowEsig(true)} title="Send a library template via eSignatures.com — cheaper, mobile-first, SMS-delivered" style={{ ...btnGhost, fontSize: 11, color: "#10b981", borderColor: "#065f46" }}>
+          ✍ Send via eSignatures
         </button>
         <button onClick={() => { setPickerMode('pin'); setShowLibraryPicker(true); }} title="Expose a library doc on this deal's client or attorney portal without copying" style={{ ...btnGhost, fontSize: 11 }}>
           📌 Pin from library
@@ -13255,8 +19159,19 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
         <DocuSignSendModal
           deal={deal}
           dealId={dealId}
-          onClose={() => setShowDocuSign(false)}
-          onSent={async () => { await loadEnvelopes(); setShowDocuSign(false); }}
+          resendFrom={resendEnv}
+          onClose={() => { setShowDocuSign(false); setResendEnv(null); loadEnvelopes(); }}
+          onSent={loadEnvelopes}
+        />
+      )}
+
+      {showEsig && (
+        <ESignaturesSendModal
+          deal={deal}
+          dealId={dealId}
+          resendFrom={resendEsig}
+          onClose={() => { setShowEsig(false); setResendEsig(null); loadEsigContracts(); }}
+          onSent={loadEsigContracts}
         />
       )}
 
@@ -13298,9 +19213,76 @@ function Documents({ items, dealId, deal, userId, logAct, reload }) {
                   <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 3, background: statusColor + '22', color: statusColor, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
                     {statusLabel}
                   </span>
+                  <button
+                    onClick={() => {
+                      setResendEnv({ library_document_id: env.library_document_id, recipient_name: env.recipient_name, recipient_email: env.recipient_email, recipient_phone: env.recipient_phone || null });
+                      setShowDocuSign(true);
+                    }}
+                    title="Send this document again to the same or a different recipient"
+                    style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#a8a29e", flexShrink: 0 }}
+                  >↩ Resend</button>
                 </div>
                 {env.ds_error && (
                   <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{env.ds_error}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Active eSignatures.com contract status — realtime, parallel to DocuSign panel */}
+      {esigContracts.length > 0 && (
+        <div style={{ marginBottom: 14, padding: "10px 12px", background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #10b981", borderRadius: 6 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+            ✍ eSignatures.com contracts ({esigContracts.length})
+          </div>
+          {esigContracts.map(c => {
+            const statusColor = c.status === 'completed' ? "#10b981"
+              : c.status === 'declined' || c.status === 'withdrawn' || c.status === 'error' ? "#ef4444"
+              : c.status === 'signed' ? "#10b981"
+              : c.status === 'viewed' ? "#3b82f6"
+              : c.status === 'sent' ? "#f59e0b"
+              : "#78716c";
+            const statusLabel = c.status === 'draft' ? 'Draft'
+              : c.status === 'sent' ? 'Waiting for signature'
+              : c.status === 'viewed' ? 'Opened by signer'
+              : c.status === 'signed' ? 'Signed'
+              : c.status === 'completed' ? 'Completed · all signers done'
+              : c.status === 'declined' ? 'Declined by signer'
+              : c.status === 'withdrawn' ? 'Withdrawn'
+              : c.status === 'error' ? 'Error'
+              : c.status;
+            return (
+              <div key={c.id} style={{ padding: "8px 0", borderBottom: "1px solid #1c1917" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 14 }}>✍</span>
+                  <div style={{ flex: 1, minWidth: 180 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#fafaf9" }}>
+                      {c.library_documents?.title || 'Contract'}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                      {c.recipient_name} · {c.recipient_email}{c.send_sms ? ' · + SMS' : ''}
+                      {c.sent_at && <> · sent {new Date(c.sent_at).toLocaleString()}</>}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 3, background: statusColor + '22', color: statusColor, letterSpacing: "0.06em", textTransform: "uppercase", whiteSpace: "nowrap" }}>
+                    {statusLabel}
+                  </span>
+                  {c.signer_url && (
+                    <a href={c.signer_url} target="_blank" rel="noreferrer" title="Open the signer URL (the same link the homeowner gets)" style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#10b981", textDecoration: "none", flexShrink: 0 }}>↗ Link</a>
+                  )}
+                  <button
+                    onClick={() => {
+                      setResendEsig({ library_document_id: c.library_document_id, recipient_name: c.recipient_name, recipient_email: c.recipient_email, recipient_phone: c.recipient_phone || null });
+                      setShowEsig(true);
+                    }}
+                    title="Send this contract again to the same or a different recipient"
+                    style={{ ...btnGhost, fontSize: 10, padding: "3px 8px", color: "#a8a29e", flexShrink: 0 }}
+                  >↩ Resend</button>
+                </div>
+                {c.esig_api_error && (
+                  <div style={{ fontSize: 10, color: "#fca5a5", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{c.esig_api_error}</div>
                 )}
               </div>
             );
@@ -14936,7 +20918,7 @@ function normalizePhone(p) {
   return p;
 }
 
-function OutboundMessages({ dealId, vendors, deal }) {
+function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   // Hoisted to the top: groupThreads useMemo below references this. Was
   // declared mid-function which caused a TDZ ReferenceError ('Cannot access
   // Ce before initialization') the first time a deal had messages with a
@@ -14972,10 +20954,32 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [showIntroModal, setShowIntroModal] = useState(false);
   const [rvmMode, setRvmMode] = useState(false);
   const [rvmPhone, setRvmPhone] = useState('');
-  const [rvmAudioUrl, setRvmAudioUrl] = useState('');
-  const [rvmTemplate, setRvmTemplate] = useState('intro');
+  const [rvmTemplates, setRvmTemplates] = useState([]);
+  const [rvmTemplateId, setRvmTemplateId] = useState('');
+  const [rvmOverrideFirstName, setRvmOverrideFirstName] = useState('');
+  const [rvmCustomNote, setRvmCustomNote] = useState('');  // per-drop hint for AI mode
+  // (rvmDryRun retired 2026-05-07 — split into two-step Generate + Drop flow.
+  //  Generation is always preview-only; drop is its own action with a separate
+  //  confirmation. See generateRvm() and dropExistingRvm() below.)
   const [rvmSending, setRvmSending] = useState(false);
-  const [rvmResult, setRvmResult] = useState(null);
+  const [rvmResult, setRvmResult] = useState(null);  // { type, text, mp3_url, rendered_script, generation_mode, ... }
+  // Feedback state for the AI script (thumbs up/down + optional reason on down)
+  const [rvmFeedbackSaved, setRvmFeedbackSaved] = useState(null);  // 'up' | 'down' | null
+  const [rvmFeedbackNoteOpen, setRvmFeedbackNoteOpen] = useState(false);
+  const [rvmFeedbackNote, setRvmFeedbackNote] = useState('');
+  const [rvmFeedbackSaving, setRvmFeedbackSaving] = useState(false);
+  // Load active RVM templates when the panel opens
+  React.useEffect(() => {
+    if (!rvmMode) return;
+    sb.from('rvm_templates')
+      .select('id, name, cadence_day, script, generation_mode')
+      .eq('active', true)
+      .order('cadence_day', { ascending: true, nullsLast: true })
+      .then(({ data }) => {
+        setRvmTemplates(data || []);
+        if (data && data.length && !rvmTemplateId) setRvmTemplateId(data[0].id);
+      });
+  }, [rvmMode]);
   const [mediaUrl, setMediaUrl] = useState('');
   const [showMediaInput, setShowMediaInput] = useState(false);
   // Drag-drop state for the composer. Per Nathan: drop screenshots
@@ -15017,12 +21021,6 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const [ownerUrl, setOwnerUrl] = useState(null);
   const [mintingContactId, setMintingContactId] = useState(null);
   const [contactRelDraft, setContactRelDraft] = useState('child');
-  // phone_intel: per-phone-number capability cache. Keyed by E.164 string.
-  // Populated on mount from phone_intel table for every phone in the
-  // current contacts list. Mac Mini bridge writes back asynchronously
-  // when probes complete; we listen via realtime.
-  const [phoneIntel, setPhoneIntel] = useState({}); // { '+15135551234': { imessage_capable, line_type, status, ... } }
-  const [probingPhones, setProbingPhones] = useState({}); // { '+15135551234': true } during request
   // Inline relationship-edit state for an already-minted URL. When the user
   // changes the dropdown next to "· child", we update personalized_links
   // AND contact_deals in one shot so the public rendered page + the
@@ -15077,32 +21075,149 @@ function OutboundMessages({ dealId, vendors, deal }) {
     if (error) alert('Could not delete: ' + error.message);
   };
 
-  const RVM_TEMPLATES = {
-    intro:    { label: 'Intro — surplus funds', url: '' },
-    followup: { label: 'Follow-up day 3',       url: '' },
-    final:    { label: 'Final touch day 7',      url: '' },
-  };
-
-  const dropRvm = async () => {
-    if (!rvmPhone.trim() || rvmSending) return;
+  // Drop a personalized RVM. drop-rvm renders the template's script with
+  // merge fields (or asks Claude for an AI-personalized script), generates
+  // audio via Fish Audio using Nathan's voice clone, uploads the mp3 to
+  // Supabase Storage, and — when dry_run=false and Slybroadcast secrets
+  // are configured — POSTs the audio URL to Slybroadcast for delivery.
+  //
+  // The response carries `delivery_status`:
+  //   dry_run         — preview only, no drop attempted
+  //   no_phone        — couldn't resolve a recipient phone number
+  //   audio_generated — Slybroadcast secrets not configured (audio is in storage but not delivered)
+  //   rvm_sent        — Slybroadcast accepted the drop, will deliver shortly
+  //   rvm_failed      — Slybroadcast rejected the drop (see delivery_error)
+  // Two-step RVM flow:
+  //   1. generateRvm() — always preview-only (server-side dry_run=true). User
+  //      reviews the rendered script + listens to the audio. No drop yet.
+  //   2. dropExistingRvm() — uses the message_id from step 1 to ask the server
+  //      to push that already-generated audio to Slybroadcast. No regen.
+  const generateRvm = async () => {
+    if (!rvmTemplateId || rvmSending) return;
     setRvmSending(true); setRvmResult(null);
+    setRvmFeedbackSaved(null); setRvmFeedbackNoteOpen(false); setRvmFeedbackNote('');
     try {
       const { data, error } = await sb.functions.invoke('drop-rvm', {
         body: {
-          to: rvmPhone.trim(),
-          audio_url: rvmAudioUrl.trim() || RVM_TEMPLATES[rvmTemplate]?.url,
+          template_id: rvmTemplateId,
           deal_id: dealId,
-          contact_id: activeContact?.contact_id,
-          template: RVM_TEMPLATES[rvmTemplate]?.label,
+          contact_id: activeContact?.contact_id || null,
+          to_number: rvmPhone.trim() || undefined,
+          override_first_name: rvmOverrideFirstName.trim() || undefined,
+          custom_note: rvmCustomNote.trim() || undefined,
+          dry_run: true,  // preview-only — drop is a separate explicit action
         }
       });
       if (error) throw error;
       if (data?.error) throw new Error(data.details || data.error);
-      setRvmResult({ type: 'success', text: 'Voicemail dropped successfully.' });
+      setRvmResult({
+        type: 'success',
+        text: '🎧 Audio generated. Listen below — when you\'re happy with it, click "📣 Drop now" to send.',
+        mp3_url: data?.mp3_url,
+        rendered_script: data?.rendered_script,
+        generation_mode: data?.generation_mode,
+        case_intel_used: data?.case_intel_used,
+        message_id: data?.message_id,
+        template_id: rvmTemplateId,
+        custom_note_used: data?.custom_note_used,
+        // Stage flags drive button visibility — "preview" = ready to drop
+        stage: 'preview',
+        to_number: data?.to_number,
+      });
     } catch (e) {
-      setRvmResult({ type: 'error', text: 'Failed: ' + (e.message || 'unknown') });
+      setRvmResult({ type: 'error', text: 'Failed to generate: ' + (e.message || 'unknown'), stage: 'error' });
     }
     setRvmSending(false);
+  };
+
+  // Drop the previously-generated voicemail. Called from the preview panel.
+  // Hard confirmation since drops are irreversible + cost money.
+  const dropExistingRvm = async () => {
+    if (!rvmResult?.message_id || rvmSending) return;
+    const phone = rvmResult.to_number || rvmPhone.trim() || activeContact?.phone || '(unknown)';
+    const tplName = rvmTemplates.find(t => t.id === rvmResult.template_id)?.name || 'this template';
+    if (!window.confirm(
+      `Drop the voicemail you just generated?\n\n` +
+      `Template: ${tplName}\n` +
+      `Recipient: ${phone}\n\n` +
+      `This will POST the audio to Slybroadcast for delivery. Cannot be undone.`
+    )) return;
+    setRvmSending(true);
+    try {
+      const { data, error } = await sb.functions.invoke('drop-rvm', {
+        body: { existing_message_id: rvmResult.message_id }
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.details || data.error);
+      const status = data?.delivery_status;
+      let bannerType = 'success';
+      let bannerText;
+      if (status === 'rvm_sent') {
+        bannerText = `✅ Voicemail dropped to ${data.to_number}. Slybroadcast accepted — typical delivery in 60-120s.${data.delivery_session_id ? ` Session: ${data.delivery_session_id}` : ''}`;
+      } else if (status === 'rvm_failed') {
+        bannerType = 'warning';
+        bannerText = `⚠ Slybroadcast rejected the drop: ${data.delivery_error || 'unknown error'}. The audio is still saved — you can retry.`;
+      } else {
+        bannerType = 'warning';
+        bannerText = `⚠ Unexpected delivery status: ${status || '(none)'}.`;
+      }
+      // Keep the existing preview info (script + mp3_url) so the user still has
+      // context after the drop. Just swap the banner + advance the stage.
+      setRvmResult(r => ({
+        ...r,
+        type: bannerType,
+        text: bannerText,
+        delivery_status: status,
+        delivery_session_id: data?.delivery_session_id,
+        delivery_error: data?.delivery_error,
+        stage: status === 'rvm_sent' ? 'sent' : 'drop_failed',
+      }));
+      // On success, auto-close the compose panel after a brief moment so the
+      // user can read the success banner — then return them to the thread
+      // (where the dropped voicemail now appears as its own entry). Per
+      // Justin 2026-05-07: a stuck-open compose panel after the drop ate
+      // most of the thread height.
+      if (status === 'rvm_sent') {
+        setTimeout(() => {
+          setRvmMode(false);
+          setRvmResult(null);
+          setRvmCustomNote('');
+          setRvmOverrideFirstName('');
+          setRvmPhone('');
+        }, 2500);
+      }
+    } catch (e) {
+      setRvmResult(r => ({
+        ...r,
+        type: 'error',
+        text: 'Drop failed: ' + (e.message || 'unknown') + ' — audio is still saved, you can retry.',
+        stage: 'drop_failed',
+      }));
+    }
+    setRvmSending(false);
+  };
+
+  // Save feedback on the AI-generated script. Direct INSERT — RLS gates to admin.
+  const saveRvmFeedback = async (rating, note) => {
+    if (rvmFeedbackSaving || !rvmResult || rvmResult.generation_mode !== 'ai_personalized') return;
+    setRvmFeedbackSaving(true);
+    try {
+      const { error } = await sb.from('rvm_ai_feedback').insert({
+        message_id: rvmResult.message_id || null,
+        template_id: rvmResult.template_id || null,
+        deal_id: dealId || null,
+        rating,
+        rendered_script: rvmResult.rendered_script,
+        custom_note_used: rvmResult.custom_note_used || null,
+        feedback_note: note?.trim() || null,
+      });
+      if (error) throw error;
+      setRvmFeedbackSaved(rating);
+      setRvmFeedbackNoteOpen(false);
+    } catch (e) {
+      alert('Could not save feedback: ' + (e.message || 'unknown'));
+    }
+    setRvmFeedbackSaving(false);
   };
 
   // Virtual "Everyone" contact — shows every message / call / note on the
@@ -15149,8 +21264,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
         return { ...entry, phone: p, _phoneShort: idx === 0 ? null : last4 || p };
       });
     };
-    if (deal?.meta?.homeownerPhone)
-      expandPhones({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: deal.meta.homeownerPhone, _homeowner: true }).forEach(add);
+    {
+      const homeownerPh = dealMetaPhone(deal?.meta);
+      if (homeownerPh)
+        expandPhones({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: homeownerPh, _homeowner: true }).forEach(add);
+    }
     (vendors || []).filter(v => v.phone).forEach(v =>
       expandPhones({ name: v.name, role: v.role || 'Vendor', phone: v.phone }).forEach(add));
     dcContacts.filter(c => c.phone).forEach(c =>
@@ -15159,42 +21277,6 @@ function OutboundMessages({ dealId, vendors, deal }) {
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
 
-  // ── Phone intel: load capability per phone + realtime subscribe ──────────
-  const loadPhoneIntel = async () => {
-    const phones = Array.from(new Set(
-      contacts.map(c => normalizePhone(c.phone)).filter(Boolean)
-    ));
-    if (phones.length === 0) return;
-    const { data } = await sb.from('phone_intel')
-      .select('*').in('phone_e164', phones);
-    const map = {};
-    (data || []).forEach(r => { map[r.phone_e164] = r; });
-    setPhoneIntel(map);
-  };
-  useEffect(() => {
-    loadPhoneIntel();
-    const ch = sb.channel('phone-intel-' + dealId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'phone_intel' }, loadPhoneIntel)
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-    // eslint-disable-next-line
-  }, [dealId, contacts.length]);
-
-  // Queue (or re-queue) a probe of a number. Bridge polls phone_intel
-  // WHERE status='queued' and runs the AppleScript Messages probe.
-  const probePhone = async (rawPhone) => {
-    const e164 = normalizePhone(rawPhone);
-    if (!e164) return;
-    setProbingPhones(p => ({ ...p, [e164]: true }));
-    try {
-      const { error } = await sb.rpc('queue_phone_probe', { p_phone_e164: e164 });
-      if (error) { alert('Could not queue probe: ' + error.message); return; }
-      await loadPhoneIntel();
-    } finally {
-      setProbingPhones(p => { const x = { ...p }; delete x[e164]; return x; });
-    }
-  };
-
   // ── Load messages + calls + notes for this deal ──────────────────────────
   const load = async () => {
     // Only fetch messages explicitly assigned to this deal.
@@ -15202,8 +21284,15 @@ function OutboundMessages({ dealId, vendors, deal }) {
     // by showing any message whose to_number matched a contact, regardless
     // of which deal it was routed to.
     const [msgsRes, callsRes, emailsRes, notesRes] = await Promise.all([
+      // Show successfully-sent RVMs in the comms thread alongside SMS/calls,
+      // but hide preview/dry-run rows — those are intermediate state from the
+      // compose panel, the recipient never received them. The renderer treats
+      // sent RVMs as a distinct entry type (audio player + "voicemail" label),
+      // not a text bubble (the body is the spoken script, not text the
+      // recipient sees).
       sb.from('messages_outbound')
         .select('*').eq('deal_id', dealId)
+        .or('channel.neq.rvm,and(channel.eq.rvm,status.in.(rvm_sent,rvm_delivered,rvm_undeliverable))')
         .order('created_at', { ascending: true }).limit(200),
       sb.from('call_logs')
         .select('*').eq('deal_id', dealId)
@@ -15312,6 +21401,8 @@ function OutboundMessages({ dealId, vendors, deal }) {
     }
   };
 
+  const fmtDuration = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
   // ── Load unmatched inbound for this deal ─────────────────────────────────
   const loadUnmatched = async () => {
     const phones = contacts.map(c => normalizePhone(c.phone)).filter(Boolean);
@@ -15326,10 +21417,12 @@ function OutboundMessages({ dealId, vendors, deal }) {
     loadDealContacts();
     loadContactUrls();
     load();
-    sb.from('phone_numbers').select('*').eq('active', true).eq('gateway', 'mac_bridge').order('created_at').then(({ data }) => {
+    sb.from('phone_numbers').select('*').eq('active', true).order('created_at').then(({ data }) => {
       const nums = data || [];
       setPhoneNumbers(nums);
-      if (nums.length > 0 && !fromNumber) setFromNumber(nums[0].number);
+      // Default to the Twilio number so outbound calls show the business line
+      const twilioNum = nums.find(n => n.gateway === 'twilio') || nums[0];
+      if (twilioNum && !fromNumber) setFromNumber(twilioNum.number);
     });
     const ch = sb.channel(`comms-${dealId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
@@ -15343,10 +21436,17 @@ function OutboundMessages({ dealId, vendors, deal }) {
 
   useEffect(() => { loadUnmatched(); }, [contacts.length]);
 
-  // Default to the Everyone view so Nathan sees the merged thread on open.
+  // Restore persisted contact tab, or default to Everyone.
+  // Stored as the contact's phone number (or '_everyone') in localStorage.
   useEffect(() => {
-    if (!activeContact) setActiveContact(EVERYONE_CONTACT);
-  }, []);
+    if (activeContact) return; // already set (e.g. deep-link)
+    const stored = localStorage.getItem(`comms_contact_${dealId}`);
+    if (stored && stored !== '_everyone' && contacts.length > 0) {
+      const match = contacts.find(c => c.phone === stored);
+      if (match) { setActiveContact(match); return; }
+    }
+    setActiveContact(EVERYONE_CONTACT);
+  }, [contacts.length]); // re-run once contacts load so we can match by phone
 
   useEffect(() => {
     if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
@@ -15424,8 +21524,15 @@ function OutboundMessages({ dealId, vendors, deal }) {
   // context about the whole case, not one conversation.
   const threadItems = React.useMemo(() => {
     const items = [];
-    // Messages
-    threadMsgs.forEach(m => items.push({ _kind: 'message', _ts: m.created_at, ...m }));
+    // Messages — split by channel: SMS/iMessage become 'message'; RVM rows
+    // (only the successfully-sent ones survive the deal-load filter) become
+    // 'rvm' with their own render path (audio player + voicemail label
+    // instead of a text bubble — the body is the spoken script).
+    threadMsgs.forEach(m => items.push({
+      _kind: m.channel === 'rvm' ? 'rvm' : 'message',
+      _ts: m.created_at,
+      ...m,
+    }));
     // Calls — Everyone view shows all, otherwise just for the active contact
     if (activeContact?._everyone) {
       calls.forEach(c => items.push({ _kind: 'call', _ts: c.started_at || c.created_at, ...c }));
@@ -15692,11 +21799,38 @@ function OutboundMessages({ dealId, vendors, deal }) {
   const visibleContacts = contacts.filter(c => !hiddenThreads.has(normalizePhone(c.phone)));
   const msgCount = c => msgs.filter(m => normalizePhone(m.to_number) === normalizePhone(c.phone) || normalizePhone(m.from_number) === normalizePhone(c.phone)).length;
 
-  const bubbleBg = s => s === 'failed' ? '#2d0a0a' : s === 'queued' ? '#292524' : '#92400e';
-  const statusIcon = s => s === 'sent' ? '✓' : s === 'failed' ? '✗' : '···';
-  const statusColor = s => s === 'sent' ? '#22c55e' : s === 'failed' ? '#ef4444' : '#78716c';
+  // SMS status visual treatment. Twilio statuses flow:
+  //   queued → sending → sent → delivered (or undelivered/failed)
+  // The twilio-sms-status Edge Function flips us from 'sent' to the real
+  // outcome via Twilio's StatusCallback. Until that callback fires (~10s
+  // typical, up to a few minutes for unreachable carriers), we sit at
+  // 'sent' = "carrier accepted" — which is real but NOT the same as
+  // delivered. UI distinguishes:
+  //   delivered          → brighter orange + ✓✓ green (carrier confirmed)
+  //   sent               → default orange + ✓ grey (acceptance, awaiting)
+  //   undelivered/failed → dark red + ✗ + reason ribbon below
+  //   queued/sending     → grey + ···
+  const bubbleBg = s => {
+    if (s === 'failed' || s === 'undelivered') return '#2d0a0a';
+    if (s === 'queued' || s === 'sending') return '#292524';
+    if (s === 'delivered') return '#b45309';
+    return '#92400e';
+  };
+  const statusIcon = s => {
+    if (s === 'delivered') return '✓✓';
+    if (s === 'sent') return '✓';
+    if (s === 'undelivered' || s === 'failed') return '✗';
+    return '···';
+  };
+  const statusColor = s => {
+    if (s === 'delivered') return '#22c55e';
+    if (s === 'sent') return '#a8a29e';
+    if (s === 'undelivered' || s === 'failed') return '#ef4444';
+    return '#78716c';
+  };
 
   return (
+    <>
     <div className="comms-container" style={{ display: 'flex', flexDirection: 'column', height: 600, background: '#0c0a09', border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
 
       {/* Unmatched-contact banner */}
@@ -15726,7 +21860,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
           const active = activeContact?._everyone;
           const total  = msgs.length + calls.length + dealNotes.length;
           return (
-            <button key="_everyone" onClick={() => { setActiveContact(EVERYONE_CONTACT); setNewMode(false); setGroupMode(false); }}
+            <button key="_everyone" onClick={() => { setActiveContact(EVERYONE_CONTACT); setNewMode(false); setGroupMode(false); localStorage.setItem(`comms_contact_${dealId}`, '_everyone'); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: active ? 'rgba(217, 119, 6, 0.08)' : 'transparent', border: 'none', borderBottom: active ? '2px solid #d97706' : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 110, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 <span style={{ fontSize: 11, marginRight: 1 }}>👨‍👩‍👧</span>
@@ -15741,24 +21875,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
           const active = activeContact?.phone === c.phone;
           const count  = msgCount(c);
           const color  = participantColor(c.name);
-          const intel  = phoneIntel[normalizePhone(c.phone)];
-          // Dot color reflects probe result: blue=iMessage, green=SMS,
-          // gray-with-slash=landline/voip/unreachable, amber=probing,
-          // translucent=unprobed. Tooltip on hover explains.
-          const dot = (() => {
-            if (!intel) return { bg: '#44403c', title: 'Not yet probed for iMessage. Click the phone tab and use the Probe button below.' };
-            if (intel.status === 'queued' || intel.status === 'probing') return { bg: '#fbbf24', title: `Probe ${intel.status}…` };
-            if (intel.imessage_capable === true) return { bg: '#3b82f6', title: 'iMessage (blue) — outbound will route via iPhone bridge' };
-            if (intel.imessage_capable === false) return { bg: '#10b981', title: 'SMS only (green) — outbound will route via Twilio' };
-            if (['landline','voip','unreachable'].includes(intel.line_type)) return { bg: '#78716c', title: `${intel.line_type} — texting won't reach this number` };
-            return { bg: '#44403c', title: 'Probe result unknown' };
-          })();
           return (
-            <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); }}
+            <button key={c.phone} onClick={() => { setActiveContact(c); setNewMode(false); localStorage.setItem(`comms_contact_${dealId}`, c.phone || '_everyone'); }}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', padding: '8px 14px', background: 'transparent', border: 'none', borderBottom: active ? `2px solid ${color}` : '2px solid transparent', borderRight: '1px solid #1c1917', cursor: 'pointer', flexShrink: 0, minWidth: 90, maxWidth: 140, gap: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5, width: '100%' }}>
                 {c.deceased && <span title="Deceased — outreach disabled" style={{ fontSize: 11, flexShrink: 0 }}>🕊️</span>}
-                <span title={dot.title} style={{ width: 7, height: 7, borderRadius: '50%', background: dot.bg, flexShrink: 0, boxShadow: dot.bg === '#fbbf24' ? '0 0 6px rgba(251,191,36,0.6)' : 'none' }} />
                 <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? '#fafaf9' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, textDecoration: c.deceased ? 'line-through' : 'none' }}>
                   {c.name.split(' ')[0]}
                 </span>
@@ -15807,7 +21928,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
           style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: rvmMode ? '2px solid #f97316' : '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: rvmMode ? '#f97316' : '#57534e', fontSize: 11, fontWeight: 600 }}>
           📣 Drop VM
         </button>
-        {deal.meta?.homeownerPhone && (
+        {dealMetaPhone(deal.meta) && (
           <button onClick={() => setShowIntroModal(true)}
             title="Send a pre-filled intro text to the homeowner"
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, padding: '8px 12px', background: 'transparent', border: 'none', borderBottom: '2px solid transparent', cursor: 'pointer', flexShrink: 0, color: '#6ee7b7', fontSize: 11, fontWeight: 600 }}>
@@ -15878,40 +21999,176 @@ function OutboundMessages({ dealId, vendors, deal }) {
         <SendIntroTextModal deal={deal} onClose={() => setShowIntroModal(false)} onSent={load} />
       )}
 
-      {/* RVM compose panel */}
+      {/* RVM compose panel — Fish Audio TTS + Nathan's voice clone, Slybroadcast delivery */}
       {rvmMode && (
-        <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+        // maxHeight + overflowY so the panel itself scrolls when its content
+        // grows past the viewport (after Generate, the result banner adds
+        // rendered script + audio player + drop button + feedback UI; with
+        // feedback open the Save button was getting cut off below the fold
+        // and the parent flex container's overflow:hidden swallowed the
+        // scrollbar). Matches the email-compose panel's `maxHeight: 60%`
+        // convention so the visible thread is never fully eclipsed by the
+        // compose panel. Per Justin 2026-05-07 — caught in QA.
+        <div style={{ padding: 14, borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, maxHeight: '60%', overflowY: 'auto' }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#f97316', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
             📣 Drop Ringless Voicemail
+            <span style={{ fontWeight: 400, color: '#78716c', textTransform: 'none', letterSpacing: 0, marginLeft: 8 }}>
+              · Nathan's voice (Fish Audio) · Slybroadcast delivery
+            </span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr', gap: '8px 10px', alignItems: 'center', marginBottom: 10 }}>
-            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To:</label>
-            <input value={rvmPhone} onChange={e => setRvmPhone(e.target.value)}
-              placeholder="+1 (555) 000-0000"
-              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+          <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '8px 10px', alignItems: 'center', marginBottom: 10 }}>
             <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Template:</label>
-            <select value={rvmTemplate} onChange={e => setRvmTemplate(e.target.value)}
+            <select value={rvmTemplateId} onChange={e => setRvmTemplateId(e.target.value)}
               style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }}>
-              {Object.entries(RVM_TEMPLATES).map(([key, t]) => (
-                <option key={key} value={key}>{t.label}</option>
+              {rvmTemplates.length === 0 && <option value="">(no templates yet — add via SQL or admin tool)</option>}
+              {rvmTemplates.map(t => (
+                <option key={t.id} value={t.id}>
+                  {t.cadence_day != null ? `Day ${t.cadence_day} — ` : ''}{t.name}{t.generation_mode === 'ai_personalized' ? '  🤖' : ''}
+                </option>
               ))}
             </select>
-            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>Audio URL:</label>
-            <input value={rvmAudioUrl} onChange={e => setRvmAudioUrl(e.target.value)}
-              placeholder="Override audio URL (optional)"
+            {(() => {
+              const sel = rvmTemplates.find(t => t.id === rvmTemplateId);
+              if (sel?.generation_mode === 'ai_personalized') {
+                return (
+                  <div style={{ gridColumn: '2 / 3', fontSize: 11, color: '#a8a29e', fontStyle: 'italic', marginTop: -4 }}>
+                    🤖 AI-personalized — will refresh case intelligence and write a per-case script. Adds ~5-10s and a small Claude cost ({'<'}$0.005).
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>To (override):</label>
+            <input value={rvmPhone} onChange={e => setRvmPhone(e.target.value)}
+              placeholder="Leave blank to use deal/contact phone"
+              style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+            <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right' }}>{'{first_name}'} override:</label>
+            <input value={rvmOverrideFirstName} onChange={e => setRvmOverrideFirstName(e.target.value)}
+              placeholder="Leave blank to use contact/deal name"
               style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none' }} />
+            <div style={{ gridColumn: '2 / 3', fontSize: 11, color: '#78716c' }}>
+              Two-step flow: generate the voicemail first, then review the audio + script before dropping it.
+            </div>
+            {(() => {
+              const sel = rvmTemplates.find(t => t.id === rvmTemplateId);
+              if (sel?.generation_mode !== 'ai_personalized') return null;
+              return (<>
+                <label style={{ fontSize: 11, color: '#78716c', textAlign: 'right', alignSelf: 'start', paddingTop: 6 }}>Custom note:</label>
+                <textarea value={rvmCustomNote} onChange={e => setRvmCustomNote(e.target.value)}
+                  placeholder="Anything specific to weave in (optional). e.g. 'mention the upcoming court date June 4th' or 'they have an attorney we can coordinate with'"
+                  rows={2}
+                  style={{ background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', minHeight: 44 }} />
+              </>);
+            })()}
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-            <button onClick={() => { setRvmMode(false); setRvmResult(null); setRvmAudioUrl(''); }}
+            <button onClick={() => { setRvmMode(false); setRvmResult(null); }}
               style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-            <button onClick={dropRvm} disabled={rvmSending || !rvmPhone.trim()}
-              style={{ background: (!rvmSending && rvmPhone.trim()) ? '#f97316' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
-              {rvmSending ? 'Dropping…' : '📣 Drop VM'}
+            <button onClick={generateRvm} disabled={rvmSending || !rvmTemplateId}
+              style={{ background: (!rvmSending && rvmTemplateId) ? '#f97316' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 16px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+              {rvmSending && rvmResult?.stage !== 'preview'
+                ? 'Generating…'
+                : (rvmResult?.stage === 'preview' || rvmResult?.stage === 'sent' || rvmResult?.stage === 'drop_failed' ? '🔄 Regenerate' : '🎧 Generate preview')}
             </button>
           </div>
           {rvmResult && (
-            <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, fontSize: 12, background: rvmResult.type === 'success' ? '#064e3b' : '#7f1d1d', color: rvmResult.type === 'success' ? '#6ee7b7' : '#fca5a5' }}>
-              {rvmResult.text}
+            <div style={{
+              marginTop: 10, padding: '10px 12px', borderRadius: 6, fontSize: 12,
+              background:
+                rvmResult.type === 'success' ? '#064e3b' :
+                rvmResult.type === 'warning' ? '#78350f' :
+                '#7f1d1d',
+              color:
+                rvmResult.type === 'success' ? '#6ee7b7' :
+                rvmResult.type === 'warning' ? '#fcd34d' :
+                '#fca5a5',
+            }}>
+              <div>{rvmResult.text}</div>
+              {rvmResult.rendered_script && (
+                <div style={{ marginTop: 6, fontFamily: "'DM Mono', monospace", fontSize: 11, color: '#a8a29e', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 6 }}>
+                  <div style={{ color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, marginBottom: 3, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>rendered script</span>
+                    {rvmResult.generation_mode && (
+                      <span style={{ color: rvmResult.generation_mode === 'ai_personalized' ? '#a78bfa' : '#78716c' }}>
+                        {rvmResult.generation_mode === 'ai_personalized' ? '🤖 AI · case intel ' + (rvmResult.case_intel_used ? 'used' : 'unavailable') : 'merge fields'}
+                      </span>
+                    )}
+                  </div>
+                  {rvmResult.rendered_script}
+                </div>
+              )}
+              {rvmResult.mp3_url && (
+                <audio controls src={rvmResult.mp3_url} style={{ marginTop: 8, width: '100%' }} />
+              )}
+              {/* Drop-now action — appears once a preview is generated and we
+                  haven't already sent. After a successful send the button is
+                  replaced with the success banner; on failure the user can
+                  retry by clicking it again. */}
+              {rvmResult.message_id && rvmResult.stage !== 'sent' && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.1)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ fontSize: 11, color: '#a8a29e' }}>
+                    {rvmResult.stage === 'drop_failed'
+                      ? 'Audio is still saved — you can retry the drop without regenerating.'
+                      : 'Reviewed the audio? Send it →'}
+                  </div>
+                  <button onClick={dropExistingRvm} disabled={rvmSending}
+                    style={{
+                      background: rvmSending ? '#292524' : (rvmResult.stage === 'drop_failed' ? '#dc2626' : '#16a34a'),
+                      border: 'none',
+                      color: '#fafaf9',
+                      borderRadius: 6,
+                      padding: '6px 16px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: rvmSending ? 'default' : 'pointer',
+                      fontFamily: 'inherit',
+                    }}>
+                    {rvmSending
+                      ? 'Dropping…'
+                      : (rvmResult.stage === 'drop_failed' ? '🔁 Retry drop' : `📣 Drop now to ${rvmResult.to_number || 'recipient'}`)}
+                  </button>
+                </div>
+              )}
+              {/* Feedback — AI mode only. Shapes the next AI script via few-shot. */}
+              {rvmResult.generation_mode === 'ai_personalized' && rvmResult.message_id && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+                  {rvmFeedbackSaved ? (
+                    <div style={{ fontSize: 11, color: rvmFeedbackSaved === 'up' ? '#86efac' : '#fca5a5' }}>
+                      Saved {rvmFeedbackSaved === 'up' ? '👍' : '👎'} — Claude will use this on the next AI generation.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 11, color: '#a8a29e' }}>Train Claude on this script:</span>
+                      <button onClick={() => saveRvmFeedback('up', null)} disabled={rvmFeedbackSaving}
+                        style={{ background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.5)', color: '#86efac', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        👍 Sounds good
+                      </button>
+                      <button onClick={() => setRvmFeedbackNoteOpen(true)} disabled={rvmFeedbackSaving}
+                        style={{ background: 'rgba(220,38,38,0.15)', border: '1px solid rgba(220,38,38,0.5)', color: '#fca5a5', borderRadius: 6, padding: '4px 12px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        👎 Off — give feedback
+                      </button>
+                    </div>
+                  )}
+                  {rvmFeedbackNoteOpen && !rvmFeedbackSaved && (
+                    <div style={{ marginTop: 8 }}>
+                      <textarea value={rvmFeedbackNote} onChange={e => setRvmFeedbackNote(e.target.value)}
+                        placeholder="What was wrong? (e.g. 'too pushy', 'wrong angle — they care about the timeline more than the dollar amount', 'said the address weird')"
+                        rows={2}
+                        style={{ width: '100%', background: '#1c1917', border: '1px solid #292524', color: '#fafaf9', borderRadius: 5, padding: '6px 10px', fontSize: 12, fontFamily: 'inherit', outline: 'none', resize: 'vertical', boxSizing: 'border-box' }} />
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 6 }}>
+                        <button onClick={() => { setRvmFeedbackNoteOpen(false); setRvmFeedbackNote(''); }}
+                          style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 5, padding: '4px 10px', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          Cancel
+                        </button>
+                        <button onClick={() => saveRvmFeedback('down', rvmFeedbackNote)} disabled={rvmFeedbackSaving}
+                          style={{ background: '#dc2626', border: 'none', color: '#fafaf9', borderRadius: 5, padding: '4px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+                          {rvmFeedbackSaving ? 'Saving…' : 'Save 👎'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -15992,8 +22249,11 @@ function OutboundMessages({ dealId, vendors, deal }) {
         </div>
       )}
 
-      {/* Thread header */}
-      {activeContact && (
+      {/* Thread header — hidden during RVM compose so the voicemail panel
+          doesn't get confused with a thread reply UI ("pick a tab to reply
+          individually" was reading as a duplicate of the tab strip per
+          Justin 2026-05-05) */}
+      {activeContact && !rvmMode && (
         <div className="thread-header" style={{ padding: '8px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ width: 30, height: 30, borderRadius: '50%', background: activeContact._everyone ? '#d97706' : participantColor(activeContact.name), display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, flexShrink: 0, color: '#fff', fontWeight: 700 }}>
             {activeContact._everyone ? '👨‍👩‍👧' : (activeContact.name || '?')[0].toUpperCase()}
@@ -16007,6 +22267,21 @@ function OutboundMessages({ dealId, vendors, deal }) {
               }
             </div>
           </div>
+          {activeContact && !activeContact._everyone && activeContact.phone && (
+            <button
+              onClick={() => startCall(activeContact)}
+              disabled={!!callStatus}
+              title={`Call ${activeContact.name}`}
+              style={{
+                background: callStatus ? '#292524' : '#16a34a',
+                border: 'none', color: '#fff', borderRadius: '50%',
+                width: 32, height: 32, fontSize: 15, cursor: callStatus ? 'default' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                flexShrink: 0, opacity: callStatus ? 0.4 : 1,
+              }}>
+              📞
+            </button>
+          )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <div className="thread-header-from" style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
               <span style={{ fontSize: 9, color: '#57534e', textTransform: 'uppercase', letterSpacing: '0.08em' }}>From</span>
@@ -16117,13 +22392,39 @@ function OutboundMessages({ dealId, vendors, deal }) {
                 const isInbound = m.direction === 'inbound';
                 const toLabel   = (m.to_emails || []).join(', ');
                 const ccLabel   = (m.cc_emails || []).filter(e => e && !e.includes('fundlocators.com')).join(', ');
+                // Per-status visual treatment for outbound emails. Inbound
+                // emails just show the default blue (we received them, no
+                // delivery state matters from our side). Resend's webhook
+                // (resend-webhook EF) flips the status from 'sent' →
+                // delivered / bounced / complained / delivery_delayed /
+                // failed once the actual outcome is known.
+                let emailAccent = '#3b82f6';     // default blue
+                let emailBadge = null;            // text + style for sub-badge
+                if (!isInbound && m.status === 'delivered') {
+                  emailAccent = '#22c55e';
+                  emailBadge = { text: '· DELIVERED', color: '#22c55e' };
+                } else if (!isInbound && m.status === 'bounced') {
+                  emailAccent = '#ef4444';
+                  emailBadge = { text: '· BOUNCED', color: '#ef4444' };
+                } else if (!isInbound && m.status === 'complained') {
+                  emailAccent = '#ef4444';
+                  emailBadge = { text: '· SPAM COMPLAINT', color: '#ef4444' };
+                } else if (!isInbound && m.status === 'delivery_delayed') {
+                  emailAccent = '#fbbf24';
+                  emailBadge = { text: '· DELAYED', color: '#fbbf24' };
+                } else if (!isInbound && m.status === 'failed') {
+                  emailAccent = '#ef4444';
+                  emailBadge = { text: '· FAILED', color: '#ef4444' };
+                } else if (!isInbound && m.status === 'sent') {
+                  emailBadge = { text: '· awaiting confirmation', color: '#78716c' };
+                }
                 return (
                   <div key={'e-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
-                    <div style={{ maxWidth: '90%', background: '#1c1917', border: '1px solid #1e3a8a33', borderLeft: '3px solid #3b82f6', borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                    <div style={{ maxWidth: '90%', background: '#1c1917', border: `1px solid ${emailAccent}33`, borderLeft: `3px solid ${emailAccent}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
                         <div>
-                          <span style={{ fontSize: 11, fontWeight: 700, color: '#3b82f6', letterSpacing: '0.04em' }}>📧 {isInbound ? 'EMAIL RECEIVED' : 'EMAIL SENT'}</span>
-                          {m.status === 'failed' && <span style={{ fontSize: 10, fontWeight: 700, color: '#ef4444', marginLeft: 8 }}>· FAILED</span>}
+                          <span style={{ fontSize: 11, fontWeight: 700, color: emailAccent, letterSpacing: '0.04em' }}>📧 {isInbound ? 'EMAIL RECEIVED' : 'EMAIL SENT'}</span>
+                          {emailBadge && <span style={{ fontSize: 10, fontWeight: 700, color: emailBadge.color, marginLeft: 8 }}>{emailBadge.text}</span>}
                         </div>
                         <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}</span>
                       </div>
@@ -16186,6 +22487,69 @@ function OutboundMessages({ dealId, vendors, deal }) {
                 );
               }
 
+              // ─── Voicemail entry ─────────────────────────────────────
+              // Status flow:
+              //   rvm_sent          → handed to Slybroadcast, awaiting their callback
+              //   rvm_delivered     → Slybroadcast confirmed VM deposited (green)
+              //   rvm_undeliverable → Slybroadcast tried + failed (yellow + reason)
+              //   rvm_failed        → Slybroadcast rejected the request itself
+              //
+              // The actual delivery state arrives via the slybroadcast-callback
+              // Edge Function (Slybroadcast hits it with c_dispo_url). Per
+              // Justin 2026-05-07: "we always want confirmation and feedback
+              // on any action we take in DCC" — so we surface the real
+              // outcome, not optimistic "we tried" messaging.
+              if (m._kind === 'rvm') {
+                const sessionLabel = m.provider_sid ? ` · session ${m.provider_sid}` : '';
+                let label, accent, icon;
+                if (m.status === 'rvm_delivered') {
+                  label = 'VOICEMAIL DELIVERED';
+                  accent = '#22c55e';
+                  icon = '🎙';
+                } else if (m.status === 'rvm_undeliverable') {
+                  label = 'VOICEMAIL UNDELIVERABLE';
+                  accent = '#fbbf24';
+                  icon = '⚠️';
+                } else if (m.status === 'rvm_sent') {
+                  label = 'VOICEMAIL · awaiting confirmation';
+                  accent = '#f97316';
+                  icon = '📣';
+                } else {
+                  label = `VOICEMAIL · ${m.status || 'unknown'}`;
+                  accent = '#78716c';
+                  icon = '📣';
+                }
+                return (
+                  <div key={'v-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
+                    <div style={{ maxWidth: '90%', background: '#1c1917', border: `1px solid ${accent}33`, borderLeft: `3px solid ${accent}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <div>
+                          <span style={{ fontSize: 11, fontWeight: 700, color: accent, letterSpacing: '0.04em' }}>{icon} {label}</span>
+                          <span style={{ fontSize: 10, color: '#78716c', marginLeft: 8, fontFamily: "'DM Mono', monospace" }}>→ {m.to_number}</span>
+                        </div>
+                        <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}{sessionLabel}</span>
+                      </div>
+                      {m.status === 'rvm_undeliverable' && m.error_message && (
+                        <div style={{ fontSize: 11, color: '#fbbf24', background: 'rgba(251,191,36,0.08)', border: '1px solid rgba(251,191,36,0.2)', borderRadius: 5, padding: '6px 8px', marginBottom: 6, lineHeight: 1.45 }}>
+                          {m.error_message}
+                        </div>
+                      )}
+                      {m.media_url && (
+                        <audio controls src={m.media_url} style={{ width: '100%', height: 36, marginBottom: 6 }}>
+                          Your browser does not support audio playback.
+                        </audio>
+                      )}
+                      {m.body && (
+                        <details style={{ fontSize: 11, color: '#a8a29e' }}>
+                          <summary style={{ cursor: 'pointer', color: '#78716c', fontSize: 10, letterSpacing: '0.05em' }}>SHOW TRANSCRIPT</summary>
+                          <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.55, marginTop: 6, paddingTop: 6, borderTop: '1px solid #292524', fontFamily: "'DM Mono', monospace" }}>{m.body}</div>
+                        </details>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
               // ─── Message bubble (existing behavior) ──────────────────
               const isInbound = m.direction === 'inbound';
               const showMeta  = i === items.length - 1 || items[i+1]?.direction !== m.direction || items[i+1]?.from_number !== m.from_number;
@@ -16220,6 +22584,20 @@ function OutboundMessages({ dealId, vendors, deal }) {
               const mediaIsVideo = m.media_url && /\.(mp4|mov|webm|m4v)(\?|$)/i.test(m.media_url);
               const mediaIsImage = m.media_url && /\.(jpg|jpeg|png|gif|webp|heic)(\?|$)/i.test(m.media_url);
 
+              // "via NNNN" chip — which of OUR numbers received (inbound) or
+              // sent (outbound) this message. Lets you tell at-a-glance
+              // whether a text hit Twilio (5440) or the iMessage bridge
+              // (2306). Defensive about the receive-sms/bridge inconsistency
+              // where one path swaps from_number/to_number meaning.
+              const OUR_NUMS = ['+15139985440', '+15135162306'];
+              const ourNum = OUR_NUMS.includes(m.from_number) ? m.from_number
+                           : OUR_NUMS.includes(m.to_number)   ? m.to_number
+                           : null;
+              const viaLast4 = ourNum ? ourNum.replace(/\D/g, '').slice(-4) : null;
+              const viaColor = ourNum === '+15139985440' ? '#10b981'   // 5440 = Twilio SMS → green
+                             : ourNum === '+15135162306' ? '#60a5fa'   // 2306 = bridge/iMessage → blue
+                             : '#78716c';
+
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
                   <div style={{ maxWidth: '78%', background: isInbound ? '#1c1917' : bubbleBg(m.status), borderRadius: isInbound ? '16px 16px 16px 4px' : '16px 16px 4px 16px', padding: '9px 13px', border: isInbound ? `1px solid ${senderColor}33` : 'none' }}>
@@ -16239,6 +22617,9 @@ function OutboundMessages({ dealId, vendors, deal }) {
                       {isInbound
                         ? <>
                             <span style={{ fontSize: 10, fontWeight: 600, color: senderColor }}>{senderName.split(' ')[0]}</span>
+                            {viaLast4 && (
+                              <span title={`Received on ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
+                            )}
                             <span style={{ fontSize: 10, color: '#44403c', fontFamily: "'DM Mono', monospace" }}>{time}</span>
                           </>
                         : <>
@@ -16249,6 +22630,9 @@ function OutboundMessages({ dealId, vendors, deal }) {
                               const recipientColor = participantColor(recipient?.name || m.to_number);
                               return <span style={{ fontSize: 10, color: '#78716c' }}>to <span style={{ color: recipientColor, fontWeight: 600 }}>{recipientName}</span></span>;
                             })()}
+                            {viaLast4 && (
+                              <span title={`Sent from ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
+                            )}
                             <span style={{ fontSize: 10, color: '#57534e' }}>{time}</span>
                             <span style={{ fontSize: 11, fontWeight: 700, color: statusColor(m.status) }}>{statusIcon(m.status)}</span>
                           </>
@@ -16358,62 +22742,6 @@ function OutboundMessages({ dealId, vendors, deal }) {
         );
       })()}
 
-      {/* Phone-intel status row — appears above composer when an active
-          contact has a phone. Shows iMessage-capable / SMS / unreachable
-          + a Probe button to (re-)run the Mac Mini bridge probe. Result
-          determines whether outbound routes via iPhone bridge or Twilio. */}
-      {activeContact?.phone && !activeContact?._everyone && (() => {
-        const e164 = normalizePhone(activeContact.phone);
-        const intel = phoneIntel[e164];
-        const stuckMs = intel?.requested_at ? (Date.now() - new Date(intel.requested_at).getTime()) : 0;
-        const isStuck = (intel?.status === 'queued' || intel?.status === 'probing') && stuckMs > 2 * 60 * 1000;
-        const probingNow = probingPhones[e164];
-        let label, color, route, showStuckReset = false;
-        if (probingNow) {
-          label = 'Queuing probe…'; color = '#fbbf24'; route = 'Inserting probe request.';
-        } else if (isStuck) {
-          label = '⚠ Probe stuck'; color = '#f97316';
-          route = `Queued ${Math.round(stuckMs / 60000)}m ago — Mac bridge probe daemon hasn't run yet (Justin's session is still wiring it up). Reset to clear, then re-probe once the bridge is live.`;
-          showStuckReset = true;
-        } else if (intel?.status === 'queued') {
-          label = '⏳ Queued for probe'; color = '#fbbf24'; route = 'Waiting for Mac bridge daemon to pick this up.';
-        } else if (intel?.status === 'probing') {
-          label = '🔄 Bridge probing now'; color = '#fbbf24'; route = 'Bridge has it — refresh in ~30s.';
-        } else if (!intel) {
-          label = 'Not yet probed'; color = '#78716c'; route = 'Click Probe to queue an iMessage capability check via the Mac bridge.';
-        } else if (intel.status === 'failed') {
-          label = '✗ Probe failed'; color = '#ef4444'; route = intel.probe_error || 'Re-probe to retry.';
-        } else if (intel.imessage_capable === true) {
-          label = '🔵 iMessage capable'; color = '#3b82f6'; route = 'Outbound routes via iPhone bridge (513-516-2306 — currently DOWN per memory; falls back to Twilio until restored).';
-        } else if (intel.imessage_capable === false) {
-          label = '🟢 SMS only'; color = '#10b981'; route = 'Outbound routes via Twilio (513-951-8855).';
-        } else if (['landline','voip','unreachable'].includes(intel.line_type)) {
-          label = `📞 ${intel.line_type}`; color = '#78716c'; route = "This number can't receive texts. Send paths should refuse.";
-        } else {
-          label = 'Result unclear'; color = '#a8a29e'; route = intel.probe_error || 'Probe completed but capability unknown. Re-probe to retry.';
-        }
-        return (
-          <div style={{ borderTop: '1px solid #1c1917', background: '#0c0a09', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0, flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: '0.04em' }}>{label}</span>
-            <span style={{ fontSize: 10, color: '#78716c', flex: 1, minWidth: 200 }}>{route}</span>
-            {showStuckReset && (
-              <button onClick={async () => {
-                await sb.from('phone_intel').update({ status: 'failed', probe_error: 'manual reset — bridge unresponsive' }).eq('phone_e164', e164);
-                await loadPhoneIntel();
-              }} style={{ background: '#7f1d1d', color: '#fca5a5', border: '1px solid #b91c1c', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                Reset
-              </button>
-            )}
-            <button onClick={() => probePhone(activeContact.phone)} disabled={probingNow}
-              title="Queue an iMessage probe. Mac Mini bridge picks up queued rows and probes via Messages.app — result cached on phone_intel."
-              style={{ background: probingNow ? '#1c1917' : '#78350f', color: probingNow ? '#78716c' : '#fbbf24', border: '1px solid #92400e', borderRadius: 5, padding: '3px 10px', fontSize: 10, fontWeight: 700, cursor: probingNow ? 'wait' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-              {probingNow ? '…' : (intel ? 'Re-probe' : 'Probe')}
-            </button>
-            {intel?.probed_at && <span style={{ fontSize: 9, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>last: {new Date(intel.probed_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>}
-          </div>
-        );
-      })()}
-
       {/* Compose */}
       {activeContact?._everyone ? (
         <div style={{ borderTop: '1px solid #1c1917', background: '#141210', padding: '12px 14px', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10 }}>
@@ -16509,6 +22837,7 @@ function OutboundMessages({ dealId, vendors, deal }) {
         </div>
       )}
     </div>
+  </>
   );
 }
 
@@ -18472,8 +24801,9 @@ function ContactsTab({ dealId, userId, isAdmin }) {
 //   1 homeowner contacts row (kind='homeowner', deceased flag, all phones
 //      comma-joined into the phone field — DCC's Comms tab splits them
 //      into per-phone tabs automatically)
-//   N family contacts rows (one per "Family X Phone" present), kind='other',
-//      linked to the deal via contact_deals with relationship='other'
+//   N family contacts rows (one per "Family X Phone" or "Family X Name"
+//      present), kind='other', linked to the deal via contact_deals with
+//      relationship='family' (Eric refines to spouse/child/parent/sibling later)
 //   1 contact_deals row for the homeowner (relationship='homeowner')
 //   1 deal_notes row if "General Notes" is non-empty (so the rich GHL note
 //      shows up in the deal's Notes panel, not buried in contact.notes)
@@ -18619,24 +24949,36 @@ function mapGhlRowToDcc(row, headers) {
   const emailsJoined = Array.from(emailSet).join(', ');
 
   // Family contacts (Family 1..10) — each becomes a separate contact, kind='other'.
+  // Per Nathan 2026-05-08:
+  //   • Read 'Family N Name' from the CSV when present and use it as the
+  //     contact name. Fall back to the homeowner-derived placeholder only
+  //     when the Name column is empty / absent.
+  //   • Default relationship='family' (was 'other'). 'family' is more
+  //     useful in the UI than 'other'; Eric still refines to spouse /
+  //     child / parent / sibling later, but the default reads correctly
+  //     instead of requiring relabeling on every import.
   const familyContacts = [];
   for (let i = 1; i <= 10; i++) {
+    const fName = (get('Family ' + i + ' Name') || '').trim();
     const fPhonesRaw = [get('Family ' + i + ' Phone'), get('Family ' + i + ' Additional phones')].filter(Boolean).join(', ');
     const fEmail = get('Family ' + i + ' Email');
-    if (!fPhonesRaw && !fEmail) continue;
+    if (!fPhonesRaw && !fEmail && !fName) continue;
     const fPhoneSet = new Set();
     fPhonesRaw.split(/[,;]/).forEach(p => {
       const n = normalizeE164(p);
       if (n) fPhoneSet.add(n);
     });
     const fPhones = Array.from(fPhoneSet);
+    // Skip rows that have nothing useful — neither a name nor a contact method.
+    // (A row with only a phone is still useful; a row with only a name without
+    // any way to contact them is probably a data-entry artifact.)
     if (!fPhones.length && !fEmail) continue;
     familyContacts.push({
-      name: `${fullName} — Family ${i}`, // placeholder name; Eric/Nathan refines later
+      name: fName || `${fullName} — Family ${i}`,
       phone: fPhones.join(', ') || null,
       email: fEmail || null,
       kind: 'other',
-      relationship: 'other', // unknown; refined manually after import
+      relationship: 'family', // Eric refines to spouse/child/parent/sibling later.
       tags: ['ghl-import', 'family-contact', 'unlabeled-relationship'],
     });
   }
@@ -18697,7 +25039,6 @@ function mapGhlRowToDcc(row, headers) {
         verifiedSurplus: num(get('Verified Surplus')),
         judgmentAmount,
         totalDebt,
-        estimatedLoanBalance: num(get('Estimated Loan Balance')),
         confirmationOfSaleDate: parseAuctionDate(get('Confirmation of Sale Date')),
         foreclosureFileDate: parseAuctionDate(get('Foreclosure File Date')),
         redemptionDeadline: parseAuctionDate(get('Redemption Deadline')),
@@ -18763,7 +25104,7 @@ async function findDuplicates(mapped) {
         const m = d.meta || {};
         const cc = m.courtCase ? String(m.courtCase).toLowerCase().replace(/\s+/g, '') : null;
         const addrNorm = (d.address || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-        const ph = (m.homeownerPhone || '').replace(/\D/g, '');
+        const ph = (dealMetaPhone(m) || '').replace(/\D/g, '');
         if (cc) dupes.set('case:' + cc, { dealId: d.id, reason: 'case#' });
         if (addrNorm) dupes.set('addr:' + addrNorm, { dealId: d.id, reason: 'address' });
         if (ph) dupes.set('phone:' + ph, { dealId: d.id, reason: 'phone' });
@@ -19141,7 +25482,7 @@ function ImportLeadsModal({ onClose, userId, onDone }) {
               <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 14, lineHeight: 1.6 }}>
                 Drop a GoHighLevel CSV export. The importer expects the <strong>rich</strong> export
                 (with columns like <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Case Number</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Full Address</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Estimated Surplus</code>, <code style={{ background: '#1c1917', padding: '1px 4px', borderRadius: 3 }}>Family 1 Phone</code>…).
-                Each row becomes one <strong>deal</strong> + one <strong>homeowner contact</strong> + N family contacts (relationship='other').
+                Each row becomes one <strong>deal</strong> + one <strong>homeowner contact</strong> + N family contacts (relationship='family' — Eric refines to spouse/child/parent/sibling later).
               </div>
               <label style={{ display: 'block', border: '2px dashed #44403c', borderRadius: 10, padding: 32, textAlign: 'center', cursor: 'pointer', background: '#0c0a09' }}>
                 <input type="file" accept=".csv,text/csv" onChange={e => handleFile(e.target.files[0])} style={{ display: 'none' }} />
@@ -19940,7 +26281,7 @@ function LibraryPickerForDeal({ deal, dealId, userId, logAct, mode = 'attach', o
 // to deal.meta. Edge Function `docusign-send-envelope` handles the JWT Grant
 // + API call. Status card back on the deal auto-updates via realtime when
 // the webhook receives DocuSign Connect events.
-function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
+function DocuSignSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedDoc, setSelectedDoc] = useState(null);
@@ -19948,38 +26289,76 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
   const [recipientEmail, setRecipientEmail] = useState('');
   const [recipientName, setRecipientName] = useState('');
   const [recipientPhone, setRecipientPhone] = useState('');
-  const [sendSms, setSendSms] = useState(false);
+  const [phoneManualMode, setPhoneManualMode] = useState(false); // true = show free-text input instead of dropdown
+  const [sendSms, setSendSms] = useState(true);  // default ON — SMS is the primary delivery
   const [emailSubject, setEmailSubject] = useState('');
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [sentResult, setSentResult] = useState(null); // non-null = show success screen
+  const [dealContacts, setDealContacts] = useState([]); // [{name, email, phone}]
 
-  // Load ONLY library docs that have a DocuSign template_id wired up
+  // Load ONLY library docs that have a DocuSign template_id wired up.
+  // If resendFrom is provided, auto-select the matching template.
   useEffect(() => {
     (async () => {
       const { data } = await sb.from('library_documents')
         .select('id, title, kind, template_fields, docusign_template_id, description')
         .not('docusign_template_id', 'is', null)
         .order('created_at', { ascending: false });
-      setTemplates(data || []);
+      const list = data || [];
+      setTemplates(list);
       setLoading(false);
+      if (resendFrom?.library_document_id) {
+        const match = list.find(t => t.id === resendFrom.library_document_id);
+        if (match) setSelectedDoc(match);
+      }
     })();
   }, []);
 
-  // Pre-fill recipient defaults once (from client_access or deal.meta)
+  // Load deal contacts for email/phone dropdowns + pre-fill recipient.
+  // If resendFrom is set, use its values as the starting point.
   useEffect(() => {
+    if (resendFrom) {
+      if (resendFrom.recipient_name)  setRecipientName(resendFrom.recipient_name);
+      if (resendFrom.recipient_email) setRecipientEmail(resendFrom.recipient_email);
+      if (resendFrom.recipient_phone) { setRecipientPhone(resendFrom.recipient_phone); setPhoneManualMode(false); }
+    }
     (async () => {
       const clientName = (deal.name || '').split(' - ')[0];
-      setRecipientName(clientName);
-      // try client_access for the canonical contact email + notification phone
-      const { data: ca } = await sb.from('client_access')
-        .select('email, prefs')
-        .eq('deal_id', dealId)
-        .eq('enabled', true)
-        .maybeSingle();
-      if (ca?.email) setRecipientEmail(ca.email);
-      else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
-      if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
-      else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+      if (!resendFrom) setRecipientName(clientName);
+
+      // Contacts linked to this deal via contact_deals
+      const { data: cdRows } = await sb
+        .from('contact_deals')
+        .select('contacts(id, name, email, phone)')
+        .eq('deal_id', dealId);
+      const linked = (cdRows || [])
+        .map(r => r.contacts)
+        .filter(Boolean)
+        .filter(c => c.email || c.phone);
+      setDealContacts(linked);
+
+      // Pre-fill recipient only if not already populated by resendFrom
+      if (!resendFrom) {
+        const firstWithEmail = linked.find(c => c.email);
+        const firstWithPhone = linked.find(c => c.phone);
+        if (firstWithEmail) {
+          setRecipientName(firstWithEmail.name || clientName);
+          setRecipientEmail(firstWithEmail.email);
+        } else {
+          const { data: ca } = await sb.from('client_access')
+            .select('email, prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.email) setRecipientEmail(ca.email);
+          else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
+        }
+        if (firstWithPhone) setRecipientPhone(firstWithPhone.phone);
+        else {
+          const { data: ca } = await sb.from('client_access')
+            .select('prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
+          else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+        }
+      }
     })();
   }, [dealId]);
 
@@ -20012,8 +26391,7 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
           library_document_id: selectedDoc.id,
           recipient_email: recipientEmail.trim(),
           recipient_name: recipientName.trim(),
-          recipient_phone: recipientPhone.trim() || null,
-          send_sms: sendSms,
+          recipient_phone: sendSms ? (recipientPhone.trim() || null) : null,
           email_subject_override: emailSubject.trim() || null,
           merge_overrides: mergeOverrides,
         },
@@ -20031,8 +26409,37 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
         setSending(false);
         return;
       }
-      setMsg({ type: 'success', text: `Envelope sent. DocuSign ID: ${data.envelope_id}` });
-      setTimeout(() => { onSent?.(); }, 800);
+      // If SMS was sent, log it to messages_outbound so it appears in the Comms thread
+      if (data.sms_sent && recipientPhone.trim()) {
+        const firstName = recipientName.trim().split(' ')[0];
+        const smsBody = `Hi ${firstName}, this is Nathan with RefundLocators. Your authorization letter is ready to sign — tap the link and sign right from your phone (takes 60 seconds):\n\n${data.signing_link || '(link)'}\n\nQuestions? Call/text (513) 998-5440.`;
+        const digitsOnly = recipientPhone.replace(/\D/g, '');
+        const toPhone = recipientPhone.startsWith('+') ? recipientPhone
+                      : digitsOnly.length === 11 ? `+${digitsOnly}`
+                      : `+1${digitsOnly}`;
+        const matchedContact = dealContacts.find(c => {
+          const d = (c.phone || '').replace(/\D/g, '');
+          return d === digitsOnly || d === digitsOnly.slice(-10);
+        });
+        await sb.from('messages_outbound').insert({
+          deal_id:      dealId,
+          to_number:    toPhone,
+          from_number:  '+15139985440',
+          body:         smsBody,
+          status:       'sent',
+          direction:    'outbound',
+          channel:      'sms',
+          contact_id:   matchedContact?.id || null,
+        });
+      }
+      setSentResult({
+        name: recipientName.trim(),
+        email: recipientEmail.trim(),
+        phone: data.sms_sent ? recipientPhone.trim() : null,
+        signing_link: data.signing_link,
+        sms_sent: data.sms_sent,
+      });
+      onSent?.();
     } catch (e) {
       setMsg({ type: 'error', text: e.message || 'Send failed' });
     } finally {
@@ -20043,8 +26450,41 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
   const mergeFieldKeys = selectedDoc ? Object.keys(selectedDoc.template_fields || {}) : [];
   const clientName = (deal.name || '').split(' - ')[0];
 
+  // ── Success screen ────────────────────────────────────────────────────────
+  if (sentResult) {
+    return (
+      <Modal onClose={onClose} title={`📝 Sent for signature → ${clientName}`} wide>
+        <div style={{ textAlign: 'center', padding: '12px 0 24px' }}>
+          <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>Envelope sent!</div>
+          <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 20 }}>
+            Sent to <strong style={{ color: '#fafaf9' }}>{sentResult.name}</strong> ({sentResult.email})
+          </div>
+          {sentResult.sms_sent && sentResult.phone && (
+            <div style={{ marginBottom: 16, padding: '10px 14px', background: '#064e3b', border: '1px solid #065f46', borderRadius: 8, fontSize: 13, color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: 8 }}>
+              📱 Signing link texted to {sentResult.phone}
+              <span style={{ fontSize: 11, color: '#34d399', marginLeft: 'auto' }}>Visible in Comms thread</span>
+            </div>
+          )}
+          {sentResult.signing_link && (
+            <div style={{ marginBottom: 20, padding: '10px 14px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, fontSize: 12, textAlign: 'left' }}>
+              <div style={{ color: '#78716c', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Signing Link</div>
+              <a href={sentResult.signing_link} target="_blank" rel="noreferrer" style={{ color: '#d97706', wordBreak: 'break-all', textDecoration: 'underline', fontSize: 12 }}>{sentResult.signing_link}</a>
+            </div>
+          )}
+          <button onClick={onClose} style={{ ...btnPrimary, fontSize: 13, padding: '10px 32px' }}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
+
   return (
     <Modal onClose={onClose} title={`📝 Send for signature → ${clientName}`} wide>
+      {resendFrom && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "#1c0a00", border: "1px solid #92400e", borderRadius: 6, fontSize: 12, color: "#fbbf24", display: "flex", alignItems: "center", gap: 6 }}>
+          ↩ <strong>Resending</strong> — template and recipient pre-filled from the previous send. Adjust anything before hitting Send.
+        </div>
+      )}
       {loading ? (
         <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading templates…</div>
       ) : templates.length === 0 ? (
@@ -20106,6 +26546,29 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                   <div style={{ fontSize: 10, fontWeight: 700, color: "#d97706", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
                     Recipient
                   </div>
+                  {/* Contact quick-select — pick from deal contacts to auto-fill all fields */}
+                  {dealContacts.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Quick-select contact</div>
+                      <select
+                        onChange={e => {
+                          const c = dealContacts.find(x => x.id === e.target.value);
+                          if (c) {
+                            if (c.name) setRecipientName(c.name);
+                            if (c.email) setRecipientEmail(c.email);
+                            if (c.phone) setRecipientPhone(c.phone);
+                          }
+                        }}
+                        defaultValue=""
+                        style={{ ...inputStyle, fontSize: 13 }}
+                      >
+                        <option value="" disabled>— pick a contact —</option>
+                        {dealContacts.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}{c.email ? ` · ${c.email}` : ''}{c.phone ? ` · ${c.phone}` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
                     <div>
                       <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Name</div>
@@ -20119,14 +26582,49 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                   <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: sendSms ? "#064e3b" : "#1c1917", border: "1px solid " + (sendSms ? "#10b981" : "#292524"), borderRadius: 5, cursor: "pointer", marginBottom: sendSms ? 8 : 0 }}>
                     <input type="checkbox" checked={sendSms} onChange={e => setSendSms(e.target.checked)} />
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send via SMS (Business DocuSign)</div>
-                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a text with a one-tap signing link. Requires phone + template configured for SMS delivery in DocuSign.</div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send signing link via SMS</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a Twilio text with a one-tap link — signs right from their phone, no DocuSign account needed.</div>
                     </div>
                   </label>
                   {sendSms && (
-                    <div>
-                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone (US; +1 assumed)</div>
-                      <input type="tel" value={recipientPhone} onChange={e => setRecipientPhone(e.target.value)} placeholder="(614) 555-1234" style={{ ...inputStyle, fontSize: 13 }} />
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone</div>
+                      {dealContacts.filter(c => c.phone).length > 0 && !phoneManualMode ? (
+                        <>
+                          <select
+                            value={recipientPhone}
+                            onChange={e => {
+                              if (e.target.value === '__custom__') {
+                                setPhoneManualMode(true);
+                                setRecipientPhone('');
+                              } else {
+                                setRecipientPhone(e.target.value);
+                              }
+                            }}
+                            style={{ ...inputStyle, fontSize: 13 }}
+                          >
+                            <option value="">— pick a number —</option>
+                            {dealContacts.filter(c => c.phone).map(c => (
+                              <option key={c.id} value={c.phone}>{c.name ? `${c.name} · ` : ''}{c.phone}</option>
+                            ))}
+                            <option value="__custom__">Enter manually…</option>
+                          </select>
+                        </>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="tel"
+                            value={recipientPhone}
+                            onChange={e => setRecipientPhone(e.target.value)}
+                            placeholder="(614) 555-1234"
+                            style={{ ...inputStyle, fontSize: 13, flex: 1 }}
+                            autoFocus={phoneManualMode}
+                          />
+                          {phoneManualMode && dealContacts.filter(c => c.phone).length > 0 && (
+                            <button onClick={() => { setPhoneManualMode(false); setRecipientPhone(''); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 8px", flexShrink: 0 }}>← Pick</button>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -20159,8 +26657,8 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                   <input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
                 </div>
 
-                {msg && (
-                  <div style={{ padding: "8px 12px", borderRadius: 6, background: msg.type === 'success' ? "#064e3b" : "#7f1d1d", color: msg.type === 'success' ? "#6ee7b7" : "#fca5a5", fontSize: 12 }}>
+                {msg && msg.type === 'error' && (
+                  <div style={{ padding: "8px 12px", borderRadius: 6, background: "#7f1d1d", color: "#fca5a5", fontSize: 12 }}>
                     {msg.text}
                   </div>
                 )}
@@ -20169,6 +26667,372 @@ function DocuSignSendModal({ deal, dealId, onClose, onSent }) {
                   <button onClick={onClose} style={{ ...btnGhost, fontSize: 12 }}>Cancel</button>
                   <button onClick={send} disabled={sending} style={{ ...btnPrimary, fontSize: 12 }}>
                     {sending ? 'Sending to DocuSign…' : '📝 Send for signature'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// ─── eSignatures.com Send Modal — parallel to DocuSignSendModal ────────────
+// Per Justin 2026-05-14: we are keeping DocuSign untouched as one path and
+// adding eSignatures.com as a second, independent path. This modal sends a
+// library template via eSignatures.com Edge Function `send-esignature-contract`.
+// The EF suppresses the vendor's email/SMS (signature_request_delivery_methods=[])
+// so the signing URL is delivered via our existing Twilio bridge — homeowner
+// gets one SMS with one tap-to-sign link, no DocuSign account, mobile-first.
+function ESignaturesSendModal({ deal, dealId, resendFrom, onClose, onSent }) {
+  const [templates, setTemplates] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedDoc, setSelectedDoc] = useState(null);
+  const [mergeOverrides, setMergeOverrides] = useState({});
+  const [recipientEmail, setRecipientEmail] = useState('');
+  const [recipientName, setRecipientName] = useState('');
+  const [recipientPhone, setRecipientPhone] = useState('');
+  const [phoneManualMode, setPhoneManualMode] = useState(false);
+  const [sendSms, setSendSms] = useState(true);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState(null);
+  const [sentResult, setSentResult] = useState(null);
+  const [dealContacts, setDealContacts] = useState([]);
+
+  // Load ONLY library docs that have an eSignatures.com template id wired.
+  useEffect(() => {
+    (async () => {
+      const { data } = await sb.from('library_documents')
+        .select('id, title, kind, template_fields, esignatures_template_id, description')
+        .not('esignatures_template_id', 'is', null)
+        .order('created_at', { ascending: false });
+      const list = data || [];
+      setTemplates(list);
+      setLoading(false);
+      if (resendFrom?.library_document_id) {
+        const match = list.find(t => t.id === resendFrom.library_document_id);
+        if (match) setSelectedDoc(match);
+      }
+    })();
+  }, []);
+
+  // Pre-fill recipient from resendFrom or deal contacts (mirror of DocuSign)
+  useEffect(() => {
+    if (resendFrom) {
+      if (resendFrom.recipient_name)  setRecipientName(resendFrom.recipient_name);
+      if (resendFrom.recipient_email) setRecipientEmail(resendFrom.recipient_email);
+      if (resendFrom.recipient_phone) { setRecipientPhone(resendFrom.recipient_phone); setPhoneManualMode(false); }
+    }
+    (async () => {
+      const clientName = (deal.name || '').split(' - ')[0];
+      if (!resendFrom) setRecipientName(clientName);
+
+      const { data: cdRows } = await sb
+        .from('contact_deals')
+        .select('contacts(id, name, email, phone)')
+        .eq('deal_id', dealId);
+      const linked = (cdRows || [])
+        .map(r => r.contacts)
+        .filter(Boolean)
+        .filter(c => c.email || c.phone);
+      setDealContacts(linked);
+
+      if (!resendFrom) {
+        const firstWithEmail = linked.find(c => c.email);
+        const firstWithPhone = linked.find(c => c.phone);
+        if (firstWithEmail) {
+          setRecipientName(firstWithEmail.name || clientName);
+          setRecipientEmail(firstWithEmail.email);
+        } else {
+          const { data: ca } = await sb.from('client_access')
+            .select('email, prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.email) setRecipientEmail(ca.email);
+          else if (deal.meta?.email) setRecipientEmail(deal.meta.email);
+        }
+        if (firstWithPhone) setRecipientPhone(firstWithPhone.phone);
+        else {
+          const { data: ca } = await sb.from('client_access')
+            .select('prefs').eq('deal_id', dealId).eq('enabled', true).maybeSingle();
+          if (ca?.prefs?.notify_phone) setRecipientPhone(ca.prefs.notify_phone);
+          else if (deal.meta?.phone) setRecipientPhone(deal.meta.phone);
+        }
+      }
+    })();
+  }, [dealId]);
+
+  // Merge defaults when template picked
+  useEffect(() => {
+    if (!selectedDoc) { setMergeOverrides({}); return; }
+    const fields = selectedDoc.template_fields || {};
+    const initial = {};
+    for (const [k, path] of Object.entries(fields)) {
+      initial[k] = resolveDealPath(deal, path);
+    }
+    setMergeOverrides(initial);
+    setEmailSubject(`Please sign: ${selectedDoc.title}`);
+  }, [selectedDoc]);
+
+  const send = async () => {
+    if (!selectedDoc || !recipientEmail || !recipientName) {
+      setMsg({ type: 'error', text: 'Pick a template, confirm recipient email + name.' });
+      return;
+    }
+    if (sendSms && !recipientPhone) {
+      setMsg({ type: 'error', text: 'SMS is on — enter a phone number or turn off SMS.' });
+      return;
+    }
+    setSending(true); setMsg(null);
+    try {
+      const { data, error } = await sb.functions.invoke('send-esignature-contract', {
+        body: {
+          deal_id: dealId,
+          library_document_id: selectedDoc.id,
+          recipient_email: recipientEmail.trim(),
+          recipient_name: recipientName.trim(),
+          recipient_phone: sendSms ? (recipientPhone.trim() || null) : null,
+          email_subject_override: emailSubject.trim() || null,
+          merge_overrides: mergeOverrides,
+        },
+      });
+      if (error) throw error;
+      if (data?.error) {
+        if (data.error === 'esignatures_not_configured') {
+          setMsg({ type: 'error', text: '⚠ eSignatures.com not configured yet — add ESIGNATURES_API_TOKEN to the Edge Function secrets.' });
+        } else if (data.error === 'not_an_esignatures_template') {
+          setMsg({ type: 'error', text: 'This template has no esignatures_template_id set. SQL-update the library row with the template id from your eSignatures.com dashboard.' });
+        } else {
+          setMsg({ type: 'error', text: data.message || JSON.stringify(data) });
+        }
+        setSending(false);
+        return;
+      }
+      setSentResult({
+        name: recipientName.trim(),
+        email: recipientEmail.trim(),
+        phone: data.sms_sent ? recipientPhone.trim() : null,
+        signing_link: data.signing_link,
+        sms_sent: data.sms_sent,
+      });
+      onSent?.();
+    } catch (e) {
+      setMsg({ type: 'error', text: e.message || 'Send failed' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const mergeFieldKeys = selectedDoc ? Object.keys(selectedDoc.template_fields || {}) : [];
+  const clientName = (deal.name || '').split(' - ')[0];
+
+  if (sentResult) {
+    return (
+      <Modal onClose={onClose} title={`✍ Sent for signature → ${clientName}`} wide>
+        <div style={{ textAlign: 'center', padding: '12px 0 24px' }}>
+          <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 12 }}>✅</div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>Contract sent!</div>
+          <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 20 }}>
+            Sent to <strong style={{ color: '#fafaf9' }}>{sentResult.name}</strong> ({sentResult.email})
+          </div>
+          {sentResult.sms_sent && sentResult.phone && (
+            <div style={{ marginBottom: 16, padding: '10px 14px', background: '#064e3b', border: '1px solid #065f46', borderRadius: 8, fontSize: 13, color: '#6ee7b7', display: 'flex', alignItems: 'center', gap: 8 }}>
+              📱 Signing link texted to {sentResult.phone}
+              <span style={{ fontSize: 11, color: '#34d399', marginLeft: 'auto' }}>via eSignatures.com</span>
+            </div>
+          )}
+          {sentResult.signing_link && (
+            <div style={{ marginBottom: 20, padding: '10px 14px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, fontSize: 12, textAlign: 'left' }}>
+              <div style={{ color: '#78716c', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Signing Link</div>
+              <a href={sentResult.signing_link} target="_blank" rel="noreferrer" style={{ color: '#10b981', wordBreak: 'break-all', textDecoration: 'underline', fontSize: 12 }}>{sentResult.signing_link}</a>
+            </div>
+          )}
+          <button onClick={onClose} style={{ ...btnPrimary, fontSize: 13, padding: '10px 32px' }}>Done</button>
+        </div>
+      </Modal>
+    );
+  }
+
+  return (
+    <Modal onClose={onClose} title={`✍ Send via eSignatures.com → ${clientName}`} wide>
+      {resendFrom && (
+        <div style={{ marginBottom: 12, padding: "8px 12px", background: "#022c22", border: "1px solid #065f46", borderRadius: 6, fontSize: 12, color: "#6ee7b7", display: "flex", alignItems: "center", gap: 6 }}>
+          ↩ <strong>Resending</strong> — template and recipient pre-filled from the previous send. Adjust anything before hitting Send.
+        </div>
+      )}
+      {loading ? (
+        <div style={{ fontSize: 13, color: "#78716c", padding: 24, textAlign: "center" }}>Loading templates…</div>
+      ) : templates.length === 0 ? (
+        <div style={{ padding: 18, background: "#1c1917", border: "1px dashed #44403c", borderRadius: 8, color: "#a8a29e", fontSize: 13, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#fafaf9", marginBottom: 8 }}>No eSignatures.com-ready templates yet.</div>
+          <p style={{ margin: "6px 0" }}>To send via eSignatures.com, a library doc needs <code style={{ background: "#0c0a09", padding: "2px 6px", borderRadius: 3 }}>esignatures_template_id</code> set to a template id from your eSignatures.com dashboard.</p>
+          <p style={{ margin: "6px 0" }}>Workflow:</p>
+          <ol style={{ margin: "6px 0", paddingLeft: 20 }}>
+            <li>Create the template at <a href="https://esignatures.com" target="_blank" rel="noreferrer" style={{ color: '#10b981' }}>esignatures.com</a> (use <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>{`{{ClientName}}`}</code>, <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>{`{{CaseNumber}}`}</code>, etc. as placeholder fields)</li>
+            <li>Copy the template id</li>
+            <li>SQL-update: <code style={{ background: "#0c0a09", padding: "1px 5px", borderRadius: 3 }}>update library_documents set esignatures_template_id = '...' where id = '...'</code></li>
+            <li>Refresh this modal — the template will appear</li>
+          </ol>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(200px, 280px) 1fr", gap: 14 }} className="library-panes">
+          <div style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 8, maxHeight: 520, overflowY: "auto" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", padding: "4px 8px 8px" }}>
+              eSignatures.com templates
+            </div>
+            {templates.map(t => {
+              const isSel = selectedDoc?.id === t.id;
+              const fieldCount = Object.keys(t.template_fields || {}).length;
+              return (
+                <button key={t.id} onClick={() => setSelectedDoc(t)} style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "10px 12px", marginBottom: 3, borderRadius: 5, cursor: "pointer",
+                  background: isSel ? "#292524" : "transparent",
+                  border: "1px solid " + (isSel ? "#10b981" : "transparent"),
+                  color: isSel ? "#fafaf9" : "#a8a29e",
+                  fontSize: 12, fontFamily: "inherit",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 16 }}>✍</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{t.title}</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>
+                        {fieldCount > 0 ? `${fieldCount} merge field${fieldCount === 1 ? '' : 's'}` : 'no merge fields'}
+                      </div>
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {!selectedDoc ? (
+              <div style={{ background: "#0c0a09", border: "1px dashed #292524", borderRadius: 8, padding: 32, textAlign: "center", fontSize: 12, color: "#78716c", fontStyle: "italic" }}>
+                Pick a template on the left to configure the send.
+              </div>
+            ) : (
+              <>
+                <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                    Recipient
+                  </div>
+                  {dealContacts.length > 0 && (
+                    <div style={{ marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Quick-select contact</div>
+                      <select
+                        onChange={e => {
+                          const c = dealContacts.find(x => x.id === e.target.value);
+                          if (c) {
+                            if (c.name) setRecipientName(c.name);
+                            if (c.email) setRecipientEmail(c.email);
+                            if (c.phone) setRecipientPhone(c.phone);
+                          }
+                        }}
+                        defaultValue=""
+                        style={{ ...inputStyle, fontSize: 13 }}
+                      >
+                        <option value="" disabled>— pick a contact —</option>
+                        {dealContacts.map(c => (
+                          <option key={c.id} value={c.id}>{c.name}{c.email ? ` · ${c.email}` : ''}{c.phone ? ` · ${c.phone}` : ''}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Name</div>
+                      <input value={recipientName} onChange={e => setRecipientName(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Email</div>
+                      <input type="email" value={recipientEmail} onChange={e => setRecipientEmail(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                    </div>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", background: sendSms ? "#064e3b" : "#1c1917", border: "1px solid " + (sendSms ? "#10b981" : "#292524"), borderRadius: 5, cursor: "pointer", marginBottom: sendSms ? 8 : 0 }}>
+                    <input type="checkbox" checked={sendSms} onChange={e => setSendSms(e.target.checked)} />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: sendSms ? "#6ee7b7" : "#a8a29e" }}>📱 Also send signing link via SMS</div>
+                      <div style={{ fontSize: 10, color: "#78716c", marginTop: 2 }}>Signer gets a Twilio text with one tap-to-sign link. Mobile-first signing page, no signer account needed.</div>
+                    </div>
+                  </label>
+                  {sendSms && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>Phone</div>
+                      {dealContacts.filter(c => c.phone).length > 0 && !phoneManualMode ? (
+                        <select
+                          value={recipientPhone}
+                          onChange={e => {
+                            if (e.target.value === '__custom__') {
+                              setPhoneManualMode(true);
+                              setRecipientPhone('');
+                            } else {
+                              setRecipientPhone(e.target.value);
+                            }
+                          }}
+                          style={{ ...inputStyle, fontSize: 13 }}
+                        >
+                          <option value="">— pick a number —</option>
+                          {dealContacts.filter(c => c.phone).map(c => (
+                            <option key={c.id} value={c.phone}>{c.name ? `${c.name} · ` : ''}{c.phone}</option>
+                          ))}
+                          <option value="__custom__">Enter manually…</option>
+                        </select>
+                      ) : (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <input
+                            type="tel"
+                            value={recipientPhone}
+                            onChange={e => setRecipientPhone(e.target.value)}
+                            placeholder="(614) 555-1234"
+                            style={{ ...inputStyle, fontSize: 13, flex: 1 }}
+                            autoFocus={phoneManualMode}
+                          />
+                          {phoneManualMode && dealContacts.filter(c => c.phone).length > 0 && (
+                            <button onClick={() => { setPhoneManualMode(false); setRecipientPhone(''); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 8px", flexShrink: 0 }}>← Pick</button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {mergeFieldKeys.length > 0 && (
+                  <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                      Merge fields · pre-filled from this deal
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                      {mergeFieldKeys.map(key => (
+                        <div key={key}>
+                          <div style={{ fontSize: 10, color: "#a8a29e", fontWeight: 600, marginBottom: 3 }}>{key}</div>
+                          <input value={mergeOverrides[key] || ''} onChange={e => setMergeOverrides(v => ({ ...v, [key]: e.target.value }))} style={{ ...inputStyle, fontSize: 12, padding: "6px 8px" }} placeholder="—" />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{ fontSize: 10, color: "#57534e", marginTop: 8 }}>
+                      These map to eSignatures.com placeholder fields by api_key. Double-check the placeholder names match your template.
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 8, padding: 12 }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: "#10b981", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
+                    Contract title
+                  </div>
+                  <input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} style={{ ...inputStyle, fontSize: 13 }} />
+                </div>
+
+                {msg && msg.type === 'error' && (
+                  <div style={{ padding: "8px 12px", borderRadius: 6, background: "#7f1d1d", color: "#fca5a5", fontSize: 12 }}>
+                    {msg.text}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                  <button onClick={onClose} style={{ ...btnGhost, fontSize: 12 }}>Cancel</button>
+                  <button onClick={send} disabled={sending} style={{ ...btnPrimary, fontSize: 12, background: "#10b981", borderColor: "#10b981" }}>
+                    {sending ? 'Sending to eSignatures.com…' : '✍ Send for signature'}
                   </button>
                 </div>
               </>
@@ -20329,12 +27193,33 @@ function LaurenDCC() {
     const expectLaurenReply = thread?.thread_type === 'lauren_dm'
       || /(@lauren\b|^\s*lauren[,:]|^\s*L:)/i.test(text);
     if (expectLaurenReply) setBusy(true);
-    const { error: insErr } = await sb.from('team_messages').insert({
-      thread_id: threadId,
+
+    // Try insert. Per Nathan 2026-05-04 — sometimes the panel's
+    // threadId points at a thread that no longer exists in
+    // team_threads (state corruption, manually-deleted thread, etc.).
+    // The PG error code for FK violations is 23503. On that specific
+    // error, recover by re-resolving the user's solo lauren_dm via
+    // RPC and retrying with that thread_id, so the UI doesn't get
+    // permanently stuck on a bad reference.
+    const tryInsert = async (tid) => sb.from('team_messages').insert({
+      thread_id: tid,
       sender_id: me.id,
       sender_kind: 'admin',
       body: text,
     });
+
+    let { error: insErr } = await tryInsert(threadId);
+
+    if (insErr && insErr.code === '23503') {
+      const { data: freshTid } = await sb.rpc('lauren_get_or_create_dm');
+      if (freshTid && freshTid !== threadId) {
+        setHomeThreadId(freshTid);
+        setThreadId(freshTid);
+        const retry = await tryInsert(freshTid);
+        insErr = retry.error;
+      }
+    }
+
     if (insErr) {
       setError('Send failed: ' + insErr.message);
       setBusy(false);
@@ -20556,9 +27441,1507 @@ function LaurenDCC() {
   );
 }
 
+// ===========================================================================
+// TIME TRACKING — Clock in/out for VAs (Erik, Anam) + admin payroll
+// ===========================================================================
+//
+// Pay-period model (mirrors the SQL `pay_period_for_date` function):
+//   Period A: 11–25 of month X       → pay 1st of month X+1
+//   Period B: 26 of month X – 10 of X+1 → pay 15 of month X+1
+//
+function computePayPeriod(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  const day = dt.getDate();
+  const yr = dt.getFullYear();
+  const mo = dt.getMonth();
+  if (day >= 11 && day <= 25) {
+    return {
+      periodStart: new Date(yr, mo, 11),
+      periodEnd: new Date(yr, mo, 25),
+      payDate: new Date(yr, mo + 1, 1),
+      label: `${dt.toLocaleString('en-US', { month: 'short' })} 11–25`,
+    };
+  }
+  if (day >= 26) {
+    return {
+      periodStart: new Date(yr, mo, 26),
+      periodEnd: new Date(yr, mo + 1, 10),
+      payDate: new Date(yr, mo + 1, 15),
+      label: `${dt.toLocaleString('en-US', { month: 'short' })} 26 – ${new Date(yr, mo + 1, 10).toLocaleString('en-US', { month: 'short' })} 10`,
+    };
+  }
+  return {
+    periodStart: new Date(yr, mo - 1, 26),
+    periodEnd: new Date(yr, mo, 10),
+    payDate: new Date(yr, mo, 15),
+    label: `${new Date(yr, mo - 1, 26).toLocaleString('en-US', { month: 'short' })} 26 – ${dt.toLocaleString('en-US', { month: 'short' })} 10`,
+  };
+}
+
+function fmtDuration(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function fmtHours(ms) { return (ms / 3600000).toFixed(2); }
+
+function fmtMoney(n) {
+  if (n == null || isNaN(n)) return '—';
+  return '$' + Number(n).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function dateKey(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  return dt.toISOString().slice(0, 10);
+}
+
+// Range presets for the admin payroll view. Each returns {start, end, label, isPayPeriod}.
+function rangePreset(name) {
+  const today = new Date();
+  if (name === 'current') {
+    const p = computePayPeriod(today);
+    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+  }
+  if (name === 'previous') {
+    // Subtract 15 days to land in the previous half-month, then compute that period
+    const prior = new Date(today.getTime() - 15 * 24 * 60 * 60 * 1000);
+    const p = computePayPeriod(prior);
+    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+  }
+  if (name === 'thisMonth') {
+    const yr = today.getFullYear(); const mo = today.getMonth();
+    return { start: new Date(yr, mo, 1), end: new Date(yr, mo + 1, 0), label: today.toLocaleString('en-US', { month: 'long', year: 'numeric' }), isPayPeriod: false };
+  }
+  if (name === 'lastMonth') {
+    const yr = today.getFullYear(); const mo = today.getMonth() - 1;
+    const first = new Date(yr, mo, 1); const last = new Date(yr, mo + 1, 0);
+    return { start: first, end: last, label: first.toLocaleString('en-US', { month: 'long', year: 'numeric' }), isPayPeriod: false };
+  }
+  if (name === 'last7') {
+    const start = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000);
+    return { start, end: today, label: 'Last 7 days', isPayPeriod: false };
+  }
+  if (name === 'last30') {
+    const start = new Date(today.getTime() - 29 * 24 * 60 * 60 * 1000);
+    return { start, end: today, label: 'Last 30 days', isPayPeriod: false };
+  }
+  // Default current
+  const p = computePayPeriod(today);
+  return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+}
+
+function isoStartOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0).toISOString(); }
+function isoEndOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).toISOString(); }
+function inputDateValue(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString().slice(0, 10); }
+
+function TimeTrackingView({ userId, isAdmin }) {
+  const [openEntry, setOpenEntry] = React.useState(null);
+  const [myEntries, setMyEntries] = React.useState([]);
+  const [now, setNow] = React.useState(Date.now());
+  const [loading, setLoading] = React.useState(true);
+  const [busy, setBusy] = React.useState(false);
+  const [notes, setNotes] = React.useState('');
+  const [showManualEntry, setShowManualEntry] = React.useState(false);
+
+  const [vaProfiles, setVaProfiles] = React.useState([]);
+  const [teamEntries, setTeamEntries] = React.useState([]);
+  const [rates, setRates] = React.useState({});
+  const [payments, setPayments] = React.useState([]);
+  const [adminRange, setAdminRange] = React.useState(() => rangePreset('current'));
+
+  const period = computePayPeriod(new Date());
+  const adminStartIso = isoStartOfDay(adminRange.start);
+  const adminEndIso = isoEndOfDay(adminRange.end);
+
+  React.useEffect(() => {
+    if (!openEntry) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [openEntry]);
+
+  const loadMine = React.useCallback(async () => {
+    const { data: open } = await sb.from('time_entries')
+      .select('*').eq('user_id', userId).is('end_at', null).maybeSingle();
+    setOpenEntry(open || null);
+    const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: entries } = await sb.from('time_entries')
+      .select('*').eq('user_id', userId).gte('start_at', since)
+      .order('start_at', { ascending: false }).limit(200);
+    setMyEntries(entries || []);
+    setLoading(false);
+  }, [userId]);
+
+  const loadAdmin = React.useCallback(async () => {
+    if (!isAdmin) return;
+    const [{ data: profs }, { data: rateRows }, { data: tes }, { data: pmts }] = await Promise.all([
+      sb.from('profiles').select('id, name, role').eq('role', 'va'),
+      sb.from('hourly_rates').select('*').order('effective_from', { ascending: false }),
+      sb.from('time_entries').select('*')
+        .gte('start_at', adminStartIso).lte('start_at', adminEndIso)
+        .not('end_at', 'is', null),
+      sb.from('payments').select('*')
+        .gte('period_end', new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+        .order('period_start', { ascending: false }),
+    ]);
+    setVaProfiles(profs || []);
+    const r = {};
+    const rangeEndDate = adminRange.end.toISOString().slice(0, 10);
+    (rateRows || []).forEach(row => {
+      if (row.effective_from > rangeEndDate) return;
+      if (row.effective_to && row.effective_to < rangeEndDate) return;
+      if (!r[row.user_id] || r[row.user_id].effective_from < row.effective_from) {
+        r[row.user_id] = { rate: row.rate, effective_from: row.effective_from, id: row.id };
+      }
+    });
+    setRates(r);
+    setTeamEntries(tes || []);
+    setPayments(pmts || []);
+  }, [isAdmin, adminStartIso, adminEndIso, adminRange.end]);
+
+  React.useEffect(() => { loadMine(); }, [loadMine]);
+  React.useEffect(() => { loadAdmin(); }, [loadAdmin]);
+
+  React.useEffect(() => {
+    const ch = sb.channel('time-entries-' + userId)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entries' }, () => {
+        loadMine();
+        loadAdmin();
+      })
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [loadMine, loadAdmin, userId]);
+
+  const clockIn = async () => {
+    if (busy || openEntry) return;
+    setBusy(true);
+    const { error } = await sb.from('time_entries').insert({
+      user_id: userId,
+      start_at: new Date().toISOString(),
+      notes: notes || null,
+    });
+    setBusy(false);
+    if (error) { alert('Clock-in failed: ' + error.message); return; }
+    setNotes('');
+    loadMine();
+  };
+
+  const clockOut = async () => {
+    if (busy || !openEntry) return;
+    setBusy(true);
+    const updates = { end_at: new Date().toISOString() };
+    if (notes && notes.trim()) {
+      updates.notes = openEntry.notes ? openEntry.notes + ' / ' + notes.trim() : notes.trim();
+    }
+    const { error } = await sb.from('time_entries').update(updates).eq('id', openEntry.id);
+    setBusy(false);
+    if (error) { alert('Clock-out failed: ' + error.message); return; }
+    setNotes('');
+    loadMine();
+  };
+
+  const deleteEntry = async (id) => {
+    if (!confirm('Delete this entry?')) return;
+    await sb.from('time_entries').delete().eq('id', id);
+    loadMine();
+  };
+
+  const submitManualEntry = async ({ targetUserId, date, startTime, endTime, entryNotes }) => {
+    if (busy) return;
+    if (!date || !startTime || !endTime) { alert('Date, start time, and end time are all required.'); return; }
+    const startAt = new Date(`${date}T${startTime}:00`);
+    const endAt = new Date(`${date}T${endTime}:00`);
+    if (endAt <= startAt) {
+      // Treat end-before-start as next-day shift only if duration looks plausible (< 16h)
+      endAt.setDate(endAt.getDate() + 1);
+      if (endAt - startAt > 16 * 3600 * 1000) {
+        alert('End time must be after start time.');
+        return;
+      }
+    }
+    setBusy(true);
+    const { error } = await sb.from('time_entries').insert({
+      user_id: targetUserId || userId,
+      start_at: startAt.toISOString(),
+      end_at: endAt.toISOString(),
+      notes: entryNotes || null,
+    });
+    setBusy(false);
+    if (error) { alert('Save failed: ' + error.message); return; }
+    setShowManualEntry(false);
+    loadMine();
+    loadAdmin();
+  };
+
+  const myPeriodMs = myEntries.reduce((sum, e) => {
+    if (!e.end_at) return sum;
+    const s = new Date(e.start_at);
+    if (s < period.periodStart || s > period.periodEnd) return sum;
+    return sum + (new Date(e.end_at) - s);
+  }, 0);
+  const myTodayMs = myEntries.reduce((sum, e) => {
+    if (!e.end_at) return sum;
+    const s = new Date(e.start_at);
+    if (dateKey(s) !== dateKey(new Date())) return sum;
+    return sum + (new Date(e.end_at) - s);
+  }, 0);
+  const liveMs = openEntry ? (now - new Date(openEntry.start_at).getTime()) : 0;
+
+  const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
+
+  return React.createElement('div', null,
+    React.createElement('div', { style: { ...card, marginBottom: 16, borderTop: '2px solid ' + (openEntry ? '#10b981' : '#44403c') } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 } },
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, openEntry ? '⏱ Clocked in' : '⏱ Time tracking'),
+          openEntry
+            ? React.createElement('div', { style: { fontSize: 32, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 6 } }, fmtDuration(liveMs))
+            : React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginTop: 4 } }, 'Click below to start a shift'),
+          openEntry && React.createElement('div', { style: { fontSize: 11, color: '#78716c', marginTop: 4 } }, 'Started ' + new Date(openEntry.start_at).toLocaleTimeString())
+        ),
+        React.createElement('button', {
+          onClick: openEntry ? clockOut : clockIn,
+          disabled: busy,
+          style: {
+            background: openEntry ? '#dc2626' : '#10b981',
+            color: '#fafaf9', border: 'none', borderRadius: 8,
+            padding: '14px 28px', fontSize: 15, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.5 : 1, minWidth: 140,
+          }
+        }, busy ? '...' : (openEntry ? '⏸ Clock Out' : '▶ Clock In'))
+      ),
+      React.createElement('input', {
+        type: 'text',
+        value: notes,
+        onChange: e => setNotes(e.target.value),
+        placeholder: openEntry ? 'Add notes for this shift (optional)' : 'What are you working on? (optional)',
+        style: { width: '100%', marginTop: 12, padding: '8px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' }
+      })
+    ),
+    React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 16 } },
+      React.createElement('div', { style: card },
+        React.createElement('div', { style: { fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, 'Today'),
+        React.createElement('div', { style: { fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 } }, fmtHours(myTodayMs + (openEntry && dateKey(new Date(openEntry.start_at)) === dateKey(new Date()) ? liveMs : 0)) + 'h'),
+        React.createElement('div', { style: { fontSize: 11, color: '#a8a29e', marginTop: 2 } }, new Date().toLocaleDateString())
+      ),
+      React.createElement('div', { style: card },
+        React.createElement('div', { style: { fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, 'Current pay period'),
+        React.createElement('div', { style: { fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 } }, fmtHours(myPeriodMs + (openEntry ? liveMs : 0)) + 'h'),
+        React.createElement('div', { style: { fontSize: 11, color: '#a8a29e', marginTop: 2 } }, period.label + ' · pay date ' + period.payDate.toLocaleDateString())
+      )
+    ),
+    React.createElement('div', { style: { ...card, marginBottom: 16 } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 } },
+        React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, 'Recent entries'),
+        React.createElement('button', {
+          onClick: () => setShowManualEntry(true),
+          style: { padding: '6px 14px', background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+        }, '+ Add manual entry')
+      ),
+      loading
+        ? React.createElement('div', { style: { padding: 12, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'Loading…')
+        : myEntries.length === 0
+          ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No entries yet. Click "Clock In" or "+ Add manual entry" to start.')
+          : React.createElement('div', null,
+              myEntries.slice(0, 30).map(e => {
+                const start = new Date(e.start_at);
+                const end = e.end_at ? new Date(e.end_at) : null;
+                const ms = end ? (end - start) : 0;
+                return React.createElement('div', {
+                  key: e.id,
+                  style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 0', borderBottom: '1px solid #292524', fontSize: 13, gap: 12, flexWrap: 'wrap' }
+                },
+                  React.createElement('div', { style: { flex: 1, minWidth: 200 } },
+                    React.createElement('div', { style: { color: '#fafaf9' } }, start.toLocaleDateString() + ' · ' + start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) + (end ? ' → ' + end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ' → (open)')),
+                    e.notes && React.createElement('div', { style: { color: '#a8a29e', fontSize: 11, marginTop: 2 } }, e.notes)
+                  ),
+                  React.createElement('div', { style: { color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700, minWidth: 80, textAlign: 'right' } }, end ? fmtHours(ms) + 'h' : '— open —'),
+                  end && React.createElement('button', {
+                    onClick: () => deleteEntry(e.id),
+                    style: { background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 11 },
+                    title: 'Delete entry'
+                  }, '✕')
+                );
+              })
+            )
+    ),
+    isAdmin && React.createElement(AdminPayrollSection, {
+      vaProfiles, teamEntries, rates, payments,
+      adminRange, setAdminRange,
+      onReload: loadAdmin,
+    }),
+    showManualEntry && React.createElement(ManualEntryModal, {
+      isAdmin, userId, vaProfiles,
+      onClose: () => setShowManualEntry(false),
+      onSubmit: submitManualEntry,
+      busy,
+    })
+  );
+}
+
+function ManualEntryModal({ isAdmin, userId, vaProfiles, onClose, onSubmit, busy }) {
+  const [targetUserId, setTargetUserId] = React.useState(userId);
+  const [date, setDate] = React.useState(inputDateValue(new Date()));
+  const [startTime, setStartTime] = React.useState('09:00');
+  const [endTime, setEndTime] = React.useState('17:00');
+  const [entryNotes, setEntryNotes] = React.useState('');
+
+  const overlay = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 };
+  const modal = { background: '#1c1917', border: '1px solid #44403c', borderRadius: 12, padding: 24, width: '100%', maxWidth: 480 };
+  const label = { display: 'block', fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: 6 };
+  const input = { width: '100%', padding: '8px 12px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 13, fontFamily: 'inherit', boxSizing: 'border-box' };
+
+  // Compute duration preview
+  let durLabel = '—';
+  try {
+    const s = new Date(`${date}T${startTime}:00`);
+    let e = new Date(`${date}T${endTime}:00`);
+    if (e <= s) e.setDate(e.getDate() + 1);
+    const ms = e - s;
+    if (ms > 0 && ms <= 16 * 3600 * 1000) durLabel = (ms / 3600000).toFixed(2) + 'h';
+  } catch (_) {}
+
+  return React.createElement('div', { style: overlay, onClick: e => { if (e.target === e.currentTarget) onClose(); } },
+    React.createElement('div', { style: modal },
+      React.createElement('div', { style: { fontSize: 16, fontWeight: 700, color: '#fafaf9', marginBottom: 16 } }, 'Add manual time entry'),
+      isAdmin && vaProfiles.length > 0 && React.createElement('div', { style: { marginBottom: 12 } },
+        React.createElement('label', { style: label }, 'Person'),
+        React.createElement('select', {
+          value: targetUserId,
+          onChange: e => setTargetUserId(e.target.value),
+          style: input,
+        },
+          React.createElement('option', { value: userId }, 'Me'),
+          vaProfiles.filter(p => p.id !== userId).map(p =>
+            React.createElement('option', { key: p.id, value: p.id }, p.name || '(unnamed)')
+          )
+        )
+      ),
+      React.createElement('div', { style: { marginBottom: 12 } },
+        React.createElement('label', { style: label }, 'Date'),
+        React.createElement('input', { type: 'date', value: date, onChange: e => setDate(e.target.value), style: input })
+      ),
+      React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 80px', gap: 10, marginBottom: 12 } },
+        React.createElement('div', null,
+          React.createElement('label', { style: label }, 'Start'),
+          React.createElement('input', { type: 'time', value: startTime, onChange: e => setStartTime(e.target.value), style: input })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { style: label }, 'End'),
+          React.createElement('input', { type: 'time', value: endTime, onChange: e => setEndTime(e.target.value), style: input })
+        ),
+        React.createElement('div', null,
+          React.createElement('label', { style: label }, 'Total'),
+          React.createElement('div', { style: { ...input, padding: '9px 12px', fontFamily: "'DM Mono', monospace", fontWeight: 700, color: durLabel === '—' ? '#78716c' : '#10b981', textAlign: 'center' } }, durLabel)
+        )
+      ),
+      React.createElement('div', { style: { marginBottom: 16 } },
+        React.createElement('label', { style: label }, 'Notes (optional)'),
+        React.createElement('input', { type: 'text', value: entryNotes, onChange: e => setEntryNotes(e.target.value), placeholder: 'What did you work on?', style: input })
+      ),
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8 } },
+        React.createElement('button', {
+          onClick: onClose,
+          style: { padding: '10px 18px', background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 6, fontSize: 13, cursor: 'pointer' }
+        }, 'Cancel'),
+        React.createElement('button', {
+          onClick: () => onSubmit({ targetUserId, date, startTime, endTime, entryNotes }),
+          disabled: busy,
+          style: { padding: '10px 18px', background: '#10b981', color: '#fafaf9', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.5 : 1 }
+        }, busy ? 'Saving…' : 'Save entry')
+      )
+    )
+  );
+}
+
+function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRange, setAdminRange, onReload }) {
+  const [editingRateFor, setEditingRateFor] = React.useState(null);
+  const [newRate, setNewRate] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
+
+  const hoursByUser = {};
+  teamEntries.forEach(e => {
+    if (!e.end_at) return;
+    const ms = new Date(e.end_at) - new Date(e.start_at);
+    hoursByUser[e.user_id] = (hoursByUser[e.user_id] || 0) + ms;
+  });
+
+  // Pay-period boundary strings — only meaningful when the range IS a pay period
+  const rangeStartStr = adminRange.start.toISOString().slice(0, 10);
+  const rangeEndStr = adminRange.end.toISOString().slice(0, 10);
+  const paidThisPeriod = {};
+  if (adminRange.isPayPeriod) {
+    payments.forEach(p => {
+      if (p.period_start === rangeStartStr && p.period_end === rangeEndStr) {
+        paidThisPeriod[p.user_id] = p;
+      }
+    });
+  }
+
+  const markPaid = async (userId, ms, rate) => {
+    if (busy || !adminRange.isPayPeriod) return;
+    const hours = ms / 3600000;
+    const amount = +(hours * rate).toFixed(2);
+    if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(amount)} as paid for this period?`)) return;
+    setBusy(true);
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('payments').insert({
+      user_id: userId,
+      period_start: rangeStartStr,
+      period_end: rangeEndStr,
+      hours_worked: hours.toFixed(2),
+      rate_used: rate,
+      amount_paid: amount,
+      paid_by: user?.id,
+    });
+    setBusy(false);
+    if (error) { alert('Mark-paid failed: ' + error.message); return; }
+    onReload();
+  };
+
+  const unmarkPaid = async (paymentId) => {
+    if (!confirm('Undo this payment record?')) return;
+    setBusy(true);
+    await sb.from('payments').delete().eq('id', paymentId);
+    setBusy(false);
+    onReload();
+  };
+
+  const saveRate = async (userId) => {
+    const r = parseFloat(newRate);
+    if (!r || r <= 0) { alert('Enter a valid hourly rate.'); return; }
+    setBusy(true);
+    const today = new Date().toISOString().slice(0, 10);
+    const existing = rates[userId];
+    if (existing) {
+      await sb.from('hourly_rates').update({ effective_to: today }).eq('id', existing.id);
+    }
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('hourly_rates').insert({
+      user_id: userId,
+      rate: r,
+      effective_from: today,
+      created_by: user?.id,
+    });
+    setBusy(false);
+    if (error) { alert('Save-rate failed: ' + error.message); return; }
+    setEditingRateFor(null);
+    setNewRate('');
+    onReload();
+  };
+
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const lastMonth = new Date(new Date().setMonth(new Date().getMonth() - 1)).toISOString().slice(0, 7);
+  const paidThisMonth = payments.filter(p => p.paid_at && p.paid_at.slice(0, 7) === thisMonth).reduce((s, p) => s + Number(p.amount_paid || 0), 0);
+  const paidLastMonth = payments.filter(p => p.paid_at && p.paid_at.slice(0, 7) === lastMonth).reduce((s, p) => s + Number(p.amount_paid || 0), 0);
+
+  const presetBtn = (id, label) => {
+    const isActive = adminRange.label === rangePreset(id).label;
+    return React.createElement('button', {
+      key: id,
+      onClick: () => setAdminRange(rangePreset(id)),
+      style: {
+        padding: '5px 10px', fontSize: 11, fontWeight: 600,
+        background: isActive ? '#292524' : 'transparent',
+        color: isActive ? '#fafaf9' : '#a8a29e',
+        border: '1px solid ' + (isActive ? '#44403c' : 'transparent'),
+        borderRadius: 5, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+      }
+    }, label);
+  };
+
+  return React.createElement('div', null,
+    React.createElement('div', { style: { ...card, marginBottom: 16, borderTop: '2px solid #d97706' } },
+      React.createElement('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, flexWrap: 'wrap', gap: 10 } },
+        React.createElement('div', null,
+          React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 } }, '💵 Team Payroll'),
+          React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginTop: 4 } },
+            adminRange.label,
+            adminRange.isPayPeriod && adminRange.period && React.createElement('span', null, ' · pay date ' + adminRange.period.payDate.toLocaleDateString()),
+            !adminRange.isPayPeriod && React.createElement('span', { style: { color: '#78716c', marginLeft: 6, fontStyle: 'italic' } }, '(report mode — Mark Paid disabled for non-pay-period ranges)')
+          )
+        ),
+        React.createElement('div', { style: { display: 'flex', gap: 16 } },
+          React.createElement('div', { style: { textAlign: 'right' } },
+            React.createElement('div', { style: { fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 } }, 'Paid this month'),
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, fmtMoney(paidThisMonth))
+          ),
+          React.createElement('div', { style: { textAlign: 'right' } },
+            React.createElement('div', { style: { fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 } }, 'Last month'),
+            React.createElement('div', { style: { fontSize: 18, fontWeight: 700, color: '#a8a29e', fontFamily: "'DM Mono', monospace" } }, fmtMoney(paidLastMonth))
+          )
+        )
+      ),
+      // ----- Range picker bar -----
+      React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14, padding: 8, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 } },
+        presetBtn('current', 'Current period'),
+        presetBtn('previous', 'Previous period'),
+        presetBtn('thisMonth', 'This month'),
+        presetBtn('lastMonth', 'Last month'),
+        presetBtn('last7', 'Last 7'),
+        presetBtn('last30', 'Last 30'),
+        React.createElement('div', { style: { width: 1, height: 18, background: '#292524', margin: '0 6px' } }),
+        React.createElement('input', {
+          type: 'date', value: inputDateValue(adminRange.start),
+          onChange: e => {
+            const newStart = new Date(e.target.value + 'T00:00:00');
+            setAdminRange({ start: newStart, end: adminRange.end, label: `${e.target.value} → ${inputDateValue(adminRange.end)}`, isPayPeriod: false });
+          },
+          style: { padding: '4px 6px', background: '#1c1917', border: '1px solid #292524', borderRadius: 4, color: '#fafaf9', fontSize: 11, fontFamily: 'inherit' }
+        }),
+        React.createElement('span', { style: { color: '#78716c', fontSize: 11 } }, '→'),
+        React.createElement('input', {
+          type: 'date', value: inputDateValue(adminRange.end),
+          onChange: e => {
+            const newEnd = new Date(e.target.value + 'T23:59:59');
+            setAdminRange({ start: adminRange.start, end: newEnd, label: `${inputDateValue(adminRange.start)} → ${e.target.value}`, isPayPeriod: false });
+          },
+          style: { padding: '4px 6px', background: '#1c1917', border: '1px solid #292524', borderRadius: 4, color: '#fafaf9', fontSize: 11, fontFamily: 'inherit' }
+        })
+      ),
+      vaProfiles.length === 0
+        ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No VAs found. Add Erik / Anam via the Team modal.')
+        : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
+            React.createElement('thead', null,
+              React.createElement('tr', { style: { textAlign: 'left', color: '#78716c', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' } },
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524' } }, 'Name'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Hours'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Rate'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Total'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Status')
+              )
+            ),
+            React.createElement('tbody', null,
+              vaProfiles.map(p => {
+                const ms = hoursByUser[p.id] || 0;
+                const hours = ms / 3600000;
+                const rate = rates[p.id]?.rate;
+                const total = (rate && hours) ? hours * rate : 0;
+                const paid = paidThisPeriod[p.id];
+                const editing = editingRateFor === p.id;
+                return React.createElement('tr', { key: p.id, style: { borderBottom: '1px solid #292524' } },
+                  React.createElement('td', { style: { padding: '10px 4px', color: '#fafaf9' } }, p.name || '(unnamed)'),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, hours.toFixed(2) + 'h'),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
+                    editing
+                      ? React.createElement('div', { style: { display: 'flex', gap: 4, justifyContent: 'flex-end' } },
+                          React.createElement('input', { type: 'number', step: '0.25', value: newRate, onChange: e => setNewRate(e.target.value), placeholder: '15.00', style: { width: 70, padding: '4px 6px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#fafaf9', fontSize: 12 } }),
+                          React.createElement('button', { onClick: () => saveRate(p.id), disabled: busy, style: { padding: '4px 8px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✓'),
+                          React.createElement('button', { onClick: () => { setEditingRateFor(null); setNewRate(''); }, style: { padding: '4px 8px', background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✕')
+                        )
+                      : React.createElement('span', { onClick: () => { setEditingRateFor(p.id); setNewRate(rate || ''); }, style: { color: rate ? '#fafaf9' : '#fb923c', cursor: 'pointer', textDecoration: 'underline dotted', fontFamily: "'DM Mono', monospace" } }, rate ? fmtMoney(rate) + '/hr' : 'set rate')
+                  ),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700 } }, total > 0 ? fmtMoney(total) : '—'),
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
+                    paid
+                      ? React.createElement('div', { style: { display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' } },
+                          React.createElement('span', { style: { color: '#10b981', fontSize: 11, fontWeight: 700 } }, '✓ Paid ' + new Date(paid.paid_at).toLocaleDateString()),
+                          React.createElement('button', { onClick: () => unmarkPaid(paid.id), style: { background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 10 }, title: 'Undo' }, '↶')
+                        )
+                      : adminRange.isPayPeriod
+                        ? React.createElement('button', { onClick: () => markPaid(p.id, ms, rate), disabled: !rate || ms === 0 || busy, style: { padding: '5px 12px', background: (!rate || ms === 0) ? '#44403c' : '#d97706', color: '#fafaf9', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: (!rate || ms === 0) ? 'not-allowed' : 'pointer', opacity: (!rate || ms === 0) ? 0.5 : 1 } }, 'Mark Paid')
+                        : React.createElement('span', { style: { color: '#78716c', fontSize: 10, fontStyle: 'italic' } }, 'report only')
+                  )
+                );
+              })
+            )
+          )
+    ),
+    payments.length > 0 && React.createElement('div', { style: card },
+      React.createElement('div', { style: { fontSize: 11, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700, marginBottom: 10 } }, 'Recent payments (90 days)'),
+      React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 12 } },
+        React.createElement('thead', null,
+          React.createElement('tr', { style: { textAlign: 'left', color: '#78716c', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' } },
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524' } }, 'Person'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524' } }, 'Period'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Hours'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Amount'),
+            React.createElement('th', { style: { padding: '6px 4px', borderBottom: '1px solid #292524' } }, 'Paid')
+          )
+        ),
+        React.createElement('tbody', null,
+          payments.map(p => {
+            const va = vaProfiles.find(v => v.id === p.user_id);
+            return React.createElement('tr', { key: p.id, style: { borderBottom: '1px solid #292524' } },
+              React.createElement('td', { style: { padding: '6px 4px', color: '#fafaf9' } }, va?.name || '—'),
+              React.createElement('td', { style: { padding: '6px 4px', color: '#a8a29e' } }, p.period_start + ' → ' + p.period_end),
+              React.createElement('td', { style: { padding: '6px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, Number(p.hours_worked).toFixed(2) + 'h'),
+              React.createElement('td', { style: { padding: '6px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700 } }, fmtMoney(p.amount_paid)),
+              React.createElement('td', { style: { padding: '6px 4px', color: '#a8a29e' } }, new Date(p.paid_at).toLocaleDateString())
+            );
+          })
+        )
+      )
+    )
+  );
+}
+
+// ─── TeamChatBubble — Messenger-style floating team chat ─────────────
+// Per Eric (2026-05-05): a floating chat tab inside DCC so messages can
+// be read + replied to without leaving the current deal/view. Mirrors
+// the Lauren FAB pattern but on the LEFT side of the screen (Lauren
+// owns the right). Mounted at the React root alongside LaurenDCC so
+// it persists across every view including deal detail.
+//
+// Two modes inside the open panel:
+//   1. Thread list — every team_thread w/ last message + unread count
+//   2. Thread view — last 80 msgs of the active thread + composer
+//
+// Realtime: subscribed to team_messages + team_message_reads so the
+// list refreshes when new messages land or another device marks read.
+//
+// Mobile: hidden via media query in index.html (.team-chat-bubble &
+// .team-chat-panel set to display:none on ≤640px). Mobile users still
+// have the in-app /team view via the bottom-nav More sheet.
+function TeamChatBubble() {
+  const [open, setOpen] = useState(false);
+  const [me, setMe] = useState(null);
+  const [threads, setThreads] = useState([]);
+  const [unreadByThread, setUnreadByThread] = useState({});
+  const [lastMsgByThread, setLastMsgByThread] = useState({});
+  const [participantsByThreadId, setParticipantsByThreadId] = useState({});
+  const [profilesById, setProfilesById] = useState({});
+  const [activeThreadId, setActiveThreadId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [body, setBody] = useState('');
+  const [sending, setSending] = useState(false);
+  // Attachments staged in the composer before send. Per Nathan
+  // 2026-05-05: bubble needs an 📎 attach button so files/pictures
+  // can be sent without leaving the deal context.
+  const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [uploadingFiles, setUploadingFiles] = useState(false);
+  const [showGifPicker, setShowGifPicker] = useState(false);
+  const fileInputRef = useRef(null);
+  const composerRef = useRef(null);
+  const msgsEndRef = useRef(null);
+
+  // Boot: load user + threads + listen for global open-event so the
+  // header chat button (and anything else) can pop the bubble open.
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    window.addEventListener('dcc:open-team-chat', handler);
+    (async () => {
+      const { data: { user } } = await sb.auth.getUser();
+      if (!user) return;
+      const { data: prof } = await sb.from('profiles').select('id, name, role').eq('id', user.id).single();
+      setMe({ id: user.id, name: prof?.name || user.email || 'Me', role: prof?.role || 'admin' });
+    })();
+    return () => window.removeEventListener('dcc:open-team-chat', handler);
+  }, []);
+
+  // Load threads + last message + participant maps + profile cache
+  const loadThreads = React.useCallback(async () => {
+    if (!me?.id) return;
+    const { data: raw } = await sb.from('team_threads')
+      .select('id, title, thread_type, created_at')
+      .is('archived_at', null)
+      .order('created_at', { ascending: true });
+    // Exclude Lauren threads — Lauren has her own dedicated FAB on the
+    // right. Per Nathan 2026-05-05: "i dont want lauren talking to me
+    // from 2 chats." This bubble is for human team chat only.
+    const t = (raw || []).filter(x => x.thread_type !== 'lauren_dm' && x.thread_type !== 'lauren_room');
+    setThreads(t);
+
+    if (t.length === 0) return;
+    const ids = t.map(x => x.id);
+
+    // Last message per thread (one query, sort + de-dupe in JS)
+    const { data: latest } = await sb.from('team_messages')
+      .select('thread_id, sender_id, sender_kind, body, created_at')
+      .in('thread_id', ids)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    const lastMap = {};
+    (latest || []).forEach(m => {
+      if (!lastMap[m.thread_id]) lastMap[m.thread_id] = m;
+    });
+    setLastMsgByThread(lastMap);
+
+    // DM participants → so we can label "DM with Justin"
+    const dmIds = t.filter(x => x.thread_type === 'dm').map(x => x.id);
+    if (dmIds.length) {
+      const { data: parts } = await sb.from('team_thread_participants')
+        .select('thread_id, user_id').in('thread_id', dmIds);
+      const map = {};
+      (parts || []).forEach(p => {
+        if (!map[p.thread_id]) map[p.thread_id] = [];
+        map[p.thread_id].push(p.user_id);
+      });
+      setParticipantsByThreadId(map);
+    }
+  }, [me?.id]);
+
+  // Per-thread unread counts (RPC the main TeamView already uses)
+  const loadUnread = React.useCallback(async () => {
+    if (!me?.id) return;
+    const { data } = await sb.rpc('team_unread_per_thread', { p_user_id: me.id });
+    const map = {};
+    (data || []).forEach(r => { map[r.thread_id] = r.unread_count; });
+    setUnreadByThread(map);
+  }, [me?.id]);
+
+  useEffect(() => { loadThreads(); loadUnread(); }, [loadThreads, loadUnread]);
+
+  // Profile cache for sender names + DM labels
+  useEffect(() => {
+    (async () => {
+      const { data: profs } = await sb.from('profiles')
+        .select('id, name, display_name')
+        .in('role', ['admin', 'user', 'va']);
+      const byId = {};
+      (profs || []).forEach(p => { byId[p.id] = p; });
+      setProfilesById(byId);
+    })();
+  }, []);
+
+  // Realtime: refresh thread metadata + unread on every message change
+  useEffect(() => {
+    if (!me?.id) return;
+    const ch = sb.channel('team-chat-bubble')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_messages' }, () => {
+        loadThreads(); loadUnread();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnread)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'team_threads' }, loadThreads)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [me?.id, loadThreads, loadUnread]);
+
+  // Load + subscribe to the active thread's messages.
+  //
+  // Pre-fix (2026-05-11): query was `.order(asc).limit(80)` — for a
+  // thread with >80 messages (e.g. Ops which has 145+), this returned
+  // the OLDEST 80 and missed everything recent. Eric flagged: opening
+  // Ops via the bubble showed messages from 6 days ago, not current.
+  // Fix: load the NEWEST 80 via DESC + limit, then reverse for ascending
+  // display. Realtime INSERT subscription appends new arrivals on top.
+  useEffect(() => {
+    if (!activeThreadId || !me?.id) return;
+    let cancelled = false;
+    (async () => {
+      const { data: latest } = await sb.from('team_messages')
+        .select('id, sender_id, sender_kind, body, created_at')
+        .eq('thread_id', activeThreadId)
+        .is('deleted_at', null)
+        .order('created_at', { ascending: false })
+        .limit(80);
+      if (cancelled) return;
+      const data = (latest || []).slice().reverse();
+      setMessages(data);
+      // Mark this thread read for me
+      await sb.from('team_message_reads').upsert({
+        thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
+      }, { onConflict: 'thread_id,user_id' });
+    })();
+    const ch = sb.channel('team-chat-bubble-msgs-' + activeThreadId)
+      .on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'team_messages', filter: `thread_id=eq.${activeThreadId}`
+      }, (payload) => {
+        const row = payload.new;
+        if (row.deleted_at) return;
+        setMessages(prev => prev.find(m => m.id === row.id) ? prev : [...prev, row]);
+        // Auto mark-read for incoming messages while this thread is open
+        if (me?.id && row.sender_id !== me.id) {
+          setTimeout(() => {
+            sb.from('team_message_reads').upsert({
+              thread_id: activeThreadId, user_id: me.id, last_read_at: new Date().toISOString()
+            }, { onConflict: 'thread_id,user_id' });
+          }, 600);
+        }
+      })
+      .subscribe();
+    return () => { cancelled = true; sb.removeChannel(ch); };
+  }, [activeThreadId, me?.id]);
+
+  // Auto-scroll to bottom — two distinct intents in one effect:
+  //   1. First time we land on a thread (or thread changes, or
+  //      messages reload from 0) → INSTANT jump to bottom. No
+  //      animation. Per Nathan 2026-05-07: "When I click into a chat,
+  //      I just want it to start at the very bottom for the most
+  //      recent conversation."
+  //   2. New message arriving in a thread we're already anchored in →
+  //      smooth slide so the user sees it appear.
+  //
+  // The race v1 of this fix missed: when activeThreadId changes,
+  // `messages` is still the OLD thread's messages until loadMessages
+  // completes. So this effect fires twice — once with threadChanged
+  // (instant) and a second time when messages.length goes 0 → N
+  // (same thread now, would have been smooth → still scrolled). The
+  // `initialScrollDoneRef` flag suppresses the smooth-scroll branch
+  // until we've completed the first scroll for this thread WITH
+  // non-empty messages. Only AFTER that do new arrivals get smooth.
+  //
+  // The "scroll lands short of the real bottom" symptom comes from
+  // measuring scrollHeight before React has committed the new rows.
+  // Double-rAF guarantees layout has settled before we scroll.
+  const lastThreadIdRef = useRef(null);
+  const initialScrollDoneRef = useRef(false);
+  useEffect(() => {
+    if (!msgsEndRef.current) return;
+    const threadChanged = lastThreadIdRef.current !== activeThreadId;
+    if (threadChanged) {
+      lastThreadIdRef.current = activeThreadId;
+      initialScrollDoneRef.current = false;
+    }
+
+    if (!initialScrollDoneRef.current) {
+      // Instant jump — covers thread switch AND the messages 0→N load
+      // that follows. Repeats are harmless (we just re-snap to bottom).
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          msgsEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+        });
+      });
+      // Only flip the "initial scroll done" flag once we've actually
+      // landed at the bottom of a populated thread. Empty thread stays
+      // in instant-mode until the first message arrives (which is fine —
+      // first message in an empty thread snapping into place is correct).
+      if (messages.length > 0) {
+        initialScrollDoneRef.current = true;
+      }
+    } else {
+      msgsEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [messages.length, activeThreadId]);
+
+  // Auto-focus composer when entering a thread
+  useEffect(() => {
+    if (open && activeThreadId && composerRef.current) {
+      setTimeout(() => composerRef.current?.focus(), 80);
+    }
+  }, [open, activeThreadId]);
+
+  // Upload attachments — same flow + same bucket as TeamView. Each
+  // file gets a unique path: <thread_id>/<ts>-<rand>-<safename>.
+  // Returned metadata is what gets stored in team_messages.attachments.
+  const uploadFiles = async (files) => {
+    if (!files.length || !activeThreadId) return [];
+    setUploadingFiles(true);
+    const out = [];
+    for (const file of files) {
+      try {
+        const safe = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+        const path = `${activeThreadId}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${safe}`;
+        const { error: upErr } = await sb.storage.from('team-chat').upload(path, file, {
+          upsert: false, contentType: file.type || 'application/octet-stream'
+        });
+        if (upErr) { alert(`Upload failed: ${file.name} — ${upErr.message}`); continue; }
+        out.push({ path, name: file.name, size: file.size, type: file.type || 'application/octet-stream' });
+      } catch (ex) {
+        alert(`Upload failed: ${file.name} — ${ex.message || ex}`);
+      }
+    }
+    setUploadingFiles(false);
+    return out;
+  };
+
+  const onPickFiles = async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const uploaded = await uploadFiles(files);
+    setPendingAttachments(prev => [...prev, ...uploaded]);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removePending = async (idx) => {
+    const att = pendingAttachments[idx];
+    if (att?.path) await sb.storage.from('team-chat').remove([att.path]).catch(() => {});
+    setPendingAttachments(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const sendBody = async () => {
+    const trimmed = body.trim();
+    // Allow a send when text is empty IF there are attachments — common
+    // case is "send this image" with no caption.
+    if ((!trimmed && pendingAttachments.length === 0) || !activeThreadId || !me?.id || sending) return;
+    setSending(true);
+    try {
+      const { error } = await sb.from('team_messages').insert({
+        thread_id: activeThreadId,
+        sender_id: me.id,
+        // sender_kind constraint: 'lauren' | 'va' | 'admin'. Map our
+        // role to the right value or every send 23514s out.
+        sender_kind: me.role === 'va' ? 'va' : 'admin',
+        body: trimmed,
+        attachments: pendingAttachments,
+      });
+      if (error) { alert('Could not send: ' + error.message); return; }
+      setBody('');
+      setPendingAttachments([]);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Build a friendly thread label. DMs → "DM · Justin". Channels → title.
+  // Lauren channels (lauren_room / lauren_dm) get a robot prefix.
+  const threadLabel = (t) => {
+    if (!t) return '—';
+    if (t.thread_type === 'lauren_dm') return '🤖 Lauren';
+    if (t.thread_type === 'lauren_room') return '🤖 ' + (t.title || 'Lauren room');
+    if (t.thread_type === 'dm') {
+      const otherIds = (participantsByThreadId[t.id] || []).filter(uid => uid !== me?.id);
+      const otherName = otherIds.map(uid => profilesById[uid]?.display_name || profilesById[uid]?.name).filter(Boolean)[0];
+      return otherName ? `DM · ${otherName}` : (t.title || 'Direct message');
+    }
+    return t.title || 'Thread';
+  };
+
+  const senderName = (m) => {
+    if (!m) return '';
+    if (m.sender_kind === 'lauren') return '🤖 Lauren';
+    if (m.sender_id === me?.id) return 'You';
+    return profilesById[m.sender_id]?.display_name || profilesById[m.sender_id]?.name || 'Teammate';
+  };
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm';
+    if (m < 1440) return Math.floor(m / 60) + 'h';
+    return Math.floor(m / 1440) + 'd';
+  };
+
+  const totalUnread = Object.values(unreadByThread).reduce((s, n) => s + (n || 0), 0);
+
+  // Sort threads: ones with unread first, then by last message ts desc
+  const sortedThreads = [...threads].sort((a, b) => {
+    const ua = unreadByThread[a.id] || 0;
+    const ub = unreadByThread[b.id] || 0;
+    if (ua !== ub) return ub - ua;
+    const ta = lastMsgByThread[a.id]?.created_at || a.created_at;
+    const tb = lastMsgByThread[b.id]?.created_at || b.created_at;
+    return new Date(tb).getTime() - new Date(ta).getTime();
+  });
+
+  if (!me?.id) return null;
+
+  return (
+    <>
+      <button
+        className="team-chat-bubble"
+        onClick={() => setOpen(o => !o)}
+        title={totalUnread > 0 ? `${totalUnread} unread message${totalUnread === 1 ? '' : 's'}` : 'Team chat'}
+        style={{
+          position: 'fixed', bottom: 24, left: 24, zIndex: 9000,
+          background: totalUnread > 0 ? '#1e3a8a' : '#1c1917',
+          color: '#fafaf9',
+          border: '1px solid ' + (totalUnread > 0 ? '#3b82f6' : '#44403c'),
+          borderRadius: 24, padding: '0 16px', height: 44,
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          fontSize: 13, fontWeight: 700, cursor: 'pointer',
+          boxShadow: totalUnread > 0
+            ? '0 4px 20px rgba(59,130,246,.55), 0 0 0 4px rgba(59,130,246,.18)'
+            : '0 4px 16px rgba(0,0,0,.55)',
+          fontFamily: 'inherit',
+          transition: 'transform .1s, box-shadow .25s, background .25s',
+        }}>
+        <span style={{ fontSize: 16, lineHeight: 1 }}>💬</span>
+        Chat
+        {totalUnread > 0 && (
+          <span style={{
+            background: '#dc2626', color: '#fff', borderRadius: 10,
+            padding: '1px 7px', fontSize: 10, fontWeight: 700,
+            minWidth: 18, textAlign: 'center', marginLeft: 2,
+          }}>{totalUnread > 99 ? '99+' : totalUnread}</span>
+        )}
+      </button>
+
+      {open && (
+        <div
+          className="team-chat-panel"
+          style={{
+            position: 'fixed', bottom: 80, left: 24, zIndex: 9001,
+            width: 380, height: 540,
+            background: '#1c1917', border: '1px solid #44403c',
+            borderRadius: 16, boxShadow: '0 16px 48px rgba(0,0,0,.65)',
+            display: 'flex', flexDirection: 'column', overflow: 'hidden',
+          }}>
+          {/* Header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px',
+            background: '#0c0a09', borderBottom: '1px solid #292524', flexShrink: 0,
+          }}>
+            {activeThreadId && (
+              <button onClick={() => setActiveThreadId(null)}
+                title="Back to threads"
+                style={{ background: '#292524', border: '1px solid #44403c', color: '#a8a29e',
+                         fontSize: 13, padding: '4px 9px', borderRadius: 6, cursor: 'pointer',
+                         fontFamily: 'inherit', flexShrink: 0 }}>←</button>
+            )}
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {activeThreadId ? threadLabel(threads.find(t => t.id === activeThreadId)) : '💬 Team Chat'}
+              </div>
+              <div style={{ fontSize: 10, color: '#78716c', marginTop: 1 }}>
+                {activeThreadId
+                  ? `${messages.length} message${messages.length === 1 ? '' : 's'} · realtime`
+                  : `${threads.length} thread${threads.length === 1 ? '' : 's'} · ${totalUnread} unread`}
+              </div>
+            </div>
+            <button onClick={() => setOpen(false)} aria-label="Close chat"
+              style={{ background: '#292524', border: '1px solid #44403c', color: '#fafaf9',
+                       fontSize: 18, lineHeight: 1, cursor: 'pointer', borderRadius: 8,
+                       width: 32, height: 32, display: 'flex', alignItems: 'center',
+                       justifyContent: 'center', flexShrink: 0, fontFamily: 'inherit' }}>×</button>
+          </div>
+
+          {/* Body */}
+          {!activeThreadId ? (
+            // ── Thread list mode ──
+            <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0' }}>
+              {/* ── Permanent video rooms — always visible at top of thread list ── */}
+              {/* Eric and Anam each have a fixed Jitsi room so Nathan/Justin can
+                  jump in without creating a new URL every time. No dynamic video
+                  call messages needed — just click Join. */}
+              <div style={{ padding: '8px 14px 4px', borderBottom: '1px solid #1c1917' }}>
+                <div style={{ fontSize: 9, fontWeight: 700, color: '#57534e', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>📹 Video Rooms</div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {[
+                    { label: "Eric's Room", url: 'https://meet.jit.si/DCC-Eric-Room' },
+                    { label: "Anam's Room", url: 'https://meet.jit.si/DCC-Anam-Room' },
+                    { label: "Nathan's Room", url: 'https://meet.jit.si/DCC-Nathan-Room' },
+                    { label: "Justin's Room", url: 'https://meet.jit.si/DCC-Justin-Room' },
+                  ].map(room => (
+                    <button key={room.url}
+                      onClick={() => window.open(room.url, '_blank', 'noopener,noreferrer')}
+                      title={`Join ${room.label} on Jitsi`}
+                      style={{
+                        flex: 1, background: '#15803d', color: '#fff',
+                        border: '1px solid #16a34a', borderRadius: 8,
+                        padding: '7px 10px', fontSize: 11, fontWeight: 700,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                      }}>
+                      📹 {room.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {sortedThreads.length === 0 && (
+                <div style={{ fontSize: 12, color: '#78716c', padding: 24, textAlign: 'center' }}>
+                  No threads yet. Open the full Team view to start one.
+                </div>
+              )}
+              {sortedThreads.map(t => {
+                const u = unreadByThread[t.id] || 0;
+                const last = lastMsgByThread[t.id];
+                const lastSnippet = last?.body
+                  ? (last.body.length > 60 ? last.body.slice(0, 60) + '…' : last.body)
+                  : '(no messages yet)';
+                return (
+                  <button key={t.id} onClick={() => setActiveThreadId(t.id)}
+                    style={{
+                      width: '100%', display: 'block', textAlign: 'left',
+                      background: 'transparent', border: 'none',
+                      padding: '10px 14px', cursor: 'pointer',
+                      borderBottom: '1px solid #1c1917', fontFamily: 'inherit',
+                    }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+                      <span style={{ fontSize: 13, fontWeight: u > 0 ? 700 : 600, color: u > 0 ? '#fafaf9' : '#d6d3d1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1, minWidth: 0 }}>
+                        {threadLabel(t)}
+                      </span>
+                      {u > 0 && (
+                        <span style={{ background: '#dc2626', color: '#fff', borderRadius: 9, padding: '1px 6px', fontSize: 9, fontWeight: 700, minWidth: 16, textAlign: 'center', flexShrink: 0 }}>
+                          {u > 99 ? '99+' : u}
+                        </span>
+                      )}
+                      {last && (
+                        <span style={{ fontSize: 9, color: '#78716c', fontFamily: "'DM Mono', monospace", flexShrink: 0 }}>
+                          {fmtAge(last.created_at)}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 11, color: u > 0 ? '#a8a29e' : '#78716c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: u > 0 ? 500 : 400 }}>
+                      {last ? `${senderName(last)}: ${lastSnippet}` : lastSnippet}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            // ── Thread view mode ──
+            <>
+              <div style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {messages.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#78716c', padding: 16, textAlign: 'center' }}>
+                    No messages yet. Be the first to say hi.
+                  </div>
+                )}
+                {messages.map(m => {
+                  const isMe = m.sender_id === me.id;
+                  const isLauren = m.sender_kind === 'lauren';
+                  return (
+                    <div key={m.id} style={{
+                      display: 'flex', flexDirection: 'column',
+                      alignItems: isMe ? 'flex-end' : 'flex-start', gap: 2,
+                    }}>
+                      {!isMe && (
+                        <div style={{ fontSize: 10, color: '#78716c', fontWeight: 600, paddingLeft: 6 }}>
+                          {senderName(m)}
+                        </div>
+                      )}
+                      {m.body && (
+                        <div style={{
+                          maxWidth: '82%', padding: '8px 12px',
+                          background: isMe ? '#d97706' : (isLauren ? '#312e81' : '#292524'),
+                          color: isMe ? '#1c0a00' : '#fafaf9',
+                          borderRadius: 12,
+                          borderBottomRightRadius: isMe ? 3 : 12,
+                          borderBottomLeftRadius: !isMe ? 3 : 12,
+                          fontSize: 12.5, lineHeight: 1.5,
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        }}>{linkifyText(m.body)}</div>
+                      )}
+                      {Array.isArray(m.attachments) && m.attachments.length > 0 && (
+                        <div style={{ alignSelf: isMe ? 'flex-end' : 'flex-start', maxWidth: '82%' }}>
+                          <TeamAttachments attachments={m.attachments} onLightbox={(url) => window.open(url, '_blank', 'noopener,noreferrer')} />
+                        </div>
+                      )}
+                      <div style={{ fontSize: 9, color: '#57534e', paddingLeft: isMe ? 0 : 6, paddingRight: isMe ? 6 : 0 }}>
+                        {fmtAge(m.created_at)} ago
+                      </div>
+                    </div>
+                  );
+                })}
+                <div ref={msgsEndRef} />
+              </div>
+              {/* Pending attachments preview (above composer) */}
+              {(pendingAttachments.length > 0 || uploadingFiles) && (
+                <div style={{ padding: '6px 10px', background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {pendingAttachments.map((a, i) => (
+                    <div key={i} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6,
+                      background: '#1c1917', border: '1px solid #292524', borderRadius: 6,
+                      padding: '3px 8px', fontSize: 11, maxWidth: 200,
+                    }}>
+                      <span style={{ fontSize: 13 }}>{/^image\//.test(a.type) ? '🖼' : /^video\//.test(a.type) ? '🎬' : '📄'}</span>
+                      <span style={{ color: '#d6d3d1', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                      <button onClick={() => removePending(i)} title="Remove"
+                        style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 12, padding: 0, lineHeight: 1 }}>×</button>
+                    </div>
+                  ))}
+                  {uploadingFiles && (
+                    <div style={{ fontSize: 10, color: '#78716c', alignSelf: 'center' }}>uploading…</div>
+                  )}
+                </div>
+              )}
+              <div style={{ padding: 10, background: '#0c0a09', borderTop: '1px solid #292524', display: 'flex', gap: 6, flexShrink: 0, alignItems: 'flex-end', position: 'relative' }}>
+                {/* Hidden file input — picker triggered by 📎 button */}
+                <input ref={fileInputRef} type="file" multiple onChange={onPickFiles}
+                  accept="image/*,video/*,application/pdf,.doc,.docx,.txt,.csv,.xlsx,.heic"
+                  style={{ display: 'none' }} />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadingFiles}
+                  title="Attach files or pictures"
+                  style={{
+                    background: '#1c1917', border: '1px solid #44403c',
+                    color: uploadingFiles ? '#57534e' : '#a8a29e',
+                    borderRadius: 8, width: 36, height: 36,
+                    fontSize: 16, cursor: uploadingFiles ? 'wait' : 'pointer',
+                    fontFamily: 'inherit', flexShrink: 0,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>📎</button>
+                <button
+                  onClick={() => setShowGifPicker(v => !v)}
+                  title="Search GIPHY"
+                  style={{
+                    background: showGifPicker ? '#78350f' : '#1c1917',
+                    border: '1px solid ' + (showGifPicker ? '#d97706' : '#44403c'),
+                    color: showGifPicker ? '#fbbf24' : '#a8a29e',
+                    borderRadius: 8, width: 36, height: 36,
+                    fontSize: 14, cursor: 'pointer',
+                    fontFamily: 'inherit', flexShrink: 0, fontWeight: 700,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>GIF</button>
+                {showGifPicker && (
+                  <GifPickerPopover
+                    onSelect={(gif) => {
+                      setPendingAttachments(prev => [...prev, gif]);
+                      setShowGifPicker(false);
+                    }}
+                    onClose={() => setShowGifPicker(false)}
+                  />
+                )}
+                <textarea
+                  ref={composerRef}
+                  value={body}
+                  onChange={e => setBody(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendBody();
+                    }
+                  }}
+                  placeholder="Type a reply… (Enter to send, Shift+Enter for newline)"
+                  rows={2}
+                  style={{
+                    flex: 1, background: '#1c1917', color: '#fafaf9',
+                    border: '1px solid #44403c', borderRadius: 8,
+                    padding: '8px 10px', fontSize: 12.5, lineHeight: 1.45,
+                    fontFamily: 'inherit', resize: 'none', outline: 'none',
+                  }} />
+                <button onClick={sendBody} disabled={(!body.trim() && pendingAttachments.length === 0) || sending}
+                  style={{
+                    background: (body.trim() || pendingAttachments.length > 0) && !sending ? '#d97706' : '#44403c',
+                    color: (body.trim() || pendingAttachments.length > 0) && !sending ? '#1c0a00' : '#78716c',
+                    border: 'none', borderRadius: 8, padding: '0 14px',
+                    fontSize: 12, fontWeight: 700,
+                    cursor: (body.trim() || pendingAttachments.length > 0) && !sending ? 'pointer' : 'not-allowed',
+                    fontFamily: 'inherit', alignSelf: 'stretch', minHeight: 36,
+                  }}>{sending ? '…' : 'Send'}</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── CombinedFAB — single floating button for Chat + Lauren ─────────────
+// Replaces the separate Chat (bottom-left) and Lauren (bottom-right) FABs.
+// One amber pill sits bottom-right. Click it to expand a mini menu:
+//   💬 Chat   — dispatches dcc:open-team-chat → TeamChatBubble opens
+//   🤖 Lauren — dispatches dcc:open-lauren    → LaurenDCC opens
+// Hidden on mobile (≤640px) via .combined-fab-btn CSS class; mobile
+// users reach Chat + Lauren via the bottom-nav More sheet.
+function CombinedFAB() {
+  const [open, setOpen] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
+  const [laurenPending, setLaurenPending] = useState(0);
+
+  // Live unread + pending counts so the FAB badge stays current.
+  // NOTE: sb.rpc() returns a PostgrestFilterBuilder — it has .then() but NOT .catch().
+  // Always use async/await with try-catch; never .catch() on an rpc result.
+  React.useEffect(() => {
+    const refreshChat = async () => {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        if (!user) return;
+        const { data } = await sb.rpc('team_unread_count', { p_user_id: user.id });
+        setChatUnread(Number(data) || 0);
+      } catch (_) { /* non-fatal */ }
+    };
+    const refreshLauren = async () => {
+      try {
+        const { data } = await sb.rpc('lauren_flagged_count');
+        setLaurenPending(Number(data) || 0);
+      } catch (_) { /* non-fatal */ }
+    };
+    refreshChat(); refreshLauren();
+    const iv = setInterval(() => { refreshChat(); refreshLauren(); }, 30_000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const totalBadge = chatUnread + laurenPending;
+
+  const pick = (event) => {
+    window.dispatchEvent(new Event(event));
+    setOpen(false);
+  };
+
+  return React.createElement(React.Fragment, null,
+    // Backdrop to close menu on outside click
+    open && React.createElement('div', {
+      style: { position: 'fixed', inset: 0, zIndex: 8998 },
+      onClick: () => setOpen(false),
+    }),
+
+    // Mini menu (shown above the FAB when open)
+    open && React.createElement('div', {
+      style: {
+        position: 'fixed', bottom: 76, right: 24, zIndex: 8999,
+        background: '#1c1917', border: '1px solid #44403c',
+        borderRadius: 12, overflow: 'hidden',
+        boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
+        display: 'flex', flexDirection: 'column',
+        minWidth: 160,
+      }
+    },
+      React.createElement('button', {
+        onClick: () => pick('dcc:open-team-chat'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          borderBottom: '1px solid #292524',
+          color: '#fafaf9', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        }
+      },
+        React.createElement('span', { style: { fontSize: 16 } }, '💬'),
+        React.createElement('span', { style: { flex: 1 } }, 'Team Chat'),
+        chatUnread > 0 && React.createElement('span', {
+          style: { background: '#dc2626', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }
+        }, chatUnread > 99 ? '99+' : chatUnread),
+      ),
+      React.createElement('button', {
+        onClick: () => pick('dcc:open-lauren'),
+        style: {
+          display: 'flex', alignItems: 'center', gap: 10,
+          padding: '12px 16px', background: 'transparent', border: 'none',
+          color: '#fafaf9', fontSize: 13, fontWeight: 600,
+          cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
+        }
+      },
+        React.createElement('span', { style: { fontSize: 16 } }, '🤖'),
+        React.createElement('span', { style: { flex: 1 } }, 'Lauren'),
+        laurenPending > 0 && React.createElement('span', {
+          style: { background: '#f59e0b', color: '#1c0a00', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700 }
+        }, laurenPending),
+      ),
+    ),
+
+    // Main FAB button
+    React.createElement('button', {
+      className: 'combined-fab-btn',
+      onClick: () => setOpen(o => !o),
+      title: 'Chat & Lauren',
+      style: {
+        position: 'fixed', bottom: 24, right: 24, zIndex: 9000,
+        background: '#d97706', color: '#1c0a00', border: 'none',
+        borderRadius: 24, padding: '0 18px', height: 44,
+        display: 'inline-flex', alignItems: 'center', gap: 8,
+        fontSize: 13, fontWeight: 700, cursor: 'pointer',
+        boxShadow: totalBadge > 0
+          ? '0 4px 24px rgba(217,119,6,.85), 0 0 0 3px rgba(217,119,6,.25)'
+          : '0 4px 16px rgba(217,119,6,.45)',
+        fontFamily: 'inherit',
+        transition: 'transform .1s, box-shadow .2s',
+      }
+    },
+      React.createElement('span', { style: { fontSize: 15 } }, open ? '✕' : '💬'),
+      open ? 'Close' : 'Chat',
+      totalBadge > 0 && !open && React.createElement('span', {
+        style: { background: '#dc2626', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700, marginLeft: 2 }
+      }, totalBadge > 99 ? '99+' : totalBadge),
+    ),
+  );
+}
+
+// ─── ErrorBoundary ───────────────────────────────────────────────────
+// Per Nathan 2026-05-05: deep-URL loads (#/deal/<id>/<tab>) intermittently
+// rendered nothing — black screen, no error visible because production
+// React swallows the stack when there's no boundary. The HostRoot fiber
+// showed the DidCapture flag, confirming an error was caught at the root.
+//
+// This boundary:
+//   1. Logs the actual error + component stack to console
+//   2. POSTs a row to system_alerts so the next time this fires we have
+//      a server-side record (alert kind = 'dcc_render_error')
+//   3. Renders a recoverable UI (retry button + "back to home") instead
+//      of a black void, so a flaky one-off doesn't leave the user stuck
+//   4. Clears the error state when the URL changes — most often the
+//      offending state is the hash, so navigating elsewhere recovers
+class DCCErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null, info: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) {
+    console.error('[DCC ErrorBoundary] caught error during render:', error);
+    console.error('[DCC ErrorBoundary] component stack:', info?.componentStack);
+    this.setState({ info });
+    // Best-effort log to server. Don't fail the boundary if this fails.
+    try {
+      const payload = {
+        kind: 'dcc_render_error',
+        severity: 'error',
+        message: String(error?.message || error || 'unknown render error').slice(0, 500),
+        details: {
+          stack: String(error?.stack || '').slice(0, 4000),
+          componentStack: String(info?.componentStack || '').slice(0, 4000),
+          hash: window.location.hash,
+          ua: navigator.userAgent,
+          ts: new Date().toISOString(),
+        },
+      };
+      sb.from('system_alerts').insert(payload).then(() => {}, () => {});
+    } catch (_) { /* ignore */ }
+
+    // Auto-recover when the URL changes — the hash is the most common
+    // trigger for these crashes, so navigating to a different view
+    // typically fixes things. We DON'T auto-recover on a timer because
+    // re-rendering the same broken state would just loop.
+    this._onHash = () => this.setState({ error: null, info: null });
+    window.addEventListener('hashchange', this._onHash);
+  }
+  componentWillUnmount() {
+    if (this._onHash) window.removeEventListener('hashchange', this._onHash);
+  }
+  retry = () => {
+    if (this._onHash) window.removeEventListener('hashchange', this._onHash);
+    this.setState({ error: null, info: null });
+  };
+  render() {
+    if (!this.state.error) return this.props.children;
+    const errMsg = String(this.state.error?.message || this.state.error || 'Unknown error');
+    return React.createElement('div', {
+      style: {
+        minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: 24, background: '#0c0a09', color: '#fafaf9', fontFamily: "'DM Sans', system-ui",
+      }
+    },
+      React.createElement('div', {
+        style: { maxWidth: 560, width: '100%', textAlign: 'center' }
+      },
+        React.createElement('div', { style: { fontSize: 38, marginBottom: 12 } }, '⚠'),
+        React.createElement('div', { style: { fontSize: 20, fontWeight: 700, marginBottom: 8 } }, 'Something broke while rendering'),
+        React.createElement('div', { style: { fontSize: 13, color: '#a8a29e', marginBottom: 20, lineHeight: 1.5 } },
+          'DCC caught an error before it could finish rendering this page. The error has been logged. Try one of:'
+        ),
+        React.createElement('div', {
+          style: {
+            background: '#1c1917', border: '1px solid #292524', borderRadius: 8,
+            padding: '12px 14px', fontSize: 12, color: '#fbbf24',
+            fontFamily: "'DM Mono', monospace", textAlign: 'left',
+            marginBottom: 20, wordBreak: 'break-word', maxHeight: 160, overflow: 'auto',
+          }
+        }, errMsg),
+        React.createElement('div', { style: { display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' } },
+          React.createElement('button', {
+            onClick: this.retry,
+            style: {
+              background: '#d97706', color: '#1c0a00', border: 'none',
+              borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }
+          }, '↻ Try again'),
+          React.createElement('button', {
+            onClick: () => { window.location.hash = '#/view/today'; this.retry(); },
+            style: {
+              background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c',
+              borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }
+          }, '← Back to Today'),
+          React.createElement('button', {
+            onClick: () => window.location.reload(),
+            style: {
+              background: '#1c1917', color: '#fafaf9', border: '1px solid #44403c',
+              borderRadius: 8, padding: '10px 18px', fontSize: 13, fontWeight: 700,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }
+          }, '↺ Reload')
+        )
+      )
+    );
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
-  React.createElement(React.Fragment, null,
-    React.createElement(Root),
-    React.createElement(LaurenDCC)
+  React.createElement(DCCErrorBoundary, null,
+    React.createElement(React.Fragment, null,
+      React.createElement(Root),
+      React.createElement(LaurenDCC),
+      React.createElement(TeamChatBubble),
+      React.createElement(CombinedFAB),
+    )
   )
 );

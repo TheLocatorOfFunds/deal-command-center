@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b1f3a">
+<!-- Cache control: GitHub Pages serves portal.html with max-age=600
+     which means clients (and Nathan testing) keep seeing a 10-min-stale
+     copy after every deploy. Per Nathan 2026-05-05 — this kept biting.
+     These three meta tags tell modern browsers to revalidate every
+     visit. Trade-off is a ~50ms server check on each load (worth it
+     for a portal that updates frequently). -->
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>RefundLocators Case Portal</title>
 <link rel="manifest" href="portal-manifest.json" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -157,7 +166,91 @@
   .case-hero-status-text { font-size: 13px; color: var(--text); margin-top: 6px; line-height: 1.6; }
   .case-hero-status-cta { font-size: 12px; color: var(--navy-mid); font-weight: 600; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); line-height: 1.5; }
 
-  .case-hero-next { background: linear-gradient(135deg, var(--gold-soft) 0%, #f5e9c9 100%); padding: 20px 28px; border-top: 1px solid var(--border); }
+  /* All bands below the dark hero share ONE cream background so the
+     whole thing reads as a single document, not five stacked panels.
+     Per Nathan 2026-05-05: previous "unified" version still felt like
+     5 colored boxes. Visual hierarchy now comes from typography +
+     section labels, not from background colors. */
+  .case-hero-status, .case-hero-tracker, .case-hero-next, .case-hero-record {
+    background: var(--bg-card);
+    padding: 22px 32px;
+    border-top: 1px solid var(--border);
+  }
+
+  /* Inline 5-step tracker — sits between the dark hero band and the
+     status band. Compact horizontal pill of dots + labels. */
+  .case-hero-tracker { padding: 22px 32px 18px; }
+  .case-hero-tracker-strip { display: flex; align-items: flex-start; gap: 0; position: relative; padding: 0 4px; }
+  .case-hero-tracker-step { flex: 1; display: flex; flex-direction: column; align-items: center; text-align: center; position: relative; padding: 0 4px; min-width: 0; }
+  .case-hero-tracker-step:not(:last-child)::after { content: ''; position: absolute; top: 14px; left: calc(50% + 16px); right: calc(-50% + 16px); height: 2px; background: var(--border); z-index: 0; }
+  .case-hero-tracker-step.done::after { background: var(--gold); }
+  .case-hero-tracker-dot { width: 30px; height: 30px; border-radius: 50%; background: var(--bg-card); border: 2px solid var(--border-strong); display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: var(--text-muted); position: relative; z-index: 1; }
+  .case-hero-tracker-step.done .case-hero-tracker-dot { background: var(--gold); color: var(--navy); border-color: var(--gold); }
+  .case-hero-tracker-step.current .case-hero-tracker-dot { background: var(--navy); color: #fffcf5; border-color: var(--navy); box-shadow: 0 0 0 4px rgba(11, 31, 58, 0.12); animation: tracker-pulse 2s ease-in-out infinite; }
+  .case-hero-tracker-label { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-top: 8px; line-height: 1.2; letter-spacing: 0.02em; }
+  .case-hero-tracker-step.done .case-hero-tracker-label, .case-hero-tracker-step.current .case-hero-tracker-label { color: var(--navy); }
+  .case-hero-tracker-step.current .case-hero-tracker-label { font-weight: 700; }
+
+  /* Status / Next / Court record — uniform layout. The colored
+     accents are now icons + small left-borders rather than full
+     panel backgrounds. Looks like prose, reads like prose. */
+  .case-hero-status { display: flex; gap: 16px; align-items: flex-start; }
+  .case-hero-status-icon { font-size: 22px; flex-shrink: 0; width: 44px; height: 44px; background: var(--gold-soft); border-radius: 10px; border: 1px solid var(--gold); display: flex; align-items: center; justify-content: center; line-height: 1; }
+  .case-hero-status-success .case-hero-status-icon { background: var(--green-soft); border-color: var(--green); }
+  .case-hero-status-celebration .case-hero-status-icon { background: var(--gold-soft); border-color: var(--gold); }
+  .case-hero-status-error .case-hero-status-icon { background: #fee2e2; border-color: var(--red); }
+  .case-hero-status-body { flex: 1; min-width: 0; }
+  .case-hero-status-sublabel { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 4px; }
+  .case-hero-status-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 19px; color: var(--navy); letter-spacing: -0.01em; line-height: 1.3; }
+  .case-hero-status-text { font-size: 13.5px; color: var(--text); margin-top: 6px; line-height: 1.65; }
+  .case-hero-status-cta { font-size: 12px; color: var(--navy-mid); font-weight: 600; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border-strong); line-height: 1.5; }
+
+  .case-hero-next-label { font-size: 10px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px; }
+  .case-hero-next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 19px; color: var(--navy); letter-spacing: -0.015em; margin-bottom: 4px; line-height: 1.3; }
+  .case-hero-next-estimate { font-size: 12px; font-weight: 600; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+  .case-hero-next-body { font-size: 13.5px; color: var(--text); line-height: 1.65; }
+
+  /* Court record — polished closing band. Prose tells the story, then
+     a hero pull-quote with the surplus number drives it home. The
+     pull-quote uses a soft gold gradient + drop shadow so it lifts
+     off the cream bg without breaking the unified-card feel. */
+  .case-hero-record { padding: 28px 32px 32px; }
+  .case-hero-record-label { font-size: 10px; font-weight: 700; color: var(--text-muted); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 12px; }
+  .case-hero-record-prose { font-family: 'Fraunces', Georgia, serif; font-weight: 400; font-size: 16px; line-height: 1.7; color: var(--text); max-width: 64ch; }
+  .case-hero-record-prose b { color: var(--navy); font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  /* Pull-quote is now visually subordinate to the dark hero amount —
+     this is the GROSS surplus pool, not what the client takes home.
+     Per Nathan 2026-05-05: don't make it too bold, since his actual
+     number is the hero ($share, already 25% deducted). Smaller pad,
+     softer tones, smaller number. */
+  .case-hero-record-surplus {
+    margin-top: 18px;
+    padding: 14px 18px;
+    background: var(--gold-soft);
+    border-radius: 10px;
+    border-left: 3px solid var(--gold);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    gap: 18px;
+  }
+  .case-hero-record-surplus-label { font-size: 10px; font-weight: 700; color: var(--amber); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 4px; }
+  .case-hero-record-surplus-sub { font-size: 12px; color: var(--text-muted); line-height: 1.55; max-width: 420px; font-weight: 400; }
+  .case-hero-record-surplus-amount {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 400;
+    font-size: 22px;
+    color: var(--navy-mid);
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    text-align: right;
+  }
+  @media (max-width: 640px) {
+    .case-hero-record-surplus { grid-template-columns: 1fr; gap: 10px; }
+    .case-hero-record-surplus-amount { text-align: left; font-size: 20px; }
+  }
   .case-hero-next-label { font-size: 11px; font-weight: 700; color: var(--amber); letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 6px; display: inline-flex; align-items: center; gap: 6px; }
   .case-hero-next-headline { font-family: 'Fraunces', serif; font-weight: 500; font-size: 20px; color: var(--navy); letter-spacing: -0.015em; margin-bottom: 6px; line-height: 1.25; }
   .case-hero-next-estimate { font-size: 13px; font-weight: 600; color: var(--navy-mid); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
@@ -167,11 +260,18 @@
     .case-hero-payout { padding: 22px 20px 20px; }
     .case-hero-amount { font-size: 36px; }
     .case-hero-progress-marks { font-size: 9px; }
+    .case-hero-tracker { padding: 14px 16px 10px; }
+    .case-hero-tracker-dot { width: 26px; height: 26px; font-size: 11px; }
+    .case-hero-tracker-step:not(:last-child)::after { top: 12px; left: calc(50% + 14px); right: calc(-50% + 14px); }
+    .case-hero-tracker-label { font-size: 9px; }
     .case-hero-status { padding: 18px 20px; gap: 12px; }
     .case-hero-status-icon { width: 42px; height: 42px; font-size: 22px; }
     .case-hero-status-headline { font-size: 17px; }
     .case-hero-next { padding: 18px 20px; }
     .case-hero-next-headline { font-size: 18px; }
+    .case-hero-record { padding: 18px 20px 20px; }
+    .case-hero-record-prose { font-size: 14px; }
+    .case-hero-record-surplus-amount { font-size: 24px; }
   }
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
   .stat { background: var(--bg-card-alt); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
@@ -356,6 +456,12 @@
 <script type="text/babel" data-presets="env,react">
 const { useState, useEffect } = React;
 
+// Visible version stamp at the bottom of the portal so Nathan can see
+// at a glance which build the page is rendering. Bump this on every
+// portal commit. If Nathan reports "nothing looks different" and the
+// stamp is older than the latest commit, it's a stale cache, not a bug.
+const PORTAL_VERSION = '20260505l';
+
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -369,16 +475,29 @@ const fmt$2 = (n) => {
   if (n == null || isNaN(n)) return "—";
   return "$" + Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 };
+// Defensive: strip a trailing "County" so concatenating ` County` later
+// can't produce "Butler County County". Castle/scraper data sometimes
+// stores `county = 'Butler County'`, sometimes `'Butler'` — we treat
+// either as "Butler" for display purposes.
+const cleanCountyName = (s) => (s || '').replace(/\s*county\s*$/i, '').trim();
+
 const fmtDate = (s) => {
   if (!s) return "—";
   const d = new Date(s);
   if (isNaN(d)) return "—";
+  // Reject implausible dates (year < 1990 or > current+2) — same guard
+  // as isPlausibleFiledAt. Catches the John Dunn '0006-04-10' parsing
+  // bug that would otherwise render as "Apr 9, 6".
+  const y = d.getFullYear();
+  if (y < 1990 || y > new Date().getFullYear() + 2) return "—";
   return d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 };
 const fmtDateShort = (s) => {
   if (!s) return "—";
   const d = new Date(s);
   if (isNaN(d)) return "—";
+  const y = d.getFullYear();
+  if (y < 1990 || y > new Date().getFullYear() + 2) return "—";
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 const statusLabel = (s) => (s || "").replace(/-/g, ' ').toUpperCase();
@@ -407,14 +526,17 @@ const isClientFacing = (action) => {
 // Every status gets a plain-English explanation of "what's happening now"
 // plus a typical timeline and whether the client needs to take action.
 function statusIntel(status, filedAt) {
-  const filedDays = filedAt ? Math.floor((Date.now() - new Date(filedAt).getTime()) / 86400000) : 0;
+  // Same guard as payoutWindow — see isPlausibleFiledAt above.
+  const filedDays = isPlausibleFiledAt(filedAt)
+    ? Math.floor((Date.now() - new Date(filedAt).getTime()) / 86400000)
+    : 0;
   const filedPhrase = filedDays > 0 ? `${filedDays} days ago` : "recently";
 
   const messages = {
     'new-lead': {
       icon: '📋', tone: 'info',
       headline: "We've received your information",
-      body: "Our team is reviewing your case to confirm the surplus amount and determine the fastest path to recovery. This typically takes one to three business days. You'll see the next update here as soon as the review is complete.",
+      body: "Our team is reviewing your case to confirm the surplus amount and determine the fastest path to recovery. Timing depends on the county and case — we move as fast as the courts allow. You'll see the next update here as soon as the review is complete.",
       cta: null,
     },
     'contacted': {
@@ -482,10 +604,22 @@ function statusIntel(status, filedAt) {
 }
 
 // Typical Ohio surplus case: 3-6 months from filing.
+// Guard against absurdly-old or future filed dates that would produce
+// "737815 days ago" or "Jul 8, 6 — Oct 6, 6" in the UI. Anything outside
+// 1990 ↔ current_year+2 is treated as missing — better to show no
+// progress info than confidently-wrong info.
+// (Triggered for John Dunn 2026-05-05: filed_at = '0006-04-10'.)
+function isPlausibleFiledAt(filedAt) {
+  if (!filedAt) return false;
+  const d = new Date(filedAt);
+  if (isNaN(d)) return false;
+  const y = d.getFullYear();
+  return y >= 1990 && y <= new Date().getFullYear() + 2;
+}
+
 function payoutWindow(filedAt) {
-  if (!filedAt) return null;
+  if (!isPlausibleFiledAt(filedAt)) return null;
   const filed = new Date(filedAt);
-  if (isNaN(filed)) return null;
   const earliest = new Date(filed); earliest.setDate(earliest.getDate() + 90);
   const latest = new Date(filed); latest.setDate(latest.getDate() + 180);
   return { earliest, latest, filed };
@@ -563,8 +697,8 @@ function getNextMilestone(status, filedAt) {
     case 'awaiting-docs':
       return {
         title: 'Reviewing your case',
-        estimate: 'Within 1–3 business days',
-        body: 'Our team is confirming the surplus and the fastest path to recovery. You\'ll see the next update here as soon as review is complete.',
+        estimate: 'Timing varies by county + case',
+        body: 'Our team is confirming the surplus and the fastest path to recovery. You\'ll see the next update here as soon as we have something concrete.',
       };
     case 'signed':
       return {
@@ -738,15 +872,33 @@ function PortalBody({ session }) {
 
   const isAdminPreview = profile && (profile.role === 'admin' || profile.role === 'user' || profile.role === 'va');
 
-  // 2a. Admin preview path: load all deals, pick one
+  // 2a. Admin preview path: load all deals, pick one.
+  //
+  // Pick order:
+  //   1. ?preview= or ?deal= URL param (explicit admin override)
+  //   2. ?email= URL param → look up the claimant's deal via the
+  //      deal_id_for_claimant_email RPC. This is what makes the
+  //      invite link `?email=X&invite=1` show the CLIENT'S deal in
+  //      admin preview, not deals[0]. Pre-fix, opening a client's
+  //      invite link as admin loaded whatever deal was last edited
+  //      in DCC, which looked like a data leak (it wasn't —
+  //      RLS-scoped client view is fine; admin preview was wrong).
+  //   3. deals[0] (most-recently-updated) — the original default.
   useEffect(() => {
     if (!profile || !isAdminPreview) return;
     (async () => {
       const { data: deals } = await sb.from('deals').select('*').order('updated_at', { ascending: false });
       setAllDeals(deals || []);
       const params = new URLSearchParams(window.location.search);
-      const fromUrl = params.get('preview') || params.get('deal');
-      const pickId = fromUrl || (deals && deals[0] && deals[0].id);
+      let pickId = params.get('preview') || params.get('deal');
+      if (!pickId) {
+        const emailParam = params.get('email');
+        if (emailParam) {
+          const { data: emailDealId } = await sb.rpc('deal_id_for_claimant_email', { p_email: emailParam });
+          if (emailDealId) pickId = emailDealId;
+        }
+      }
+      if (!pickId) pickId = deals && deals[0] && deals[0].id;
       if (pickId) setPreviewDealId(pickId);
       else setState({ loading: false, error: 'deal_missing' });
     })();
@@ -954,7 +1106,7 @@ function TimelineExpectation({ filedAt, status }) {
 // block. Replaces the old NextMilestone + payout-hero + StatusIntel +
 // TimelineExpectation stack so the home view feels less like a list and more
 // like a single case snapshot.
-function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJointCase, claimantCount, perClaimantShare }) {
+function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJointCase, claimantCount, perClaimantShare, deal }) {
   const info = statusIntel(status, filedAt);
   const next = getNextMilestone(status, filedAt);
   const w = payoutWindow(filedAt);
@@ -985,30 +1137,46 @@ function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJo
 
   return (
     <div className="case-hero">
-      {estimatedSurplus > 0 && (
-        <div className="case-hero-payout">
-          <div className="case-hero-label">
-            {isJointCase ? 'Estimated Share (All Claimants)' : 'Your Estimated Share'}
-          </div>
-          <div className="case-hero-amount">{fmt$2(clientShare)}</div>
-          <div className="case-hero-sub">
-            Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% contingency
-            {isJointCase && claimantCount > 1 && <> · ≈ {fmt$2(perClaimantShare)} per claimant</>}
-          </div>
-          {progressPct !== null && (
-            <div className="case-hero-progress">
-              <div className="case-hero-progress-track">
-                <div className="case-hero-progress-fill" style={{ width: progressPct + '%' }} />
-              </div>
-              <div className="case-hero-progress-marks">
-                <span>Filed</span>
-                <span>{windowLabel}</span>
-              </div>
-              <div className="case-hero-progress-label">{progressLabel}</div>
+      <div className="case-hero-payout">
+        {estimatedSurplus > 0 ? (
+          <>
+            <div className="case-hero-label">
+              {isJointCase ? 'Estimated Share (All Claimants)' : 'Your Estimated Share'}
             </div>
-          )}
-        </div>
-      )}
+            <div className="case-hero-amount">{fmt$2(clientShare)}</div>
+            <div className="case-hero-sub">
+              Based on an estimated surplus of {fmt$(estimatedSurplus)} · {feePct}% recovery fee
+              {isJointCase && claimantCount > 1 && <> · ≈ {fmt$2(perClaimantShare)} per claimant</>}
+            </div>
+            {progressPct !== null && (
+              <div className="case-hero-progress">
+                <div className="case-hero-progress-track">
+                  <div className="case-hero-progress-fill" style={{ width: progressPct + '%' }} />
+                </div>
+                <div className="case-hero-progress-marks">
+                  <span>Filed</span>
+                  <span>{windowLabel}</span>
+                </div>
+                <div className="case-hero-progress-label">{progressLabel}</div>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="case-hero-label">Your Estimated Share</div>
+            <div className="case-hero-amount" style={{ fontSize: 28, opacity: 0.5, letterSpacing: 4 }}>— —</div>
+            <div className="case-hero-sub">
+              Our team is finalizing your surplus estimate. We'll update this as soon as the court records confirm the available funds — typically within a few days of filing.
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Step tracker — same 5-step model that used to live in a
+          separate SurplusTracker card above the hero. Folded inline
+          per Nathan 2026-05-05 so the whole status story flows as
+          one connected card. */}
+      <CaseHeroTracker status={status} />
 
       <div className={"case-hero-status case-hero-status-" + info.tone}>
         <div className="case-hero-status-icon">{info.icon}</div>
@@ -1026,6 +1194,90 @@ function CaseHero({ estimatedSurplus, clientShare, feePct, filedAt, status, isJo
           <div className="case-hero-next-headline">{next.title}</div>
           {next.estimate && <div className="case-hero-next-estimate">{next.estimate}</div>}
           <div className="case-hero-next-body">{next.body}</div>
+        </div>
+      )}
+
+      {/* Court record narrative — also folded inline so the user sees
+          one continuous flow: how much you'll get → where the case is →
+          what's next → and here's the court math behind it all. */}
+      {deal && <CaseHeroCourtRecord deal={deal} />}
+    </div>
+  );
+}
+
+// Inline 5-step tracker, used inside CaseHero. Shares logic + step
+// definitions with the standalone SurplusTracker but visually compact
+// to fit between the hero band and the status band.
+function CaseHeroTracker({ status }) {
+  const currentIdx = trackerIndexForStatus(status);
+  const isDead = currentIdx === -2;
+  if (isDead) return null;
+  return (
+    <div className="case-hero-tracker">
+      <div className="case-hero-tracker-strip">
+        {TRACKER_STEPS.map((step, idx) => {
+          const isDone    = idx < currentIdx;
+          const isCurrent = idx === currentIdx;
+          let cls = 'case-hero-tracker-step';
+          if (isDone)    cls += ' done';
+          if (isCurrent) cls += ' current';
+          return (
+            <div key={step.key} className={cls}>
+              <div className="case-hero-tracker-dot">
+                {isDone ? '✓' : step.icon}
+              </div>
+              <div className="case-hero-tracker-label">{step.label}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Inline court-record summary — used to live in its own
+// <CaseSnapshotCard /> below the hero. Per Nathan 2026-05-05: looked
+// disconnected. Now folds into CaseHero as the closing band.
+function CaseHeroCourtRecord({ deal }) {
+  const m = deal?.meta || {};
+  const judgment  = m.judgmentAmount ?? null;
+  const salePrice = m.salePrice ?? null;
+  const surplus   = m.verifiedSurplus ?? m.estimatedSurplus ?? null;
+  const verified  = m.verifiedSurplus != null;
+  const saleDate  = m.saleDate || null;
+  if (judgment == null && salePrice == null) return null;
+
+  const fmt = (v) => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const saleLabel = saleDate
+    ? new Date(saleDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null;
+
+  return (
+    <div className="case-hero-record">
+      <div className="case-hero-record-label">Court record</div>
+      <div className="case-hero-record-prose">
+        {judgment != null && salePrice != null ? (
+          <>
+            The bank was owed <b>{fmt(judgment)}</b> on the judgment.
+            {' '}The home sold for <b>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.
+          </>
+        ) : judgment != null ? (
+          <>The bank was owed <b>{fmt(judgment)}</b> on the judgment.</>
+        ) : (
+          <>The home sold for <b>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.</>
+        )}
+      </div>
+      {surplus != null && (
+        <div className="case-hero-record-surplus">
+          <div>
+            <div className="case-hero-record-surplus-label">{verified ? 'Verified surplus pool' : 'Estimated surplus pool'}</div>
+            <div className="case-hero-record-surplus-sub">
+              {verified
+                ? 'Court-confirmed — the gross amount before fees. Your share above is calculated from this.'
+                : 'An estimate of the gross surplus left in the case file before fees. Your share above is your portion of this number, after our 25% recovery fee.'}
+            </div>
+          </div>
+          <div className="case-hero-record-surplus-amount">{fmt(surplus)}</div>
         </div>
       )}
     </div>
@@ -1062,8 +1314,39 @@ function clientEventTitle(e) {
   return 'New court filing';
 }
 
-function ClientDocketCard({ dealId, access, isPreview }) {
+// Some Castle scrapers emit junk single-cell docket events — descriptions
+// that are just a date ("06/18/2025"), just a dollar amount ("$21,759.90"),
+// or empty. Those are scraper artifacts (table cells parsed as separate
+// events) and shouldn't show on the client portal — they're confusing.
+// This is the conservative filter: keep anything that's clearly a real
+// filing description, drop anything that's just a number/date/blank.
+function isJunkDocketEvent(e) {
+  const d = (e?.description || '').trim();
+  if (!d) return true;                               // blank
+  if (/^\$[\d.,]+$/.test(d)) return true;            // pure dollar amount
+  if (/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(d)) return true; // pure date
+  if (/^\d+$/.test(d)) return true;                  // pure integer
+  if (d.length < 10 && !/[a-z]{3,}/i.test(d)) return true; // very short and no real word
+  return false;
+}
+
+// Normalize a string for fuzzy-matching docket-event descriptions to
+// uploaded-document filenames. The court PDFs Castle uploads have names
+// truncated to ~80 chars; the docket descriptions are the full text.
+// Stripping whitespace + lowercasing + dropping extension lets us
+// prefix-match reliably even when the filename is truncated.
+function matchKey(s) {
+  return (s || '')
+    .replace(/\.pdf$/i, '')
+    .replace(/[\s\n\r]+/g, ' ')
+    .replace(/[^a-z0-9 ]/gi, '')
+    .trim()
+    .toLowerCase();
+}
+
+function ClientDocketCard({ dealId, access, isPreview, activity = [] }) {
   const [events, setEvents] = React.useState({ live: [], history: [] });
+  const [courtDocs, setCourtDocs] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [prefsOpen, setPrefsOpen] = React.useState(false);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -1076,14 +1359,29 @@ function ClientDocketCard({ dealId, access, isPreview }) {
       .eq('deal_id', dealId)
       .eq('is_backfill', false)
       .order('event_date', { ascending: false })
-      .limit(20);
+      .limit(40);
     const { data: history } = await sb.from('docket_events')
       .select('id, event_type, event_date, description, court_system, detected_at, is_backfill, document_url')
       .eq('deal_id', dealId)
       .eq('is_backfill', true)
       .order('event_date', { ascending: false })
       .limit(200);
-    setEvents({ live: live || [], history: history || [] });
+    // Pull court-source documents (uploaded_by IS NULL). Castle's PDF
+    // attach pipeline + the standalone Butler scraper both upload PDFs
+    // here without setting uploaded_by, so this is the discriminator
+    // for "court file" vs "client uploaded my driver's license".
+    const { data: docs } = await sb.from('documents')
+      .select('id, name, path, size, created_at')
+      .eq('deal_id', dealId)
+      .is('uploaded_by', null)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    // Apply junk filter at load time so we never even render the noise
+    setEvents({
+      live: (live || []).filter(e => !isJunkDocketEvent(e)),
+      history: (history || []).filter(e => !isJunkDocketEvent(e)),
+    });
+    setCourtDocs(docs || []);
     setLoading(false);
   };
 
@@ -1092,9 +1390,58 @@ function ClientDocketCard({ dealId, access, isPreview }) {
   React.useEffect(() => {
     const ch = sb.channel('client-docket-' + dealId)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'documents', filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [dealId]);
+
+  // Build a lookup so each docket event can find its matching court PDF
+  // by description prefix. Docket description is usually longer than the
+  // doc filename (which gets truncated to ~80 chars at upload), so we
+  // index by normalized doc-name and check whether each event description
+  // STARTS WITH that key. First match wins; ties broken by recency.
+  const docByKey = React.useMemo(() => {
+    const index = {};
+    for (const d of courtDocs) {
+      const key = matchKey(d.name);
+      if (key && !index[key]) index[key] = d;
+    }
+    return index;
+  }, [courtDocs]);
+  const findDocForEvent = (e) => {
+    if (!e?.description) return null;
+    const evKey = matchKey(e.description);
+    if (!evKey) return null;
+    // Walk doc keys longest-first so the most-specific match wins
+    // (otherwise "AFFIDAVIT" might match a generic stub before the
+    // longer "AFFIDAVIT IN SUPPORT OF ..." key).
+    const keys = Object.keys(docByKey).sort((a, b) => b.length - a.length);
+    for (const k of keys) {
+      if (k.length >= 12 && evKey.startsWith(k)) return docByKey[k];
+    }
+    return null;
+  };
+  // Open via signed URL — same pattern openDocument() uses below.
+  const openCourtDoc = async (path) => {
+    if (!path) return;
+    const { data, error } = await sb.storage.from('deal-docs').createSignedUrl(path, 300);
+    if (error || !data?.signedUrl) {
+      alert("We couldn't open that document. Please call Nathan at (513) 516-2306 and we'll send it over directly.");
+      return;
+    }
+    window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  // Team-posted activity entries that AREN'T just shadow copies of
+  // docket events. The trigger that mirrors docket_events into activity
+  // prefixes the action with "Docket:" or "Docket ·" — anything else is
+  // a real human update (Nathan posted, status changed, document
+  // uploaded, etc.) and earns a slot in the unified timeline.
+  const teamUpdates = (activity || []).filter(a => {
+    const action = String(a.action || '');
+    if (/^Docket\b/i.test(action)) return false;        // docket shadow
+    return action.length > 0;
+  });
 
   if (loading) return null;
 
@@ -1172,10 +1519,27 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                     <div style={{ marginTop: 8 }}>
                       {e.document_url ? (
                         <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                          title="Opens the court PDF — view in browser or save to your device"
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gold)', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid var(--gold)', borderRadius: 6, background: 'transparent' }}>
-                          📄 View the filing →
+                          📄 View or download PDF →
                         </a>
-                      ) : (
+                      ) : (() => {
+                        // Fallback: if we have an uploaded court PDF that
+                        // matches this docket entry by name, link to that
+                        // instead. Per Nathan 2026-05-05 — Butler events
+                        // never carry document_url but the PDFs DO get
+                        // uploaded to deal-docs by the standalone scraper.
+                        const matched = findDocForEvent(e);
+                        if (matched) {
+                          return (
+                            <button type="button" onClick={() => openCourtDoc(matched.path)}
+                              title="Opens the court PDF — view or save"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--gold)', textDecoration: 'none', fontWeight: 600, padding: '4px 10px', border: '1px solid var(--gold)', borderRadius: 6, background: 'transparent', cursor: 'pointer', fontFamily: 'inherit' }}>
+                              📄 View or download PDF →
+                            </button>
+                          );
+                        }
+                        return (
                         <span title="The court portal didn't expose a PDF for this entry"
                           style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--text-muted)', fontWeight: 500, padding: '4px 10px', border: '1px solid var(--border)', borderRadius: 6, background: 'var(--bg-card-alt)', position: 'relative' }}>
                           <span style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 16, height: 16 }}>
@@ -1185,13 +1549,44 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                           </span>
                           No filing PDF available
                         </span>
-                      )}
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
               );
             })}
           </div>
+
+          {/* Team-posted updates — non-docket activity entries fold in
+              below the docket feed so the client sees ONE chronological
+              source-of-truth for their case instead of two duplicated
+              cards. Per Nathan 2026-05-05. */}
+          {teamUpdates.length > 0 && (
+            <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--border)' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>
+                Updates from your team
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {teamUpdates.slice(0, 10).map((a, i) => (
+                  <div key={a.id || i} style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--gold)', marginTop: 6, flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13, color: 'var(--text)', lineHeight: 1.5 }}>{a.action}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>
+                        {a.created_at && new Date(a.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {teamUpdates.length > 10 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', fontStyle: 'italic', paddingLeft: 20 }}>
+                    + {teamUpdates.length - 10} earlier update{teamUpdates.length - 10 === 1 ? '' : 's'}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {(events.history || []).length > 0 && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: '2px solid var(--border)' }}>
@@ -1229,14 +1624,27 @@ function ClientDocketCard({ dealId, access, isPreview }) {
                             <span>{e.event_date && new Date(e.event_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
                             {e.document_url ? (
                               <a href={e.document_url} target="_blank" rel="noopener noreferrer"
+                                title="Opens the court PDF — view or save"
                                 style={{ color: 'var(--gold)', textDecoration: 'none', fontWeight: 600 }}>
-                                · 📄 View filing →
+                                · 📄 View or download PDF →
                               </a>
-                            ) : (
-                              <span title="No PDF for this entry" style={{ color: 'var(--text-subtle)', fontStyle: 'italic' }}>
-                                · no PDF
-                              </span>
-                            )}
+                            ) : (() => {
+                              const matched = findDocForEvent(e);
+                              if (matched) {
+                                return (
+                                  <button type="button" onClick={() => openCourtDoc(matched.path)}
+                                    title="Opens the court PDF — view or save"
+                                    style={{ background: 'transparent', border: 'none', padding: 0, color: 'var(--gold)', textDecoration: 'underline', fontWeight: 600, fontFamily: 'inherit', fontSize: 'inherit', cursor: 'pointer' }}>
+                                    · 📄 View or download PDF →
+                                  </button>
+                                );
+                              }
+                              return (
+                                <span title="No PDF for this entry" style={{ color: 'var(--text-subtle)', fontStyle: 'italic' }}>
+                                  · no PDF
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
                       </div>
@@ -1247,6 +1655,83 @@ function ClientDocketCard({ dealId, access, isPreview }) {
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// ─── Case Snapshot — court-record dollars at a glance ────────────
+// Per Nathan 2026-05-05: bring the structured Case Intelligence the
+// team sees in DCC over to the client portal (the dollar tiles —
+// judgment, sale price, court appraisal, min bid, verified surplus).
+// Source-of-truth ladder mirrors DCC: meta > AI extraction > hidden.
+// We do NOT mirror the team's AI prose summary because it's written
+// for internal ops ("send him an update", "5 duplicate tasks") and
+// would feel weird for John to read about himself.
+function CaseSnapshotCard({ deal }) {
+  const m = deal?.meta || {};
+  const judgment   = m.judgmentAmount ?? null;
+  const salePrice  = m.salePrice ?? null;
+  // Prefer court-confirmed surplus when set, else manual estimate.
+  const surplus    = m.verifiedSurplus ?? m.estimatedSurplus ?? null;
+  const verified   = m.verifiedSurplus != null;
+  const saleDate   = m.saleDate || null;
+
+  // Render nothing if we don't have the two anchor numbers — judgment +
+  // sale price are the spine of the story. Surplus alone without those
+  // doesn't tell John much.
+  if (judgment == null && salePrice == null) return null;
+
+  const fmt = (v) => '$' + Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const saleLabel = saleDate
+    ? new Date(saleDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+    : null;
+
+  // Build the prose. Two short sentences lead. Surplus pull-quote below.
+  // Per Nathan 2026-05-05: "the judgment amount and sold-for is about
+  // the only two that are necessary. We need to figure out how to
+  // reword that." Tile grid was disgusting; this reads like a person.
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <p className="card-title" style={{ marginBottom: 10 }}>Court record</p>
+      <div style={{ fontSize: 15, color: 'var(--text)', lineHeight: 1.65, fontFamily: "'Fraunces', Georgia, serif", fontWeight: 400 }}>
+        {judgment != null && salePrice != null ? (
+          <>
+            The bank was owed <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(judgment)}</b> on the judgment.
+            {' '}The home sold for <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.
+          </>
+        ) : judgment != null ? (
+          <>The bank was owed <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(judgment)}</b> on the judgment.</>
+        ) : (
+          <>The home sold for <b style={{ color: 'var(--navy)', fontVariantNumeric: 'tabular-nums' }}>{fmt(salePrice)}</b>{saleLabel ? <> on <span style={{ color: 'var(--navy-mid)' }}>{saleLabel}</span></> : ''}.</>
+        )}
+      </div>
+
+      {surplus != null && (
+        <div style={{
+          marginTop: 16, padding: '14px 18px',
+          background: 'var(--gold-soft)', borderRadius: 10,
+          borderLeft: '4px solid var(--gold)',
+          display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap',
+        }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--amber)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 4 }}>
+              {verified ? 'Verified surplus' : 'Estimated surplus'}
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              {verified
+                ? 'Court-confirmed — the funds we are now working to release to you.'
+                : 'After fees and costs come out of the sale, this is what is left for you to recover.'}
+            </div>
+          </div>
+          <div style={{
+            fontFamily: "'Fraunces', Georgia, serif", fontWeight: 500,
+            fontSize: 32, color: 'var(--navy)', letterSpacing: '-0.015em',
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {fmt(surplus)}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1508,6 +1993,157 @@ function EmpathyCheckin({ prefs, dealStatus, isPreview }) {
   );
 }
 
+// ─── Contact Info Card (email / phone update requests) ───────────────
+// Shows the client their current email and phone on file.
+// They can request a change; the change lands in client_edit_requests
+// as 'pending' — Nathan approves/rejects from the DCC ClientPortalCard.
+function ContactInfoCard({ access, deal, isPreview }) {
+  const [editField, setEditField]   = React.useState(null); // 'email' | 'phone' | null
+  const [editValue, setEditValue]   = React.useState('');
+  const [busy, setBusy]             = React.useState(false);
+  const [status, setStatus]         = React.useState(null); // 'sent' | 'error'
+  const [pendingFields, setPending] = React.useState({});   // { email: true, phone: true }
+
+  // Load any existing pending requests for this access row
+  React.useEffect(() => {
+    if (!access?.id) return;
+    sb.from('client_edit_requests')
+      .select('field')
+      .eq('client_access_id', access.id)
+      .eq('status', 'pending')
+      .then(({ data }) => {
+        if (data) {
+          const map = {};
+          data.forEach(r => { map[r.field] = true; });
+          setPending(map);
+        }
+      });
+  }, [access?.id]);
+
+  // Source-of-truth ladder for contact display:
+  //   1. client_access — what the client has confirmed via the portal
+  //      (notify_phone they set in NotificationPreferences, the email
+  //       they used to sign in)
+  //   2. deal.meta.homeownerEmail / homeownerPhone — what Nathan / Eric
+  //      recorded on the team side. Per Nathan 2026-05-05: this card
+  //      was showing "Not on file" for John Dunn even though we have
+  //      johndunn211@yahoo.com + (513) 615-0796 on the deal.
+  // First non-empty wins. Avoids the previous bug where a fresh portal
+  // signup (client_access.email=null) made the card look amnesia.
+  const m = deal?.meta || {};
+  const currentEmail = (access?.email && access.email.trim())
+    || (m.homeownerEmail && String(m.homeownerEmail).trim())
+    || '';
+  const currentPhone = (access?.prefs?.notify_phone && access.prefs.notify_phone.trim())
+    || (m.homeownerPhone && String(m.homeownerPhone).trim())
+    || '';
+
+  const openEdit = (field) => {
+    setEditField(field);
+    setEditValue(field === 'email' ? currentEmail : currentPhone);
+    setStatus(null);
+  };
+
+  const cancelEdit = () => { setEditField(null); setEditValue(''); setStatus(null); };
+
+  const submitRequest = async () => {
+    if (!editValue.trim()) return;
+    const oldVal = editField === 'email' ? currentEmail : currentPhone;
+    if (editValue.trim() === oldVal) { cancelEdit(); return; }
+    if (isPreview) { cancelEdit(); setStatus('sent'); return; }
+    setBusy(true);
+    try {
+      const { error } = await sb.from('client_edit_requests').insert({
+        client_access_id: access.id,
+        deal_id: access.deal_id,
+        field: editField,
+        new_value: editValue.trim(),
+        old_value: oldVal,
+      });
+      if (error) throw error;
+      setPending(prev => ({ ...prev, [editField]: true }));
+      setEditField(null);
+      setStatus('sent');
+    } catch (e) {
+      setStatus('error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 18 }}>
+      <p className="card-title" style={{ marginBottom: 14 }}>Your Contact Info</p>
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
+        Need to update your email or phone? Submit a change request and we'll update it on our end.
+      </p>
+
+      {/* Email row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Email</div>
+          <div style={{ fontSize: 14, color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {currentEmail || <span style={{ color: 'var(--text-muted)' }}>Not on file</span>}
+          </div>
+          {pendingFields.email && (
+            <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 3 }}>Change requested — your team will review it shortly</div>
+          )}
+        </div>
+        {!pendingFields.email && editField !== 'email' && (
+          <button onClick={() => openEdit('email')} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Edit</button>
+        )}
+      </div>
+      {editField === 'email' && (
+        <div style={{ marginBottom: 12, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8, border: '1px solid var(--amber)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>New Email Address</div>
+          <input type="email" value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="your@email.com" style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, boxSizing: 'border-box' }} autoFocus />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={submitRequest} disabled={busy || !editValue.trim()} style={{ fontSize: 12, padding: '6px 14px', background: 'var(--navy)', color: 'var(--cream)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>{busy ? 'Sending…' : 'Submit Request'}</button>
+            <button onClick={cancelEdit} style={{ fontSize: 12, padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Phone row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 2 }}>Phone</div>
+          <div style={{ fontSize: 14, color: 'var(--text)' }}>
+            {currentPhone || <span style={{ color: 'var(--text-muted)' }}>Not on file</span>}
+          </div>
+          {pendingFields.phone && (
+            <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 3 }}>Change requested — your team will review it shortly</div>
+          )}
+        </div>
+        {!pendingFields.phone && editField !== 'phone' && (
+          <button onClick={() => openEdit('phone')} style={{ fontSize: 11, padding: '4px 10px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 5, color: 'var(--text-muted)', cursor: 'pointer', whiteSpace: 'nowrap' }}>Edit</button>
+        )}
+      </div>
+      {editField === 'phone' && (
+        <div style={{ marginTop: 8, padding: '10px 12px', background: 'var(--bg-card-alt)', borderRadius: 8, border: '1px solid var(--amber)' }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6 }}>New Phone Number</div>
+          <input type="tel" value={editValue} onChange={e => setEditValue(e.target.value)} placeholder="(513) 555-0100" style={{ width: '100%', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text)', fontSize: 14, boxSizing: 'border-box' }} autoFocus />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button onClick={submitRequest} disabled={busy || !editValue.trim()} style={{ fontSize: 12, padding: '6px 14px', background: 'var(--navy)', color: 'var(--cream)', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>{busy ? 'Sending…' : 'Submit Request'}</button>
+            <button onClick={cancelEdit} style={{ fontSize: 12, padding: '6px 12px', background: 'transparent', border: '1px solid var(--border)', borderRadius: 6, color: 'var(--text-muted)', cursor: 'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {status === 'sent' && (
+        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: '#064e3b', color: '#6ee7b7', fontSize: 12 }}>
+          ✓ Change request sent — your team will review and update your info shortly.
+        </div>
+      )}
+      {status === 'error' && (
+        <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 6, background: '#7f1d1d', color: '#fca5a5', fontSize: 12 }}>
+          Something went wrong. Please call us at <a href="tel:+15139518855" style={{ color: '#fca5a5' }}>(513) 951-8855</a> to update your info.
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Client Documents (with upload) ──────────────────
 function ClientDocumentsSection({ dealId, documents, session, onChange, isPreview }) {
   const [uploading, setUploading] = useState(false);
@@ -1580,11 +2216,19 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
     window.open(data.signedUrl, '_blank');
   };
 
+  // Per Nathan 2026-05-05: this section is for THE CLIENT'S personal
+  // files only — signed agreements, IDs, death certs, retention forms,
+  // bank docs, etc. Court-source PDFs (uploaded_by IS NULL — populated
+  // by Castle's auto-attach pipeline) belong in the Court Activity card
+  // inline with their docket events, NOT here. Filter them out so the
+  // documents list stays focused on what the client is responsible for.
+  const personalDocs = (documents || []).filter(d => d.uploaded_by != null);
+
   return (
     <div className="card">
-      <p className="card-title">Documents</p>
+      <p className="card-title">Your documents</p>
       <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 14, lineHeight: 1.5 }}>
-        Your signed agreement and court filings appear here as we receive them. You can also upload documents we've requested (ID, death certificate, prior correspondence, etc.) — Nathan's team is notified automatically.
+        Anything you've signed or sent us — agreements, ID, death certificates, prior correspondence, bank info. Court filings live above in <b>Court activity</b> with View-PDF buttons on each entry.
       </div>
       <div style={{ marginBottom: 14 }}>
         <label style={{
@@ -1600,13 +2244,13 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
       </div>
       {err && <div className="empathy-error">{err}</div>}
 
-      {documents.length === 0 && pins.length === 0 ? (
-        <div className="empty" style={{ padding: '12px 0' }}>No documents on file yet. Upload anything we've requested, or just save it here for your records.</div>
+      {personalDocs.length === 0 && pins.length === 0 ? (
+        <div className="empty" style={{ padding: '12px 0' }}>Nothing here yet. Upload anything we've asked for, or save documents you want to keep with your case.</div>
       ) : (() => {
         // Contain the list in a fixed-height scroller once it gets long, so the
         // overall page stays a reasonable length. Threshold picked to match
         // "about a viewport" worth of rows.
-        const totalRows = pins.length + documents.length;
+        const totalRows = pins.length + personalDocs.length;
         const scrollable = totalRows > 6;
         const listStyle = scrollable ? { maxHeight: 460, overflowY: 'auto', paddingRight: 6 } : {};
         return (
@@ -1636,7 +2280,7 @@ function ClientDocumentsSection({ dealId, documents, session, onChange, isPrevie
                   </div>
                 );
               })}
-              {documents.map(d => (
+              {personalDocs.map(d => (
                 <div className="doc-row" key={d.id}>
                   <div className="doc-icon">📄</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -1979,7 +2623,7 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
 
       <h1 className="deal-name">{(deal.name || '').split(' - ')[0]}</h1>
       <div className="deal-sub">
-        {address || (county ? `${county} County, Ohio` : 'Your home')}
+        {address || (county ? `${cleanCountyName(county)} County, Ohio` : 'Your home')}
       </div>
 
       <WelcomeVideoBlock url={welcomeVideoUrl} />
@@ -2068,6 +2712,8 @@ function PreforeclosureCaseView({ deal, access, activity, documents, welcomeVide
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your sale progresses.
+        <br/>
+        <span style={{ opacity: 0.5, fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>v{PORTAL_VERSION}</span>
       </p>
 
       <StickyCallButton />
@@ -2121,7 +2767,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       <h1 className="deal-name">{deal.name}</h1>
       <div className="deal-sub">
-        {county ? `${county} County, Ohio` : (deal.address || '')}
+        {county ? `${cleanCountyName(county)} County, Ohio` : (deal.address || '')}
         {isJointCase && (
           <span style={{ marginLeft: 8, padding: '2px 8px', fontSize: 11, background: 'var(--gold-soft)', color: 'var(--amber)', borderRadius: 10, fontWeight: 600 }}>
             Joint case · {claimantCount} claimants
@@ -2131,10 +2777,17 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
 
       <WelcomeVideoBlock url={welcomeVideoUrl} />
 
-      <span className={"status-badge " + statusCls}>{statusLabel(deal.status)}</span>
+      {/* SIGNED status pill removed 2026-05-05 — was redundant with the
+          5-step tracker inside CaseHero, which already shows "Engaged"
+          (or whichever step is current) prominently. The pill was opaque
+          to clients ("what does SIGNED mean?") and competed with the
+          dark hero for attention. */}
 
-      <SurplusTracker status={deal.status} filedAt={filedAt} />
-
+      {/* Per Nathan 2026-05-05: SurplusTracker + CaseHero + CaseSnapshotCard
+          used to be three separate cards stacked here. Now folded into ONE
+          unified <CaseHero /> that flows: estimated share → step tracker →
+          where you are → what's next → court record. CaseSnapshotCard kept
+          as a back-compat export but no longer rendered separately. */}
       {isRecovered ? (
         <CelebrationHero clientShare={clientShare} address={deal.address} />
       ) : (
@@ -2148,8 +2801,9 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
             isJointCase={isJointCase}
             claimantCount={claimantCount}
             perClaimantShare={perClaimantShare}
+            deal={deal}
           />
-          <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} />
+          <ClientDocketCard dealId={deal.id} access={access} isPreview={isPreview} activity={activity} />
         </>
       )}
 
@@ -2178,7 +2832,7 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
         {estimatedSurplus > 0 && (
           <div className="fee-breakdown">
             <div className="fee-line"><span>Estimated surplus funds</span><span className="amt">{fmt$2(estimatedSurplus)}</span></div>
-            <div className="fee-line sub"><span>Our contingency fee ({feePct}%)</span><span className="amt">−{fmt$2(ourFee)}</span></div>
+            <div className="fee-line sub"><span>Recovery fee ({feePct}%)</span><span className="amt">−{fmt$2(ourFee)}</span></div>
             <div className="fee-line total"><span>Your estimated share</span><span className="amt">{fmt$2(clientShare)}</span></div>
           </div>
         )}
@@ -2212,30 +2866,25 @@ function CaseView({ deal, access, activity, documents, claimantCount, welcomeVid
       {/* Messages thread */}
       <MessagesThread dealId={deal.id} session={session} clientName={deal.name} isPreview={isPreview} />
 
-      {/* Timeline */}
-      <div className="card">
-        <p className="card-title">Case Timeline</p>
-        {activity.length === 0 ? (
-          <div className="empty">No case updates yet. We'll post updates here as your case progresses.</div>
-        ) : (
-          activity.map((a, i) => (
-            <div className="timeline-item" key={a.id || i}>
-              <div className="timeline-dot"></div>
-              <div className="timeline-action">{a.action}</div>
-              <div className="timeline-date">{fmtDateShort(a.created_at)}</div>
-            </div>
-          ))
-        )}
-      </div>
+      {/* Case Timeline removed 2026-05-05 per Nathan — it was duplicating
+          the Court Activity card. The trigger that mirrors docket_events
+          into the activity table caused 90%+ of timeline rows to be
+          shadow copies of docket entries already shown above with
+          PDFs. Non-docket activity (real team posts, status changes)
+          now folds into the bottom of the Court Activity card. */}
 
       {/* Documents */}
       <ClientDocumentsSection dealId={deal.id} documents={documents} session={session} onChange={() => window.location.reload()} isPreview={isPreview} />
 
       {isRecovered && <TestimonialOptIn accessId={access.id} initialPrefs={access.prefs} />}
 
+      <ContactInfoCard access={access} deal={deal} isPreview={isPreview} />
+
       <p className="fineprint" style={{ textAlign: 'center', marginTop: 32 }}>
         Questions about your case? Call Nathan directly at <a href="tel:+15135162306">(513) 516-2306</a>.<br/>
         This portal updates in real time as your case progresses.
+        <br/>
+        <span style={{ opacity: 0.5, fontSize: 10, fontVariantNumeric: 'tabular-nums' }}>v{PORTAL_VERSION}</span>
       </p>
 
       <StickyCallButton />

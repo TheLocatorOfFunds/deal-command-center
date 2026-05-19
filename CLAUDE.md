@@ -2,6 +2,30 @@
 
 This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund cases). Read this file before making changes — it has the stuff that isn't obvious from reading the code.
 
+## Session start and end ritual (REQUIRED)
+
+This repo is co-coded by Justin and Nathan, each running their own Claude Code sessions.
+Cross-session state lives in `WORKING_ON.md`, `session_archives/`, and `DIRECTOR_DCC_INTERFACE.md`.
+**You must run the session rituals so the other session doesn't work blind.**
+
+### Starting a session
+Run `/catchup` as your very first action. It pulls, reads WORKING_ON.md + recent session
+archives + DIRECTOR_DCC_INTERFACE.md + recent commits, and produces a <300-word briefing
+on what the other session shipped, what's in-flight, and any gotchas. Do not start work
+until you have run it.
+
+### Ending a session
+Run `/handoff` before your last response. It audits what you shipped, decides if it's
+substantive enough to archive (architectural decisions, migrations, edge function deploys,
+non-obvious gotchas), writes the session_archives entry if so, updates your section in
+WORKING_ON.md, and proposes a commit. **If you skip this, the next session starts blind.**
+
+Both commands live in `.claude/commands/`. If you are running from outside the repo
+directory and the slash commands are not available, manually do the equivalent:
+- Start: `git pull`, read `WORKING_ON.md` + `session_archives/index.md` + `DIRECTOR_DCC_INTERFACE.md`
+- End: update your section in `WORKING_ON.md` with status + what you shipped + open follow-ups,
+  write a `session_archives/YYYY-MM-DD-<slug>.md` if the session was substantive, commit both
+
 ## Architecture at a glance
 
 - **Source**: React JSX in `src/app.jsx` (~12,640 lines). Pre-compiled by **esbuild** to `app.js` (~483KB minified) via `npm run build`. **Edit `src/app.jsx`, NOT `index.html`.**
@@ -12,6 +36,10 @@ This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund ca
 - **Backend**: Supabase project `rcfaashkfpurkvtmsmeb` — Postgres + Auth + Realtime.
 - **Hosting**: GitHub Pages on `main` branch root. Any commit to `main` rebuilds in ~30s. URL: https://thelocatoroffunds.github.io/deal-command-center/ (custom domain: app.refundlocators.com).
 - **Auth**: Magic-link (`signInWithOtp`). Users auto-create on first sign-in. Profiles auto-populate via `handle_new_user` trigger.
+- **Mobile companion app**: `mobile/` directory — React Native + Expo (managed
+  workflow), TypeScript, expo-router. Same Supabase project. Distributed via
+  TestFlight for iOS internal alpha. See `mobile/README.md` for setup +
+  `memory/mobile_app_plan.md` for v1 scope decisions. Domain: Justin.
 
 ## Credentials
 
@@ -188,13 +216,39 @@ Nathan's column — leave it alone and ask. Same in reverse.
 | Castle / docket integration | **Nathan** | `docket_events`, `docket_events_unmatched`, `scrape_runs`, `supabase/functions/docket-webhook` |
 | Email / Resend triggers | **Nathan** | `messages_email_notify`, `docket_events_client_notify`, `send_daily_digest` |
 | Lead intake + dup detection | **Nathan** | `lead-intake.html`, `leads` table, `find_lead_duplicates` RPC |
-| Lauren / pgvector AI chat | **Justin** | `lauren_*` tables, pgvector embeddings |
+| Lauren / pgvector AI chat | **Both (co-owned)** | `lauren_*` tables, pgvector embeddings — Nathan + Justin own equally; coordinate before substantive changes (per Nathan, 2026-05-05) |
 | Phase 3 Library | **Nathan** | Designed — not yet built |
 | Phase 4 Financials | **Nathan** | Not yet built |
+| **DCC Mobile companion app** | **Justin** | `mobile/` — Expo + React Native, TestFlight distribution. v1 scope still being decided with Nathan. See `memory/mobile_app_plan.md`. |
 | **Shared (either can touch)** | Both | `deals`, `vendors`, `tasks`, `expenses`, `activity`, `deal_notes`, `documents`, `contacts`, `contact_deals`, `index.html` shell + nav + shared components |
 
 **When in doubt**: don't write migrations or edit Edge Functions in another owner's domain.
 Post a note and wait for the other session to coordinate.
+
+## Cross-project: intel-main interface
+
+DCC is not standalone — Nathan also runs **intel-main** (`~/Documents/Claude/main-intel/`,
+Vercel-hosted, separate Supabase project `qbdslghonhuvkacqlsbd`) which writes into DCC.
+The contract is documented in **[`DIRECTOR_DCC_INTERFACE.md`](./DIRECTOR_DCC_INTERFACE.md)** —
+read it before touching `deals`, `intel_subscriptions`, `intel-sync`, `ohio-intel-to-deal`,
+or any of the intel-main-managed `deals.meta` fields.
+
+**Hot rules** (the rest is in the interface doc):
+- intel-main writes these `deals.meta` keys via initial push + 30-min `sync-deal-updates`
+  cron. **Do not manually mutate them in DCC code or SQL** — if you need a change, do it
+  through intel-main and the next cron reconciles within 30 min:
+  `intel_case_id`, `intel_main_url`, `county`, `courtCase`, `grade`, `gradeScore`,
+  `estimatedSurplus`, `salePrice`, `judgmentAmount`, `totalDebt`, `courtAppraisalValue`,
+  `minimumBidAmount`, `saleDate`, `auctionStatus`, `auctionUrl`, `plaintiffName`,
+  `parcelId`, `foreclosureType`, `isPostAuction`, `surplusClaimStatus`, `walkerVerified`,
+  `walkerPlatform`, `lifecycleStage`, `buyerName`, `lastIntelSyncAt`,
+  `sourced_from`/`sourced_at`/`sourced_by`. Full source-of-truth table in
+  `DIRECTOR_DCC_INTERFACE.md`.
+- When intel-main inserts a deal, `tg_ensure_intel_subscription` fires automatically. **Do
+  not manually insert into `intel_subscriptions` after a deal insert** — PK-collides and
+  rolls the deal back. This is why `ohio-intel-to-deal` EF is currently bypassed.
+- Bump the `Last updated` date at the top of `DIRECTOR_DCC_INTERFACE.md` whenever you
+  change something on this contract.
 
 ## Co-coding protocol (read every session)
 
@@ -221,6 +275,22 @@ to work on. Per-user sections (Justin / Nathan / Erik) — edit only your own.
 4. Apply via Supabase SQL editor (not `supabase db push` — no local DB)
 5. Commit the `.sql` file in the same commit as the feature that needs it
 
+**Step 4 is the trap.** Skipping it ships UI that depends on schema that
+doesn't exist in prod yet — every fetch errors out and the app silently
+falls back to defaults. This is exactly how 2026-05-07 took the entire
+DCC down for ~30 minutes (soft-delete PR shipped `WHERE deleted_at IS NULL`
+without applying the column-add migration).
+
+**Guardrail:** the `.github/workflows/migrations-applied.yml` workflow runs
+on every PR + every push to main. It compares files in
+`supabase/migrations/` against migrations actually applied to prod (via
+the Supabase Management API) and fails the build with the list of missing
+files. Requires repo secret `SUPABASE_PAT` — Personal Access Token from
+https://supabase.com/dashboard/account/tokens. If the check fails:
+1. Open the SQL Editor link the workflow logs print
+2. Paste each missing file's contents and click Run
+3. Push a new commit (or re-trigger the workflow) to confirm green
+
 ### Live state — update WORKING_ON.md as you work
 Don't wait for session end. As you make decisions or shift focus,
 update YOUR section of `WORKING_ON.md` and push (small commits are
@@ -228,6 +298,16 @@ fine). Other sessions running concurrently `git pull` to refresh — so
 the more recent your section is, the less likely they are to step on
 your work. Conflict-free as long as everyone edits only their own
 section. **Never edit another user's section.**
+
+**Multiple worktrees as the same user**: if you run two Claude Code
+worktrees in parallel (e.g. Justin running `claude/foo-bar` AND
+`claude/baz-qux` simultaneously), the Stop hook auto-creates a
+per-worktree subsection `### <Your name> · <worktree-slug>` inside
+your top-level user section. Each worktree updates only its own
+subsection — no race. Your manual notes about "what I'm working on"
+can go either at the user-section level (high-level status) or
+inside a specific worktree subsection (fine-grained per-branch).
+Subsections from finished worktrees can be pruned manually.
 
 ### Session end ritual
 1. Commit everything (including any migration files).
@@ -254,12 +334,20 @@ now," archives for "what's been figured out before," `memory/` for
 
 ### Stop hook safety net (`.claude/hooks/touch-working-on.sh`)
 A Stop hook fires after every Claude turn and updates a
-`**Last updated (auto):**` timestamp in your section of
-`WORKING_ON.md` — automatically, even if Claude itself forgets to
+`**Last updated (auto):**` timestamp in your **per-worktree subsection**
+of `WORKING_ON.md` — automatically, even if Claude itself forgets to
 update its content. The hook:
-- Maps your OS user (`$USER`) → DCC name (`Justin`/`Nathan`/`Erik`)
-- Updates only the timestamp line in your section (never touches others')
-- Auto-commits the heartbeat if the file's last commit is > 2 min old
+- Maps your `git config user.email` (or fallback `$USER`) → DCC name
+  (`Justin`/`Nathan`/`Erik`)
+- Detects the current worktree slug (`basename $(git rev-parse --show-toplevel)`,
+  or "main" if you're in the main worktree)
+- Finds/creates a `### <Your name> · <worktree-slug>` subsection inside
+  your top-level `## <Name>'s session` section
+- Updates the timestamp line **only inside that subsection** — never
+  touches other users' sections, never touches your other worktrees'
+  subsections
+- Auto-commits the heartbeat if the file's last commit is > 2 min old,
+  with message `chore(working_on): <Name> heartbeat (auto, <slug>)`
   (avoids commit spam while still surfacing state to other sessions
   on their next `git pull`)
 - Never pushes — Claude pushes as part of normal commit flow
@@ -272,9 +360,17 @@ focus drift over long sessions, and mid-session crashes. The
 timestamp moves regardless. Other sessions can see "active 2 min
 ago" vs "stale 6 hours, probably crashed."
 
-If the hook ever causes problems, disable it by removing the `Stop`
-block from `.claude/settings.json` — the convention still works
-without it, just less robustly.
+**Per-worktree subsections also fix the race condition** where a single
+user running two parallel worktrees would have both hooks fighting over
+the same user-level section, producing merge conflicts on shared lines.
+Each worktree now owns its own subsection. Subsection naming is stable
+(based on worktree path), so the hook is idempotent across runs.
+
+If the hook ever causes problems, disable it for a specific worktree
+by adding `"hooks": {"Stop": []}` to that worktree's
+`.claude/settings.local.json` (gitignored, local-only). The convention
+still works without it, just less robustly. Disable repo-wide only as a
+last resort by removing the `Stop` block from `.claude/settings.json`.
 
 ### RLS convention (hard rule — applies to both sessions)
 Always use the helper functions — never inline role checks:
@@ -316,6 +412,47 @@ Do NOT delete `TXT resend._domainkey` or `TXT _dmarc` under any circumstance —
 those are the active outbound sending config. SES leftovers (`MX send` and `TXT send`
 with `include:amazonses.com`) were deleted Apr 22, 2026 and do not need to come back.
 
+## e-signature integration — two parallel surfaces
+
+DCC has TWO independent signing pipelines, both production-live:
+
+### DocuSign (legacy, $500/yr Starter tier)
+- **EF**: `docusign-send-envelope` / `docusign-sign` / `docusign-status` / `docusign-webhook`
+- **Table**: `docusign_envelopes`
+- **Template column**: `library_documents.docusign_template_id`
+- **UI**: `DocuSignSendModal` in `src/app.jsx`, amber button in the Documents section
+- **Status**: stuck on Starter — production embedded signing requires Enterprise ($2,500/yr). Sandbox-only until we pay or migrate.
+
+### eSignatures.com (added 2026-05-14 — pay-as-you-go)
+- **EF**: `send-esignature-contract` (REST) + `esignatures-webhook`
+- **Table**: `esignatures_contracts`
+- **Template column**: `library_documents.esignatures_template_id`
+- **UI**: `ESignaturesSendModal` in `src/app.jsx`, green button in the Documents section
+- **MCP server**: `mcp-server-esignatures` published on PyPI. Project `.mcp.json` exposes 13 tools (create / query / withdraw / delete / list contracts; create / update / query / delete / list templates; 3 collaborator tools). Token source: https://esignatures.com/api_accounts → Automation & API tab.
+- **Cost**: $0.49/contract pay-as-you-go, $50 minimum top-up, no monthly floor.
+
+### When to use which surface
+
+| Trigger | Surface | Why |
+|---|---|---|
+| Nathan/Eric/Inaam clicks Send in DCC UI | REST/EF (either provider) | UI calls Edge Function; UI has no MCP access |
+| Inbound webhook from vendor | EF (`docusign-webhook` or `esignatures-webhook`) | HTTP-only by definition |
+| Justin in a Claude Code chat: "send the Retention to Elaine" | MCP (eSignatures) | One tool call, no UI round-trip |
+| Lauren autonomous flow: "client said ready" | MCP (eSignatures) | Agent-native interface |
+| Research agent: "lead graded A, send retainer" | MCP (eSignatures) | Agent-native interface |
+
+### Critical UX caveat for the MCP path
+
+The MCP `create_contract` tool may NOT honor `signature_request_delivery_methods=[]` the way the REST/EF path does. We built the EF to suppress eSignatures.com's own email/SMS so we can deliver the signing URL via Nathan's iPhone bridge (homeowner-on-an-iPhone UX). If you use the MCP server to send a contract, eSignatures.com will probably email/SMS the signer from a `noreply@esignatures.com` address — which is a worse experience for elderly surplus-fund homeowners.
+
+**Rule of thumb**: for envelopes that go to homeowners, use the DCC UI (which goes through the EF). For internal / professional recipients (attorneys, vendors) where a `noreply` sender is fine, the MCP path is faster.
+
+### Records reconciliation
+
+Both surfaces should write to `esignatures_contracts`. The webhook EF reconciles either way — when a contract is created via MCP that DCC didn't originate, the first `signer-viewed-the-contract` webhook event inserts a stub row keyed on the `metadata.deal_id` we pass in the MCP call.
+
+If you create a contract via MCP and want it to appear in DCC, set the `metadata` field to `{"deal_id": "<dcc-deal-id>", "source": "mcp"}` so the webhook can stitch it together.
+
 ## ⚠️ Messaging gateway — ALWAYS use Nathan's iPhone, NEVER Twilio
 
 **All outbound SMS, MMS, and video is sent via Nathan's iPhone through the mac_bridge.**
@@ -338,7 +475,7 @@ ssh defender-mini   # resolves to dealcommandcenter@defender-mini.local
 
 **After any change to `mac-bridge/bridge.js`**, always run this to deploy:
 ```bash
-ssh defender-mini "cd '/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center' && git pull && launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist && launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist && sleep 3 && tail -20 /tmp/dcc-bridge.log"
+ssh defender-mini "cd /Users/dealcommandcenter/Documents/deal-command-center && git pull && launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist && launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist && sleep 3 && tail -20 /tmp/dcc-bridge.log"
 ```
 
 Check bridge logs anytime:
@@ -348,7 +485,75 @@ ssh defender-mini "tail -50 /tmp/dcc-bridge.log"
 
 SSH key: `~/.ssh/defender_mini` (ed25519, already authorized on Mac Mini)
 Plist: `com.refundlocators.bridge`
-Bridge repo path: `/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
+**Bridge repo path** (the one the LaunchAgent actually runs from — see
+`~/Library/LaunchAgents/com.refundlocators.bridge.plist` ProgramArguments):
+`/Users/dealcommandcenter/Documents/deal-command-center/`
+
+**⚠ Trap (2026-05-13):** there's ALSO a stale clone at
+`/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
+(with a space + "DealCommand Center/" subdirectory). The bridge does NOT
+run from there. Earlier versions of this doc pointed there; SSH-deploys
+to that path silently succeeded but never updated the running daemon.
+If a deploy "succeeds" but behavior doesn't change, double-check you
+pulled to the path above, not the stale one.
+
+## Action confirmation — close the loop on every external side effect
+
+Per Justin 2026-05-07: **every user-driven action with an external side
+effect must surface real delivery confirmation, not just "we sent the
+request."** Optimistic-success UI hides real-world failures and erodes
+trust in the system.
+
+The 2026-05-07 RVM testing made this painful: Slybroadcast accepted every
+drop with a 200 OK, our UI claimed "✅ Voicemail dropped" — but the actual
+delivery succeeded only when the recipient's carrier supported direct VM
+deposit. For most major US carriers post-2022 FCC ruling, deposit fails
+and the call falls through as a regular ring. We were lying to the user.
+
+### Required pattern
+
+When building any feature that talks to a provider that supports delivery
+callbacks (Slybroadcast, Twilio, Resend, Stripe, DocuSign, etc.):
+
+1. **Initial action** records optimistic status (e.g. `sms_queued`,
+   `rvm_sent`, `email_queued`). This means "we handed it to the provider"
+   — NOT "the recipient got it."
+2. **Wire the provider's webhook / callback** on the same PR. Don't
+   defer it. If we ship the action without the callback, we ship a lie.
+   - Slybroadcast: `c_dispo_url` parameter → `slybroadcast-callback` EF
+   - Twilio SMS: `StatusCallback` URL → `twilio-status` EF
+   - Twilio Voice: `StatusCallback` URL → `twilio-voice-status` EF
+   - Resend: webhook events (`email.delivered`, `email.bounced`)
+   - DocuSign: Connect / EventNotification → `docusign-status` EF
+3. **Update the row** to a terminal status: `delivered` / `undeliverable`
+   / `bounced` / `failed`. Surface a `error_message` / `status_reason`
+   that explains the outcome in plain English.
+4. **The UI shows the real state** — never just "we tried." Each
+   terminal status gets distinct visual treatment (color, icon, label):
+   - delivered → green, "✓ delivered"
+   - awaiting → orange, "awaiting confirmation"
+   - undeliverable → amber, "undeliverable" + reason
+   - failed → red, "failed" + retry path
+5. **Auth the webhook**. Provider callbacks hit a public URL. Verify a
+   shared secret (query param) or HMAC signature before trusting the
+   payload — otherwise anyone can forge "delivered."
+
+### Existing implementations to copy from
+
+- `supabase/functions/slybroadcast-callback/` — query-param shared-secret
+  auth, GET-or-POST tolerant, classifies provider disposition strings
+  into our canonical status. Updates `messages_outbound` in place.
+- `supabase/functions/twilio-status/` — Twilio status callback handler.
+- `supabase/functions/twilio-voice-status/` — Voice call status.
+- `supabase/functions/docusign-status/` — DocuSign Connect events.
+
+### Anti-patterns
+
+- Showing "✅ Sent" when the provider only ACK'd the request → users
+  trust this as ground truth, then get burned when delivery silently fails
+- Storing only the immediate response — losing the actual outcome means
+  the audit trail is wrong + the dashboard is wrong forever
+- Accepting webhooks without auth → trivial to forge "delivered" status
 
 ## QA protocol — mandatory before declaring work done
 
