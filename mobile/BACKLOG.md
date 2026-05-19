@@ -120,11 +120,35 @@ Parity items now live on mobile:
   team profiles, inserts `@Name `. Plain-text storage, matches web.
 
 Open follow-ups (not blocking — backlog them if they become real):
-- Push notification when a user is @mentioned (today they only get
-  the visual marker, no ping).
 - Edit/delete a message from mobile (web has it; mobile doesn't).
-- GIF picker in the composer (mobile can render incoming GIFs but
-  can't send new ones — those still have to start on web).
+- Image / file upload from mobile (mobile can render incoming images
+  and send GIFs, but can't upload a photo from the camera roll yet —
+  needs expo-image-picker + storage upload).
+
+### Team chat — @mention push notifications **[SHIPPED]**
+Done 2026-05-19 alongside the GIPHY picker. Postgres migration
+`20260519130000_team_message_mention_pushes.sql` replaces
+`tg_push_notify_team_message()` to:
+- Scan the message body for `@<word>` tokens (regexp)
+- Resolve each to a profile via case-insensitive prefix match on
+  `display_name` or `name`
+- Send a distinct "X mentioned you in #thread" push to mentioned
+  users (data.type = `team_mention`)
+- Subtract them from the generic thread recipients so they don't
+  get double-pinged
+
+Limitation: single-word names only. All current teammates (Nathan,
+Justin, Eric, Anam) qualify. Multi-word names would need a
+mentions[] column on team_messages.
+
+### Team chat — GIPHY picker on mobile composer **[SHIPPED]**
+Done 2026-05-19. `mobile/components/GifPicker.tsx` mirrors the web
+`GifPickerPopover` — same GIPHY API key, trending on empty query,
+debounced search, 3-col grid. Wired into the team-thread composer
+via a 🎬 button next to the text input. Selected GIFs land in a
+new `pendingAttachments` preview row and ship with the next send
+inside `team_messages.attachments` (same shape the web app
+produces, so AttachmentView round-trips them on both ends).
 
 ### Pull-to-refresh on chat + SMS threads **[SHIPPED]**
 Done 2026-05-19. `RefreshControl` wired on both

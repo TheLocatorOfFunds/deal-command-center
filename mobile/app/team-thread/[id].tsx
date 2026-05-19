@@ -50,6 +50,7 @@ import { Stack, useLocalSearchParams } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { extractJitsiUrls } from '../../lib/videoRooms'
+import { GifPicker, type GiphyAttachment } from '../../components/GifPicker'
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '🔥', '✅', '👀', '🤔']
 const STORAGE_BUCKET = 'team-chat'
@@ -63,7 +64,9 @@ type Thread = {
 }
 
 type Attachment = {
-  path?: string
+  // Storage-backed attachments set `path`; Giphy/external attachments
+  // explicitly set `path: null` and use `url`. Both are valid.
+  path?: string | null
   name?: string
   size?: number
   type?: string
@@ -115,6 +118,8 @@ export default function TeamThreadScreen() {
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([])
+  const [gifPickerOpen, setGifPickerOpen] = useState(false)
 
   // Long-press action sheet (reactions + reply)
   const [actionForMsg, setActionForMsg] = useState<Msg | null>(null)
@@ -405,7 +410,8 @@ export default function TeamThreadScreen() {
   // ── Send ───────────────────────────────────────────────────────────
   const send = async () => {
     const body = draft.trim()
-    if (!body || sending || !userId || !id) return
+    const hasAttachments = pendingAttachments.length > 0
+    if ((!body && !hasAttachments) || sending || !userId || !id) return
     setSending(true)
     try {
       const row: Record<string, unknown> = {
@@ -414,12 +420,14 @@ export default function TeamThreadScreen() {
         sender_kind: myKind,
         body,
       }
+      if (hasAttachments) row.attachments = pendingAttachments
       if (replyTo) row.parent_id = replyTo.id
       const { error: err } = await supabase.from('team_messages').insert(row)
       if (err) throw err
       setDraft('')
       setReplyTo(null)
       setMention(null)
+      setPendingAttachments([])
       setTimeout(() => load(), 200)
     } catch (e) {
       Alert.alert(
@@ -582,7 +590,46 @@ export default function TeamThreadScreen() {
             </View>
           )}
 
+          {/* Pending attachments preview */}
+          {pendingAttachments.length > 0 && (
+            <View style={styles.pendingRow}>
+              {pendingAttachments.map((a, i) => {
+                const thumb = a.url ?? null
+                return (
+                  <View key={`pend-${i}`} style={styles.pendingItem}>
+                    {thumb ? (
+                      <Image
+                        source={{ uri: thumb }}
+                        style={styles.pendingThumb}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <Text style={styles.pendingPlaceholder}>📎</Text>
+                    )}
+                    <TouchableOpacity
+                      style={styles.pendingRemove}
+                      onPress={() =>
+                        setPendingAttachments((prev) =>
+                          prev.filter((_, idx) => idx !== i),
+                        )
+                      }
+                    >
+                      <Text style={styles.pendingRemoveText}>×</Text>
+                    </TouchableOpacity>
+                  </View>
+                )
+              })}
+            </View>
+          )}
+
           <View style={styles.composer}>
+            <TouchableOpacity
+              style={styles.gifBtn}
+              onPress={() => setGifPickerOpen(true)}
+              disabled={sending}
+            >
+              <Text style={styles.gifBtnText}>🎬</Text>
+            </TouchableOpacity>
             <TextInput
               ref={composerRef}
               style={styles.composerInput}
@@ -599,16 +646,30 @@ export default function TeamThreadScreen() {
             <TouchableOpacity
               style={[
                 styles.sendBtn,
-                (!draft.trim() || sending) && styles.sendBtnDisabled,
+                (!draft.trim() && pendingAttachments.length === 0) || sending
+                  ? styles.sendBtnDisabled
+                  : null,
               ]}
               onPress={send}
-              disabled={!draft.trim() || sending}
+              disabled={
+                (!draft.trim() && pendingAttachments.length === 0) || sending
+              }
             >
               <Text style={styles.sendBtnText}>{sending ? '…' : 'Send'}</Text>
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
       )}
+
+      {/* GIPHY picker */}
+      <GifPicker
+        visible={gifPickerOpen}
+        onClose={() => setGifPickerOpen(false)}
+        onSelect={(gif: GiphyAttachment) => {
+          setPendingAttachments((prev) => [...prev, gif])
+          setGifPickerOpen(false)
+        }}
+      />
 
       {/* Long-press action sheet — reactions + reply */}
       <Modal
@@ -1098,6 +1159,61 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: '#292524' },
   sendBtnText: { color: '#0c0a09', fontWeight: '700', fontSize: 14 },
+
+  gifBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#1c1917',
+    borderColor: '#292524',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gifBtnText: { fontSize: 18 },
+
+  pendingRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    backgroundColor: '#0c0a09',
+  },
+  pendingItem: {
+    width: 64,
+    height: 64,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#1c1917',
+    borderColor: '#292524',
+    borderWidth: 1,
+    position: 'relative',
+  },
+  pendingThumb: { width: '100%', height: '100%' },
+  pendingPlaceholder: {
+    fontSize: 24,
+    textAlign: 'center',
+    lineHeight: 60,
+    color: '#a8a29e',
+  },
+  pendingRemove: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#7f1d1d',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pendingRemoveText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
 
   modalBackdrop: {
     flex: 1,
