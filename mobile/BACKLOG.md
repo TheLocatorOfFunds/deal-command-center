@@ -132,25 +132,28 @@ yet or when returning to the app after backgrounding.
 **Effort: small. No design needed.**
 
 ### Join a video call from the mobile app
-When a team video call is happening (or a call invite is posted to a
-deal chat), the mobile app needs a way to join it directly — tap a
-banner / button in the chat and land in the call.
+Mobile needs a one-tap "Join" path into the existing Jitsi rooms so
+Nathan/Justin can hop into a call with Eric or Anam from their phone.
 
-We already use **Jitsi** (`meet.jit.si`) on the web app — fixed rooms
-like `https://meet.jit.si/DCC-Eric-Room` and `https://meet.jit.si/DCC-Anam-Room`,
-plus per-deal rooms posted into chat as `📹 X started a video call: https://meet.jit.si/...`
-(see `src/app.jsx:668, 3905-3906, 4033, 28497-28498`). Mobile should
-reuse Jitsi — no new provider needed.
+**We already have fixed rooms** — no provider decision needed, no new
+infra. Web app already exposes:
+- Eric's Room → `https://meet.jit.si/DCC-Eric-Room`
+- Anam's Room → `https://meet.jit.si/DCC-Anam-Room`
 
-Implementation options:
-- Simplest: detect the `meet.jit.si/...` URL in chat, open it in
-  `Linking.openURL()` which hands off to the Jitsi Meet iOS app (or
-  Safari if not installed).
-- Better: open in an in-app WebView so the user doesn't leave DCC.
-- Best: integrate the Jitsi Meet React Native SDK for a native call UX.
+(See `src/app.jsx:3905-3906, 28497-28498`.) Plus per-deal ad-hoc rooms
+posted into deal chat as `📹 X started a video call: https://meet.jit.si/...`
+(`src/app.jsx:668, 4033`).
 
-Start with `Linking.openURL()` for v1; upgrade later if the handoff
-feels janky.
+What mobile needs:
+- A "Video" section (or button next to each teammate in a roster) with
+  the two known rooms — tap Eric / tap Anam → join the call.
+- Detect `meet.jit.si/...` URLs in chat messages and render them as a
+  tappable "Join call" button instead of raw URL text.
+
+Implementation: start with `Linking.openURL('https://meet.jit.si/...')`
+which hands off to the Jitsi Meet iOS app (or Safari if not installed).
+Upgrade to in-app WebView or the Jitsi React Native SDK later if the
+handoff feels janky.
 
 ---
 
