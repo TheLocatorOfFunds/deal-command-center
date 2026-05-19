@@ -97,10 +97,30 @@ This is the next big surface after the dialer is solid.
 
 **[DEFERRED — revisit after dialer is stable in TestFlight]**
 
-### Team chat
-Justin/Nathan/Eric internal channel on mobile. Currently deferred.
+### Team chat — feature parity with web
+Justin/Nathan/Eric internal channel on mobile. The mobile chat surface needs
+to match the web app's team chat capabilities. Today the mobile surface is
+read-mostly and missing the interactive bits below.
 
-**[DEFERRED]**
+Parity checklist (must match web before we call mobile team chat "done"):
+- **Reactions** — heart, thumbs up, like (and whatever emoji set the web app
+  exposes). Tap-and-hold on a message to react, same as iMessage. Reaction
+  counts visible inline.
+- **GIFs + images render inline** — currently broken on mobile. Messages
+  containing image/GIF attachments come through as text-only or blank. Need
+  to fix the attachment rendering path so media displays in the thread.
+- **Reply to a specific message** — threaded replies / quoted-reply UX so
+  you can respond to a particular comment instead of always appending to
+  the bottom of the channel.
+- **@mentions / tag people** — typing `@` should show a picker of team
+  members, insert the mention as a styled token, and notify the tagged
+  user.
+
+Bug to triage first: GIFs and images coming through Slack/web team chat
+are not displaying on mobile right now — that's a regression to fix
+before the rest of this work, since the data is already arriving.
+
+**[DEFERRED — but parity list above is the spec when we pick it up]**
 
 ---
 
