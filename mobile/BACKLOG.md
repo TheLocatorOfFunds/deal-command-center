@@ -131,6 +131,16 @@ yet or when returning to the app after backgrounding.
 
 **Effort: small. No design needed.**
 
+### Join a video call from the mobile app
+When a team video call is happening (or a call invite is sent to a deal
+contact), the mobile app needs a way to join it directly — tap a banner
+/ button in the chat or notification and land in the call. Need to
+decide the underlying provider (Daily.co, Twilio Video, Jitsi, Google
+Meet link passthrough, etc.) and how the join surface is presented
+(in-app WebView vs. native SDK vs. external app handoff).
+
+**[DESIGN NEEDED — pick provider + define entry points]**
+
 ---
 
 ## TestFlight
