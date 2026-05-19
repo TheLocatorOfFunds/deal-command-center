@@ -3904,6 +3904,8 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
               {[
                 { label: 'Eric', url: 'https://meet.jit.si/DCC-Eric-Room' },
                 { label: 'Anam', url: 'https://meet.jit.si/DCC-Anam-Room' },
+                { label: 'Nathan', url: 'https://meet.jit.si/DCC-Nathan-Room' },
+                { label: 'Justin', url: 'https://meet.jit.si/DCC-Justin-Room' },
               ].map(room => (
                 <button key={room.url}
                   onClick={() => window.open(room.url, '_blank', 'noopener,noreferrer')}
@@ -28496,6 +28498,8 @@ function TeamChatBubble() {
                   {[
                     { label: "Eric's Room", url: 'https://meet.jit.si/DCC-Eric-Room' },
                     { label: "Anam's Room", url: 'https://meet.jit.si/DCC-Anam-Room' },
+                    { label: "Nathan's Room", url: 'https://meet.jit.si/DCC-Nathan-Room' },
+                    { label: "Justin's Room", url: 'https://meet.jit.si/DCC-Justin-Room' },
                   ].map(room => (
                     <button key={room.url}
                       onClick={() => window.open(room.url, '_blank', 'noopener,noreferrer')}

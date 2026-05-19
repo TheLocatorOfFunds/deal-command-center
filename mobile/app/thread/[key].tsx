@@ -19,7 +19,9 @@ import {
   Alert,
   FlatList,
   KeyboardAvoidingView,
+  Linking,
   Platform,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
@@ -29,6 +31,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
+import { extractJitsiUrls } from '../../lib/videoRooms'
 
 type Msg = {
   id: string
@@ -89,6 +92,7 @@ export default function ThreadScreen() {
   const [error, setError] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const listRef = useRef<FlatList<Msg>>(null)
 
   const load = useCallback(async () => {
@@ -288,6 +292,17 @@ export default function ThreadScreen() {
             onContentSizeChange={() =>
               listRef.current?.scrollToEnd({ animated: false })
             }
+            refreshControl={
+              <RefreshControl
+                tintColor="#d97706"
+                refreshing={refreshing}
+                onRefresh={async () => {
+                  setRefreshing(true)
+                  await load()
+                  setRefreshing(false)
+                }}
+              />
+            }
             ListEmptyComponent={
               <View style={styles.empty}>
                 <Text style={styles.emptyText}>
@@ -297,6 +312,8 @@ export default function ThreadScreen() {
             }
             renderItem={({ item }) => {
               const outbound = item.direction === 'outbound'
+              const body = item.body ?? ''
+              const jitsi = extractJitsiUrls(body)
               return (
                 <View
                   style={[
@@ -307,8 +324,17 @@ export default function ThreadScreen() {
                   <Text
                     style={outbound ? styles.bubbleTextOut : styles.bubbleTextIn}
                   >
-                    {item.body ?? ''}
+                    {body}
                   </Text>
+                  {jitsi.map((url) => (
+                    <TouchableOpacity
+                      key={url}
+                      style={styles.joinCallBtn}
+                      onPress={() => Linking.openURL(url)}
+                    >
+                      <Text style={styles.joinCallText}>📹 Join video call</Text>
+                    </TouchableOpacity>
+                  ))}
                   <Text style={styles.bubbleMeta}>
                     {formatRelative(item.created_at ?? '')}
                     {item.status && item.status !== 'sent' && outbound
@@ -452,4 +478,19 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { backgroundColor: '#292524' },
   sendBtnText: { color: '#0c0a09', fontWeight: '700', fontSize: 14 },
+  joinCallBtn: {
+    marginTop: 6,
+    backgroundColor: '#052e16',
+    borderColor: '#16a34a',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignSelf: 'flex-start',
+  },
+  joinCallText: {
+    color: '#86efac',
+    fontSize: 12,
+    fontWeight: '700',
+  },
 })

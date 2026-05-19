@@ -5,6 +5,8 @@ starting them immediately. When we ask "what should we work on next?" pull
 from this list.
 
 Items marked **[DESIGN NEEDED]** need more thought before any code starts.
+Items marked **[SHIPPED]** are merged — left in this doc so the history of
+what we asked for is visible alongside what's still open.
 
 ---
 
@@ -97,69 +99,58 @@ This is the next big surface after the dialer is solid.
 
 **[DEFERRED — revisit after dialer is stable in TestFlight]**
 
-### Team chat — feature parity with web
-Justin/Nathan/Eric internal channel on mobile. The mobile chat surface needs
-to match the web app's team chat capabilities. Today the mobile surface is
-read-mostly and missing the interactive bits below.
+### Team chat — feature parity with web **[SHIPPED]**
+Justin/Nathan/Eric internal channel on mobile. Built out
+2026-05-19. Implementation lives in
+`mobile/app/team-thread/[id].tsx`.
 
-Parity checklist (must match web before we call mobile team chat "done"):
-- **Reactions** — heart, thumbs up, like (and whatever emoji set the web app
-  exposes). Tap-and-hold on a message to react, same as iMessage. Reaction
-  counts visible inline.
-- **GIFs + images render inline** — currently broken on mobile. Messages
-  containing image/GIF attachments come through as text-only or blank. Need
-  to fix the attachment rendering path so media displays in the thread.
-- **Reply to a specific message** — threaded replies / quoted-reply UX so
-  you can respond to a particular comment instead of always appending to
-  the bottom of the channel.
-- **@mentions / tag people** — typing `@` should show a picker of team
-  members, insert the mention as a styled token, and notify the tagged
-  user.
+Parity items now live on mobile:
+- **Reactions** — long-press on a bubble opens an emoji picker (👍 ❤️
+  😂 🎉 🔥 ✅ 👀 🤔). Tap an existing pill to toggle. Optimistic
+  update + realtime sync via `team_reactions` table.
+- **GIFs + images render inline** — was the priority bug. Storage-backed
+  attachments re-sign via `team-chat` bucket signed URLs; Giphy
+  attachments use the embedded `url`. Tap an image to open full-size
+  in the system viewer.
+- **Reply to a specific message** — long-press → Reply, composer
+  shows quoted preview, reply bubbles render the parent body inline.
+  Stored via `team_messages.parent_id` (schema has supported this
+  since phase 1; web hasn't built it yet, so mobile leads).
+- **@mentions** — composer detects `@<prefix>`, shows a picker of
+  team profiles, inserts `@Name `. Plain-text storage, matches web.
 
-Bug to triage first: GIFs and images coming through Slack/web team chat
-are not displaying on mobile right now — that's a regression to fix
-before the rest of this work, since the data is already arriving.
+Open follow-ups (not blocking — backlog them if they become real):
+- Push notification when a user is @mentioned (today they only get
+  the visual marker, no ping).
+- Edit/delete a message from mobile (web has it; mobile doesn't).
+- GIF picker in the composer (mobile can render incoming GIFs but
+  can't send new ones — those still have to start on web).
 
-**[DEFERRED — but parity list above is the spec when we pick it up]**
+### Pull-to-refresh on chat + SMS threads **[SHIPPED]**
+Done 2026-05-19. `RefreshControl` wired on both
+`mobile/app/team-thread/[id].tsx` and `mobile/app/thread/[key].tsx`.
+Pulling down on either thread re-fetches the messages list from
+Supabase. The team-list view already had it.
 
-### Pull-to-refresh on chat + SMS threads
-Pulling down on a team chat channel or an SMS thread should trigger a
-refresh of the messages list (re-fetch latest from Supabase). Standard
-iOS `RefreshControl` UX. Applies to both the team chat surface and the
-deal Comms / inbound SMS thread view. Useful when realtime hasn't fired
-yet or when returning to the app after backgrounding.
+### Join a video call from the mobile app **[SHIPPED]**
+Done 2026-05-19. All four fixed rooms (Eric, Anam, Nathan,
+Justin) now exist in both web and mobile. `mobile/lib/videoRooms.ts`
+is the single source of truth — used by the Team tab roster and the
+Jitsi-URL detection in both thread surfaces.
 
-**Effort: small. No design needed.**
+- Web room lists in `src/app.jsx` (the desktop sidebar at line ~3905
+  and the mobile-popover at line ~28497) now include Nathan + Justin.
+- Mobile Team tab (`mobile/app/(tabs)/team.tsx`) renders a Video
+  Rooms bar with all four rooms. Tap → `Linking.openURL` hands off
+  to the Jitsi Meet iOS app (or Safari if not installed).
+- Both thread views (`team-thread/[id].tsx` and `thread/[key].tsx`)
+  detect `meet.jit.si/...` URLs in message bodies and render a
+  tappable "📹 Join video call" button.
 
-### Join a video call from the mobile app
-Mobile needs a one-tap "Join" path into the existing Jitsi rooms so
-Nathan/Justin can hop into a call with Eric or Anam from their phone.
-
-**We already have fixed rooms** — no provider decision needed, no new
-infra. Web app already exposes:
-- Eric's Room → `https://meet.jit.si/DCC-Eric-Room`
-- Anam's Room → `https://meet.jit.si/DCC-Anam-Room`
-
-(See `src/app.jsx:3905-3906, 28497-28498`.) Plus per-deal ad-hoc rooms
-posted into deal chat as `📹 X started a video call: https://meet.jit.si/...`
-(`src/app.jsx:668, 4033`).
-
-**Gap to fix first:** Nathan and Justin don't have dedicated rooms yet.
-Add `DCC-Nathan-Room` and `DCC-Justin-Room` to the web app room list
-(both spots in `src/app.jsx`) so Nathan/Justin can hop into each
-other's room from web or mobile. Same room URL works for both
-surfaces.
-
-What mobile needs:
-- A "Video" section (or button next to each teammate in a roster) with
-  the two known rooms — tap Eric / tap Anam → join the call.
-- Detect `meet.jit.si/...` URLs in chat messages and render them as a
-  tappable "Join call" button instead of raw URL text.
-
-Implementation: start with `Linking.openURL('https://meet.jit.si/...')`
-which hands off to the Jitsi Meet iOS app (or Safari if not installed).
-Upgrade to in-app WebView or the Jitsi React Native SDK later if the
-handoff feels janky.
+Upgrade later to in-app WebView or the Jitsi React Native SDK if the
+handoff feels janky — but `Linking.openURL` gives us full Jitsi
+features (screen share, raise hand, audio routing) for zero
+maintenance overhead.
 
 ---
 

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
+  Linking,
   RefreshControl,
   StyleSheet,
   Text,
@@ -27,6 +28,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useFocusEffect, useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
+import { VIDEO_ROOMS } from '../../lib/videoRooms'
 
 type Thread = {
   id: string
@@ -130,6 +132,26 @@ export default function TeamScreen() {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Team</Text>
         <Text style={styles.headerSubtitle}>Internal channels + DMs</Text>
+      </View>
+
+      {/* Permanent Jitsi rooms — tap to join. Hands off to the Jitsi Meet
+          iOS app (or Safari) via Linking.openURL. Same URLs the web app
+          exposes, so a tap from mobile drops you in the same room as a
+          web user. */}
+      <View style={styles.roomsBar}>
+        <Text style={styles.roomsLabel}>📹 VIDEO ROOMS</Text>
+        <View style={styles.roomsRow}>
+          {VIDEO_ROOMS.map((room) => (
+            <TouchableOpacity
+              key={room.url}
+              style={styles.roomBtn}
+              activeOpacity={0.7}
+              onPress={() => Linking.openURL(room.url)}
+            >
+              <Text style={styles.roomBtnText}>📹 {room.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       {loading ? (
@@ -265,4 +287,40 @@ const styles = StyleSheet.create({
   rowTime: { color: '#78716c', fontSize: 11, fontWeight: '500' },
   rowMessage: { color: '#a8a29e', fontSize: 13, lineHeight: 18 },
   rowQuiet: { color: '#57534e', fontStyle: 'italic' },
+  roomsBar: {
+    paddingHorizontal: 14,
+    paddingTop: 10,
+    paddingBottom: 8,
+    borderBottomColor: '#1c1917',
+    borderBottomWidth: 1,
+  },
+  roomsLabel: {
+    color: '#57534e',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 6,
+  },
+  roomsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  roomBtn: {
+    flexGrow: 1,
+    flexBasis: '22%',
+    minWidth: 70,
+    backgroundColor: '#15803d',
+    borderColor: '#16a34a',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+  },
+  roomBtnText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
 })
