@@ -144,6 +144,12 @@ infra. Web app already exposes:
 posted into deal chat as `📹 X started a video call: https://meet.jit.si/...`
 (`src/app.jsx:668, 4033`).
 
+**Gap to fix first:** Nathan and Justin don't have dedicated rooms yet.
+Add `DCC-Nathan-Room` and `DCC-Justin-Room` to the web app room list
+(both spots in `src/app.jsx`) so Nathan/Justin can hop into each
+other's room from web or mobile. Same room URL works for both
+surfaces.
+
 What mobile needs:
 - A "Video" section (or button next to each teammate in a roster) with
   the two known rooms — tap Eric / tap Anam → join the call.
