@@ -122,6 +122,15 @@ before the rest of this work, since the data is already arriving.
 
 **[DEFERRED — but parity list above is the spec when we pick it up]**
 
+### Pull-to-refresh on chat + SMS threads
+Pulling down on a team chat channel or an SMS thread should trigger a
+refresh of the messages list (re-fetch latest from Supabase). Standard
+iOS `RefreshControl` UX. Applies to both the team chat surface and the
+deal Comms / inbound SMS thread view. Useful when realtime hasn't fired
+yet or when returning to the app after backgrounding.
+
+**Effort: small. No design needed.**
+
 ---
 
 ## TestFlight
