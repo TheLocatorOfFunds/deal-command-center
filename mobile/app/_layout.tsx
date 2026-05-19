@@ -31,13 +31,13 @@ function ProtectedRouter() {
   // current count too (unused here — the screens read it themselves).
   useUnreadCount(session?.user?.id ?? null)
 
-  // Hide the splash once auth state has resolved (or after 1s, whichever
+  // Hide the splash once auth state has resolved (or after 1.5s, whichever
   // comes later — gives a tiny minimum hold so the splash actually shows).
   useEffect(() => {
     if (loading) return
     const t = setTimeout(() => {
       SplashScreen.hideAsync().catch(() => {})
-    }, 1000)
+    }, 1500)
     return () => clearTimeout(t)
   }, [loading])
 
