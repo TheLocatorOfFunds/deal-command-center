@@ -234,12 +234,16 @@ read it before touching `deals`, `intel_subscriptions`, `intel-sync`, `ohio-inte
 or any of the intel-main-managed `deals.meta` fields.
 
 **Hot rules** (the rest is in the interface doc):
-- intel-main writes these `deals.meta` keys every 30 min via cron — do not manually mutate
-  them in DCC code or SQL: `salePrice`, `isPostAuction`, `estimatedSurplus`,
-  `surplusClaimStatus`, `walkerVerified`, `walkerPlatform`, `grade`, `gradeScore`,
-  `lifecycleStage`, `auctionStatus`, `buyerName`, `judgmentAmount`, `saleDate`,
-  `lastIntelSyncAt`. If you need to change one of them, do it through intel-main and the
-  next cron reconciles within 30 min.
+- intel-main writes these `deals.meta` keys via initial push + 30-min `sync-deal-updates`
+  cron. **Do not manually mutate them in DCC code or SQL** — if you need a change, do it
+  through intel-main and the next cron reconciles within 30 min:
+  `intel_case_id`, `intel_main_url`, `county`, `courtCase`, `grade`, `gradeScore`,
+  `estimatedSurplus`, `salePrice`, `judgmentAmount`, `totalDebt`, `courtAppraisalValue`,
+  `minimumBidAmount`, `saleDate`, `auctionStatus`, `auctionUrl`, `plaintiffName`,
+  `parcelId`, `foreclosureType`, `isPostAuction`, `surplusClaimStatus`, `walkerVerified`,
+  `walkerPlatform`, `lifecycleStage`, `buyerName`, `lastIntelSyncAt`,
+  `sourced_from`/`sourced_at`/`sourced_by`. Full source-of-truth table in
+  `DIRECTOR_DCC_INTERFACE.md`.
 - When intel-main inserts a deal, `tg_ensure_intel_subscription` fires automatically. **Do
   not manually insert into `intel_subscriptions` after a deal insert** — PK-collides and
   rolls the deal back. This is why `ohio-intel-to-deal` EF is currently bypassed.
