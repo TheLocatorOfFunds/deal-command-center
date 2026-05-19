@@ -581,6 +581,41 @@ Use the Claude-in-Chrome MCP tools to QA directly in the browser, not just by re
 - Realtime subscription not firing on edge-function DB writes → use polling fallback (3s interval already in place)
 - `firedRef` Set needed to prevent double-calling edge functions across React re-renders
 
+## Inventory & status outputs — verify before rendering
+
+Anytime a session is asked to produce a "what we have" / "what we use" /
+"what's live" deliverable (third-party tool inventory, edge-function list,
+table list, table-of-contents, status report, pitch material, PDF, deck),
+follow this protocol — it exists because we shipped a wrong inventory
+2026-05-19 by trusting grep over the operator.
+
+1. **Fetch latest first.** Run `git fetch --all` and confirm the working
+   branch is current with `origin/main` *before* doing the inventory.
+   Otherwise you'll describe yesterday's codebase. The 2026-05-19 miss was
+   100% this — Fish Audio + Slybroadcast had landed on main but weren't in
+   the working tree at scan time.
+
+2. **Code-in-repo ≠ in use.** Dead code lingers in the repo after a feature
+   is retired (the `quo-webhook` edge function was sitting unused for
+   weeks). Treat the user as the source of truth for what's live.
+   Presence in `supabase/functions/` proves the file exists, not that it's
+   wired up. Cross-check by:
+   - asking the user explicitly for anything ambiguous
+   - reading `WORKING_ON.md` and recent `session_archives/` for "we retired X"
+   - searching commit messages: `git log --all --oneline | grep -i <topic>`
+
+3. **Draft in chat before rendering to a file.** If the deliverable is
+   becoming a PDF / slide deck / standalone doc, paste the draft content
+   into the chat first, let the user red-pen it, *then* render. Re-rendering
+   a PDF takes 30 seconds; the user catching errors at the chat stage
+   is dramatically cheaper than catching them after they've forwarded the
+   wrong artifact to a partner.
+
+4. **State your sources at the bottom.** End any inventory with a one-line
+   note: "Compiled from grep of `supabase/functions/`, `src/app.jsx`,
+   and the last 30 days of git log. Operator should confirm before
+   sharing externally." This signals confidence level without overpromising.
+
 ## Context preservation — fighting session rot
 
 Claude Code sessions corrupt. Context windows fill up. This section explains how to keep
