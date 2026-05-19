@@ -149,8 +149,14 @@ const computeDealNet = (deal) => {
     const closingDollars = strategy === "wholesale" ? 0 : salePrice * closingPct + (m.flatFee || 0);
     return salePrice - (m.contractPrice || 0) - closingDollars;
   }
-  // surplus / wholesale / rental / other → use projected fee minus attorney fee
-  const projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
+  // surplus / wholesale / rental / other → use projected fee minus attorney fee.
+  // Cascade: estimatedSurplus (hand-entered / intel-main pushed) → estimated_surplus
+  // (snake) → estimatedAvailableEquity (pre-auction GHL key). Director fix
+  // 2026-05-19: top tiles previously only read estimatedSurplus, so post-auction
+  // leads with the equity figure populated showed "TBD" even when the math was
+  // there (e.g. McGruder: salePrice $220K − totalDebt $178K = $41,828 in
+  // estimatedAvailableEquity, estimatedSurplus null).
+  const projectedFee = (((m.estimatedSurplus || m.estimated_surplus || m.estimatedAvailableEquity) || 0) * (m.feePct || 0)) / 100;
   return projectedFee - (m.attorneyFee || 0);
 };
 const csvEscape = (v) => {
@@ -13577,7 +13583,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
     netProfit = salePrice - (m.contractPrice || 0) - closingDollars - totalExpenses;
   }
   let projectedFee = 0;
-  if (!isFlip) projectedFee = ((m.estimatedSurplus || 0) * (m.feePct || 0)) / 100;
+  // See note above on the surplus cascade. Match here so the Our-Fee tile
+  // doesn't show TBD when only estimatedAvailableEquity is populated.
+  if (!isFlip) projectedFee = (((m.estimatedSurplus || m.estimated_surplus || m.estimatedAvailableEquity) || 0) * (m.feePct || 0)) / 100;
 
   const tasksDone = tasks.filter(t => t.done).length;
   const tasksHigh = tasks.filter(t => !t.done && t.priority === "high").length;
@@ -13770,7 +13778,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
             <Metric label={strategy === "wholesale" ? "Wholesale Price" : "List Price"} value={fmt(salePrice)} sub={strategy === "wholesale" ? "Assignment exit" : (deal.status === "listing" ? "Active listing" : "Target")} color="#3b82f6" />
             <Metric label="Projected Net" value={fmt(netProfit)} sub={strategy === "wholesale" ? "As wholesale" : (netProfit >= 60000 ? "Above $60K target" : netProfit >= 0 ? "Positive" : "Negative")} color={netProfit >= 60000 ? "#10b981" : netProfit >= 0 ? "#f59e0b" : "#ef4444"} big />
           </>) : (<>
-            <Metric label="Est. Surplus" value={m.estimatedSurplus > 0 ? fmt(m.estimatedSurplus) : "TBD"} sub={m.county ? cleanCountyName(m.county) + " County" : "—"} color="#3b82f6" />
+            <Metric label="Est. Surplus" value={(() => { const v = m.estimatedSurplus || m.estimated_surplus || m.estimatedAvailableEquity; return v > 0 ? fmt(v) : "TBD"; })()} sub={m.county ? cleanCountyName(m.county) + " County" : "—"} color="#3b82f6" />
             <Metric label="Our Fee" value={projectedFee > 0 ? fmt(projectedFee) : "TBD"} sub={`${m.feePct || 0}% contingency`} color="#10b981" />
             <Metric label="Attorney" value={m.attorney || "Not assigned"} sub={m.courtCase || "No case #"} color="#8b5cf6" />
           </>)}
