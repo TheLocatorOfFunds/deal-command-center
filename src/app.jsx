@@ -3026,8 +3026,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "1fr" : "1fr 320px", gap: 20 }}>
-        <div>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+        <div style={{ minWidth: 0 }}>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
           ) : view === "calls" ? (
