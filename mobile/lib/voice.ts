@@ -34,6 +34,10 @@ let voice: Voice | null = null
 let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let cachedToken: string | null = null
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /**
  * Fetch a fresh Voice access token from the `twilio-token` Edge Function.
  * Caches the token in memory for outbound calls; the SDK manages its own
@@ -66,6 +70,21 @@ async function fetchToken(): Promise<string | null> {
  *
  * Returns `false` if init fails (no auth, no Twilio config, network
  * error). Caller should fall back to the legacy `dial.ts` flow.
+ *
+ * IMPORTANT — PushKit timing race:
+ * Twilio's `voice.register(token)` immediately checks for an iOS PushKit
+ * device token. On cold launches that token isn't ready yet — iOS fires
+ * `pushRegistry:didUpdatePushCredentials:forType:` asynchronously after
+ * APNs completes its handshake (2-30+ seconds). If we call register()
+ * before that, the SDK rejects with "Failed to initialize PushKit device
+ * token" and `voice` ends up null — meaning Twilio never knows this
+ * device exists, inbound CallInvites never arrive, and calls to the
+ * 5440 number fall through to the bridge fallback. We diagnosed this
+ * by streaming idevicesyslog during a real call on 2026-05-20 (Build 8).
+ *
+ * Fix: retry register() with exponential backoff. Most cold launches
+ * succeed within ~5 seconds; we give it up to ~30 seconds before giving
+ * up entirely.
  */
 export async function initVoice(): Promise<boolean> {
   if (Platform.OS !== 'ios') return false // iOS-only for V1
@@ -77,14 +96,44 @@ export async function initVoice(): Promise<boolean> {
 
   try {
     voice = new Voice()
-    // Register the device with Twilio so PushKit pushes deliver inbound
-    // call invites to this device. SDK manages the PushKit token internally.
-    await voice.register(token)
   } catch (e) {
-    console.warn('[voice] init failed', e)
+    console.warn('[voice] new Voice() failed', e)
     voice = null
     return false
   }
+
+  // Wait a beat after constructing Voice so the SDK has time to create
+  // its PKPushRegistry instance and let iOS fire the credential callback.
+  // Without this, the first register() call almost always races and fails.
+  await sleep(1500)
+
+  // Retry register() with backoff. The SDK throws synchronously if its
+  // internal deviceToken is still nil — we retry until iOS catches up.
+  const delays = [0, 1000, 2000, 3000, 5000, 8000, 10000] // ~29s total budget
+  let lastErr: unknown = null
+  for (const wait of delays) {
+    if (wait > 0) await sleep(wait)
+    try {
+      await voice.register(token)
+      lastErr = null
+      break
+    } catch (e) {
+      lastErr = e
+      const msg = e instanceof Error ? e.message : String(e)
+      // Only retry on the specific PushKit-not-ready error; other errors
+      // (network, bad token) won't fix themselves with more waiting.
+      if (!/PushKit device token/i.test(msg)) {
+        break
+      }
+      console.log('[voice] PushKit not ready yet, retrying', { wait, msg })
+    }
+  }
+  if (lastErr) {
+    console.warn('[voice] init failed after retries', lastErr)
+    voice = null
+    return false
+  }
+  console.log('[voice] registered with Twilio (PushKit ready)')
 
   // Refresh ~3 min before 12-hour token expires
   scheduleTokenRefresh(12 * 60 * 60 * 1000 - 3 * 60 * 1000)
@@ -129,10 +178,20 @@ function scheduleTokenRefresh(ms: number) {
     const fresh = await fetchToken()
     if (fresh) {
       cachedToken = fresh
-      try {
-        await voice.register(fresh)
-      } catch (e) {
-        console.warn('[voice] token refresh re-register failed', e)
+      // Same retry pattern as initVoice — see PushKit timing race notes there.
+      const delays = [0, 1000, 2000, 5000]
+      for (const wait of delays) {
+        if (wait > 0) await sleep(wait)
+        try {
+          await voice.register(fresh)
+          break
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          if (!/PushKit device token/i.test(msg)) {
+            console.warn('[voice] token refresh re-register failed', e)
+            break
+          }
+        }
       }
     }
     scheduleTokenRefresh(12 * 60 * 60 * 1000 - 3 * 60 * 1000)
