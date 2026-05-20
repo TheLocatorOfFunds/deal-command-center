@@ -11660,10 +11660,55 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   const [prepQueueExpanded, setPrepQueueExpanded] = useState(false);
   const PREP_QUEUE_COLLAPSED_LIMIT = 3;
 
+  // Deceased homeowners deliberately have NO homeowner contact (the Lindon
+  // Phillips / Leroy Turner Jr near-miss rule — we never want to text a
+  // deceased person), so deal.meta.homeownerPhone stays NULL and prepMissing
+  // flagged "phone" forever. Eric hit this on Jimmy Wells, then again on
+  // Jacqueline Cain (2026-05-20). For deceased deals the reachable number
+  // lives on a relative/estate contact instead. This Set holds the IDs of
+  // deceased prep-queue deals that have ≥1 relative contact with a phone.
+  const [deceasedReachable, setDeceasedReachable] = useState(new Set());
+
   const prepQueueAll = deals
     .filter(d => isLeadStatus(d) && !d.prepped_at && !["closed", "dead", "recovered"].includes(d.status))
     .filter(d => !recentlyPrepped.has(d.id))
     .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+
+  // For the deceased deals in the prep queue, look up whether any linked
+  // relative/estate contact carries a phone. We only run this for deals that
+  // are both (a) deceased and (b) currently in the prep queue, so it's a
+  // small, targeted query keyed on a stable id list.
+  const deceasedPrepKey = prepQueueAll
+    .filter(d => isDeceased(d)).map(d => d.id).sort().join(',');
+  useEffect(() => {
+    if (!deceasedPrepKey) { setDeceasedReachable(new Set()); return; }
+    let cancelled = false;
+    (async () => {
+      // Match relative / estate roles against BOTH the per-link relationship
+      // AND the contact's kind. Real data shows relatives are usually tagged
+      // via contacts.kind='family' with a NULL contact_deals.relationship
+      // (e.g. Jacqueline Cain's Sherri Ford / Mark Stevenson / Valerie
+      // Morrison), and free-text labels like "Daughter of Brian Allen" or
+      // "Son-in-Law" appear too — so we substring-match. The pattern excludes
+      // professional links (attorney/title/vendor/buyer/tenant/team) so their
+      // phone never counts as the homeowner-side reachable number.
+      const RELATIVE_RE = /(family|relative|next of kin|\bkin\b|spouse|husband|wife|child|children|daughter|son|stepchild|grandchild|parent|mother|father|grandparent|grandmother|grandfather|sibling|brother|sister|cousin|niece|nephew|heir|estate|executor|administrator|beneficiary|neighbou?r|in-law)/i;
+      const { data } = await sb.from('contact_deals')
+        .select('deal_id, relationship, contacts(phone, kind)')
+        .in('deal_id', deceasedPrepKey.split(','));
+      if (cancelled || !data) return;
+      const s = new Set();
+      for (const row of data) {
+        const c = row.contacts || {};
+        const phone = String(c.phone || '').trim();
+        if (!phone) continue;
+        if (RELATIVE_RE.test(String(row.relationship || '')) ||
+            RELATIVE_RE.test(String(c.kind || ''))) s.add(row.deal_id);
+      }
+      setDeceasedReachable(s);
+    })();
+    return () => { cancelled = true; };
+  }, [deceasedPrepKey]);
 
   // What's shown depends on the collapse state. Default = first 3.
   const prepQueueVisible = prepQueueExpanded
@@ -11697,7 +11742,13 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
     const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
 
     const missing = [];
-    if (!dealMetaPhone(m)) missing.push('phone');
+    if (!dealMetaPhone(m)) {
+      // Deceased homeowners have no homeowner contact by design, so the
+      // reachable number is a relative/estate contact (deceasedReachable).
+      // Accept that as satisfying "phone" — note markPrepped's auto-queue
+      // still gates on the meta phone, so this never auto-texts the deceased.
+      if (!(isDeceased(d) && deceasedReachable.has(d.id))) missing.push('phone');
+    }
     if (!d.lead_tier) missing.push('tier');
     if (!m.county) missing.push('county');
     if (!m.courtCase) missing.push('case #');
