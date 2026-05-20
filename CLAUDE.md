@@ -2,6 +2,27 @@
 
 This repo is a lead/deal tracker for **RefundLocators** (flips + surplus fund cases). Read this file before making changes — it has the stuff that isn't obvious from reading the code.
 
+## Backlog: file feature requests + bugs as GitHub Issues (REQUIRED)
+
+When Justin or Nathan says *"I want to fix/add/change X"* and the work
+isn't going to ship in the current session, **file a GitHub issue** at
+`gh issue create` immediately. Don't just stuff it into the in-session
+todo list — those evaporate when the session ends and the next session
+starts blind.
+
+The convention:
+- `gh issue create --title "<surface>: <verb> <noun>"` — e.g. `Mobile: notification badges don't clear after viewing`
+- Always attach a surface label: `mobile` (DCC iOS app), `web` (DCC web app), or `castle` / `ohio-intel` if that surface
+- Add `bug` or `enhancement`
+- Include a repro path (for bugs) or acceptance criteria (for features)
+- Include implementation hints if you have any — file paths, hook names, table names
+- Always include the date + who reported it, so future sessions can ping back
+
+The backlog lives at https://github.com/TheLocatorOfFunds/deal-command-center/issues.
+Triaging, prioritizing, and closing issues is the right way to track
+what's getting done across sessions. PRs should reference the issue
+they close with `Closes #N` in the body.
+
 ## Session start and end ritual (REQUIRED)
 
 This repo is co-coded by Justin and Nathan, each running their own Claude Code sessions.
