@@ -28,6 +28,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack } from 'expo-router'
+import Constants from 'expo-constants'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { registerForPushAsync } from '../lib/push'
@@ -417,7 +418,23 @@ export default function SettingsScreen() {
                 <Text style={styles.signOutText}>Sign out</Text>
               </TouchableOpacity>
 
-              <Text style={styles.versionText}>DCC mobile · 0.1.0</Text>
+              {/* Build identity — pulled from expo-constants at runtime so
+                  it always reflects the actual installed binary, not a
+                  hardcoded number. Useful for "did I get the latest
+                  TestFlight build?" checks.
+
+                  expoConfig.version = the human version we set in app.json
+                  nativeBuildVersion = the iOS CFBundleVersion that EAS
+                    auto-increments on every build (so build 3, 4, 5…).
+                    On Expo Go / dev client it may be missing — fall back
+                    to the ios.buildNumber from config. */}
+              <Text style={styles.versionText}>
+                {`DCC mobile · v${Constants.expoConfig?.version ?? '?'} (build ${
+                  Constants.nativeBuildVersion ??
+                  Constants.expoConfig?.ios?.buildNumber ??
+                  '?'
+                })`}
+              </Text>
             </>
           )}
         </ScrollView>
