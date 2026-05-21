@@ -186,6 +186,15 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
   `prepped_at`). Single readiness source of truth = module-level `leadMissing()`
   (the Today→Prep Queue now delegates to it too). QA'd live: filter, toggle
   (mark+revert), badges, 0 console errors.
+- **Lead contact-status + Log-outreach shipped (`da64ce2`):** New Leads cards now
+  show a contact badge (🔴 Not contacted / 📞 Worked Xd ago + outcome / ⏰ Follow-up
+  due, overdue-aware) + a 2nd filter row (Contact status: All / Not contacted /
+  Worked / Follow-up due) + a one-click "📞 Log outreach" button that opens the
+  existing `LogActivityForm` in a modal (call/text/email/note/meeting + outcome +
+  follow-up date, without leaving the list). Pure surfacing of the existing
+  `last_contacted_at` / `log_deal_activity` system — no new backend. Reads latest
+  outcome + next follow-up from `activity` per lead. **Justin:** merged cleanly
+  with your #183 team-chat work (app.js rebuilt). QA'd live, 0 feature errors.
 
 **🚨 HEADS-UP FOR JUSTIN — Mac bridge key rotation (this GATES the legacy-key disable)**
 
