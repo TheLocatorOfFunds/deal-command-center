@@ -220,6 +220,34 @@ const dealMetaPhone = (meta) => {
 // kanban, detail header, compose flows, and the prep-queue gate.
 const isDeceased = (deal) => !!(deal?.death_signal || deal?.meta?.deceased);
 
+// A lead is "Ready for Outreach" once it's been vetted — phone, tier, county,
+// case #, URL, surplus est all in place. `prepped_at` is the canonical flag
+// (it also gates the bulk-outreach button); `meta.verified` is set alongside
+// it (the legacy ✓ CLEAN signal — merged 2026-05-21 so there's one status).
+const isReadyForOutreach = (deal) => !!(deal?.prepped_at || deal?.meta?.verified);
+
+// Shared lead-readiness check — what a surplus lead still needs before it's
+// Ready for Outreach. SINGLE SOURCE OF TRUTH used by BOTH the Today→Prep Queue
+// gate AND the Leads-list "Mark Ready" button, so the two can't drift (the
+// same drift class that caused the Charlotte Morrow "missing: phone" bug).
+// `relativePhoneOk` = a deceased lead has a relative/estate contact with a
+// phone (computed by the caller, which has the contact data).
+function leadMissing(deal, relativePhoneOk = false) {
+  const m = deal?.meta || {};
+  const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
+  const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
+  const missing = [];
+  if (!dealMetaPhone(m) && !(isDeceased(deal) && relativePhoneOk)) missing.push('phone');
+  if (!deal?.lead_tier) missing.push('tier');
+  if (!m.county) missing.push('county');
+  if (!m.courtCase) missing.push('case #');
+  if (isPostSale) {
+    if (!deal?.refundlocators_token) missing.push('URL');
+    if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
+  }
+  return missing;
+}
+
 // What status to bump to when "converting" a lead → engaged deal.
 const POST_ENGAGEMENT_STATUS = { flip: "under-contract", surplus: "signed" };
 const STATUS_COLORS = {
@@ -2740,6 +2768,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // 'all' = show everything, 'A'|'B'|'C' = only that tier, 'untiered' =
   // deals with no lead_tier set yet (the long tail of older imports).
   const [tierFilter, setTierFilter] = useState("all");
+  // New Leads → Outreach-readiness sub-filter (all / needs cleaning / ready).
+  const [readyFilter, setReadyFilter] = useState("all");
+  // Relative/estate-phone presence for DECEASED New Leads in view, so the card
+  // "missing: phone" warning is accurate (deceased leads have no homeowner
+  // contact by design — the reachable number lives on a relative).
+  const [deceasedRelPhone, setDeceasedRelPhone] = useState(new Set());
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
   // Soft-delete admin recovery modal (added 2026-05-07).
   const [showDeletedLeads, setShowDeletedLeads] = useState(false);
@@ -2794,11 +2828,43 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       const t = (d.lead_tier || '').toUpperCase();
       if (tierFilter === "untiered" ? ['A','B','C'].includes(t) : t !== tierFilter) return false;
     }
+    if (view === "leads-phase" && readyFilter !== "all") {
+      const r = isReadyForOutreach(d);
+      if (readyFilter === "ready" && !r) return false;
+      if (readyFilter === "needs" && r) return false;
+    }
     if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
   const surplus = visible.filter(d => d.type === "surplus");
+
+  // New Leads readiness counts + relative-phone fetch for deceased leads.
+  const surplusLeads = leadDeals.filter(d => d.type === "surplus");
+  const readyCount = surplusLeads.filter(isReadyForOutreach).length;
+  const needsCount = surplusLeads.length - readyCount;
+  const deceasedNeedingRel = leadDeals
+    .filter(d => d.type === "surplus" && isDeceased(d) && !dealMetaPhone(d.meta))
+    .map(d => d.id).sort().join(',');
+  useEffect(() => {
+    if (!deceasedNeedingRel) { setDeceasedRelPhone(new Set()); return; }
+    let cancelled = false;
+    (async () => {
+      const RE = /(family|relative|spouse|husband|wife|child|children|daughter|son|parent|mother|father|sibling|brother|sister|cousin|niece|nephew|grandchild|heir|estate|executor|administrator|beneficiary|neighbou?r|in-law)/i;
+      const { data } = await sb.from('contact_deals')
+        .select('deal_id, relationship, contacts(phone, kind)')
+        .in('deal_id', deceasedNeedingRel.split(','));
+      if (cancelled || !data) return;
+      const s = new Set();
+      for (const row of data) {
+        const c = row.contacts || {};
+        const phone = String(c.phone || '').trim();
+        if (phone && (RE.test(String(row.relationship || '')) || RE.test(String(c.kind || '')))) s.add(row.deal_id);
+      }
+      setDeceasedRelPhone(s);
+    })();
+    return () => { cancelled = true; };
+  }, [deceasedNeedingRel]);
 
   const year = new Date().getFullYear();
   const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
@@ -3095,6 +3161,20 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           ) : (
             <div>
+              {view === "leads-phase" && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: 2 }}>Outreach readiness</span>
+                  {[["all", `All (${surplusLeads.length})`, "#a8a29e"], ["needs", `🌱 Needs cleaning (${needsCount})`, "#fbbf24"], ["ready", `✅ Ready for Outreach (${readyCount})`, "#5eead4"]].map(opt => (
+                    <button key={opt[0]} onClick={() => setReadyFilter(opt[0])} style={{
+                      background: readyFilter === opt[0] ? "#292524" : "transparent",
+                      color: readyFilter === opt[0] ? opt[2] : "#78716c",
+                      border: "1px solid " + (readyFilter === opt[0] ? opt[2] : "#44403c"),
+                      borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 700,
+                      cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.02em", whiteSpace: "nowrap",
+                    }}>{opt[1]}</button>
+                  ))}
+                </div>
+              )}
               {flips.length > 0 && (<>
                 <SectionLabel icon="🏠" label={view === "archive" ? "Closed Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
@@ -3104,7 +3184,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {surplus.length > 0 && (<>
                 <SectionLabel icon="💰" label={view === "archive" ? "Closed Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
@@ -3314,7 +3394,7 @@ function DealStatusBadges({ deal }) {
   const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
   const isPostAuction = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
   const isPreAuction = !isPostAuction && (!!deal?.is_30dts || (m.saleDate && new Date(m.saleDate) > new Date()));
-  const verified = !!m.verified;
+  const ready = isReadyForOutreach(deal);
 
   const Pill = ({ label, title, bg, fg, border, mono = false }) => (
     <span title={title} style={{
@@ -3336,7 +3416,7 @@ function DealStatusBadges({ deal }) {
       <DeceasedBadge deal={deal} size="sm" />
       {isPostAuction && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
       {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
-      {verified && <Pill label="✓ CLEAN" title="Verified — Eric has cleaned this lead's data" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
+      {ready && <Pill label="✅ READY" title="Ready for Outreach — vetted: phone, contacts, and personalized URL all in place" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
       {cosDate && <Pill label="💰 SOS" title={`Surplus On Sale — confirmation of sale ${cosDate}; surplus dollar amount is locked, not estimated`} bg="#78350f" fg="#fbbf24" border="#d97706" />}
     </span>
   );
@@ -11736,28 +11816,11 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   // Net: pre-sale leads (NOD, 30DTS, scheduled, unclassified) only
   // need phone/tier/county/case#. URL + surplus est are gated on a
   // confirmed-sold signal (cosDate or explicit isPostAuction flag).
-  const prepMissing = (d) => {
-    const m = d.meta || {};
-    const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
-    const isPostSale = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
-
-    const missing = [];
-    if (!dealMetaPhone(m)) {
-      // Deceased homeowners have no homeowner contact by design, so the
-      // reachable number is a relative/estate contact (deceasedReachable).
-      // Accept that as satisfying "phone" — note markPrepped's auto-queue
-      // still gates on the meta phone, so this never auto-texts the deceased.
-      if (!(isDeceased(d) && deceasedReachable.has(d.id))) missing.push('phone');
-    }
-    if (!d.lead_tier) missing.push('tier');
-    if (!m.county) missing.push('county');
-    if (!m.courtCase) missing.push('case #');
-    if (isPostSale) {
-      if (!d.refundlocators_token) missing.push('URL');
-      if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
-    }
-    return missing;
-  };
+  // Delegates to the shared leadMissing() so the Prep Queue and the Leads-list
+  // "Mark Ready" button stay in lockstep. deceasedReachable supplies the
+  // relative/estate-phone signal for deceased leads (markPrepped's auto-queue
+  // still gates on the meta phone, so this never auto-texts the deceased).
+  const prepMissing = (d) => leadMissing(d, deceasedReachable.has(d.id));
 
   const markPrepped = async (dealId) => {
     // Optimistic: pull it out of the visible queue immediately.
@@ -12376,13 +12439,30 @@ function MiniDocketPulse({ dealId }) {
   );
 }
 
-function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
+function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = false }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const dl = deadlineInfo(m.deadline || deal.deadline);
   const filedDays = daysSince(m.filed_at || deal.filed_at);
   const flagged = m.flagged;
   const isClosed = ["closed", "recovered", "dead"].includes(deal.status);
+  // Ready-for-Outreach state (merged prepped_at + meta.verified). Eric/Innam
+  // vet leads right from the card; "allow with a warning" — clickable even
+  // when incomplete, but it surfaces what's still missing.
+  const [ready, setReady] = React.useState(isReadyForOutreach(deal));
+  const [savingReady, setSavingReady] = React.useState(false);
+  const missing = leadMissing(deal, relativePhoneOk);
+  const toggleReady = async (val) => {
+    if (savingReady) return;
+    setSavingReady(true);
+    setReady(val); // optimistic
+    const { error } = await sb.from('deals').update({
+      prepped_at: val ? new Date().toISOString() : null,
+      meta: { ...(deal.meta || {}), verified: val },
+    }).eq('id', deal.id);
+    if (error) { setReady(!val); alert('Could not update Ready status: ' + error.message); }
+    setSavingReady(false);
+  };
   return (
     <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, paddingTop: 40, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
       <div style={{ position: "absolute", top: 10, left: 18, right: 70, display: "flex", gap: 6, alignItems: "center" }}>
@@ -12412,6 +12492,33 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag }) {
         </div>
       )}
       {!isClosed && <MiniDocketPulse dealId={deal.id} />}
+      {!isClosed && (
+        <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {ready ? (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 10, fontWeight: 800, color: "#5eead4", background: "#134e4a", border: "1px solid #0d9488", borderRadius: 5, padding: "5px 10px", letterSpacing: "0.04em" }}>
+              ✅ READY FOR OUTREACH
+              <span onClick={e => { e.stopPropagation(); toggleReady(false); }} title="Move back to needs-cleaning" style={{ cursor: "pointer", opacity: 0.65, fontWeight: 700, fontSize: 12 }}>×</span>
+            </span>
+          ) : (
+            <button
+              onClick={e => { e.stopPropagation(); toggleReady(true); }}
+              disabled={savingReady}
+              title={missing.length ? `Marking ready, but still missing: ${missing.join(", ")}` : "Everything's in place — mark Ready for Outreach"}
+              style={{
+                background: missing.length === 0 ? "#065f46" : "transparent",
+                color: missing.length === 0 ? "#6ee7b7" : "#fbbf24",
+                border: "1px solid " + (missing.length === 0 ? "#10b981" : "#a16207"),
+                borderRadius: 5, padding: "5px 11px", fontSize: 10, fontWeight: 700,
+                letterSpacing: "0.04em", cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap", flexShrink: 0,
+              }}>
+              ✓ Mark Ready
+            </button>
+          )}
+          {!ready && missing.length > 0 && (
+            <span style={{ fontSize: 9, color: "#a16207", letterSpacing: "0.03em" }}>missing: {missing.join(", ")}</span>
+          )}
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
         {dl.label && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: dl.overdue ? "#7f1d1d" : dl.soon ? "#78350f" : "#1c1917", color: dl.overdue ? "#fca5a5" : dl.soon ? "#fbbf24" : "#a8a29e", border: `1px solid ${dl.overdue ? "#b91c1c" : dl.soon ? "#d97706" : "#44403c"}`, letterSpacing: "0.06em", textTransform: "uppercase" }}>{dl.label}</span>}
         {(m.lead_source || deal.lead_source) && <span style={{ fontSize: 9, fontWeight: 600, padding: "3px 8px", borderRadius: 4, background: "#1c1917", color: "#a8a29e", border: "1px solid #44403c", letterSpacing: "0.06em", textTransform: "uppercase" }}>{m.lead_source || deal.lead_source}</span>}
