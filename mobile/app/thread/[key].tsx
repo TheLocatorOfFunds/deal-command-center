@@ -32,6 +32,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { extractJitsiUrls } from '../../lib/videoRooms'
+import { markDealRead } from '../../lib/notifications'
 
 type Msg = {
   id: string
@@ -84,6 +85,20 @@ export default function ThreadScreen() {
     [key],
   )
   const parts = useMemo(() => parseThreadKey(decoded), [decoded])
+
+  // Clear notifications for the underlying deal when the user opens
+  // this SMS thread (#173). markDealRead stamps read_at on every
+  // notification pointing at this deal — including inbound_sms ones
+  // tied to this thread. Not surgical (it clears other notification
+  // kinds for the same deal too) but the right trade for now —
+  // opening any thread on a deal is implicit acknowledgment that the
+  // user has the deal in front of them. mark_thread_read RPC is
+  // UUID-typed so it can't accept SMS thread_keys; using deal-level
+  // clearing instead.
+  useEffect(() => {
+    if (!parts.dealId) return
+    markDealRead(parts.dealId).catch(() => {})
+  }, [parts.dealId])
 
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [contact, setContact] = useState<ContactRow | null>(null)
