@@ -2776,6 +2776,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // "missing: phone" warning is accurate (deceased leads have no homeowner
   // contact by design — the reachable number lives on a relative).
   const [deceasedRelPhone, setDeceasedRelPhone] = useState(new Set());
+  // New Leads → contact status: latest outcome + next follow-up per lead, the
+  // contact sub-filter, the inline Log-outreach modal, and a refetch nonce.
+  const [contactMap, setContactMap] = useState({});
+  const [contactFilter, setContactFilter] = useState("all");
+  const [logDeal, setLogDeal] = useState(null);
+  const [contactRefetch, setContactRefetch] = useState(0);
   const [layoutMode, setLayoutMode] = useState("cards"); // "cards" | "kanban"
   // Soft-delete admin recovery modal (added 2026-05-07).
   const [showDeletedLeads, setShowDeletedLeads] = useState(false);
@@ -2835,6 +2841,15 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       if (readyFilter === "ready" && !r) return false;
       if (readyFilter === "needs" && r) return false;
     }
+    if (view === "leads-phase" && contactFilter !== "all") {
+      const lc = !!d.last_contacted_at;
+      const ce = contactMap[d.id];
+      const fu = ce && ce.followupDate;
+      const t = new Date().toISOString().slice(0, 10);
+      if (contactFilter === "none" && lc) return false;
+      if (contactFilter === "worked" && !lc) return false;
+      if (contactFilter === "followup" && !(fu && fu <= t)) return false;
+    }
     if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
   });
@@ -2867,6 +2882,35 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     })();
     return () => { cancelled = true; };
   }, [deceasedNeedingRel]);
+
+  // Contact status (latest outcome + next follow-up) for the New Leads.
+  const leadIdsKey = surplusLeads.map(d => d.id).sort().join(',');
+  useEffect(() => {
+    if (view !== "leads-phase" || !leadIdsKey) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await sb.from('activity')
+        .select('deal_id, activity_type, outcome, next_followup_date, created_at')
+        .in('deal_id', leadIdsKey.split(','))
+        .order('created_at', { ascending: false });
+      if (cancelled || !data) return;
+      const map = {};
+      for (const a of data) {
+        const e = map[a.deal_id] || {};
+        if (!('outcome' in e) && ['call','text','sms','email','meeting'].includes(a.activity_type)) {
+          e.outcome = a.outcome || a.activity_type;
+        }
+        if (!('followupDate' in e) && a.next_followup_date) e.followupDate = a.next_followup_date;
+        map[a.deal_id] = e;
+      }
+      setContactMap(map);
+    })();
+    return () => { cancelled = true; };
+  }, [leadIdsKey, view, contactRefetch]);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const notContactedCount = surplusLeads.filter(d => !d.last_contacted_at).length;
+  const workedCount = surplusLeads.filter(d => d.last_contacted_at).length;
+  const followupDueCount = surplusLeads.filter(d => { const fu = contactMap[d.id] && contactMap[d.id].followupDate; return fu && fu <= todayStr; }).length;
 
   const year = new Date().getFullYear();
   const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
@@ -3177,6 +3221,31 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                   ))}
                 </div>
               )}
+              {view === "leads-phase" && (
+                <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: 2 }}>Contact status</span>
+                  {[["all", "All", "#a8a29e"], ["none", `🔴 Not contacted (${notContactedCount})`, "#fca5a5"], ["worked", `📞 Worked (${workedCount})`, "#93c5fd"], ["followup", `⏰ Follow-up due (${followupDueCount})`, "#fcd34d"]].map(opt => (
+                    <button key={opt[0]} onClick={() => setContactFilter(opt[0])} style={{
+                      background: contactFilter === opt[0] ? "#292524" : "transparent",
+                      color: contactFilter === opt[0] ? opt[2] : "#78716c",
+                      border: "1px solid " + (contactFilter === opt[0] ? opt[2] : "#44403c"),
+                      borderRadius: 6, padding: "5px 12px", fontSize: 11, fontWeight: 700,
+                      cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.02em", whiteSpace: "nowrap",
+                    }}>{opt[1]}</button>
+                  ))}
+                </div>
+              )}
+              {logDeal && (
+                <div onClick={() => setLogDeal(null)} style={{ position: "fixed", inset: 0, background: "#000000bb", zIndex: 10000, display: "flex", alignItems: "flex-start", justifyContent: "center", paddingTop: 70 }}>
+                  <div onClick={e => e.stopPropagation()} style={{ background: "#0c0a09", border: "1px solid #44403c", borderRadius: 12, padding: 20, width: "min(560px, 92vw)", maxHeight: "82vh", overflowY: "auto" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>📞 Log outreach — {logDeal.name}</div>
+                      <button onClick={() => setLogDeal(null)} style={{ ...btnGhost, fontSize: 16, padding: "2px 10px" }}>×</button>
+                    </div>
+                    <LogActivityForm dealId={logDeal.id} onLogged={() => { setLogDeal(null); setContactRefetch(n => n + 1); }} />
+                  </div>
+                </div>
+              )}
               {flips.length > 0 && (<>
                 <SectionLabel icon="🏠" label={view === "archive" ? "Closed Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
@@ -3186,7 +3255,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               {surplus.length > 0 && (<>
                 <SectionLabel icon="💰" label={view === "archive" ? "Closed Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} />)}
+                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
@@ -12847,7 +12916,7 @@ function MiniDocketPulse({ dealId }) {
   );
 }
 
-function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = false }) {
+function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = false, contactExtra = {}, onLog }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const dl = deadlineInfo(m.deadline || deal.deadline);
@@ -12925,6 +12994,26 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
           {!ready && missing.length > 0 && (
             <span style={{ fontSize: 9, color: "#a16207", letterSpacing: "0.03em" }}>missing: {missing.join(", ")}</span>
           )}
+        </div>
+      )}
+      {!isClosed && (
+        <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {(() => {
+            const base = { fontSize: 9, fontWeight: 700, padding: "4px 9px", borderRadius: 5, letterSpacing: "0.04em", whiteSpace: "nowrap" };
+            const fu = contactExtra.followupDate;
+            const lc = deal.last_contacted_at;
+            if (fu) {
+              const due = new Date(fu + "T00:00:00");
+              const overdue = due < new Date(new Date().toDateString());
+              return <span style={{ ...base, color: overdue ? "#fca5a5" : "#fcd34d", border: "1px solid " + (overdue ? "#b91c1c" : "#a16207"), background: overdue ? "#7f1d1d22" : "#78350f22" }}>⏰ Follow-up {overdue ? "overdue · " : ""}{due.toLocaleDateString(undefined, { month: "short", day: "numeric" })}</span>;
+            }
+            if (lc) {
+              const d = daysSince(lc);
+              return <span style={{ ...base, color: "#93c5fd", border: "1px solid #1e3a8a", background: "#1e3a8a22" }}>📞 Worked {d === 0 ? "today" : d + "d ago"}{contactExtra.outcome ? ` · ${contactExtra.outcome}` : ""}</span>;
+            }
+            return <span style={{ ...base, color: "#fca5a5", border: "1px solid #7f1d1d", background: "#7f1d1d22" }}>🔴 Not contacted</span>;
+          })()}
+          {onLog && <button onClick={e => { e.stopPropagation(); onLog(deal); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 9px", color: "#a8a29e" }}>📞 Log outreach</button>}
         </div>
       )}
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 12, alignItems: "center" }}>
