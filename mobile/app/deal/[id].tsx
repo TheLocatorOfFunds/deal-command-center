@@ -33,6 +33,7 @@ import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
+import { markDealRead } from '../../lib/notifications'
 import { OutreachDraftPanel } from '../../components/OutreachDraftPanel'
 
 type Deal = {
@@ -129,6 +130,17 @@ export default function DealDetailScreen() {
   const router = useRouter()
   const { session } = useAuth()
   const { id } = useLocalSearchParams<{ id: string }>()
+
+  // Clear notifications for this deal when the user opens it. Wires
+  // up the missing badge-dismissal that was issue #173 — landing on
+  // a deal stamps read_at on every notification pointing at this deal
+  // (inbound SMS, docket events, status changes, missed calls), which
+  // drops the unread count + the iOS app badge + per-deal badge dots.
+  useEffect(() => {
+    if (!id || !session?.user?.id) return
+    markDealRead(id).catch(() => {})
+  }, [id, session?.user?.id])
+
   const [deal, setDeal] = useState<Deal | null>(null)
   const [vendors, setVendors] = useState<Vendor[]>([])
   const [contactLinks, setContactLinks] = useState<ContactLink[]>([])

@@ -50,6 +50,7 @@ import { Stack, useLocalSearchParams } from 'expo-router'
 import { supabase } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { extractJitsiUrls } from '../../lib/videoRooms'
+import { markThreadRead } from '../../lib/notifications'
 import { GifPicker, type GiphyAttachment } from '../../components/GifPicker'
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '🎉', '🔥', '✅', '👀', '🤔']
@@ -107,6 +108,16 @@ export default function TeamThreadScreen() {
   const userId = session?.user?.id ?? null
   const listRef = useRef<FlatList<Msg>>(null)
   const composerRef = useRef<TextInput>(null)
+
+  // Clear notifications for this thread when the user lands on it.
+  // The mark_thread_read RPC stamps read_at on every notification row
+  // pointing at this thread, which drops it from the unread count + the
+  // tab badge + the iOS app icon badge via realtime. Fixes #173 — until
+  // this was wired, opening a thread never dismissed the badge.
+  useEffect(() => {
+    if (!id || !userId) return
+    markThreadRead(id).catch(() => {})
+  }, [id, userId])
 
   const [thread, setThread] = useState<Thread | null>(null)
   const [msgs, setMsgs] = useState<Msg[]>([])
