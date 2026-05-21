@@ -167,6 +167,15 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
   - `82cc5e1` — `main-grid` `1fr` track blowout fixed (`minWidth:0` +
     `minmax(0,1fr)`); expanding the Prep Queue no longer forces a horizontal
     page scroll. Verified live at 1194px. Latent layout bug — applies to all views.
+- **IN stale-lead cleanup (Director coordination item — DONE):** dead-statused all
+  90 stale Indiana surplus leads from the Director's 2026-05-20 re-walk kill list
+  (49 confirmed-dead `already_claimed` + 41 `unverified`/revivable) — cleared from
+  Eric's active prep queue. Cross-checked all 90 live county/case# against the
+  kill-list CSV (`indiana-pipeline/.../DCC_kill_list.csv`) — no ID collisions; all
+  90 were `new-lead` (unworked). Used uniform `status='dead'` (soft-delete reason
+  allowlist didn't fit either disposition). Reversible: set back to `new-lead`.
+  Archive/park distinction preserved in `meta.surplusClaimStatus`; the 41
+  `unverified` ones revive when their clerk records-request lands.
 
 **🚨 HEADS-UP FOR JUSTIN — Mac bridge key rotation (this GATES the legacy-key disable)**
 
