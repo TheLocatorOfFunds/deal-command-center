@@ -176,6 +176,16 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
   allowlist didn't fit either disposition). Reversible: set back to `new-lead`.
   Archive/park distinction preserved in `meta.surplusClaimStatus`; the 41
   `unverified` ones revive when their clerk records-request lands.
+- **"Ready for Outreach" status shipped (`900b025`):** New Leads view now has an
+  Outreach-readiness filter (All / 🌱 Needs cleaning / ✅ Ready) + a per-card
+  "✓ Mark Ready" button (allow-with-warning — clickable when incomplete, shows
+  what's missing) + "✅ READY" badge. Merged the two prior signals — `prepped_at`
+  + `meta.verified` — into ONE status so Eric/Innam vet from the leads list and
+  the whole team sees cleaned-vs-raw at a glance. **Justin:** the old `✓ CLEAN`
+  badge is now `✅ READY` (same `meta.verified` flag, now set together with
+  `prepped_at`). Single readiness source of truth = module-level `leadMissing()`
+  (the Today→Prep Queue now delegates to it too). QA'd live: filter, toggle
+  (mark+revert), badges, 0 console errors.
 
 **🚨 HEADS-UP FOR JUSTIN — Mac bridge key rotation (this GATES the legacy-key disable)**
 
