@@ -1292,6 +1292,7 @@ function DealCommandCenter({ session, profile }) {
     const senderName = sender?.display_name || sender?.name || 'Someone';
     let threadLabel;
     if (thread.thread_type === 'dm') threadLabel = 'sent you a DM';
+    else if (thread.thread_type === 'group') threadLabel = `in 👥 ${thread.title || 'a group'}`;
     else if (thread.thread_type === 'deal') threadLabel = `in ${thread.title || 'a deal thread'}`;
     else threadLabel = `in #${thread.title || 'channel'}`;
     setChatToasts(prev => {
@@ -2511,6 +2512,7 @@ function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMar
         if (t.thread_type === 'lauren_dm') return '🤖 Lauren';
         if (t.thread_type === 'lauren_room') return '🤖 ' + (t.title || 'Lauren room');
         if (t.thread_type === 'dm') return 'DM';
+        if (t.thread_type === 'group') return `👥 ${t.title || 'group'}`;
         if (t.thread_type === 'channel') return `#${t.title || 'channel'}`;
         return t.title || 'thread';
       };
@@ -4007,7 +4009,13 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
               Showing them here creates confusing duplicates; they auto-recreate
               on every TeamView mount so deleting them is futile. */}
           {threads.filter(t => t.thread_type !== 'lauren_dm' && t.thread_type !== 'lauren_room').map(t => {
-            const icon = t.thread_type === 'dm' ? '💬' : t.thread_type === 'deal' ? '🏠' : '#';
+            // Icon mapping: group threads get the 👥 (people) emoji so
+            // they're visually distinct from public channels (#) and
+            // DMs (💬). Per #176, ad-hoc multi-participant chats.
+            const icon = t.thread_type === 'dm' ? '💬'
+              : t.thread_type === 'deal' ? '🏠'
+              : t.thread_type === 'group' ? '👥'
+              : '#';
             let label = t.title;
             if (t.thread_type === 'dm') {
               const others = (participantsByThreadId[t.id] || []).filter(uid => uid !== me.id);
@@ -4805,13 +4813,24 @@ const confirm_ = (msg) => window.confirm(msg);
 
 // Modal for creating a new thread (channel / DM / per-deal).
 function NewThreadModal({ onClose, profilesById, me, onCreated }) {
-  const [kind, setKind] = useState('channel');  // channel | dm
+  const [kind, setKind] = useState('channel');  // channel | dm | group
   const [name, setName] = useState('');
   const [otherUserId, setOtherUserId] = useState('');
+  // Group chats: a Set of selected teammate IDs (Justin doesn't need to
+  // be in this — auto-added by the team_threads INSERT trigger).
+  const [groupParticipants, setGroupParticipants] = useState(new Set());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
   const teammates = Object.values(profilesById).filter(p => p.id !== me.id);
+
+  const toggleGroupMember = (uid) => {
+    setGroupParticipants(prev => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid); else next.add(uid);
+      return next;
+    });
+  };
 
   const create = async () => {
     setBusy(true); setErr(null);
@@ -4828,6 +4847,29 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
         const { data, error } = await sb.rpc('team_create_dm', { p_other_user: otherUserId });
         if (error) throw error;
         onCreated(data);
+      } else if (kind === 'group') {
+        // Group thread — needs a name (so the sidebar can label it) and
+        // at least one other teammate. Schema-side: thread_type='group'
+        // + insert rows into team_thread_participants for the creator
+        // AND each selected teammate. The creator is auto-added but we
+        // double-tap them here so the row exists even if a future schema
+        // change drops that default.
+        if (!name.trim()) { setErr('Group name required.'); setBusy(false); return; }
+        if (groupParticipants.size === 0) {
+          setErr('Pick at least one teammate to add.'); setBusy(false); return;
+        }
+        const { data: thread, error: threadErr } = await sb.from('team_threads')
+          .insert({ title: name.trim(), thread_type: 'group', created_by_id: me.id, lauren_enabled: false })
+          .select('id').single();
+        if (threadErr) throw threadErr;
+        const rows = [
+          { thread_id: thread.id, user_id: me.id },
+          ...Array.from(groupParticipants).map(uid => ({ thread_id: thread.id, user_id: uid })),
+        ];
+        const { error: partErr } = await sb.from('team_thread_participants')
+          .upsert(rows, { onConflict: 'thread_id,user_id' });
+        if (partErr) throw partErr;
+        onCreated(thread.id);
       }
     } catch (ex) {
       setErr(ex.message || String(ex));
@@ -4836,24 +4878,23 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
     }
   };
 
+  const tabBtn = (k, label) => (
+    <button key={k} onClick={() => setKind(k)} style={{
+      flex: 1, padding: '10px 12px',
+      background: kind === k ? '#292524' : 'transparent',
+      color: kind === k ? '#fbbf24' : '#a8a29e',
+      border: '1px solid ' + (kind === k ? '#92400e' : '#292524'),
+      borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+    }}>{label}</button>
+  );
+
   return (
     <Modal onClose={onClose} title="New thread">
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={() => setKind('channel')} style={{
-            flex: 1, padding: '10px 12px',
-            background: kind === 'channel' ? '#292524' : 'transparent',
-            color: kind === 'channel' ? '#fbbf24' : '#a8a29e',
-            border: '1px solid ' + (kind === 'channel' ? '#92400e' : '#292524'),
-            borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-          }}># Channel</button>
-          <button onClick={() => setKind('dm')} style={{
-            flex: 1, padding: '10px 12px',
-            background: kind === 'dm' ? '#292524' : 'transparent',
-            color: kind === 'dm' ? '#fbbf24' : '#a8a29e',
-            border: '1px solid ' + (kind === 'dm' ? '#92400e' : '#292524'),
-            borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-          }}>💬 Direct Message</button>
+          {tabBtn('channel', '# Channel')}
+          {tabBtn('group',   '👥 Group')}
+          {tabBtn('dm',      '💬 DM')}
         </div>
 
         {kind === 'channel' && (
@@ -4868,6 +4909,52 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
               {teammates.map(p => <option key={p.id} value={p.id}>{p.display_name || p.name}</option>)}
             </select>
           </Field>
+        )}
+        {kind === 'group' && (
+          <>
+            <Field label="Group name">
+              <input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder='e.g. "Casey case team", "Marketing review"' />
+            </Field>
+            <Field label={`Add teammates (${groupParticipants.size} selected)`}>
+              <div style={{
+                display: 'flex', flexDirection: 'column', gap: 4,
+                maxHeight: 240, overflowY: 'auto',
+                border: '1px solid #292524', borderRadius: 6, padding: 8,
+                background: '#0c0a09',
+              }}>
+                {teammates.length === 0 && (
+                  <div style={{ fontSize: 12, color: '#78716c' }}>No other teammates yet.</div>
+                )}
+                {teammates.map(p => {
+                  const checked = groupParticipants.has(p.id);
+                  return (
+                    <label key={p.id} style={{
+                      display: 'flex', alignItems: 'center', gap: 8,
+                      padding: '6px 8px', borderRadius: 4,
+                      background: checked ? '#1c1917' : 'transparent',
+                      cursor: 'pointer',
+                    }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleGroupMember(p.id)}
+                        style={{ accentColor: '#fbbf24' }}
+                      />
+                      <span style={{ fontSize: 13, color: '#fafaf9' }}>
+                        {p.display_name || p.name || p.email || 'Unnamed'}
+                      </span>
+                      {p.role === 'va' && (
+                        <span style={{ fontSize: 9, color: '#78716c', letterSpacing: '0.05em' }}>· VA</span>
+                      )}
+                    </label>
+                  );
+                })}
+              </div>
+              <div style={{ fontSize: 10, color: '#78716c', marginTop: 6 }}>
+                Only the people you check (plus you) will see this group. Anyone in the group can add more members later.
+              </div>
+            </Field>
+          </>
         )}
 
         {err && <div style={{ fontSize: 12, color: '#fca5a5' }}>{err}</div>}
@@ -8254,7 +8341,19 @@ function InboxView({ deals, onSelect }) {
             const meta = KIND_META[it.kind];
             return (
               <div key={it.key}
-                onClick={() => it.deal && onSelect && onSelect(it.deal.id)}
+                onClick={() => {
+                  // Auto-mark inbound SMS rows seen when the user clicks
+                  // through to the deal — clicking the row IS the act of
+                  // looking at the notification. Was previously only fired
+                  // by the explicit "Mark seen" button, which left the
+                  // badge sitting in the header for users who just clicked
+                  // through to the deal to handle it. Fixes the web-side
+                  // half of #173.
+                  if (it.kind === 'sms' && it.unread && it.raw?.id) {
+                    markSmsSeen(it.raw.id);
+                  }
+                  if (it.deal && onSelect) onSelect(it.deal.id);
+                }}
                 style={{
                   background: '#0c0a09',
                   border: '1px solid #292524',
@@ -9589,7 +9688,16 @@ function ReplyInbox({ onSelect, limit = 100 }) {
       {rows.map(r => (
         <div key={r.id}
           style={{ background: '#0c0a09', border: '1px solid #292524', borderLeft: '3px solid #3b82f6', borderRadius: 7, padding: '10px 12px' }}>
-          <div onClick={() => r.deal && onSelect && onSelect(r.deal.id)} style={{ cursor: r.deal ? 'pointer' : 'default' }}>
+          <div
+            onClick={() => {
+              // Clicking the row IS the act of looking at the reply —
+              // auto-mark seen + navigate to the deal. Same fix as
+              // InboxView. Fixes the web-side badge dismissal bug (#173).
+              if (r.id) markSeen(r.id);
+              if (r.deal && onSelect) onSelect(r.deal.id);
+            }}
+            style={{ cursor: r.deal ? 'pointer' : 'default' }}
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                 {r.deal?.name || r.from_number || 'Unknown sender'}
