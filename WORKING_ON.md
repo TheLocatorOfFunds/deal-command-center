@@ -142,10 +142,53 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-05-08 evening — full-day audit + 8 migrations + system alert hardening
-**Branch:** main (all work merged)
+**Status:** Active — 2026-05-20 — legacy service_role key rotation (in progress) + Eric bug fixes
+**Branch:** main (all work pushed)
 
-**Tonight (2026-05-08) — what shipped**
+**Today (2026-05-20) — what shipped**
+
+- **Legacy `service_role` key rotation — IN PROGRESS.** Moving every consumer
+  off the project's legacy anon/service_role JWTs onto new
+  `sb_publishable_`/`sb_secret_` keys so the legacy service_role (which leaked
+  into a chat transcript) can be safely disabled. Migrated + verified so far:
+  Castle scrapers (`/home/deploy/castle-v2/config/.env` on intel-vps), Vercel
+  portal (`refundlocators-next` `SUPABASE_SERVICE_ROLE_KEY` → redeployed,
+  `/s/{token}` smoke-tested), ohio-intel (`DCC_SUPABASE_SERVICE_KEY` on
+  intel-vps). **Edge Functions need NO change** — a probe (`keycheck-tmp`,
+  since removed) proved Supabase already injects an `sb_secret_`
+  value into the EF `SUPABASE_SERVICE_ROLE_KEY` env var and a service-role DB
+  read works. `.env.bak.20260519-rotation` backups left on intel-vps.
+- **Eric bug fixes (both live on main):**
+  - `2df5b5d` — Prep Queue "missing: phone" warning now clears for deceased
+    homeowners that have a relative/estate contact phone (matches a relative
+    pattern against BOTH `contact_deals.relationship` AND `contacts.kind`,
+    since relatives are tagged `kind='family'` with a null relationship).
+    `markPrepped` auto-queue still gates on the meta phone — no texts to the deceased.
+  - `82cc5e1` — `main-grid` `1fr` track blowout fixed (`minWidth:0` +
+    `minmax(0,1fr)`); expanding the Prep Queue no longer forces a horizontal
+    page scroll. Verified live at 1194px. Latent layout bug — applies to all views.
+
+**🚨 HEADS-UP FOR JUSTIN — Mac bridge key rotation (this GATES the legacy-key disable)**
+
+`bridge.js` reads `SUPABASE_SERVICE_KEY` from `mac-bridge/.env` on the Mac Mini,
+and that value is the legacy `service_role` JWT — it is NOT platform-injected,
+so it did NOT auto-swap to `sb_secret_` the way the Edge Functions did. When the
+legacy keys get disabled, the bridge's DB auth dies → **outbound SMS stops.**
+It's your domain + you have the `defender_mini` key, and the Mini was offline
+when I checked (couldn't reach it from Nathan's machine). **Please rotate before
+anyone clicks "Disable JWT-based legacy API keys" in the Supabase dashboard:**
+1. Mint a new `sb_secret_` (DCC dashboard → API Keys → Secret keys, name `mac-bridge`)
+2. `mac-bridge/.env` → `SUPABASE_SERVICE_KEY=<new sb_secret_>`
+3. `launchctl unload` then `load ~/Library/LaunchAgents/com.refundlocators.bridge.plist`
+4. `tail -20 /tmp/dcc-bridge.log` (clean reconnect, no auth errors) + send one test SMS
+Then ping Nathan so the Disable + signing-key Revoke can finish.
+
+Low-pri sibling: the `weekly-db-backup` GitHub Action uses a `SUPABASE_ANON_KEY`
+repo secret that may still be a legacy JWT. The backup itself uses a direct
+Postgres connection so it survives the disable; only the failure-alert REST call
+would break. Update the secret to an `sb_publishable_` when convenient.
+
+**Previous (2026-05-08) — full-day audit + 8 migrations + system alert hardening**
 
 Bug-fix marathon driven by Eric flagging multiple silent failures. Pattern that emerged: **contact data ↔ deal data drift** — facts on `contacts` that need to bridge to `deal.meta` for the auto-queue gate to see them. Hit it 4 times today, fixed each instance + the architectural pattern.
 
