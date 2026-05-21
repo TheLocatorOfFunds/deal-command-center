@@ -3469,6 +3469,7 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
   const [mentionState, setMentionState] = useState(null);  // { open, prefix, anchorPos }
   const [showEodModal, setShowEodModal] = useState(false);
   const [showActivityFor, setShowActivityFor] = useState(null); // userId | null — opens "today's activity" panel
+  const [showGroupSettings, setShowGroupSettings] = useState(false); // open settings panel for the active group thread
   const [unreadByThread, setUnreadByThread] = useState({});  // thread_id → count
   const [markingAllRead, setMarkingAllRead] = useState(false);
   const dragDepth = useRef(0);
@@ -4110,16 +4111,44 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
         )}
         {activeThread ? (
           <>
-            {/* Thread header */}
+            {/* Thread header — title gets the same icon-prefix mapping
+                we use in the sidebar list, so a group thread reads
+                "👥 Casey case team" instead of "# Casey case team". */}
             <div style={{ padding: '14px 18px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
               <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9' }}># {activeThread.title}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9' }}>
+                  {(() => {
+                    const tt = activeThread.thread_type;
+                    if (tt === 'dm') return `💬 ${activeThread.title}`;
+                    if (tt === 'group') return `👥 ${activeThread.title}`;
+                    if (tt === 'deal') return `🏠 ${activeThread.title}`;
+                    if (tt === 'lauren_dm') return `🤖 Lauren`;
+                    if (tt === 'lauren_room') return `🤖 ${activeThread.title}`;
+                    return `# ${activeThread.title}`;
+                  })()}
+                </div>
                 <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
                   {messages.length} message{messages.length === 1 ? '' : 's'}
+                  {activeThread.thread_type === 'group' && (() => {
+                    const n = (participantsByThreadId[activeThread.id] || []).length;
+                    return n > 0 ? <> · {n} member{n === 1 ? '' : 's'}</> : null;
+                  })()}
                   {activeThread.lauren_enabled && <> · 🤖 mention <code style={{ background: '#0c0a09', padding: '0 4px', borderRadius: 3 }}>@lauren</code> to summon</>}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                {/* Group settings — rename, add/remove members, leave.
+                    Only renders for group threads (channels manage
+                    membership via role, DMs are 1:1, Lauren stuff is
+                    auto-managed). */}
+                {activeThread.thread_type === 'group' && (
+                  <button
+                    onClick={() => setShowGroupSettings(true)}
+                    title="Group settings — rename, add/remove members, leave"
+                    style={{ fontSize: 11, fontWeight: 600, padding: '5px 10px', borderRadius: 6, border: '1px solid #292524', background: '#0c0a09', color: '#a8a29e', cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>
+                    👥 Members
+                  </button>
+                )}
                 {/* Video call — opens a Jitsi Meet room scoped to this
                     thread, then posts the link as a message so others can
                     join. Free, no signup, no API key. */}
@@ -4494,6 +4523,24 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
           userId={showActivityFor}
           profile={profilesById[showActivityFor]}
           onClose={() => setShowActivityFor(null)}
+        />
+      )}
+      {showGroupSettings && activeThread?.thread_type === 'group' && (
+        <GroupSettingsModal
+          thread={activeThread}
+          me={me}
+          profilesById={profilesById}
+          onClose={() => setShowGroupSettings(false)}
+          onRenamed={(newTitle) => {
+            setThreads(prev => prev.map(t => t.id === activeThread.id ? { ...t, title: newTitle } : t));
+          }}
+          onLeft={() => {
+            // After leaving, switch to a different thread (or null) since
+            // RLS will hide this one from the next loadThreads().
+            setShowGroupSettings(false);
+            setActiveThreadId(null);
+            // loadThreads will fire via realtime sub on team_thread_participants
+          }}
         />
       )}
     </div>
@@ -4962,6 +5009,259 @@ function NewThreadModal({ onClose, profilesById, me, onCreated }) {
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <button onClick={onClose} style={btnGhost}>Cancel</button>
           <button onClick={create} disabled={busy} style={btnPrimary}>{busy ? 'Creating…' : 'Create'}</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Group settings — rename, add/remove members, leave ─────────────
+// Per Justin 2026-05-21: group chats need first-class membership
+// management. Users in a group can rename it, add new teammates,
+// remove members (with confirmation), or leave on their own.
+//
+// All operations route through the same tables we already use:
+//   - rename:        UPDATE team_threads SET title = ... WHERE id = ...
+//   - add member:    INSERT INTO team_thread_participants ...
+//   - remove member: UPDATE team_thread_participants SET left_at = now()
+//                    WHERE thread_id = ... AND user_id = ...
+//   - leave group:   same as remove-self
+//
+// RLS (from migration 20260521150000):
+//   - any current participant can read the participants list
+//   - any current participant can insert new participants
+//   - users can update their own row (to leave) or admins can update anyone
+//   - any current participant can update the parent team_threads row (rename)
+//
+// We "remove" by setting left_at rather than deleting, so message
+// history attribution stays intact for past contributors.
+function GroupSettingsModal({ thread, me, profilesById, onClose, onRenamed, onLeft }) {
+  const [members, setMembers] = useState([]);   // active participants
+  const [loading, setLoading] = useState(true);
+  const [titleDraft, setTitleDraft] = useState(thread.title || '');
+  const [renaming, setRenaming] = useState(false);
+  const [renameErr, setRenameErr] = useState(null);
+  const [addingId, setAddingId] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addErr, setAddErr] = useState(null);
+  const [busy, setBusy] = useState(null);  // user_id being processed (remove/leave)
+
+  const loadMembers = async () => {
+    const { data, error } = await sb.from('team_thread_participants')
+      .select('user_id, added_at, left_at')
+      .eq('thread_id', thread.id)
+      .is('left_at', null)
+      .order('added_at', { ascending: true });
+    if (error) { console.warn('[group] load members failed', error.message); return; }
+    setMembers(data || []);
+    setLoading(false);
+  };
+
+  useEffect(() => { loadMembers(); }, [thread.id]);
+
+  // Subscribe so add/remove from another session lands here in realtime.
+  useEffect(() => {
+    const ch = sb.channel('group-participants-' + thread.id)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: 'team_thread_participants',
+        filter: `thread_id=eq.${thread.id}`,
+      }, () => loadMembers())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+    // eslint-disable-next-line
+  }, [thread.id]);
+
+  const handleRename = async () => {
+    const next = titleDraft.trim();
+    if (!next || next === thread.title) return;
+    setRenaming(true); setRenameErr(null);
+    try {
+      const { error } = await sb.from('team_threads')
+        .update({ title: next })
+        .eq('id', thread.id);
+      if (error) throw error;
+      onRenamed && onRenamed(next);
+    } catch (ex) {
+      setRenameErr(ex.message || String(ex));
+    } finally {
+      setRenaming(false);
+    }
+  };
+
+  const handleAdd = async () => {
+    if (!addingId) return;
+    setAdding(true); setAddErr(null);
+    try {
+      const { error } = await sb.from('team_thread_participants')
+        .upsert(
+          { thread_id: thread.id, user_id: addingId, added_by: me.id, left_at: null },
+          { onConflict: 'thread_id,user_id' },
+        );
+      if (error) throw error;
+      setAddingId('');
+      // Optional: post a system-ish message so members see "Justin added Eric"
+      const addedProfile = profilesById[addingId];
+      await sb.from('team_messages').insert({
+        thread_id: thread.id,
+        sender_id: me.id,
+        sender_kind: me.role === 'va' ? 'va' : 'admin',
+        body: `👥 ${me.name || 'Someone'} added ${addedProfile?.name || addedProfile?.display_name || 'a teammate'} to the group.`,
+      });
+    } catch (ex) {
+      setAddErr(ex.message || String(ex));
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleRemove = async (uid) => {
+    if (uid === me.id) return;  // self-remove goes through Leave
+    const target = profilesById[uid];
+    const name = target?.name || target?.display_name || 'this teammate';
+    if (!window.confirm(`Remove ${name} from the group?`)) return;
+    setBusy(uid);
+    try {
+      const { error } = await sb.from('team_thread_participants')
+        .update({ left_at: new Date().toISOString() })
+        .eq('thread_id', thread.id)
+        .eq('user_id', uid);
+      if (error) { alert('Could not remove: ' + error.message); return; }
+      await sb.from('team_messages').insert({
+        thread_id: thread.id,
+        sender_id: me.id,
+        sender_kind: me.role === 'va' ? 'va' : 'admin',
+        body: `👥 ${me.name || 'Someone'} removed ${name} from the group.`,
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleLeave = async () => {
+    if (!window.confirm('Leave this group? You will stop seeing new messages but the existing history stays for anyone still in the group.')) return;
+    setBusy(me.id);
+    try {
+      const { error } = await sb.from('team_thread_participants')
+        .update({ left_at: new Date().toISOString() })
+        .eq('thread_id', thread.id)
+        .eq('user_id', me.id);
+      if (error) { alert('Could not leave: ' + error.message); return; }
+      onLeft && onLeft();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const memberIds = new Set(members.map(m => m.user_id));
+  const addCandidates = Object.values(profilesById).filter(
+    p => p.id !== me.id && !memberIds.has(p.id),
+  );
+
+  return (
+    <Modal onClose={onClose} title={`👥 ${thread.title}`}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {/* Rename */}
+        <Field label="Group name">
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={titleDraft}
+              onChange={e => setTitleDraft(e.target.value)}
+              style={{ ...inputStyle, flex: 1 }}
+              placeholder="Group name"
+            />
+            <button
+              onClick={handleRename}
+              disabled={renaming || !titleDraft.trim() || titleDraft.trim() === thread.title}
+              style={titleDraft.trim() && titleDraft.trim() !== thread.title ? btnPrimary : btnGhost}>
+              {renaming ? 'Saving…' : 'Rename'}
+            </button>
+          </div>
+          {renameErr && <div style={{ fontSize: 11, color: '#fca5a5', marginTop: 4 }}>{renameErr}</div>}
+        </Field>
+
+        {/* Members list */}
+        <Field label={`Members (${members.length})`}>
+          {loading ? (
+            <div style={{ fontSize: 12, color: '#78716c' }}>Loading…</div>
+          ) : (
+            <div style={{
+              display: 'flex', flexDirection: 'column', gap: 4,
+              border: '1px solid #292524', borderRadius: 6, padding: 8,
+              background: '#0c0a09', maxHeight: 240, overflowY: 'auto',
+            }}>
+              {members.map(m => {
+                const p = profilesById[m.user_id];
+                const isMe = m.user_id === me.id;
+                const name = p?.display_name || p?.name || p?.email || 'Unknown';
+                return (
+                  <div key={m.user_id} style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '6px 8px', borderRadius: 4,
+                    background: isMe ? '#1c1917' : 'transparent',
+                  }}>
+                    <span style={{ fontSize: 13, color: '#fafaf9' }}>
+                      {name}{isMe && <span style={{ fontSize: 10, color: '#78716c', marginLeft: 6 }}>(you)</span>}
+                      {p?.role === 'va' && <span style={{ fontSize: 9, color: '#78716c', marginLeft: 6, letterSpacing: '0.05em' }}>· VA</span>}
+                    </span>
+                    {!isMe && (
+                      <button
+                        onClick={() => handleRemove(m.user_id)}
+                        disabled={busy === m.user_id}
+                        style={{ ...btnGhost, fontSize: 10, padding: '2px 8px', color: '#fca5a5' }}>
+                        {busy === m.user_id ? '…' : 'Remove'}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Field>
+
+        {/* Add member */}
+        <Field label="Add a teammate">
+          <div style={{ display: 'flex', gap: 6 }}>
+            <select
+              value={addingId}
+              onChange={e => setAddingId(e.target.value)}
+              style={{ ...inputStyle, flex: 1, padding: '8px 10px' }}>
+              <option value="">Pick a teammate…</option>
+              {addCandidates.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.display_name || p.name || p.email || 'Unnamed'}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={handleAdd}
+              disabled={adding || !addingId}
+              style={addingId ? btnPrimary : btnGhost}>
+              {adding ? 'Adding…' : 'Add'}
+            </button>
+          </div>
+          {addErr && <div style={{ fontSize: 11, color: '#fca5a5', marginTop: 4 }}>{addErr}</div>}
+          {addCandidates.length === 0 && !loading && (
+            <div style={{ fontSize: 11, color: '#78716c', marginTop: 4 }}>
+              Everyone on the team is already in this group.
+            </div>
+          )}
+        </Field>
+
+        {/* Leave group */}
+        <div style={{ borderTop: '1px solid #292524', paddingTop: 16 }}>
+          <button
+            onClick={handleLeave}
+            disabled={busy === me.id}
+            style={{
+              padding: '8px 14px', borderRadius: 6,
+              border: '1px solid #7f1d1d', background: '#1c0a0a', color: '#fca5a5',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            }}>
+            {busy === me.id ? 'Leaving…' : 'Leave group'}
+          </button>
+          <div style={{ fontSize: 10, color: '#78716c', marginTop: 6 }}>
+            History stays for anyone still in the group. You can be re-added later.
+          </div>
         </div>
       </div>
     </Modal>
