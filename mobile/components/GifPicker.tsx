@@ -11,9 +11,19 @@
  * the team_messages.attachments jsonb when sending. AttachmentView in
  * team-thread/[id].tsx already handles `path: null` items by reading
  * `attachment.url` directly.
+ *
+ * Presentation: pageSheet on iOS so it slides up as a card and has a
+ * native swipe-down dismiss gesture. The status-bar collision the
+ * earlier full-screen Modal caused (title overlapping the clock /
+ * carrier indicator, Done button hidden under signal icons) is gone
+ * with pageSheet because iOS positions the sheet below the bar.
+ *
+ * Pagination: GIPHY returns 24 per page; we fetch the next batch when
+ * the user nears the end of the grid (onEndReached). pagination.total_count
+ * from the response gates further fetches.
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -31,6 +41,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 const GIPHY_API_KEY = '0btoI3X8C1qh2m0JnpCHGSCxfcZ0Cet1'
 const GIPHY_SEARCH_URL = 'https://api.giphy.com/v1/gifs/search'
 const GIPHY_TRENDING_URL = 'https://api.giphy.com/v1/gifs/trending'
+const PAGE_SIZE = 24
 
 export type GiphyAttachment = {
   path: null
@@ -66,46 +77,95 @@ export function GifPicker({
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<GiphyResult[]>([])
   const [loading, setLoading] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const [err, setErr] = useState<string | null>(null)
+
+  // Token to invalidate in-flight requests when the query changes.
+  // Prevents an old "burrito" response from clobbering newer "pizza" results.
+  const fetchTokenRef = useRef(0)
 
   // Reset when the modal opens
   useEffect(() => {
     if (!visible) return
     setQuery('')
     setErr(null)
+    setResults([])
+    setHasMore(true)
   }, [visible])
 
-  // Search (debounced) — load trending on empty query
+  // Build the GIPHY URL for a given query + offset
+  const buildUrl = useCallback((q: string, offset: number) => {
+    const trimmed = q.trim()
+    const base = trimmed ? GIPHY_SEARCH_URL : GIPHY_TRENDING_URL
+    const params = new URLSearchParams({
+      api_key: GIPHY_API_KEY,
+      limit: String(PAGE_SIZE),
+      offset: String(offset),
+      rating: 'pg-13',
+    })
+    if (trimmed) params.set('q', trimmed)
+    return `${base}?${params.toString()}`
+  }, [])
+
+  // Initial / search-change fetch (debounced; trending on empty query)
   useEffect(() => {
     if (!visible) return
-    let cancelled = false
+    const token = ++fetchTokenRef.current
     const timer = setTimeout(async () => {
       setLoading(true)
       setErr(null)
-      const url = query.trim()
-        ? `${GIPHY_SEARCH_URL}?api_key=${GIPHY_API_KEY}&q=${encodeURIComponent(query.trim())}&limit=24&rating=pg-13`
-        : `${GIPHY_TRENDING_URL}?api_key=${GIPHY_API_KEY}&limit=24&rating=pg-13`
       try {
-        const resp = await fetch(url)
+        const resp = await fetch(buildUrl(query, 0))
         if (!resp.ok) throw new Error(`GIPHY HTTP ${resp.status}`)
         const json = await resp.json()
-        if (!cancelled) setResults((json?.data ?? []) as GiphyResult[])
+        if (token !== fetchTokenRef.current) return
+        const data = (json?.data ?? []) as GiphyResult[]
+        const total = Number(json?.pagination?.total_count ?? 0)
+        setResults(data)
+        setHasMore(data.length >= PAGE_SIZE && data.length < total)
       } catch (e) {
-        if (!cancelled)
+        if (token === fetchTokenRef.current) {
           setErr(e instanceof Error ? e.message : 'Failed to load GIFs')
+        }
       } finally {
-        if (!cancelled) setLoading(false)
+        if (token === fetchTokenRef.current) setLoading(false)
       }
     }, query.trim() ? 250 : 0)
     return () => {
-      cancelled = true
       clearTimeout(timer)
     }
-  }, [query, visible])
+  }, [query, visible, buildUrl])
+
+  // Load the next page when the user scrolls to the bottom of the grid
+  const loadMore = useCallback(async () => {
+    if (loadingMore || loading || !hasMore) return
+    const token = fetchTokenRef.current
+    setLoadingMore(true)
+    try {
+      const resp = await fetch(buildUrl(query, results.length))
+      if (!resp.ok) throw new Error(`GIPHY HTTP ${resp.status}`)
+      const json = await resp.json()
+      if (token !== fetchTokenRef.current) return
+      const data = (json?.data ?? []) as GiphyResult[]
+      const total = Number(json?.pagination?.total_count ?? 0)
+      setResults((prev) => {
+        const next = [...prev, ...data]
+        setHasMore(data.length >= PAGE_SIZE && next.length < total)
+        return next
+      })
+    } catch (e) {
+      if (token === fetchTokenRef.current) {
+        // Non-fatal — keep what we have, just stop trying
+        setHasMore(false)
+      }
+    } finally {
+      if (token === fetchTokenRef.current) setLoadingMore(false)
+    }
+  }, [buildUrl, hasMore, loading, loadingMore, query, results.length])
 
   const handleSelect = (g: GiphyResult) => {
-    const full =
-      g.images?.fixed_height?.url ?? g.images?.original?.url ?? ''
+    const full = g.images?.fixed_height?.url ?? g.images?.original?.url ?? ''
     if (!full) return
     onSelect({
       path: null,
@@ -122,15 +182,24 @@ export function GifPicker({
     <Modal
       visible={visible}
       animationType="slide"
-      transparent={false}
+      // iOS-only — slides up as a sheet with native swipe-to-dismiss.
+      // On Android it falls back to a full-screen modal (acceptable;
+      // we're iOS-first per the user).
+      presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <SafeAreaView style={styles.container} edges={['top']}>
+      <SafeAreaView style={styles.container} edges={['top', 'bottom']}>
         <View style={styles.header}>
-          <Text style={styles.title}>🎬 GIPHY</Text>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Text style={styles.closeBtnText}>Done</Text>
+          <TouchableOpacity
+            onPress={onClose}
+            style={styles.cancelBtn}
+            hitSlop={12}
+          >
+            <Text style={styles.cancelBtnText}>Cancel</Text>
           </TouchableOpacity>
+          <Text style={styles.title}>🎬 GIPHY</Text>
+          {/* Spacer so the title sits centered between Cancel and the right edge */}
+          <View style={styles.headerSpacer} />
         </View>
 
         <View style={styles.searchBar}>
@@ -165,9 +234,21 @@ export function GifPicker({
         ) : (
           <FlatList
             data={results}
-            keyExtractor={(g) => g.id}
+            keyExtractor={(g, i) => `${g.id}-${i}`}
             numColumns={3}
             contentContainerStyle={styles.grid}
+            keyboardShouldPersistTaps="handled"
+            onEndReachedThreshold={0.5}
+            onEndReached={loadMore}
+            ListFooterComponent={
+              loadingMore ? (
+                <View style={styles.footerSpinner}>
+                  <ActivityIndicator color="#d97706" />
+                </View>
+              ) : !hasMore && results.length > PAGE_SIZE ? (
+                <Text style={styles.footerEnd}>End of results</Text>
+              ) : null
+            }
             renderItem={({ item }) => {
               const thumb =
                 item.images?.fixed_height_small?.url ??
@@ -206,16 +287,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderBottomColor: '#1c1917',
     borderBottomWidth: 1,
   },
-  title: { color: '#fafaf9', fontSize: 16, fontWeight: '700' },
-  closeBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+  cancelBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    minWidth: 70,
   },
-  closeBtnText: { color: '#d97706', fontSize: 14, fontWeight: '700' },
+  cancelBtnText: {
+    color: '#d97706',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  title: {
+    color: '#fafaf9',
+    fontSize: 16,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  headerSpacer: { minWidth: 70 },
 
   searchBar: {
     paddingHorizontal: 14,
@@ -257,6 +349,17 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 6,
     backgroundColor: '#1c1917',
+  },
+
+  footerSpinner: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  footerEnd: {
+    paddingVertical: 16,
+    textAlign: 'center',
+    color: '#57534e',
+    fontSize: 11,
   },
 
   footer: {
