@@ -98,8 +98,26 @@ Deno.serve(async (req: Request) => {
 
     await maybeSendMissedCallSms(db, row, isMissed);
 
-    // Missed inbound call → return voicemail TwiML so caller can leave a message.
+    // Missed inbound call → either hand off to the Vapi voice agent
+    // (if configured) OR fall back to a static voicemail prompt.
+    //
+    // VAPI_SIP_URI is the credential-specific SIP endpoint from the
+    // Vapi dashboard, e.g. sip:+15139985440@abc123.sip.vapi.ai. When
+    // unset, we keep the original voicemail behavior — so this Edge
+    // Function is safe to ship even before the Vapi account is wired up.
     if (isMissed && row?.direction === 'inbound') {
+      const vapiSipUri = Deno.env.get('VAPI_SIP_URI') ?? '';
+      if (vapiSipUri) {
+        // Hand off to Vapi. Vapi will fire end-of-call-report to
+        // /functions/v1/vapi-webhook when the conversation finishes.
+        return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial answerOnBridge="true">
+    <Sip>${vapiSipUri}</Sip>
+  </Dial>
+</Response>`, { status: 200, headers: { 'Content-Type': 'text/xml' } });
+      }
+      // Fallback: static voicemail prompt + <Record>.
       return new Response(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna">You've reached FundLocators. Please leave a message after the beep and we'll call you right back.</Say>

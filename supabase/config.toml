@@ -82,3 +82,13 @@ verify_jwt = false
 [functions.docusign-sign]
 # Public tap-to-sign link sent via SMS — no Supabase JWT.
 verify_jwt = false
+
+[functions.vapi-webhook]
+# Called by Vapi server (no Supabase JWT). Auth is enforced inside the
+# function via the x-vapi-secret header (env var VAPI_WEBHOOK_SECRET).
+verify_jwt = false
+
+[functions.vapi-lookup-deal]
+# Called by Vapi mid-call as a custom tool. Same shared-secret auth
+# as vapi-webhook — both use the VAPI_WEBHOOK_SECRET env var.
+verify_jwt = false

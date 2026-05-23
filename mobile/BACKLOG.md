@@ -91,6 +91,49 @@ has more daily users.
 
 ## Comms / Messaging
 
+### Voicemail playback on mobile deal screen **[SHIPPED]**
+Done 2026-05-23. `mobile/app/deal/[id].tsx` now renders a "▶ Play
+voicemail · 0:34" button on missed-inbound calls with a recording.
+Uses `Linking.openURL(recording_url)` — hands off to iOS Safari /
+the native audio sheet. No new dependency. The `twilio-recording`
+EF is deployed `verify_jwt=false` so the proxy URL works without
+auth headers (RE-prefixed Twilio SID is the access token).
+
+Inline player upgrade (no app handoff) is a backlog follow-up —
+needs `expo-audio` from SDK 53+.
+
+### Voicemail-landed push notification **[SHIPPED]**
+Done 2026-05-23. Closes the gap where the only inbound-call push
+was at ring-time. New trigger
+`tg_push_notify_voicemail_landed` fires "🎙 Voicemail from <caller>"
+when `call_logs.recording_url` first populates on a missed inbound
+call. data.type=voicemail so mobile can route distinctly from the
+"📞 Incoming" ring push.
+
+Migration: `supabase/migrations/20260523120000_push_notify_voicemail_landed.sql`.
+
+### AI voice agent — Vapi integration (issue #210) **[CODE STAGED]**
+Done 2026-05-23. Code on main, dormant until env vars are set in
+Supabase. See the runbook posted on issue #210 for the dashboard
+setup steps. Components shipped:
+- Migration `20260523120100_call_logs_voice_intake.sql` —
+  adds voice_provider / voice_call_id / voice_transcript /
+  voice_summary / voice_intake / voice_cost_cents to call_logs.
+- Migration `20260523120200_push_notify_agent_intake.sql` —
+  trigger fires "🤖 Agent intake: <caller>" + topic when an intake
+  lands.
+- New EF `supabase/functions/vapi-webhook/index.ts` — receives
+  end-of-call-report, verifies x-vapi-secret, stores
+  transcript/summary/intake, resolves deal by caller phone,
+  inserts activity row (or creates a lead if no deal match).
+- New EF `supabase/functions/vapi-lookup-deal/index.ts` —
+  Vapi-callable custom tool. Agent calls mid-conversation to
+  personalize ("I see this is about case X in Y County").
+- Modified `twilio-voice-status/index.ts` — missed inbound calls
+  now redirect to Vapi if `VAPI_SIP_URI` env var is set;
+  fall back to static voicemail otherwise. Existing voicemail
+  behavior preserved when env var is missing — safe to deploy.
+
 ### SMS inbox + thread view + reply
 Full two-way SMS surface on mobile. View inbound messages, send replies
 from inside a deal. Currently deferred per v1 scope.

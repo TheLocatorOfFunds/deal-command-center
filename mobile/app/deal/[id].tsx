@@ -123,6 +123,8 @@ type CommsItem = {
   duration_seconds?: number | null
   thread_key?: string | null
   media_url?: string | null
+  recording_url?: string | null
+  recording_duration?: number | null
   at: string
 }
 
@@ -192,7 +194,7 @@ export default function DealDetailScreen() {
       supabase
         .from('call_logs')
         .select(
-          'id, direction, status, duration_seconds, thread_key, started_at, ended_at',
+          'id, direction, status, duration_seconds, thread_key, started_at, ended_at, recording_url, recording_duration',
         )
         .eq('deal_id', id)
         .order('started_at', { ascending: false })
@@ -277,6 +279,8 @@ export default function DealDetailScreen() {
         duration_seconds: number | null
         thread_key: string | null
         started_at: string | null
+        recording_url: string | null
+        recording_duration: number | null
       }>) {
         merged.push({
           kind: 'call',
@@ -286,6 +290,8 @@ export default function DealDetailScreen() {
           status: cl.status,
           duration_seconds: cl.duration_seconds,
           thread_key: cl.thread_key,
+          recording_url: cl.recording_url,
+          recording_duration: cl.recording_duration,
           at: cl.started_at ?? '',
         })
       }
@@ -1034,7 +1040,19 @@ export default function DealDetailScreen() {
           ) : (
             comms.map((item) => {
               const outbound = item.direction === 'outbound'
-              const Icon = item.kind === 'call' ? '📞' : '💬'
+              const isVoicemail =
+                item.kind === 'call' &&
+                !!item.recording_url &&
+                item.status === 'missed' &&
+                item.direction === 'inbound'
+              // Voicemail icon overrides the generic call icon so a glance
+              // at the timeline tells you "there's audio to listen to."
+              const Icon =
+                item.kind === 'call'
+                  ? isVoicemail
+                    ? '🎙'
+                    : '📞'
+                  : '💬'
               const tappable = item.kind === 'sms' && !!item.thread_key
               return (
                 <TouchableOpacity
@@ -1058,7 +1076,9 @@ export default function DealDetailScreen() {
                         {outbound ? '→ ' : '← '}
                       </Text>
                       {item.kind === 'call'
-                        ? formatCall(item)
+                        ? isVoicemail
+                          ? 'voicemail'
+                          : formatCall(item)
                         : item.body || (item.media_url ? '(image)' : '(empty)')}
                     </Text>
                     {item.kind === 'sms' && item.media_url ? (
@@ -1068,6 +1088,29 @@ export default function DealDetailScreen() {
                         resizeMode="cover"
                         accessibilityLabel="MMS attachment"
                       />
+                    ) : null}
+                    {/* Recording playback. twilio-recording EF is
+                        deployed verify_jwt=false (the RE-prefixed
+                        Twilio SID is the access token), so a plain
+                        Linking.openURL hands the MP3 to iOS Safari /
+                        the native audio sheet — works without any
+                        new audio dependency. Phase 2: inline player
+                        with expo-audio. */}
+                    {item.kind === 'call' && !!item.recording_url ? (
+                      <TouchableOpacity
+                        style={styles.recordingBtn}
+                        onPress={() =>
+                          item.recording_url &&
+                          Linking.openURL(item.recording_url)
+                        }
+                      >
+                        <Text style={styles.recordingBtnText}>
+                          ▶ Play{isVoicemail ? ' voicemail' : ' recording'}
+                          {item.recording_duration
+                            ? ` · ${formatDuration(item.recording_duration)}`
+                            : ''}
+                        </Text>
+                      </TouchableOpacity>
                     ) : null}
                     <Text style={styles.commsMeta}>
                       {formatRelative(item.at)}
@@ -1355,6 +1398,13 @@ function formatCall(item: CommsItem): string {
   return `${status} call`
 }
 
+function formatDuration(seconds: number): string {
+  const sec = Math.max(0, Math.floor(seconds))
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return `${m}:${s.toString().padStart(2, '0')}`
+}
+
 function formatRelative(iso: string): string {
   const then = new Date(iso).getTime()
   const now = Date.now()
@@ -1617,4 +1667,19 @@ const styles = StyleSheet.create({
   commsDir: { color: '#a8a29e', fontWeight: '600' },
   commsMeta: { color: '#78716c', fontSize: 11, marginTop: 2 },
   commsChev: { color: '#57534e', fontSize: 22 },
+  recordingBtn: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: '#1c1917',
+    borderColor: '#44403c',
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  recordingBtnText: {
+    color: '#fbbf24',
+    fontSize: 12,
+    fontWeight: '700',
+  },
 })
