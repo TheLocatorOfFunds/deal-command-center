@@ -70,12 +70,27 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
-**Status:** Active — 2026-05-24
-**Branch:** `claude/twilio-default-outbound` (worktree, PR #211)
+**Status:** Active — 2026-05-26
+**Branch:** `claude/eloquent-brahmagupta-248dfb` (worktree)
+**Working on:** Backlog grooming — mined ~500MB of prior session transcripts
+to extract every "I want to build X" / "we need to fix Y" Justin said
+across the past 6 weeks, cross-referenced against the 5 existing open
+issues, filed the 28 missing ones (#186–#215). DCC backlog is now 33
+tracked GitHub issues split web (17) / mobile (13) / cross-platform (3).
+Persistent across sessions — no more "what did I say I wanted last week"
+amnesia. Also codified the session-search dual-path workaround (native
+MCP tool in interactive sessions, bash grep on `~/.claude/projects/*/*.jsonl`
+in unsupervised mode) into `memory/session_search_pattern.md` and added
+the entry to `MEMORY.md`.
 
-**Today (2026-05-24) — Twilio default outbound rollout**
+---
 
-A2P 10DLC campaign on `+15139985440` flipped to **VERIFIED** today (was bouncing FAILED ↔ IN_PROGRESS since 5/12). Twilio is now the architectural default for SMS + voice; mac_bridge stays as a per-message fallback option in the UI for cases where Nathan needs to send from his personal iPhone.
+**Previous (2026-05-24) — Twilio default outbound rollout (PR #211)**
+
+A2P 10DLC campaign on `+15139985440` flipped to **VERIFIED** on 5/24 (was
+bouncing FAILED ↔ IN_PROGRESS since 5/12). Twilio is now the architectural
+default for SMS + voice; mac_bridge stays as a per-message fallback option
+in the UI for cases where Nathan needs to send from his personal iPhone.
 
 **Shipped in PR #211 (`feat(sms): default outbound sender to +15139985440`):**
 - `OutreachDraftPanel` (Comms-tab AI cadence draft approval) — was hardcoded `useState('+15135162306')`. Now loads all active `phone_numbers`, defaults to `gateway='twilio'`, with 2306 still selectable.
@@ -87,19 +102,12 @@ A2P 10DLC campaign on `+15139985440` flipped to **VERIFIED** today (was bouncing
 - Mobile SMS (quick/sms, thread/[key], OutreachDraftPanel.tsx) already deferred to env default → 5440.
 - Web Comms tab sender picker already preferred `gateway='twilio'`.
 - Voice inbound rings web + mobile (via `dcc-fundlocators` SDK identity) + Nathan's 2306 (screened by twilio-voice-screen) in parallel.
-- Voice outbound from web (`Twilio.Device.connect({CallerId: '+15139985440'})`) and mobile (Voice SDK + bridge fallback) — both already use 5440 caller ID.
-
-**Why the split was 103/37 (2306/5440) in last 30 days:** Those two UI defaults were sending AI drafts + intro texts through the bridge even though everything else routed to Twilio. PR #211 closes that gap.
+- Voice outbound from web and mobile both already use 5440 caller ID.
 
 **Open A2P loose ends (separate, not blocking):**
-- Email notifications on `check-a2p-campaign-status` Edge Function have been silently failing since 5/12 — 4 status transitions missed including today's VERIFIED. Resend call broken somewhere.
-- Daily A2P status-check cron has a gap on 5/21 + 5/22 (weekday slots not logged). Cron may need re-scheduling.
-- Architectural note: mac_bridge AppleScript hardcodes `service type = iMessage` and silently fails on Android. With Twilio now universal default, this is less urgent but still a footgun if 2306 is ever chosen for an Android recipient. Memory note saved at `messaging_bridge_imessage_only.md`.
-
-**Plan post-merge:**
-- Browser-test both UI surfaces (AI draft default = 5440; Send Intro Text default = 5440; 2306 still selectable).
-- Send one real outbound from OutreachDraftPanel to a known number, confirm `messages_outbound.from_number = '+15139985440'`.
-- Keep 2306 active in `phone_numbers` for ~1 week while monitoring Twilio reliability before considering deactivation (per Justin 2026-05-24).
+- Email notifications on `check-a2p-campaign-status` Edge Function have been silently failing since 5/12 — 4 status transitions missed including the VERIFIED. Resend call broken somewhere.
+- Daily A2P status-check cron has a gap on 5/21 + 5/22 (weekday slots not logged).
+- mac_bridge AppleScript hardcodes `service type = iMessage` and silently fails on Android. Less urgent now Twilio is default but still a footgun if 2306 is ever chosen for an Android recipient. Memory note at `messaging_bridge_imessage_only.md`.
 
 ---
 
@@ -111,20 +119,41 @@ upload to a new public `inbound-media` Supabase bucket under
 `messages_outbound.media_url`. UI side already rendered images/video/audio
 from media_url — no app.jsx changes needed.
 
-**Recent decisions:**
-- 2026-05-13: New public storage bucket `inbound-media` (migration
+**Recent decisions (2026-05-26):**
+- Backlog lives in GitHub Issues, not in-session todos. Pattern: every
+  "I want…" / "we need to…" Justin says becomes an issue. Per-session
+  todos die with the session; issues survive.
+- Filed bundle: 17 web (badges, dialer, tab persistence, Relay coach,
+  Relay→Comms default, MMS surface, payroll, no-optimistic audit, call
+  popup polish, RVM thread sizing, Slybroadcast callbacks, Ask-Lauren
+  delete bug, STOP/HELP responder, layout polish bundle, strip-GHL
+  nav, eSign decom verification) + 13 mobile (CallKit dialer, push
+  via pg_net, search, case intel, voice Lauren, safe-area, tab bar,
+  5440 routing, FAB, Forecast, group-chat UI, in-app updates, version
+  display closed) + 3 cross-platform (group chats #176, MMS #191,
+  Android RCS #215).
+- Session-search dual path: in unsupervised mode the native MCP tool
+  is gated regardless of allowlist; use bash grep on `~/.claude/projects/*/*.jsonl`
+  with jq filters. Documented in `memory/session_search_pattern.md`.
+
+**Previous decisions (2026-05-13 — inbound MMS / iMessage attachments):**
+- New public storage bucket `inbound-media` (migration
   20260513120000). Public-read for `<img src>` rendering to "just work";
   privacy via random uuid filenames. Mirrors the `rvm-audio` pattern.
-- 2026-05-13: receive-sms now reads `NumMedia` + `MediaUrl0` /
-  `MediaContentType0`, fetches with Twilio Basic auth, uploads, stores
-  the public URL on the row. Edge fn deployed (v51, verify_jwt=false
-  preserved). Multi-attachment is deferred (only first stored in v1).
-- 2026-05-13: bridge.js now reads `message_attachment_join` + `attachment`
-  rows for cache_has_attachments=1 messages, resolves the on-disk
+- receive-sms now reads `NumMedia` + `MediaUrl0` / `MediaContentType0`,
+  fetches with Twilio Basic auth, uploads, stores the public URL on
+  the row. Edge fn deployed (v51, verify_jwt=false preserved).
+  Multi-attachment is deferred (only first stored in v1).
+- bridge.js now reads `message_attachment_join` + `attachment` rows for
+  cache_has_attachments=1 messages, resolves the on-disk
   `~/Library/Messages/Attachments/...` path, uploads, and stamps
   media_url. SQL WHERE relaxed for inbound to allow text-null
   attachment-only rows; outbound kept text-required to preserve the
   body-based dedup against pending DCC handoffs.
+- **Note 2026-05-26:** the MMS work was completed but Justin reported
+  in a later session that images "still aren't showing up in DCC or
+  mobile" — refiled as #191 for a follow-up verification pass (could
+  be a UI render bug, not the ingestion path that shipped here).
 
 ---
 
@@ -167,7 +196,12 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ---
 
-**Last updated:** 2026-05-07 evening
+**Open follow-ups (Justin's lane):**
+- Build 8 inbound-call verification (test calling +1 513 998 5440)
+- A2P 10DLC final approval at TCR (IN_PROGRESS; daily 9am check live)
+- 28 newly-filed issues to triage + prioritize (#186–#215)
+
+**Last updated:** 2026-05-26 — backlog grooming + session-search dual-path codified
 
 **Last updated (auto):** 2026-05-14 20:12 UTC
 
