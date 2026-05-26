@@ -712,6 +712,10 @@ function DealCommandCenter({ session, profile }) {
   // the bell row is clicked. One row per lead, so a homeowner refreshing 5×
   // still counts as a single engaged lead (meaningful-moments only).
   const [engagementCount, setEngagementCount] = useState(0);
+  // When set, the "why did this surplus lead die" modal is open.
+  // { id, deal, pendingPatch } — pendingPatch is the status change that
+  // triggered it (so we apply status=dead + the reason meta together).
+  const [dispositionDeal, setDispositionDeal] = useState(null);
   // Toast queue for new team-chat messages — top-right popups that the
   // user must Reply to or Dismiss (no auto-timeout). Per Nathan: "I just
   // want to make it so that they don't have to click a bunch of buttons
@@ -1576,9 +1580,44 @@ function DealCommandCenter({ session, profile }) {
     setActiveDealId(deal.id);
   };
 
-  const updateDealMeta = async (id, patch) => {
+  const updateDealMeta = async (id, patch, _skipDeadGate) => {
+    // Lead-outcome feedback gate: a SURPLUS deal can't go status='dead'
+    // without a recorded reason (deals.meta.dispositionReason). Intercept
+    // here so EVERY mark-dead path (detail status select, kanban drag, etc.)
+    // funnels through the reason modal. The modal re-calls with
+    // _skipDeadGate=true. Spec: docs/LEAD_OUTCOME_FEEDBACK_BUILD.md.
+    if (!_skipDeadGate && patch.status === 'dead') {
+      const d = deals.find(x => x.id === id);
+      if (d && d.type === 'surplus' && !d.meta?.dispositionReason) {
+        setDispositionDeal({ id, deal: d, pendingPatch: patch });
+        return;
+      }
+    }
     setDeals(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d)); // optimistic
     await sb.from('deals').update(patch).eq('id', id);
+  };
+
+  // Complete a "mark surplus lead dead" once the caller has picked a reason.
+  // Writes status=dead + the 3 DCC-owned meta keys intel-main reads, logs the
+  // activity, then closes the modal. Merges onto existing meta so intel-main's
+  // own keys (grade, estimatedSurplus, …) are preserved.
+  const confirmDisposition = async (reasonCode) => {
+    if (!dispositionDeal) return;
+    const { id, deal, pendingPatch } = dispositionDeal;
+    const meta = {
+      ...(deal.meta || {}),
+      dispositionReason: reasonCode,
+      dispositionAt: new Date().toISOString(),
+      dispositionBy: userName || session.user.id,
+    };
+    await updateDealMeta(id, { ...(pendingPatch || {}), status: 'dead', meta }, true);
+    await sb.from('activity').insert({
+      deal_id: id,
+      user_id: session.user.id,
+      action: `🪦 Lead marked dead · reason: ${dispositionLabel(reasonCode)}`,
+      visibility: ['team'],
+    });
+    setDispositionDeal(null);
   };
 
   const deleteDeal = async (id) => {
@@ -1982,6 +2021,7 @@ function DealCommandCenter({ session, profile }) {
       {showImport && <ImportLeadsModal onClose={() => setShowImport(false)} userId={session.user.id} onDone={() => loadDeals()} />}
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
       {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
+      {dispositionDeal && <DispositionModal deal={dispositionDeal.deal} initialReason={dispositionDeal.deal?.meta?.dispositionReason || ''} onConfirm={confirmDisposition} onClose={() => setDispositionDeal(null)} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
@@ -2021,7 +2061,7 @@ function DealCommandCenter({ session, profile }) {
             nextDeal: peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null,
             onNav: setActiveDealId,
           };
-          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
+          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} onRequestDisposition={(d) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' } })} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
         })()
       )}
 
@@ -13378,6 +13418,74 @@ const DELETE_REASONS = [
   { code: 'other',                  label: 'Other (specify)' },
 ];
 
+// ─── Lead-outcome feedback (the "why did this lead die" dropdown) ────
+// When a SURPLUS lead is set to status='dead', the caller must record WHY.
+// Stored on deals.meta (dispositionReason/At/By) — DCC-owned keys that
+// intel-main reads back (cron sync-lead-outcomes) to score qualification
+// and gate auto-push. Two UX groups; the Director derives category from the
+// code, so we only store the code. Spec: docs/LEAD_OUTCOME_FEEDBACK_BUILD.md.
+const DISPOSITION_REASONS = [
+  // Group 1 — Bad lead (shouldn't have been sent)
+  { group: 'bad',  code: 'already_claimed',   label: 'Surplus already claimed / disbursed' },
+  { group: 'bad',  code: 'no_surplus',        label: 'No real surplus after debts/liens' },
+  { group: 'bad',  code: 'bad_data',          label: 'Wrong case / duplicate / bad data' },
+  { group: 'bad',  code: 'unworkable_estate', label: 'Deceased — no heir/claimant findable' },
+  // Group 2 — Real lead, no deal
+  { group: 'real', code: 'no_response',      label: "Couldn't reach the homeowner" },
+  { group: 'real', code: 'declined',         label: 'Homeowner declined' },
+  { group: 'real', code: 'hired_competitor', label: 'Signed with a competitor' },
+  { group: 'real', code: 'other',            label: 'Other' },
+];
+const dispositionLabel = (code) => DISPOSITION_REASONS.find(r => r.code === code)?.label || code || '—';
+
+function DispositionModal({ deal, initialReason, onConfirm, onClose }) {
+  const [reason, setReason] = useState(initialReason || '');
+  const [busy, setBusy] = useState(false);
+  const editing = !!initialReason;
+  const G1 = DISPOSITION_REASONS.filter(r => r.group === 'bad');
+  const G2 = DISPOSITION_REASONS.filter(r => r.group === 'real');
+  const submit = async () => {
+    if (!reason || busy) return;
+    setBusy(true);
+    try { await onConfirm(reason); } finally { setBusy(false); }
+  };
+  return (
+    <Modal onClose={busy ? () => {} : onClose} title={editing ? 'Why did this lead die?' : 'Mark lead dead — why?'}>
+      <div style={{ fontSize: 13, color: '#d6d3d1', lineHeight: 1.55, marginBottom: 14 }}>
+        <strong style={{ color: '#fafaf9' }}>{deal.name || deal.id}</strong>
+        <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>
+          {deal.address || '—'}{deal.meta?.courtCase ? ` · ${deal.meta.courtCase}` : ''}
+        </div>
+      </div>
+      <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: 12, marginBottom: 16, fontSize: 12, color: '#a8a29e', lineHeight: 1.55 }}>
+        Recording <strong style={{ color: '#fafaf9' }}>why</strong> a surplus lead died lets us tell a
+        "bad lead we shouldn't have worked" from a "good lead that just didn't sign" — the signal
+        that decides which leads can be auto-sent to callers later.
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Reason <span style={{ color: '#fca5a5' }}>(required)</span>
+        </label>
+        <select value={reason} onChange={e => setReason(e.target.value)} disabled={busy} style={{ ...inputStyle, padding: '8px 10px' }}>
+          <option value="" disabled>Select a reason…</option>
+          <optgroup label="Bad lead (shouldn't have been sent)">
+            {G1.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+          </optgroup>
+          <optgroup label="Real lead, no deal">
+            {G2.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
+          </optgroup>
+        </select>
+      </div>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+        <button onClick={busy ? undefined : onClose} disabled={busy} style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+        <button onClick={submit} disabled={!reason || busy} style={{ background: !reason ? '#292524' : '#78350f', color: !reason ? '#57534e' : '#fbbf24', border: '1px solid ' + (!reason ? '#292524' : '#92400e'), padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: (!reason || busy) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+          {busy ? '⏳ Saving…' : (editing ? 'Update reason' : 'Mark dead')}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
 function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
   const [reason, setReason] = useState('sale_unwound');
   const [detail, setDetail] = useState('');
@@ -14229,7 +14337,7 @@ function NotesDrawerTrigger({ count, onClick, isOpen }) {
   );
 }
 
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin, initialTab, peerNav, startCall, callStatus }) {
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, initialTab, peerNav, startCall, callStatus }) {
   const [tab, setTab] = useState(initialTab || "overview");
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
@@ -14430,6 +14538,13 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         <select value={deal.status} onChange={e => {
           const prev = deal.status;
           const next = e.target.value;
+          // Surplus lead → dead must capture a reason (intel-main reads it).
+          // Hand off to the disposition modal, which writes status + meta + logs.
+          // The controlled select snaps back to prev until the modal confirms.
+          if (next === 'dead' && deal.type === 'surplus' && !deal.meta?.dispositionReason) {
+            onRequestDisposition && onRequestDisposition(deal);
+            return;
+          }
           const patch = { status: next };
           const isClosedStatus = (s) => ["closed", "recovered"].includes(s);
           if (isClosedStatus(next) && !deal.closed_at) patch.closed_at = new Date().toISOString();
@@ -14442,6 +14557,11 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, isAdmin
         }} style={{ ...selectStyle, fontSize: 11 }}>
           {(DEAL_STATUSES[deal.type] || []).map(s => <option key={s} value={s}>{s.replace(/-/g, " ").toUpperCase()}</option>)}
         </select>
+        {deal.type === 'surplus' && deal.status === 'dead' && (
+          deal.meta?.dispositionReason
+            ? <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title="Edit why this lead was marked dead" style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>🪦 {dispositionLabel(deal.meta.dispositionReason)} <span style={{ color: '#57534e' }}>✎</span></button>
+            : <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title="Record why this lead died — required for surplus leads" style={{ background: '#3a1d0e', color: '#fdba74', border: '1px solid #7c2d12', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>⚠ Set reason this died</button>
+        )}
         {isLeadStatus(deal) && POST_ENGAGEMENT_STATUS[deal.type] && (
           <button
             onClick={() => {
