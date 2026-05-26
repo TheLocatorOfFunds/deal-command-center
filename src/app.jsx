@@ -5867,9 +5867,15 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
         setSelectedId(match.id);
         setBody(renderTemplate(match.body_template));
       }
-      const { data: pn } = await sb.from('phone_numbers').select('*').eq('active', true).eq('gateway', 'mac_bridge');
-      setPhoneNumbers(pn || []);
-      if ((pn || []).length > 0) setFromNumber(pn[0].number);
+      // Pull all active senders. Prefer the Twilio business line (+15139985440)
+      // as the default; Nathan's mac_bridge stays available as an option.
+      const { data: pn } = await sb.from('phone_numbers').select('*').eq('active', true).order('gateway', { ascending: true });
+      const list = pn || [];
+      setPhoneNumbers(list);
+      if (list.length > 0) {
+        const twilioNum = list.find(n => n.gateway === 'twilio') || list[0];
+        setFromNumber(twilioNum.number);
+      }
     })();
     // eslint-disable-next-line
   }, []);
@@ -11500,7 +11506,12 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const [editMode, setEditMode]   = React.useState(false);
   const sendingRef                = React.useRef(false);
   const [editBody, setEditBody]   = React.useState('');
-  const [fromNum, setFromNum]     = React.useState('+15135162306');
+  // Default to the Twilio business line (+15139985440); 2026-05-24 A2P 10DLC
+  // campaign was VERIFIED so Twilio outbound is the standard channel now.
+  // Real default is filled in from phone_numbers once it loads (see effect below);
+  // empty-string initial state means the Edge Function will use TWILIO_FROM_NUMBER
+  // env var (also 5440) if a send fires before the load completes.
+  const [fromNum, setFromNum]     = React.useState('');
   const [phoneNums, setPhoneNums] = React.useState([]);
   const [error, setError]         = React.useState(null);
   const [sentInfo, setSentInfo]   = React.useState(null);
@@ -11552,9 +11563,20 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const toPhone   = item?.contact_phone || meta.homeownerPhone || '';
 
   React.useEffect(() => {
-    sb.from('phone_numbers').select('number, label, gateway').eq('gateway', 'mac_bridge').then(({ data }) => {
-      if (data) setPhoneNums(data);
-    });
+    // Load every active sender. Default to the Twilio line (+15139985440);
+    // mac_bridge (2306) stays available as an option in the dropdown.
+    sb.from('phone_numbers')
+      .select('number, label, gateway')
+      .eq('active', true)
+      .then(({ data }) => {
+        const list = data || [];
+        setPhoneNums(list);
+        if (list.length > 0 && !fromNum) {
+          const twilioNum = list.find(n => n.gateway === 'twilio') || list[0];
+          setFromNum(twilioNum.number);
+        }
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   function fmtPhone(p) {
@@ -11679,10 +11701,13 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
           value={fromNum}
           onChange={e => setFromNum(e.target.value)}
           style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#e7e5e4', padding: '3px 7px', fontSize: 11, cursor: 'pointer', maxWidth: 220 }}>
-          <option value="+15135162306">Nathan's iPhone · (513) 516-2306</option>
-          {phoneNums.filter(p => p.number !== '+15135162306').map(p => (
-            <option key={p.number} value={p.number}>{p.label || p.number}</option>
-          ))}
+          {/* Sort so Twilio gateway comes first (default), bridge second.
+              Both numbers stay selectable. */}
+          {[...phoneNums]
+            .sort((a, b) => (a.gateway === 'twilio' ? -1 : 1) - (b.gateway === 'twilio' ? -1 : 1))
+            .map(p => (
+              <option key={p.number} value={p.number}>{p.label || p.number}</option>
+            ))}
         </select>
         <span style={{ fontSize: 11, color: '#57534e' }}>→</span>
         <span style={{ fontSize: 11, color: '#e7e5e4', fontWeight: 600 }}>{fmtPhone(toPhone)}</span>

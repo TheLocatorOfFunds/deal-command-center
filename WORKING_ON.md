@@ -70,9 +70,40 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
-**Status:** Active — 2026-05-13
-**Branch:** `claude/cranky-boyd-d5f84a` (worktree)
-**Working on:** Inbound MMS / iMessage attachment support — both the Twilio
+**Status:** Active — 2026-05-24
+**Branch:** `claude/twilio-default-outbound` (worktree, PR #211)
+
+**Today (2026-05-24) — Twilio default outbound rollout**
+
+A2P 10DLC campaign on `+15139985440` flipped to **VERIFIED** today (was bouncing FAILED ↔ IN_PROGRESS since 5/12). Twilio is now the architectural default for SMS + voice; mac_bridge stays as a per-message fallback option in the UI for cases where Nathan needs to send from his personal iPhone.
+
+**Shipped in PR #211 (`feat(sms): default outbound sender to +15139985440`):**
+- `OutreachDraftPanel` (Comms-tab AI cadence draft approval) — was hardcoded `useState('+15135162306')`. Now loads all active `phone_numbers`, defaults to `gateway='twilio'`, with 2306 still selectable.
+- `SendIntroTextModal` (manual intro-text composer) — was filtering `phone_numbers` to `gateway='mac_bridge'` only. Now pulls every active sender, defaults to the Twilio gateway row.
+- Dropdown reordering so Twilio appears first in both surfaces.
+
+**What was already correct (most of the routing):**
+- `TWILIO_FROM_NUMBER` env var on send-sms was already 5440.
+- Mobile SMS (quick/sms, thread/[key], OutreachDraftPanel.tsx) already deferred to env default → 5440.
+- Web Comms tab sender picker already preferred `gateway='twilio'`.
+- Voice inbound rings web + mobile (via `dcc-fundlocators` SDK identity) + Nathan's 2306 (screened by twilio-voice-screen) in parallel.
+- Voice outbound from web (`Twilio.Device.connect({CallerId: '+15139985440'})`) and mobile (Voice SDK + bridge fallback) — both already use 5440 caller ID.
+
+**Why the split was 103/37 (2306/5440) in last 30 days:** Those two UI defaults were sending AI drafts + intro texts through the bridge even though everything else routed to Twilio. PR #211 closes that gap.
+
+**Open A2P loose ends (separate, not blocking):**
+- Email notifications on `check-a2p-campaign-status` Edge Function have been silently failing since 5/12 — 4 status transitions missed including today's VERIFIED. Resend call broken somewhere.
+- Daily A2P status-check cron has a gap on 5/21 + 5/22 (weekday slots not logged). Cron may need re-scheduling.
+- Architectural note: mac_bridge AppleScript hardcodes `service type = iMessage` and silently fails on Android. With Twilio now universal default, this is less urgent but still a footgun if 2306 is ever chosen for an Android recipient. Memory note saved at `messaging_bridge_imessage_only.md`.
+
+**Plan post-merge:**
+- Browser-test both UI surfaces (AI draft default = 5440; Send Intro Text default = 5440; 2306 still selectable).
+- Send one real outbound from OutreachDraftPanel to a known number, confirm `messages_outbound.from_number = '+15139985440'`.
+- Keep 2306 active in `phone_numbers` for ~1 week while monitoring Twilio reliability before considering deactivation (per Justin 2026-05-24).
+
+---
+
+**Previous (2026-05-13):** Inbound MMS / iMessage attachment support — both the Twilio
 path (receive-sms edge fn) and the mac_bridge inbound path were dropping
 attachments and only persisting body text. Both now download the media,
 upload to a new public `inbound-media` Supabase bucket under
