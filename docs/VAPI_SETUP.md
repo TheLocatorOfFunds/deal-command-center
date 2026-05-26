@@ -69,7 +69,20 @@ End-of-call:
    - Server URL header: `x-vapi-secret: <existing VAPI_WEBHOOK_SECRET value>`
 7. **Save**
 
-**Option B — paste-via-cURL** (3 commands, ~30 sec):
+**Option B — `npm run vapi-create-assistant`** (recommended, ~30 sec):
+
+```bash
+npm run vapi-create-assistant
+```
+
+The script prompts for your Vapi private key + the existing `VAPI_WEBHOOK_SECRET`,
+auto-generates a fresh `VAPI_LLM_SECRET`, checks for duplicate assistants (idempotent),
+posts to api.vapi.ai, and prints the next-steps list including the exact env vars to
+paste into Supabase. The full assistant config (model URL, headers, voice, transcriber,
+structured-data schema for end-of-call analysis) is in `scripts/vapi-create-assistant.mjs`
+— edit there if you want to change voice ID, temperature, etc.
+
+**Option C — raw cURL** (if you don't want to run Node):
 
 ```bash
 # Set these once

@@ -70,15 +70,43 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
-**Status:** Active — 2026-05-13
-**Branch:** `claude/cranky-boyd-d5f84a` (worktree)
-**Working on:** Inbound MMS / iMessage attachment support — both the Twilio
-path (receive-sms edge fn) and the mac_bridge inbound path were dropping
-attachments and only persisting body text. Both now download the media,
-upload to a new public `inbound-media` Supabase bucket under
-`<deal_id>/<uuid>.<ext>`, and store the durable URL on
-`messages_outbound.media_url`. UI side already rendered images/video/audio
-from media_url — no app.jsx changes needed.
+**Status:** Active — 2026-05-26
+**Branch:** `claude/mobile-feature-parity-p3pPZ`
+**Working on:** Voice agent integration — pivoted from "Vapi-attached Claude"
+to "Vapi-as-transport, Lauren-as-brain" (Custom LLM). Code shipped on this
+branch; awaiting Justin to do the Vapi dashboard / Supabase secrets / test
+call (steps 1, 3, 4, 6 in docs/VAPI_SETUP.md). Steps 2 + 5 are scripted:
+`npm run vapi-create-assistant` for the assistant POST, GH Actions "Deploy
+Edge Functions" workflow for the deploy. Closes/advances issue #210.
+
+**Recent decisions:**
+- 2026-05-26: New shared module `supabase/functions/_shared/lauren-brain.ts`
+  — SYSTEM prompt + VOICE_ADDENDUM + safety filters + caller-phone →
+  case-context resolver. Used by new `lauren-voice` function (Vapi Custom
+  LLM endpoint). `lauren-chat` (web widget) left untouched to avoid risk
+  to the production widget — follow-up PR will migrate it to import from
+  `_shared/`. Once both surfaces share, tuning Lauren's prompt updates
+  chat + voice in one edit.
+- 2026-05-26: Voicemail fallback chained AFTER the Vapi SIP <Dial> in
+  twilio-voice-status with `timeout=10` + `action` callback. If Vapi
+  doesn't answer in 10s (account suspended, network blip, misconfig),
+  caller still hits voicemail. Without this chain a Vapi outage = silent
+  dropped calls.
+- 2026-05-26: Deleted `vapi-lookup-deal` Edge Function — its mid-call
+  caller-lookup duty is subsumed by lauren-voice's inline resolution
+  on every turn (cheap, stateless on our side since Vapi sends the full
+  transcript each turn).
+- 2026-05-26: New GH Actions workflow `.github/workflows/deploy-functions.yml`
+  (workflow_dispatch only, uses existing SUPABASE_PAT). One-click deploy
+  for any Edge Function from the GH UI. Pattern: type the function name(s)
+  in the input, hit run, done in ~30s.
+
+**Previous (2026-05-13):** Inbound MMS / iMessage attachment support —
+both the Twilio path (receive-sms edge fn) and the mac_bridge inbound
+path were dropping attachments and only persisting body text. Both now
+download the media, upload to a new public `inbound-media` Supabase bucket
+under `<deal_id>/<uuid>.<ext>`, and store the durable URL on
+`messages_outbound.media_url`.
 
 **Recent decisions:**
 - 2026-05-13: New public storage bucket `inbound-media` (migration
@@ -126,17 +154,26 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
   applied; that was the root cause of the "deal pages render Today
   dashboard" bug we hit during RVM testing.
 
-**Touching:** `supabase/migrations/_pending_review/*`, `WORKING_ON.md`
+**Touching (current session):** `supabase/functions/lauren-voice/`,
+`supabase/functions/_shared/lauren-brain.ts`, `supabase/functions/twilio-voice-status/`,
+`.github/workflows/deploy-functions.yml`, `scripts/vapi-create-assistant.mjs`,
+`docs/VAPI_SETUP.md`
 
 **Open follow-ups:**
-- Justin tests RVM full-flow drop to +14797196859 (preview → drop → verify
-  voicemail arrives)
-- Nathan + Justin design approval flow for client-notify triggers
-- Twilio Brand approval still parked
+- Justin to do dashboard work: Vapi signup + Twilio SIP import + Supabase
+  secrets (`VAPI_LLM_SECRET`, `VAPI_SIP_URI`) + test call. See
+  `docs/VAPI_SETUP.md` steps 1, 3, 4, 6.
+- Follow-up PR: migrate `lauren-chat` (web widget) to import from
+  `_shared/lauren-brain.ts`. Hold until voice is verified working.
+- Optional v2: add `case_status(deal_id)` + `recent_outreach(contact_id)`
+  tools to lauren-voice so Lauren can answer mid-call status questions
+  beyond the initial caller-context block. Non-breaking when added.
+- Older parked: Twilio Brand approval still parked. RVM full-flow test
+  drop to +14797196859 still pending Justin.
 
 ---
 
-**Last updated:** 2026-05-07 evening
+**Last updated:** 2026-05-26
 
 **Last updated (auto):** 2026-05-14 20:12 UTC
 
