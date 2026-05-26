@@ -28271,8 +28271,13 @@ function TimeTrackingView({ userId, isAdmin }) {
 
   const loadAdmin = React.useCallback(async () => {
     if (!isAdmin) return;
+    // Load ALL profiles (not just role='va') because Eric & Innam are role='admin'
+    // after the 2026-05-12 security hardening that put the team allowlist into
+    // handle_new_user. We then filter client-side to "anyone on payroll": has
+    // role='va', OR clocked time in this range, OR has a configured rate.
+    // This makes the payroll table self-healing: clock in once → appear in it.
     const [{ data: profs }, { data: rateRows }, { data: tes }, { data: pmts }] = await Promise.all([
-      sb.from('profiles').select('id, name, role').eq('role', 'va'),
+      sb.from('profiles').select('id, name, role'),
       sb.from('hourly_rates').select('*').order('effective_from', { ascending: false }),
       sb.from('time_entries').select('*')
         .gte('start_at', adminStartIso).lte('start_at', adminEndIso)
@@ -28281,7 +28286,12 @@ function TimeTrackingView({ userId, isAdmin }) {
         .gte('period_end', new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
         .order('period_start', { ascending: false }),
     ]);
-    setVaProfiles(profs || []);
+    const teUserIds = new Set((tes || []).map(t => t.user_id));
+    const rateUserIds = new Set((rateRows || []).map(r => r.user_id));
+    const payrollProfs = (profs || []).filter(p =>
+      p.role === 'va' || teUserIds.has(p.id) || rateUserIds.has(p.id)
+    );
+    setVaProfiles(payrollProfs);
     const r = {};
     const rangeEndDate = adminRange.end.toISOString().slice(0, 10);
     (rateRows || []).forEach(row => {
@@ -28699,7 +28709,7 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
         })
       ),
       vaProfiles.length === 0
-        ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No VAs found. Add Erik / Anam via the Team modal.')
+        ? React.createElement('div', { style: { padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 } }, 'No team members are tracking time in this range yet. Anyone who clocks in — or has an hourly rate configured — will appear here automatically.')
         : React.createElement('table', { style: { width: '100%', borderCollapse: 'collapse', fontSize: 13 } },
             React.createElement('thead', null,
               React.createElement('tr', { style: { textAlign: 'left', color: '#78716c', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' } },
