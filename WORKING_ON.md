@@ -104,10 +104,9 @@ in the UI for cases where Nathan needs to send from his personal iPhone.
 - Voice inbound rings web + mobile (via `dcc-fundlocators` SDK identity) + Nathan's 2306 (screened by twilio-voice-screen) in parallel.
 - Voice outbound from web and mobile both already use 5440 caller ID.
 
-**Open A2P loose ends (separate, not blocking):**
-- Email notifications on `check-a2p-campaign-status` Edge Function have been silently failing since 5/12 — 4 status transitions missed including the VERIFIED. Resend call broken somewhere.
-- Daily A2P status-check cron has a gap on 5/21 + 5/22 (weekday slots not logged).
-- mac_bridge AppleScript hardcodes `service type = iMessage` and silently fails on Android. Less urgent now Twilio is default but still a footgun if 2306 is ever chosen for an Android recipient. Memory note at `messaging_bridge_imessage_only.md`.
+**A2P monitoring retired (2026-05-26):** Campaign VERIFIED → no further status monitoring needed. Dropped table `a2p_campaign_status_log`, RPC `verify_a2p_status_secret`, Vault secret `a2p_status_check_secret`. Edge Function `check-a2p-campaign-status` replaced with a 410 Gone stub. Teardown migration: `20260526200000_drop_a2p_campaign_monitoring.sql`. Memory note `twilio_a2p_setup.md` trimmed to keep the SID reference card but strip the monitoring section.
+
+**One residual gotcha (not blocking):** mac_bridge AppleScript hardcodes `service type = iMessage` and silently fails on Android. Less urgent now that Twilio is default, but still a footgun if 2306 is ever chosen for an Android recipient. Memory note at `messaging_bridge_imessage_only.md`.
 
 ---
 
