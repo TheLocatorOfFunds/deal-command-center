@@ -105,26 +105,41 @@ Deno.serve(async (req: Request) => {
     // Vapi dashboard, e.g. sip:+15139985440@abc123.sip.vapi.ai. When
     // unset, we keep the original voicemail behavior — so this Edge
     // Function is safe to ship even before the Vapi account is wired up.
+    //
+    // When Vapi IS configured, we still chain a voicemail fallback
+    // after the <Dial> via `action` — if Vapi fails to pick up within
+    // 10 seconds (network issue, account suspended, dashboard
+    // misconfig), Twilio re-POSTs here with DialCallStatus=no-answer
+    // and we serve the static voicemail prompt instead. Without this
+    // chain a Vapi outage = silent dropped calls.
     if (isMissed && row?.direction === 'inbound') {
       const vapiSipUri = Deno.env.get('VAPI_SIP_URI') ?? '';
-      if (vapiSipUri) {
-        // Hand off to Vapi. Vapi will fire end-of-call-report to
-        // /functions/v1/vapi-webhook when the conversation finishes.
-        return new Response(`<?xml version="1.0" encoding="UTF-8"?>
-<Response>
-  <Dial answerOnBridge="true">
-    <Sip>${vapiSipUri}</Sip>
-  </Dial>
-</Response>`, { status: 200, headers: { 'Content-Type': 'text/xml' } });
-      }
-      // Fallback: static voicemail prompt + <Record>.
-      return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+      const voicemailTwiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="Polly.Joanna">You've reached FundLocators. Please leave a message after the beep and we'll call you right back.</Say>
   <Record maxLength="120" playBeep="true"
     recordingStatusCallback="${supabaseUrl}/functions/v1/twilio-voice-status"
     recordingStatusCallbackMethod="POST"/>
+</Response>`;
+      if (vapiSipUri) {
+        // Hand off to Vapi. If Vapi fails to answer within 10s, the
+        // outer Dial action callback (this same endpoint) runs the
+        // standalone voicemail TwiML below by detecting DialCallStatus
+        // from the Sip leg. answerOnBridge keeps the caller on hold
+        // music until Vapi picks up.
+        return new Response(`<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial answerOnBridge="true" timeout="10" action="${supabaseUrl}/functions/v1/twilio-voice-status" method="POST">
+    <Sip>${vapiSipUri}</Sip>
+  </Dial>
+  <Say voice="Polly.Joanna">Sorry, our line is unavailable. Please leave a message after the beep and we'll call you right back.</Say>
+  <Record maxLength="120" playBeep="true"
+    recordingStatusCallback="${supabaseUrl}/functions/v1/twilio-voice-status"
+    recordingStatusCallbackMethod="POST"/>
 </Response>`, { status: 200, headers: { 'Content-Type': 'text/xml' } });
+      }
+      // No Vapi configured: static voicemail prompt + <Record>.
+      return new Response(voicemailTwiml, { status: 200, headers: { 'Content-Type': 'text/xml' } });
     }
 
     return TWIML_OK;

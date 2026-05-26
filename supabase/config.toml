@@ -88,7 +88,8 @@ verify_jwt = false
 # function via the x-vapi-secret header (env var VAPI_WEBHOOK_SECRET).
 verify_jwt = false
 
-[functions.vapi-lookup-deal]
-# Called by Vapi mid-call as a custom tool. Same shared-secret auth
-# as vapi-webhook — both use the VAPI_WEBHOOK_SECRET env var.
+[functions.lauren-voice]
+# Vapi Custom LLM endpoint — Vapi POSTs OpenAI-style /chat/completions
+# requests here per conversation turn. Auth via Bearer ${VAPI_LLM_SECRET}.
+# No Supabase JWT.
 verify_jwt = false
