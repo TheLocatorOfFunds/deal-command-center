@@ -1240,16 +1240,27 @@ function DealCommandCenter({ session, profile }) {
   const loadEngagementCount = async () => {
     let seenAt = '1970-01-01T00:00:00Z';
     try { seenAt = localStorage.getItem('dcc_engagement_seen_at') || seenAt; } catch (e) {}
-    const { data, error } = await sb.from('v_personalized_link_engagement')
-      .select('token, deal_id, last_external_viewed_at')
-      .gt('external_views_last_7d', 0)
-      .not('deal_id', 'is', null)
-      .order('last_external_viewed_at', { ascending: false })
-      .limit(200);
-    if (error) { setEngagementCount(0); return; }
     const seen = new Date(seenAt).getTime();
-    const n = (data || []).filter(r => r.last_external_viewed_at && new Date(r.last_external_viewed_at).getTime() > seen).length;
-    setEngagementCount(n);
+    const since7 = new Date(Date.now() - 7 * 86400_000).toISOString();
+    // Two signals, counted together: link opens (v_personalized_link_engagement,
+    // excludes team views) + real Lauren website chats (lauren_conversations,
+    // ≥1 message). Each query safe-fails to empty so one being unavailable (e.g.
+    // RLS for a VA) never zeroes the other.
+    const [linkRes, chatRes] = await Promise.all([
+      sb.from('v_personalized_link_engagement')
+        .select('token, deal_id, last_external_viewed_at')
+        .gt('external_views_last_7d', 0).not('deal_id', 'is', null)
+        .order('last_external_viewed_at', { ascending: false }).limit(200),
+      sb.from('lauren_conversations')
+        .select('id, last_message_at')
+        .not('token', 'is', null).gte('message_count', 1).gte('last_message_at', since7)
+        .order('last_message_at', { ascending: false }).limit(200),
+    ]);
+    const linkN = (linkRes && !linkRes.error ? (linkRes.data || []) : [])
+      .filter(r => r.last_external_viewed_at && new Date(r.last_external_viewed_at).getTime() > seen).length;
+    const chatN = (chatRes && !chatRes.error ? (chatRes.data || []) : [])
+      .filter(r => r.last_message_at && new Date(r.last_message_at).getTime() > seen).length;
+    setEngagementCount(linkN + chatN);
   };
 
   // Total unread team-chat messages across all threads I'm in (DMs + #Ops
@@ -1518,6 +1529,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, loadSystemAlertCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadUnreadSmsCount)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'personalized_link_views' }, loadEngagementCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, loadEngagementCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -1820,7 +1832,7 @@ function DealCommandCenter({ session, profile }) {
                     {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
                     {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
                     {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
-                    {engagementCount > 0 && <button onClick={() => { setActiveDealId(null); setView('attention'); try { localStorage.setItem('dcc_engagement_seen_at', new Date().toISOString()); } catch (e) {} setEngagementCount(0); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fdba74', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🔥 <span style={{ flex: 1 }}>{engagementCount} lead{engagementCount !== 1 ? 's' : ''} opened their link</span></button>}
+                    {engagementCount > 0 && <button onClick={() => { setActiveDealId(null); setView('attention'); try { localStorage.setItem('dcc_engagement_seen_at', new Date().toISOString()); } catch (e) {} setEngagementCount(0); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fdba74', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🔥 <span style={{ flex: 1 }}>{engagementCount} new lead signal{engagementCount !== 1 ? 's' : ''} (opens + chats)</span></button>}
                     {pendingWalkthroughs.length > 0 && <button onClick={() => setShowWalkthroughs(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🏠 <span style={{ flex: 1 }}>{pendingWalkthroughs.length} walkthrough{pendingWalkthroughs.length !== 1 ? 's' : ''}</span></button>}
                     {pendingOffersCount > 0 && <button onClick={() => { sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', {ascending:false}).limit(1).then(({data}) => { if (data?.[0]) setActiveDealId(data[0].deal_id); }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#6ee7b7', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>💰 <span style={{ flex: 1 }}>{pendingOffersCount} investor offer{pendingOffersCount !== 1 ? 's' : ''}</span></button>}
                     {isOwner && systemAlertCount > 0 && <button onClick={() => setShowSystemAlerts(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚠ <span style={{ flex: 1 }}>{systemAlertCount} system alert{systemAlertCount !== 1 ? 's' : ''}</span></button>}
@@ -10181,20 +10193,61 @@ function LeadEngagementStrip({ deals, onSelect }) {
   const [rows, setRows] = useState([]);
   const alive = useAliveRef();
   const load = React.useCallback(async () => {
-    const { data, error } = await sb.from('v_personalized_link_engagement')
-      .select('token, deal_id, first_name, last_name, external_views, external_views_last_24h, last_external_viewed_at')
-      .gt('external_views_last_7d', 0)
-      .not('deal_id', 'is', null)
-      .order('last_external_viewed_at', { ascending: false })
-      .limit(25);
+    const since7 = new Date(Date.now() - 7 * 86400_000).toISOString();
+    // Link opens + Lauren website chats, fetched in parallel. Each safe-fails to
+    // empty so one source being unavailable never blanks the other.
+    const [linkRes, chatRes] = await Promise.all([
+      sb.from('v_personalized_link_engagement')
+        .select('token, deal_id, first_name, last_name, external_views, external_views_last_24h, last_external_viewed_at')
+        .gt('external_views_last_7d', 0).not('deal_id', 'is', null)
+        .order('last_external_viewed_at', { ascending: false }).limit(25),
+      sb.from('lauren_conversations')
+        .select('id, token, started_at, last_message_at, message_count, submitted_claim')
+        .not('token', 'is', null).gte('message_count', 1).gte('last_message_at', since7)
+        .order('last_message_at', { ascending: false }).limit(25),
+    ]);
     if (!alive.current) return;
-    if (error) { setRows([]); return; }
-    setRows(data || []);
+    const linkRows = (linkRes && !linkRes.error ? (linkRes.data || []) : []);
+    const chatRows = (chatRes && !chatRes.error ? (chatRes.data || []) : []);
+
+    // lauren_conversations has no deal_id — resolve deal + name from the
+    // personalized link by token (same mapping the link-engagement view uses).
+    const tokMap = new Map();
+    const chatTokens = [...new Set(chatRows.map(r => r.token).filter(Boolean))];
+    if (chatTokens.length) {
+      const { data: pls } = await sb.from('personalized_links')
+        .select('token, deal_id, first_name, last_name').in('token', chatTokens);
+      (pls || []).forEach(p => tokMap.set(p.token, p));
+      if (!alive.current) return;
+    }
+
+    const open = linkRows.map(r => ({
+      key: 'open:' + r.token, kind: 'open', deal_id: r.deal_id,
+      first_name: r.first_name, last_name: r.last_name,
+      count: r.external_views || 1, today: (r.external_views_last_24h || 0) > 0,
+      lastAt: r.last_external_viewed_at,
+    }));
+    const chat = chatRows.map(r => {
+      const p = tokMap.get(r.token) || {};
+      return {
+        key: 'chat:' + r.id, kind: 'chat', deal_id: p.deal_id || null,
+        first_name: p.first_name, last_name: p.last_name,
+        count: r.message_count || 1, claim: !!r.submitted_claim,
+        today: !!(r.last_message_at && (Date.now() - new Date(r.last_message_at).getTime() < 86400_000)),
+        lastAt: r.last_message_at || r.started_at,
+      };
+    }).filter(r => r.deal_id); // only chats we can tie to a deal
+
+    const merged = [...open, ...chat]
+      .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime())
+      .slice(0, 40);
+    setRows(merged);
   }, [alive]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     const ch = sb.channel('lead-engagement-strip')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'personalized_link_views' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, load)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [load]);
@@ -10216,22 +10269,27 @@ function LeadEngagementStrip({ deals, onSelect }) {
     <div style={{ marginBottom: 16, border: '1px solid #7c2d12', borderRadius: 10, background: 'linear-gradient(180deg,#1c1410,#14110d)', overflow: 'hidden' }}>
       <div style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, color: '#fdba74', letterSpacing: '0.1em', textTransform: 'uppercase', borderBottom: '1px solid #292017', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         🔥 Lead Engagement
-        <span style={{ fontSize: 10, color: '#a8a29e', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'none' }}>{rows.length} lead{rows.length !== 1 ? 's' : ''} opened their link in the last 7 days</span>
+        <span style={{ fontSize: 10, color: '#a8a29e', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'none' }}>{rows.length} signal{rows.length !== 1 ? 's' : ''} in the last 7 days · link opens + Lauren chats</span>
       </div>
       <div>
         {rows.map(r => {
           const d = dealById.get(r.deal_id);
-          const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || (d && d.name) || r.token;
+          const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || (d && d.name) || r.deal_id;
           const sub = d ? (d.address || d.name || '') : r.deal_id;
-          const today = (r.external_views_last_24h || 0) > 0;
+          const icon = r.kind === 'chat' ? '💬' : '🔗';
+          const detail = r.kind === 'chat'
+            ? `chatted with Lauren · ${r.count} msg${r.count !== 1 ? 's' : ''} · ${fmtRel(r.lastAt)}`
+            : `opened ${r.count}× · ${fmtRel(r.lastAt)}`;
           return (
-            <button key={r.token} onClick={() => onSelect && onSelect(r.deal_id)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#e7e5e4', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+            <button key={r.key} onClick={() => onSelect && onSelect(r.deal_id)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#e7e5e4', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <span style={{ fontSize: 13, flexShrink: 0 }}>{icon}</span>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 <span style={{ fontWeight: 700, color: '#fafaf9' }}>{name}</span>
                 {sub && <span style={{ color: '#78716c' }}> · {sub}</span>}
               </span>
-              {today && <span style={{ fontSize: 9, fontWeight: 700, color: '#fb923c', background: '#3a1d0e', border: '1px solid #7c2d12', borderRadius: 4, padding: '2px 6px', letterSpacing: '0.06em' }}>TODAY</span>}
-              <span style={{ fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap' }}>opened {r.external_views || 1}× · {fmtRel(r.last_external_viewed_at)}</span>
+              {r.claim && <span style={{ fontSize: 9, fontWeight: 700, color: '#6ee7b7', background: '#0c2a1f', border: '1px solid #14532d', borderRadius: 4, padding: '2px 6px', letterSpacing: '0.06em' }}>✅ CLAIM</span>}
+              {r.today && <span style={{ fontSize: 9, fontWeight: 700, color: '#fb923c', background: '#3a1d0e', border: '1px solid #7c2d12', borderRadius: 4, padding: '2px 6px', letterSpacing: '0.06em' }}>TODAY</span>}
+              <span style={{ fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap' }}>{detail}</span>
             </button>
           );
         })}
