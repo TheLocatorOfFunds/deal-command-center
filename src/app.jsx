@@ -11869,6 +11869,10 @@ function AutomationsQueue({ onSelectDeal }) {
   const { items: rawItems, deals } = useOutreachQueue();
   const firedRef = React.useRef(new Set());
   const cancelledRef = React.useRef(new Set());
+  // Collapsed by default so a big queue (often 90+) doesn't drown the page;
+  // "Show all N" expands. Mirrors the Prep Queue collapse pattern.
+  const [expanded, setExpanded] = React.useState(false);
+  const AUTOMATIONS_COLLAPSED_LIMIT = 5;
 
   // Phase 1 scope lock (Justin + Nathan, 2026-05-13 meeting):
   // Auto-outreach fires ONLY on Verified A-tier surplus leads.
@@ -11960,6 +11964,8 @@ function AutomationsQueue({ onSelectDeal }) {
     return { text: `Day ${item.cadence_day} follow-up ready`, color: '#78716c', stuck: false };
   }
 
+  const visible = expanded ? items : items.slice(0, AUTOMATIONS_COLLAPSED_LIMIT);
+
   return (
     <div style={{ marginBottom: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
@@ -11972,7 +11978,7 @@ function AutomationsQueue({ onSelectDeal }) {
         </span>
         <span style={{ fontSize: 11, color: '#57534e', marginLeft: 2 }}>· tap a deal to review &amp; send</span>
       </div>
-      {items.map(item => {
+      {visible.map(item => {
         const d = deals[item.deal_id];
         const meta = d?.meta || {};
         const county = meta.county;
@@ -12021,6 +12027,15 @@ function AutomationsQueue({ onSelectDeal }) {
           </div>
         );
       })}
+      {items.length > AUTOMATIONS_COLLAPSED_LIMIT && (
+        <button
+          onClick={() => setExpanded(e => !e)}
+          style={{ display: 'block', width: '100%', textAlign: 'center', background: 'transparent', border: '1px dashed #44403c', color: '#a8a29e', borderRadius: 6, padding: '8px 12px', fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', cursor: 'pointer', fontFamily: 'inherit', marginTop: 2 }}>
+          {expanded
+            ? `▲ Show less (collapse to top ${AUTOMATIONS_COLLAPSED_LIMIT})`
+            : `▼ Show all ${items.length} (currently showing ${AUTOMATIONS_COLLAPSED_LIMIT})`}
+        </button>
+      )}
     </div>
   );
 }
