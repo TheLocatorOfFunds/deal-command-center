@@ -705,6 +705,13 @@ function DealCommandCenter({ session, profile }) {
   // system_alerts table. Owner-only badge in the header.
   const [systemAlertCount, setSystemAlertCount] = useState(0);
   const [showSystemAlerts, setShowSystemAlerts] = useState(false);
+  // Lead engagement — count of personalized links opened by the REAL
+  // recipient (not team/preview clicks) more recently than this user last
+  // looked. Drives the 🔥 bell row + the Attention "Lead Engagement" strip.
+  // "Seen" is a localStorage timestamp (dcc_engagement_seen_at) bumped when
+  // the bell row is clicked. One row per lead, so a homeowner refreshing 5×
+  // still counts as a single engaged lead (meaningful-moments only).
+  const [engagementCount, setEngagementCount] = useState(0);
   // Toast queue for new team-chat messages — top-right popups that the
   // user must Reply to or Dismiss (no auto-timeout). Per Nathan: "I just
   // want to make it so that they don't have to click a bunch of buttons
@@ -1221,6 +1228,26 @@ function DealCommandCenter({ session, profile }) {
     setSystemAlertCount(count || 0);
   };
 
+  // Lead-engagement bell count — how many leads opened their personalized
+  // link (real, non-team views) in the last 7d MORE recently than this user
+  // last acknowledged the 🔥 row. Reads v_personalized_link_engagement, which
+  // already excludes is_team_view rows and aggregates one row per token — so
+  // refresh-spam can't inflate it. Safe-fails to 0 if the view is unavailable.
+  const loadEngagementCount = async () => {
+    let seenAt = '1970-01-01T00:00:00Z';
+    try { seenAt = localStorage.getItem('dcc_engagement_seen_at') || seenAt; } catch (e) {}
+    const { data, error } = await sb.from('v_personalized_link_engagement')
+      .select('token, deal_id, last_external_viewed_at')
+      .gt('external_views_last_7d', 0)
+      .not('deal_id', 'is', null)
+      .order('last_external_viewed_at', { ascending: false })
+      .limit(200);
+    if (error) { setEngagementCount(0); return; }
+    const seen = new Date(seenAt).getTime();
+    const n = (data || []).filter(r => r.last_external_viewed_at && new Date(r.last_external_viewed_at).getTime() > seen).length;
+    setEngagementCount(n);
+  };
+
   // Total unread team-chat messages across all threads I'm in (DMs + #Ops
   // + Lauren channels). Drives the badge on the 💬 Chat header button.
   const loadUnreadChatCount = async () => {
@@ -1448,7 +1475,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -1486,6 +1513,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, loadSystemAlertCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadUnreadSmsCount)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'personalized_link_views' }, loadEngagementCount)
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, []);
@@ -1737,7 +1765,7 @@ function DealCommandCenter({ session, profile }) {
           {/* Notifications bell — aggregates Docket, Leads, Walkthroughs, Offers, Alerts */}
           {isTeam && (() => {
             // Bell does NOT include unread chat — the red banner handles that separately
-            const totalNotifs = unackDocketCount + newLeadCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
+            const totalNotifs = unackDocketCount + newLeadCount + engagementCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
             return (
               <div style={{ position: 'relative' }}>
                 <button onClick={() => setShowNotifDropdown(v => !v)}
@@ -1753,6 +1781,7 @@ function DealCommandCenter({ session, profile }) {
                     {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
                     {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
                     {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
+                    {engagementCount > 0 && <button onClick={() => { setActiveDealId(null); setView('attention'); try { localStorage.setItem('dcc_engagement_seen_at', new Date().toISOString()); } catch (e) {} setEngagementCount(0); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fdba74', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🔥 <span style={{ flex: 1 }}>{engagementCount} lead{engagementCount !== 1 ? 's' : ''} opened their link</span></button>}
                     {pendingWalkthroughs.length > 0 && <button onClick={() => setShowWalkthroughs(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🏠 <span style={{ flex: 1 }}>{pendingWalkthroughs.length} walkthrough{pendingWalkthroughs.length !== 1 ? 's' : ''}</span></button>}
                     {pendingOffersCount > 0 && <button onClick={() => { sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', {ascending:false}).limit(1).then(({data}) => { if (data?.[0]) setActiveDealId(data[0].deal_id); }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#6ee7b7', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>💰 <span style={{ flex: 1 }}>{pendingOffersCount} investor offer{pendingOffersCount !== 1 ? 's' : ''}</span></button>}
                     {isOwner && systemAlertCount > 0 && <button onClick={() => setShowSystemAlerts(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚠ <span style={{ flex: 1 }}>{systemAlertCount} system alert{systemAlertCount !== 1 ? 's' : ''}</span></button>}
@@ -10101,6 +10130,76 @@ function ReplyInbox({ onSelect, limit = 100 }) {
   );
 }
 
+// ─── Lead Engagement strip (Attention) ──────────────────────────────
+// Surfaces leads who opened their personalized /s/<token> link recently —
+// the REAL recipient, not team/preview clicks (v_personalized_link_engagement
+// already excludes is_team_view rows). One row per lead; "opened 2×" is total
+// real opens. Click → jump to the deal. Stays live via a realtime sub on
+// personalized_link_views inserts. Renders nothing when no lead has engaged
+// in the last 7 days (or if the engagement view is unavailable).
+function LeadEngagementStrip({ deals, onSelect }) {
+  const [rows, setRows] = useState([]);
+  const alive = useAliveRef();
+  const load = React.useCallback(async () => {
+    const { data, error } = await sb.from('v_personalized_link_engagement')
+      .select('token, deal_id, first_name, last_name, external_views, external_views_last_24h, last_external_viewed_at')
+      .gt('external_views_last_7d', 0)
+      .not('deal_id', 'is', null)
+      .order('last_external_viewed_at', { ascending: false })
+      .limit(25);
+    if (!alive.current) return;
+    if (error) { setRows([]); return; }
+    setRows(data || []);
+  }, [alive]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('lead-engagement-strip')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'personalized_link_views' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  if (rows.length === 0) return null;
+
+  const dealById = new Map(deals.map(d => [d.id, d]));
+  const fmtRel = (iso) => {
+    if (!iso) return '';
+    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
+    if (sec < 60) return 'just now';
+    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
+    if (sec < 86400 * 7) return `${Math.round(sec / 86400)}d ago`;
+    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  };
+
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid #7c2d12', borderRadius: 10, background: 'linear-gradient(180deg,#1c1410,#14110d)', overflow: 'hidden' }}>
+      <div style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, color: '#fdba74', letterSpacing: '0.1em', textTransform: 'uppercase', borderBottom: '1px solid #292017', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        🔥 Lead Engagement
+        <span style={{ fontSize: 10, color: '#a8a29e', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'none' }}>{rows.length} lead{rows.length !== 1 ? 's' : ''} opened their link in the last 7 days</span>
+      </div>
+      <div>
+        {rows.map(r => {
+          const d = dealById.get(r.deal_id);
+          const name = `${r.first_name || ''} ${r.last_name || ''}`.trim() || (d && d.name) || r.token;
+          const sub = d ? (d.address || d.name || '') : r.deal_id;
+          const today = (r.external_views_last_24h || 0) > 0;
+          return (
+            <button key={r.token} onClick={() => onSelect && onSelect(r.deal_id)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#e7e5e4', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <span style={{ fontWeight: 700, color: '#fafaf9' }}>{name}</span>
+                {sub && <span style={{ color: '#78716c' }}> · {sub}</span>}
+              </span>
+              {today && <span style={{ fontSize: 9, fontWeight: 700, color: '#fb923c', background: '#3a1d0e', border: '1px solid #7c2d12', borderRadius: 4, padding: '2px 6px', letterSpacing: '0.06em' }}>TODAY</span>}
+              <span style={{ fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap' }}>opened {r.external_views || 1}× · {fmtRel(r.last_external_viewed_at)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function AttentionView({ deals, onSelect }) {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState([]);
@@ -10254,6 +10353,8 @@ function AttentionView({ deals, onSelect }) {
           strip component is kept defined for potential reuse elsewhere
           (e.g. ReportsView), but Attention surfaces only deal-level work. */}
       <DeadlineAlertStrip onSelect={onSelect} />
+
+      <LeadEngagementStrip deals={deals} onSelect={onSelect} />
 
       {rows.length === 0 && (
         <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10, fontSize: 14 }}>
