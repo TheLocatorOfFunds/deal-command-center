@@ -29,6 +29,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack } from 'expo-router'
 import Constants from 'expo-constants'
+import * as Application from 'expo-application'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { registerForPushAsync } from '../lib/push'
@@ -418,19 +419,31 @@ export default function SettingsScreen() {
                 <Text style={styles.signOutText}>Sign out</Text>
               </TouchableOpacity>
 
-              {/* Build identity — pulled from expo-constants at runtime so
-                  it always reflects the actual installed binary, not a
-                  hardcoded number. Useful for "did I get the latest
-                  TestFlight build?" checks.
+              {/* Build identity — pulled from `expo-application` at runtime
+                  so it ALWAYS reflects the actual installed binary, not the
+                  stale "buildNumber": "1" hardcoded in app.json.
 
-                  expoConfig.version = the human version we set in app.json
-                  nativeBuildVersion = the iOS CFBundleVersion that EAS
-                    auto-increments on every build (so build 3, 4, 5…).
-                    On Expo Go / dev client it may be missing — fall back
-                    to the ios.buildNumber from config. */}
+                  Why expo-application instead of expo-constants:
+                  - Constants.nativeBuildVersion was deprecated in
+                    expo-constants 17+ and returns `undefined` in SDK 54.
+                    On 2026-05-24 Justin saw "(build 1)" because the code
+                    fell through to Constants.expoConfig.ios.buildNumber,
+                    which is the stale "1" in app.json. EAS auto-bumps the
+                    binary's CFBundleVersion but DOESN'T touch app.json.
+                  - Application.nativeBuildVersion reads CFBundleVersion
+                    directly from the device binary, so it returns the
+                    actual number EAS baked in (8, 9, 10…).
+
+                  On Expo Go / dev client both may be null — fall back to
+                  Constants.expoConfig.ios.buildNumber so we at least show
+                  something instead of "?". */}
               <Text style={styles.versionText}>
-                {`DCC mobile · v${Constants.expoConfig?.version ?? '?'} (build ${
-                  Constants.nativeBuildVersion ??
+                {`DCC mobile · v${
+                  Application.nativeApplicationVersion ??
+                  Constants.expoConfig?.version ??
+                  '?'
+                } (build ${
+                  Application.nativeBuildVersion ??
                   Constants.expoConfig?.ios?.buildNumber ??
                   '?'
                 })`}
