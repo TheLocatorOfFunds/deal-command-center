@@ -3090,8 +3090,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         );
       })()}
 
-      {/* Search / Filter / Layout toggle bar (hidden on Today / Reports / Analytics / Hygiene / Pipeline / Tasks / Team / Leads views) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "va-queue" && view !== "comms" && (
+      {/* Search / Filter / Layout toggle bar (hidden on views where deal-search is irrelevant — Today, Time tracking, Reports, etc.) */}
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
