@@ -3239,7 +3239,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               }}
             />
           ) : view === "outreach" ? (
-            <OutreachView deals={deals} onSelect={onSelect} />
+            <OutreachView deals={deals} onSelect={onSelect} setView={setView} />
           ) : view === "inbox" ? (
             <InboxView deals={deals} onSelect={onSelect} />
           ) : view === "forecast" ? (
@@ -8627,13 +8627,12 @@ function OutreachView({ deals, onSelect, setView }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
         <div>
-          <SectionHeader icon="🤖" label="Drafts ready to send" sub="AI-drafted intro + cadence messages — showing the active outreach phase (the tile above counts all pending across phases). Click any row to open the deal's Comms tab." />
-          <AutomationsQueue onSelectDeal={onSelect} />
-          {stats.pending_drafts === 0 && (
-            <div style={{ fontSize: 12, color: '#78716c', padding: 18, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
-              No drafts pending. Push an A/B-tier deal into outreach to queue one.
-            </div>
-          )}
+          <SectionHeader icon="🤖" label="Drafts ready to send" sub="The draft queue lives on Today now — one home, no duplicate. Jump there to review + send." />
+          <button onClick={() => setView && setView('today')} style={{ display: 'block', width: '100%', textAlign: 'left', background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: '18px 20px', cursor: 'pointer', fontFamily: 'inherit' }}>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" }}>{stats.pending_drafts} draft{stats.pending_drafts !== 1 ? 's' : ''} ready</div>
+            <div style={{ fontSize: 12, color: '#fdba74', marginTop: 5, fontWeight: 700 }}>→ Review &amp; send on Today</div>
+            {stats.pending_drafts === 0 && <div style={{ fontSize: 12, color: '#78716c', marginTop: 6 }}>Nothing pending — push an A/B-tier deal into outreach to queue one.</div>}
+          </button>
         </div>
         <div>
           <SectionHeader icon="💬" label="Replies waiting" sub="Inbound SMS from claimants you haven't responded to yet. Oldest first — clear by replying or marking seen." />
