@@ -3282,7 +3282,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               }}
             />
           ) : view === "outreach" ? (
-            <OutreachView deals={deals} onSelect={onSelect} setView={setView} />
+            <OutreachView deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin} />
           ) : view === "inbox" || view === "communications" ? (
             /* Phase 3 (5/27): the new cross-deal Communications hub (Calls +
                Texting) supersedes the old InboxView/ReplyInbox. The "inbox"
@@ -8622,7 +8622,68 @@ function DoubleQueueGuard({ deals, onSelect }) {
   );
 }
 
-function OutreachView({ deals, onSelect, setView }) {
+// Review-mode banner + toggle (Phase A.3, 2026-05-27). Reads the singleton
+// outreach_settings.auto_send_enabled. While OFF, no text/RVM auto-sends —
+// every message is human-reviewed in the queue first. Admins can flip it at
+// go-live; VAs see the status read-only.
+function ReviewModeBanner({ isAdmin }) {
+  const [autoSend, setAutoSend] = useState(null); // null = loading
+  const [saving, setSaving] = useState(false);
+  const alive = useAliveRef();
+
+  const load = React.useCallback(async () => {
+    const { data } = await sb.from('outreach_settings').select('auto_send_enabled').eq('id', 1).maybeSingle();
+    if (alive.current) setAutoSend(data?.auto_send_enabled ?? false);
+  }, [alive]);
+
+  useEffect(() => {
+    load();
+    const ch = sb.channel('outreach-settings')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_settings' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  if (autoSend === null) return null;
+
+  const toggle = async () => {
+    if (!isAdmin || saving) return;
+    const next = !autoSend;
+    const confirmMsg = next
+      ? 'Turn AUTO-SEND ON? Texts and RVM drops will start sending WITHOUT human review. Only do this at go-live.'
+      : 'Turn auto-send OFF (back to review mode)? Every message will require human approval again.';
+    if (!window.confirm(confirmMsg)) return;
+    setSaving(true);
+    const { data: authData } = await sb.auth.getUser();
+    const { error } = await sb.from('outreach_settings')
+      .update({ auto_send_enabled: next, updated_by: authData?.user?.id || null })
+      .eq('id', 1);
+    setSaving(false);
+    if (error) { alert('Could not update: ' + error.message); return; }
+    setAutoSend(next);
+  };
+
+  const live = autoSend === true;
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid ' + (live ? '#7f1d1d' : '#14532d'), background: live ? '#2a0e0e' : '#0c1f14', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 13, fontWeight: 700, color: live ? '#fca5a5' : '#6ee7b7' }}>
+        {live ? '🔴 AUTO-SEND LIVE' : '🟢 REVIEW MODE'}
+      </span>
+      <span style={{ fontSize: 12, color: '#a8a29e', flex: 1, minWidth: 200 }}>
+        {live
+          ? 'Texts + RVM are sending automatically without human review.'
+          : 'Every text + RVM is held for human review before it goes out. Nothing auto-sends.'}
+      </span>
+      {isAdmin && (
+        <button onClick={toggle} disabled={saving} style={{ fontSize: 11, fontWeight: 700, background: live ? '#14532d' : '#7f1d1d', border: '1px solid ' + (live ? '#10b981' : '#dc2626'), color: live ? '#6ee7b7' : '#fca5a5', borderRadius: 6, padding: '5px 11px', cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+          {saving ? '…' : live ? 'Switch to review mode' : 'Turn on auto-send (go-live)'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function OutreachView({ deals, onSelect, setView, isAdmin }) {
   const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
   const alive = useAliveRef();
 
@@ -8670,6 +8731,8 @@ function OutreachView({ deals, onSelect, setView }) {
           <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· campaigns + replies + escalations, all in one place</span>
         </h2>
       </div>
+
+      <ReviewModeBanner isAdmin={isAdmin} />
 
       <DoubleQueueGuard deals={deals} onSelect={onSelect} />
 

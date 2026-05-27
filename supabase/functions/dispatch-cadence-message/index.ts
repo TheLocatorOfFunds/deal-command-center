@@ -88,6 +88,19 @@ Deno.serve(async (req) => {
       return json({ skipped: true, reason: 'dnc_optout' });
     }
 
+    // ── Review-mode gate (Phase A.3, Justin 2026-05-27) ──────
+    // During the testing phase nothing auto-sends — every text is reviewed
+    // by a human first. The row stays 'pending' so it surfaces in the
+    // AutomationsQueue for approval. At go-live, flip
+    // outreach_settings.auto_send_enabled = true and this gate opens.
+    const { data: settings } = await sb.from('outreach_settings')
+      .select('auto_send_enabled')
+      .eq('id', 1)
+      .maybeSingle();
+    if (!settings?.auto_send_enabled) {
+      return json({ held: true, reason: 'review_mode', cadence_day: q.cadence_day });
+    }
+
     // ── Fire send-sms ────────────────────────────────────────
     const sendResp = await fetch(`${supabaseUrl}/functions/v1/send-sms`, {
       method: 'POST',
