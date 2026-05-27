@@ -33,6 +33,22 @@ const TOKEN_URL =
 let voice: Voice | null = null
 let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let cachedToken: string | null = null
+const _callInviteHandlers: Array<(callInvite: CallInvite) => void> = []
+
+/**
+ * Subscribe to incoming call invites. Returns an unsubscribe function.
+ * Wire this up in `app/_layout.tsx` to navigate to the in-call screen
+ * after the user accepts via CallKit.
+ */
+export function subscribeToCallInvite(
+  handler: (callInvite: CallInvite) => void,
+): () => void {
+  _callInviteHandlers.push(handler)
+  return () => {
+    const idx = _callInviteHandlers.indexOf(handler)
+    if (idx !== -1) _callInviteHandlers.splice(idx, 1)
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -102,9 +118,25 @@ export async function initVoice(): Promise<boolean> {
     return false
   }
 
-  // Wait a beat after constructing Voice so the SDK has time to create
-  // its PKPushRegistry instance and let iOS fire the credential callback.
-  // Without this, the first register() call almost always races and fails.
+  // Initialize PushKit. This creates PKPushRegistry and asks iOS for the
+  // VoIP device token. Without this call, deviceTokenData is always nil,
+  // voice.register() always fails with "Failed to initialize PushKit device
+  // token", and the device is never registered — so Twilio never delivers
+  // call invites to this device (foreground or background).
+  //
+  // Must be called BEFORE register(). The VoIP token arrives asynchronously
+  // from iOS (typically 1-10 seconds), so the register() retry loop below
+  // polls for it via exponential backoff.
+  try {
+    await voice.initializePushRegistry()
+  } catch (e) {
+    console.warn('[voice] initializePushRegistry failed', e)
+    voice = null
+    return false
+  }
+
+  // Wait a beat after setting up PKPushRegistry so iOS has time to fire
+  // the pushRegistry:didUpdatePushCredentials: callback with the VoIP token.
   await sleep(1500)
 
   // Retry register() with backoff. The SDK throws synchronously if its
@@ -139,16 +171,34 @@ export async function initVoice(): Promise<boolean> {
   scheduleTokenRefresh(12 * 60 * 60 * 1000 - 3 * 60 * 1000)
 
   // Wire incoming-call handling: the SDK fires 'callInvite' when Twilio
-  // pushes a VoIP notification. Accepting via callInvite.accept() hands
-  // off to CallKit, which is already showing the native incoming-call UI.
+  // pushes a VoIP notification. CallKit shows the native incoming-call UI
+  // automatically (via TwilioVoiceReactNative+CallKit.m reportNewIncomingCall:).
+  // When the user taps Accept in CallKit, the SDK accepts internally and
+  // eventually fires Call.Event.Connected. We notify subscribers (e.g.
+  // the root layout) so the app can navigate to the in-call screen.
   voice.on(Voice.Event.CallInvite, async (callInvite: CallInvite) => {
-    // The CallKit prompt is shown automatically by the SDK using the
-    // PushKit payload. When the user taps Accept, the SDK fires
-    // `acceptCallInvite` on the callInvite object behind the scenes.
-    // Our job is just to log + populate the in-call screen with deal context.
-    console.log('[voice] callInvite from', await callInvite.getFrom())
-    // The in-call screen reads custom params (dealId, contactId) off the
-    // callInvite — populated by twilio-voice Edge Function TwiML.
+    const from = await callInvite.getFrom().catch(() => 'unknown')
+    console.log('[voice] callInvite received from', from)
+
+    // Diagnostic write to Supabase — lets us confirm the callInvite event
+    // fired without needing to stream device console logs. Remove once
+    // inbound calling is verified stable.
+    try {
+      const { supabase } = await import('./supabase')
+      const { data: session } = await supabase.auth.getSession()
+      if (session.session) {
+        await supabase.from('call_logs')
+          .update({ status: 'ringing' })
+          .eq('twilio_call_sid', callInvite.getCallSid ? await callInvite.getCallSid().catch(() => '') : '')
+          .then(() => {}) // fire-and-forget
+      }
+    } catch {}
+
+    // Notify any subscriber (e.g. root layout) so the app can open the
+    // in-call screen after the user accepts via CallKit.
+    for (const handler of _callInviteHandlers) {
+      try { handler(callInvite) } catch {}
+    }
   })
 
   return true
