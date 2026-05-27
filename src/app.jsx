@@ -2856,6 +2856,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // #8 — Closed view filter: isolate dead surplus leads with no disposition
   // reason so the team can backfill them (intel-main reads deals.meta.dispositionReason).
   const [deadReasonFilter, setDeadReasonFilter] = useState("all");
+  // Insights "Profit Booked" — which year's closed deals to total (default: now).
+  const [revenueYear, setRevenueYear] = useState(new Date().getFullYear());
   // Relative/estate-phone presence for DECEASED New Leads in view, so the card
   // "missing: phone" warning is accurate (deceased leads have no homeowner
   // contact by design — the reachable number lives on a relative).
@@ -3000,8 +3002,19 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const workedCount = surplusLeads.filter(d => d.last_contacted_at).length;
   const followupDueCount = surplusLeads.filter(d => { const fu = contactMap[d.id] && contactMap[d.id].followupDate; return fu && fu <= todayStr; }).length;
 
-  const year = new Date().getFullYear();
-  const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && (!d.closed_at || new Date(d.closed_at).getFullYear() === year));
+  const thisYear = new Date().getFullYear();
+  // Year options = every year that has a closed/recovered deal (by closed_at),
+  // newest first, always including the current year so the picker is never empty.
+  const revenueYears = [...new Set([thisYear, ...deals
+    .filter(d => (d.status === "closed" || d.status === "recovered") && d.closed_at)
+    .map(d => new Date(d.closed_at).getFullYear())])].sort((a, b) => b - a);
+  const year = revenueYear;
+  // Deals booked in the selected year. Current year also counts closed deals with
+  // no closed_at stamp (legacy rows); past years require a closed_at in that year.
+  const closedYtd = deals.filter(d => (d.status === "closed" || d.status === "recovered") && (
+    year === thisYear ? (!d.closed_at || new Date(d.closed_at).getFullYear() === year)
+                      : (d.closed_at && new Date(d.closed_at).getFullYear() === year)
+  ));
   const ytdProfit = closedYtd.reduce((s, d) => s + (computeDealNet(d) || 0), 0);
   const pipeline = activeDeals;
   const estFlipProfit = activeDeals.filter(d => d.type === "flip").reduce((s, d) => s + (computeDealNet(d) || 0), 0);
@@ -3062,13 +3075,23 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     <div>
       {/* Portfolio summary — Insights only */}
       {["reports", "analytics", "traffic"].includes(view) && (
-        <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12, marginBottom: 20 }}>
+       <div style={{ marginBottom: 20 }}>
+        {isAdmin && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+            <span style={{ fontSize: 11, color: "#78716c", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase" }}>Revenue year</span>
+            <select value={revenueYear} onChange={e => setRevenueYear(Number(e.target.value))} style={{ ...selectStyle, fontSize: 12, padding: "5px 10px", width: "auto" }}>
+              {revenueYears.map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          </div>
+        )}
+        <div className="portfolio-stats" style={{ display: "grid", gridTemplateColumns: isAdmin ? "repeat(5, 1fr)" : "repeat(3, 1fr)", gap: 12 }}>
           {isAdmin && <PortfolioStat label={`${year} Profit Booked`} value={fmt(ytdProfit)} sub={`${closedYtd.length} closed deals`} color="#10b981" />}
           <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
           <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
           {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
           <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
         </div>
+       </div>
       )}
 
       {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads +
