@@ -234,6 +234,27 @@ export async function initVoice(): Promise<boolean> {
     }
   })
 
+  // Cold-launch catchup: if the app was killed and PushKit woke it, the
+  // SDK fires Voice.Event.CallInvite while our listener above was not yet
+  // registered (we were still in the sleep/register loop). The event
+  // fires into nothing and navigation never happens — the call connects
+  // natively but the app doesn't open the deal or call screen.
+  //
+  // Fix: after the listener is wired, drain any pending call invites the
+  // SDK already buffered. Handlers registered by subscribeToCallInvite()
+  // are guaranteed to be in _callInviteHandlers by this point because
+  // useEffect callbacks run synchronously and initVoice() took at least
+  // 1.5s — well after the subscribe effect already executed.
+  try {
+    const pending = await voice.getCallInvites()
+    for (const [, callInvite] of pending) {
+      console.log('[voice] cold-launch pending callInvite from', callInvite.getFrom())
+      for (const handler of _callInviteHandlers) {
+        try { handler(callInvite) } catch {}
+      }
+    }
+  } catch {}
+
   return true
 }
 
