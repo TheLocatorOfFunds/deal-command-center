@@ -8576,7 +8576,7 @@ function OutreachView({ deals, onSelect }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-        <Tile label="Drafts ready to send" value={stats.pending_drafts} sub={stats.pending_drafts === 0 ? 'Nothing pending' : 'review + send below'} color="#d8b560" />
+        <Tile label="Drafts ready to send" value={stats.pending_drafts} sub={stats.pending_drafts === 0 ? 'Nothing pending' : 'all phases · queue shows active phase'} color="#d8b560" />
         <Tile label="Replies waiting" value={stats.replies_waiting} sub={stats.replies_waiting === 0 ? 'Inbox clear' : 'oldest first below'} color="#3b82f6" />
         <Tile label="Drips scheduled · next 24h" value={stats.scheduled_24h} sub="cadence engine" color="#a78bfa" />
         <Tile label="Sent today" value={stats.sent_today} sub="outbound count" color="#10b981" />
@@ -8584,7 +8584,7 @@ function OutreachView({ deals, onSelect }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
         <div>
-          <SectionHeader icon="🤖" label="Drafts ready to send" sub="AI-drafted intro + cadence messages waiting on your review. Click any row to open the deal's Comms tab." />
+          <SectionHeader icon="🤖" label="Drafts ready to send" sub="AI-drafted intro + cadence messages — showing the active outreach phase (the tile above counts all pending across phases). Click any row to open the deal's Comms tab." />
           <AutomationsQueue onSelectDeal={onSelect} />
           {stats.pending_drafts === 0 && (
             <div style={{ fontSize: 12, color: '#78716c', padding: 18, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
