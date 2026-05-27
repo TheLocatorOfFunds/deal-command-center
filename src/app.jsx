@@ -2856,6 +2856,10 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // #8 — Closed view filter: isolate dead surplus leads with no disposition
   // reason so the team can backfill them (intel-main reads deals.meta.dispositionReason).
   const [deadReasonFilter, setDeadReasonFilter] = useState("all");
+  // #237 — surplus confidence-tier filter (intel-main meta.confidenceTier):
+  // 'all' | 'walker_verified' | 'complaint_inferred'. Applies to the surplus
+  // list only; untiered deals show only under 'all'.
+  const [confTierFilter, setConfTierFilter] = useState("all");
   // Insights "Profit Booked" — which year's closed deals to total (default: now).
   const [revenueYear, setRevenueYear] = useState(new Date().getFullYear());
   // Relative/estate-phone presence for DECEASED New Leads in view, so the card
@@ -2944,7 +2948,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
-  const surplus = visible.filter(d => d.type === "surplus");
+  // #237 — confidence-tier filter on the surplus list. Counts come from the
+  // pre-filter set so the filter dropdown + its counts don't vanish when a
+  // tier filters down to empty.
+  const surplusAll = visible.filter(d => d.type === "surplus");
+  const confWalkerCount = surplusAll.filter(d => d.meta?.confidenceTier === 'walker_verified').length;
+  const confVerifyCount = surplusAll.filter(d => d.meta?.confidenceTier === 'complaint_inferred').length;
+  const surplus = confTierFilter === "all" ? surplusAll : surplusAll.filter(d => (d.meta?.confidenceTier || '') === confTierFilter);
 
   // New Leads readiness counts + relative-phone fetch for deceased leads.
   const surplusLeads = leadDeals.filter(d => d.type === "surplus");
@@ -3227,6 +3237,17 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <option value="C">Tier C only</option>
             <option value="untiered">Untiered</option>
           </select>
+          {/* #237 — surplus confidence tier (intel-main). Only shown when tiered
+              surplus is present in the current view. */}
+          {(confWalkerCount + confVerifyCount) > 0 && (
+            <select value={confTierFilter} onChange={e => setConfTierFilter(e.target.value)}
+              title="Filter surplus by intel-main confidence tier (walker-verified vs complaint-inferred)"
+              style={{ ...selectStyle, minWidth: 165, ...(confTierFilter !== 'all' ? { borderColor: '#d97706', color: '#fbbf24' } : {}) }}>
+              <option value="all">All confidence</option>
+              <option value="walker_verified">Walker only ({confWalkerCount})</option>
+              <option value="complaint_inferred">Verify-first ({confVerifyCount})</option>
+            </select>
+          )}
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
             <option value="all">All Statuses</option>
             <optgroup label="Flip Statuses">
@@ -3615,14 +3636,16 @@ function DealStatusBadges({ deal }) {
       {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
       {ready && <Pill label="✅ READY" title="Ready for Outreach — vetted: phone, contacts, and personalized URL all in place" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
       {cosDate && <Pill label="💰 SOS" title={`Surplus On Sale — confirmation of sale ${cosDate}; surplus dollar amount is locked, not estimated`} bg="#78350f" fg="#fbbf24" border="#d97706" />}
-      {/* Verified vs unverified surplus — meta.walkerVerified is the canonical
-          verification flag (intel-main, walker-confirmed). Surplus deals only,
-          and only while open. Green = confirmed claimable amount; amber = still
-          just an estimate. Per Nathan 2026-05-27. */}
-      {deal?.type === 'surplus' && !['closed', 'recovered', 'dead'].includes(deal?.status) && (m.estimatedSurplus || deal?.surplus_estimate || m.estimatedAvailableEquity) ? (
-        m.walkerVerified === true
-          ? <Pill label="✓ VERIFIED" title="Surplus VERIFIED — walker/records-confirmed (claimable amount confirmed, not just an estimate)" bg="#064e3b" fg="#6ee7b7" border="#10b981" />
-          : <Pill label="~ UNVERIFIED" title="Surplus is an ESTIMATE — not yet walker/records-verified" bg="#3a1d0e" fg="#fdba74" border="#a16207" />
+      {/* Surplus confidence tier — intel-main-managed meta.confidenceTier (read-only;
+          set on CONFIRMED surplus only, kept fresh by the 30-min sync). Supersedes
+          the earlier binary walkerVerified pill. walker_verified = gold (real +
+          still-claimable, work first); complaint_inferred = amber "verify lien"
+          (confirmed by inference — all tax foreclosures land here, a senior mortgage
+          could still eat it); untiered (legacy/non-confirmed) = no badge. #237. */}
+      {m.confidenceTier === 'walker_verified' ? (
+        <Pill label={m.confidenceLabel || 'Walker-verified'} title="Walker-verified — a walker confirmed the surplus is real AND still claimable at the county. Highest confidence; work these first." bg="#064e3b" fg="#6ee7b7" border="#10b981" />
+      ) : m.confidenceTier === 'complaint_inferred' ? (
+        <Pill label={m.confidenceLabel || 'Complaint-inferred · verify lien'} title="Complaint-inferred — confirmed by inference (all tax foreclosures land here). A walker confirmed money is at the county but NOT that a senior mortgage won't eat it — verify the lien before investing outreach." bg="#3a1d0e" fg="#fdba74" border="#a16207" />
       ) : null}
     </span>
   );
@@ -18407,6 +18430,19 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               death_signal column also feeds isDeceased() for
               auto-detected cases. */}
           <SubLabel>Lead Classification</SubLabel>
+          {/* #237 — intel-main surplus confidence tier (read-only; set on confirmed
+              leads, reconciled every 30 min). Distinct from the manual "Verified"
+              toggle below, which is Eric's data-cleaned flag. */}
+          {m.confidenceTier === 'walker_verified' && (
+            <div style={{ marginBottom: 12, padding: '8px 12px', background: '#064e3b', border: '1px solid #10b981', borderRadius: 6, fontSize: 12, color: '#6ee7b7', fontWeight: 600, lineHeight: 1.5 }}>
+              ✓ {m.confidenceLabel || 'Walker-verified'} — surplus confirmed real &amp; still claimable. Highest confidence; work first. <span style={{ color: '#34d399', fontWeight: 400 }}>(intel-main · read-only)</span>
+            </div>
+          )}
+          {m.confidenceTier === 'complaint_inferred' && (
+            <div style={{ marginBottom: 12, padding: '8px 12px', background: '#3a1d0e', border: '1px solid #a16207', borderRadius: 6, fontSize: 12, color: '#fdba74', fontWeight: 600, lineHeight: 1.5 }}>
+              ~ {m.confidenceLabel || 'Complaint-inferred · verify lien'} — confirmed by inference (all tax foreclosures land here). Verify a senior mortgage won't eat the surplus before heavy outreach. <span style={{ color: '#d97706', fontWeight: 400 }}>(intel-main · read-only)</span>
+            </div>
+          )}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             <Field label="Lead Tier">
               <select value={deal.lead_tier || ''} onChange={e => onUpdateDeal({ lead_tier: e.target.value || null })} style={{ ...inputStyle, padding: '8px 10px' }}>
