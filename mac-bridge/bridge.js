@@ -443,8 +443,10 @@ function sendFileViaMessages(toPhone, localPath) {
 function pollOutboundDelivery(toPhone, afterAppleNanos) {
   const db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
   try {
+    // D1 (5/27): also pull date_delivered + date_read so we can record
+    // read receipts. These are Apple-epoch nanoseconds (0 until the event).
     return db.prepare(`
-      SELECT m.ROWID, m.is_sent, m.error
+      SELECT m.ROWID, m.is_sent, m.error, m.date_delivered, m.date_read
       FROM message m
       JOIN chat_message_join cmj ON m.ROWID = cmj.message_id
       JOIN chat c                ON cmj.chat_id = c.ROWID
@@ -454,6 +456,50 @@ function pollOutboundDelivery(toPhone, afterAppleNanos) {
       ORDER BY m.ROWID DESC
       LIMIT 1
     `).get(toPhone, afterAppleNanos) || null;
+  } finally {
+    db.close();
+  }
+}
+
+// D1: convert an Apple-epoch nanosecond timestamp (chat.db date_* columns)
+// to an ISO string. Returns null for 0 / falsy (event hasn't happened).
+function appleNanosToIso(nanos) {
+  if (!nanos || Number(nanos) === 0) return null;
+  return new Date((Number(nanos) / 1e9 + APPLE_EPOCH) * 1000).toISOString();
+}
+
+// D1: re-poll chat.db for delivered/read timestamps on recently-sent
+// iMessages that we have a ROWID for but no read_at yet. Updates
+// messages_outbound.delivered_at / read_at. Read receipts only populate when
+// the recipient has them enabled — many won't, so read_at often stays null.
+async function pollReadReceipts() {
+  const { data: rows, error } = await sb
+    .from('messages_outbound')
+    .select('id, imessage_rowid')
+    .eq('from_number', NATHAN_NUMBER)
+    .not('imessage_rowid', 'is', null)
+    .is('read_at', null)
+    .gte('created_at', new Date(Date.now() - 7 * 86400_000).toISOString())
+    .limit(100);
+  if (error || !rows || rows.length === 0) return;
+
+  const db = new Database(CHAT_DB_PATH, { readonly: true, fileMustExist: true });
+  try {
+    const stmt = db.prepare('SELECT date_delivered, date_read FROM message WHERE ROWID = ?');
+    for (const row of rows) {
+      const rec = stmt.get(row.imessage_rowid);
+      if (!rec) continue;
+      const deliveredAt = appleNanosToIso(rec.date_delivered);
+      const readAt = appleNanosToIso(rec.date_read);
+      const patch = {};
+      if (deliveredAt) patch.delivered_at = deliveredAt;
+      if (readAt) patch.read_at = readAt;
+      if (Object.keys(patch).length > 0) {
+        await sb.from('messages_outbound').update(patch).eq('id', row.id);
+      }
+    }
+  } catch (e) {
+    console.error('⚠️  pollReadReceipts error:', e.message);
   } finally {
     db.close();
   }
@@ -526,7 +572,14 @@ async function processPendingOutbound() {
         continue;
       }
       if (delivery && delivery.is_sent === 1 && delivery.error === 0) {
-        await sb.from('messages_outbound').update({ status: 'sent' }).eq('id', msg.id);
+        // D1: persist the chat.db ROWID so pollReadReceipts can re-check this
+        // message's date_read later, and stamp delivered_at if Apple already
+        // reported delivery in this first poll.
+        await sb.from('messages_outbound').update({
+          status: 'sent',
+          imessage_rowid: delivery.ROWID ?? null,
+          delivered_at: appleNanosToIso(delivery.date_delivered),
+        }).eq('id', msg.id);
         console.log(`✅ DELIVERED  ${msg.to_number}`);
         continue;
       }
@@ -990,4 +1043,8 @@ async function tick() {
   ensureMessagesRunning();
   await tick();
   setInterval(tick, POLL_MS);
+  // D1 (5/27): read receipts re-poll on a slower cadence than the 5s message
+  // tick — date_read can land minutes/hours after send, so 30s is plenty and
+  // keeps chat.db reads light.
+  setInterval(() => { pollReadReceipts().catch(e => console.error('pollReadReceipts:', e.message)); }, 30000);
 })();

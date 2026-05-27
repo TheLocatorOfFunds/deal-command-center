@@ -64,8 +64,10 @@ Deno.serve(async (req) => {
       db.from('documents').select('name, extracted, extraction_status, created_at').eq('deal_id', deal_id).eq('extraction_status', 'done').order('created_at', { ascending: false }).limit(50),
       db.from('docket_events').select('event_type, event_date, description, is_backfill').eq('deal_id', deal_id).order('event_date', { ascending: false }).limit(25),
       db.from('contact_deals').select('relationship, contacts(name, phone, email, kind, kind_other, company, notes)').eq('deal_id', deal_id),
-      db.from('messages_outbound').select('direction, body, created_at, status').eq('deal_id', deal_id).order('created_at', { ascending: false }).limit(30),
-      db.from('call_logs').select('direction, duration_seconds, status, started_at').eq('deal_id', deal_id).order('started_at', { ascending: false }).limit(15),
+      db.from('messages_outbound').select('direction, body, created_at, status, contacts(name)').eq('deal_id', deal_id).order('created_at', { ascending: false }).limit(30),
+      // Phase 4 (F1): pull the per-call summary + transcript so the brief
+      // knows WHO each call was with and WHAT it was about, not just metadata.
+      db.from('call_logs').select('direction, duration_seconds, status, started_at, summary, transcript, contacts(name)').eq('deal_id', deal_id).order('started_at', { ascending: false }).limit(15),
       db.from('emails').select('direction, subject, body_text, to_emails, cc_emails, created_at, status').eq('deal_id', deal_id).order('created_at', { ascending: false }).limit(15),
       db.from('activity').select('action, outcome, body, activity_type, created_at').eq('deal_id', deal_id).order('created_at', { ascending: false }).limit(40),
       db.from('deal_notes').select('title, body, created_at, updated_at').eq('deal_id', deal_id).order('updated_at', { ascending: false }).limit(20),
@@ -99,9 +101,17 @@ Deno.serve(async (req) => {
         relationship_on_deal: c.relationship, notes: c.contacts?.notes,
       })),
       recent_messages: (messagesRes.data || []).slice(0, 15).map((m: any) => ({
-        direction: m.direction, body: (m.body || '').slice(0, 300), when: m.created_at, status: m.status,
+        direction: m.direction, with: m.contacts?.name || null,
+        body: (m.body || '').slice(0, 300), when: m.created_at, status: m.status,
       })),
-      recent_calls: callsRes.data || [],
+      // F1: each call now carries who it was with + a summary (and a trimmed
+      // transcript as backup) so the brief can reason about call content.
+      recent_calls: (callsRes.data || []).map((c: any) => ({
+        direction: c.direction, with: c.contacts?.name || null,
+        duration_seconds: c.duration_seconds, status: c.status, when: c.started_at,
+        summary: c.summary || null,
+        transcript_preview: c.transcript ? String(c.transcript).slice(0, 500) : null,
+      })),
       recent_emails: (emailsRes.data || []).map((e: any) => ({
         direction: e.direction, subject: e.subject,
         body_preview: (e.body_text || '').slice(0, 240),

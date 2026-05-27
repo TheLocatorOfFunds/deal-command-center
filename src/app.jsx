@@ -653,7 +653,7 @@ function DealCommandCenter({ session, profile }) {
     'tasks', 'time', 'reports', 'analytics', 'traffic', 'team',
     // Added 2026-05-15 per Justin: these were nav items but missing from
     // the whitelist, so refresh on these views bounced you back to today.
-    'relay', 'calls', 'comms', 'va-queue',
+    'relay', 'calls', 'comms', 'va-queue', 'communications',
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
@@ -1701,7 +1701,7 @@ function DealCommandCenter({ session, profile }) {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
               {navItem('today',    '📌', 'Today')}
               {navItem('attention','⏰', 'Deadlines')}
-              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','inbox','leads','forecast'] })}
+              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','inbox','communications','leads','forecast'] })}
               {navItem('relay',    '📡', 'Relay')}
               {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
@@ -2112,7 +2112,7 @@ function DealCommandCenter({ session, profile }) {
         <Modal onClose={() => setShowMoreSheet(false)} title="More">
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[
-              { label: '📬 Inbox',      onClick: () => setView('inbox'),    count: 0 },
+              { label: '📞 Communications', onClick: () => setView('communications'), count: 0 },
               { label: '⚑ Flagged',     onClick: () => setView('flagged'),  count: 0 },
               { label: '🩺 Hygiene',    onClick: () => setView('hygiene'),  count: 0 },
               { label: '📦 Closed',     onClick: () => setView('archive'),  count: 0 },
@@ -3261,7 +3261,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -3282,8 +3282,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             />
           ) : view === "outreach" ? (
             <OutreachView deals={deals} onSelect={onSelect} setView={setView} />
-          ) : view === "inbox" ? (
-            <InboxView deals={deals} onSelect={onSelect} />
+          ) : view === "inbox" || view === "communications" ? (
+            /* Phase 3 (5/27): the new cross-deal Communications hub (Calls +
+               Texting) supersedes the old InboxView/ReplyInbox. The "inbox"
+               route is kept as an alias so existing bookmarks/nav still work. */
+            <CommunicationsView onSelect={onSelect} />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
           ) : view === "leads" ? (
@@ -10275,6 +10278,234 @@ function ReplyInbox({ onSelect, limit = 100 }) {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════
+// CommunicationsView — top-level cross-deal comms hub (Phase 3, 5/27)
+// ════════════════════════════════════════════════════════════════════
+// GoHighLevel-style: history list on the LEFT, conversation on the RIGHT.
+// Two sub-tabs — Texting and Calls. Clicking a thread's header (the contact
+// name / number) drills into that deal's Comms tab, where the full composer
+// lives. This view is read + triage; the deal Comms tab is where you work.
+//
+// Folds in the old Reply Inbox: the Texting tab has an "Unread" filter that
+// shows only inbound messages not yet marked read_by_team_at, and selecting a
+// thread marks its inbound messages seen. The standalone ReplyInbox/InboxView
+// is superseded by this (the "inbox" route now renders CommunicationsView).
+function CommunicationsView({ onSelect }) {
+  const [subtab, setSubtab] = useState('texting'); // 'texting' | 'calls'
+  const [textFilter, setTextFilter] = useState('all'); // 'all' | 'unread'
+  const [threads, setThreads] = useState(null);   // grouped text threads
+  const [calls, setCalls] = useState(null);
+  const [activeKey, setActiveKey] = useState(null); // selected thread key
+  const alive = useAliveRef();
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + 'm';
+    if (m < 1440) return Math.round(m / 60) + 'h';
+    return Math.floor(m / 1440) + 'd';
+  };
+  const fmtDur = (s) => s ? `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}` : '—';
+
+  // ── Load + group text threads across all deals ──────────────────────
+  const loadThreads = React.useCallback(async () => {
+    const { data: msgs } = await sb.from('messages_outbound')
+      .select('id, deal_id, contact_id, body, from_number, to_number, direction, created_at, read_by_team_at, channel, media_url, thread_key, delivered_at, read_at')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (!alive.current) return;
+    if (!msgs) { setThreads([]); return; }
+
+    const dealIds = [...new Set(msgs.map(m => m.deal_id).filter(Boolean))];
+    const contactIds = [...new Set(msgs.map(m => m.contact_id).filter(Boolean))];
+    const [{ data: deals }, { data: contacts }] = await Promise.all([
+      dealIds.length ? sb.from('deals').select('id, name, lead_tier').in('id', dealIds) : Promise.resolve({ data: [] }),
+      contactIds.length ? sb.from('contacts').select('id, name, phone').in('id', contactIds) : Promise.resolve({ data: [] }),
+    ]);
+    if (!alive.current) return;
+    const dealById = Object.fromEntries((deals || []).map(d => [d.id, d]));
+    const contactById = Object.fromEntries((contacts || []).map(c => [c.id, c]));
+
+    // Group by thread_key when present, else deal_id + counterpart number.
+    const groups = new Map();
+    for (const m of msgs) {
+      const counterpart = m.direction === 'inbound' ? m.from_number : m.to_number;
+      const key = m.thread_key || `${m.deal_id || 'none'}:${normalizePhone(counterpart || '')}`;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key, deal_id: m.deal_id, contact_id: m.contact_id,
+          counterpart, messages: [], latest: m.created_at, unread: 0,
+        });
+      }
+      const g = groups.get(key);
+      g.messages.push(m);
+      if (m.direction === 'inbound' && !m.read_by_team_at) g.unread++;
+      if (!g.contact_id && m.contact_id) g.contact_id = m.contact_id;
+      if (!g.deal_id && m.deal_id) g.deal_id = m.deal_id;
+    }
+    const list = [...groups.values()].map(g => {
+      const deal = dealById[g.deal_id];
+      const contact = contactById[g.contact_id];
+      const name = contact?.name || deal?.name || g.counterpart || 'Unknown';
+      // messages were pushed newest-first; reverse for the conversation pane
+      const ordered = [...g.messages].reverse();
+      const last = g.messages[0];
+      return { ...g, deal, contact, name, ordered, lastBody: last?.body || (last?.media_url ? '📎 media' : ''), lastDir: last?.direction };
+    }).sort((a, b) => new Date(b.latest).getTime() - new Date(a.latest).getTime());
+    setThreads(list);
+  }, [alive]);
+
+  // ── Load calls across all deals ─────────────────────────────────────
+  const loadCalls = React.useCallback(async () => {
+    const { data } = await sb.from('call_logs')
+      .select('id, deal_id, contact_id, direction, from_number, to_number, status, duration_seconds, started_at, recording_url, summary, contacts(name), deals(name, lead_tier)')
+      .order('started_at', { ascending: false })
+      .limit(200);
+    if (!alive.current) return;
+    setCalls(data || []);
+  }, [alive]);
+
+  useEffect(() => { loadThreads(); loadCalls(); }, [loadThreads, loadCalls]);
+  useEffect(() => {
+    const ch = sb.channel('communications-view')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadThreads())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, () => loadCalls())
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [loadThreads, loadCalls]);
+
+  // Selecting a thread marks its inbound messages seen (folds in Reply Inbox).
+  const markThreadSeen = async (thread) => {
+    const unreadIds = thread.messages.filter(m => m.direction === 'inbound' && !m.read_by_team_at).map(m => m.id);
+    if (unreadIds.length === 0) return;
+    await sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).in('id', unreadIds);
+    loadThreads();
+  };
+
+  const visibleThreads = (threads || []).filter(t => textFilter === 'all' || t.unread > 0);
+  const activeThread = (threads || []).find(t => t.key === activeKey) || null;
+
+  const tabBtn = (id, label, icon, badge) => (
+    <button onClick={() => { setSubtab(id); setActiveKey(null); }}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', fontSize: 13, fontWeight: 700,
+        background: subtab === id ? '#1c1917' : 'transparent', color: subtab === id ? '#d97706' : '#78716c',
+        border: 'none', borderBottom: subtab === id ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer' }}>
+      <span>{icon}</span> {label}
+      {badge > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>{badge}</span>}
+    </button>
+  );
+
+  const totalUnread = (threads || []).reduce((n, t) => n + t.unread, 0);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 160px)', minHeight: 480 }}>
+      <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>📞 Communications</div>
+      <div style={{ fontSize: 12, color: '#78716c', marginBottom: 14 }}>Every text and call across all deals. Click a conversation to read it; click the name to drill into the deal.</div>
+
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #292524', marginBottom: 12 }}>
+        {tabBtn('texting', 'Texting', '💬', totalUnread)}
+        {tabBtn('calls', 'Calls', '📞', 0)}
+      </div>
+
+      {subtab === 'texting' ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 0, flex: 1, minHeight: 0, border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
+          {/* LEFT — thread history */}
+          <div style={{ borderRight: '1px solid #292524', display: 'flex', flexDirection: 'column', minHeight: 0, background: '#0f0d0c' }}>
+            <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1c1917', flexShrink: 0 }}>
+              {['all', 'unread'].map(f => (
+                <button key={f} onClick={() => setTextFilter(f)}
+                  style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+                    background: textFilter === f ? '#d97706' : 'transparent', color: textFilter === f ? '#0c0a09' : '#78716c',
+                    border: `1px solid ${textFilter === f ? '#d97706' : '#292524'}` }}>
+                  {f === 'all' ? 'All' : `Unread${totalUnread ? ` (${totalUnread})` : ''}`}
+                </button>
+              ))}
+            </div>
+            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+              {threads === null ? <div style={{ padding: 16, color: '#78716c', fontSize: 12 }}>Loading…</div>
+                : visibleThreads.length === 0 ? <div style={{ padding: 16, color: '#57534e', fontSize: 12 }}>{textFilter === 'unread' ? 'No unread messages.' : 'No conversations yet.'}</div>
+                : visibleThreads.map(t => (
+                  <button key={t.key} onClick={() => { setActiveKey(t.key); markThreadSeen(t); }}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: activeKey === t.key ? '#1c1917' : 'transparent',
+                      border: 'none', borderBottom: '1px solid #1c1917', borderLeft: t.unread > 0 ? '3px solid #3b82f6' : '3px solid transparent', cursor: 'pointer' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
+                      <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(t.latest)}</span>
+                    </div>
+                    <div style={{ fontSize: 11, color: '#a8a29e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+                      {t.lastDir === 'inbound' ? '' : '↩ '}{t.lastBody}
+                    </div>
+                  </button>
+                ))}
+            </div>
+          </div>
+          {/* RIGHT — conversation */}
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, background: '#0c0a09' }}>
+            {!activeThread ? (
+              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13 }}>Select a conversation</div>
+            ) : (
+              <>
+                <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <button onClick={() => activeThread.deal && onSelect && onSelect(activeThread.deal.id)}
+                      disabled={!activeThread.deal}
+                      style={{ background: 'none', border: 'none', padding: 0, fontSize: 14, fontWeight: 700, color: activeThread.deal ? '#d97706' : '#fafaf9', cursor: activeThread.deal ? 'pointer' : 'default', textAlign: 'left' }}>
+                      {activeThread.name}{activeThread.deal ? ' →' : ''}
+                    </button>
+                    <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{activeThread.counterpart}{activeThread.deal ? ` · ${activeThread.deal.name}` : ''}</div>
+                  </div>
+                  {activeThread.deal && (
+                    <button onClick={() => onSelect && onSelect(activeThread.deal.id)} style={{ ...btnGhost, fontSize: 11, padding: '5px 10px' }}>Open in deal →</button>
+                  )}
+                </div>
+                <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
+                  {activeThread.ordered.map(m => (
+                    <div key={m.id} style={{ alignSelf: m.direction === 'inbound' ? 'flex-start' : 'flex-end', maxWidth: '75%' }}>
+                      <div style={{ background: m.direction === 'inbound' ? '#1c1917' : '#1e3a5f', color: '#fafaf9', borderRadius: 12, padding: '8px 12px', fontSize: 13, lineHeight: 1.4 }}>
+                        {m.body}
+                        {m.media_url && <div style={{ marginTop: 6 }}><img src={m.media_url} alt="media" style={{ maxWidth: 180, borderRadius: 8 }} /></div>}
+                      </div>
+                      <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>
+                        {fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}
+                        {/* D1: iMessage delivery/read receipt on outbound bubbles */}
+                        {m.direction !== 'inbound' && (m.read_at ? ' · ✓✓ Read' : m.delivered_at ? ' · ✓ Delivered' : '')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      ) : (
+        /* CALLS sub-tab */
+        <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #292524', borderRadius: 10, minHeight: 0 }}>
+          {calls === null ? <div style={{ padding: 16, color: '#78716c', fontSize: 12 }}>Loading…</div>
+            : calls.length === 0 ? <div style={{ padding: 16, color: '#57534e', fontSize: 12 }}>No calls yet.</div>
+            : calls.map(c => {
+              const name = c.contacts?.name || c.deals?.name || (c.direction === 'inbound' ? c.from_number : c.to_number) || 'Unknown';
+              return (
+                <div key={c.id} onClick={() => c.deal_id && onSelect && onSelect(c.deal_id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderBottom: '1px solid #1c1917', cursor: c.deal_id ? 'pointer' : 'default' }}>
+                  <span style={{ fontSize: 18 }}>{c.direction === 'inbound' ? '📥' : '📤'}</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{name}{c.deals?.name ? ` · ${c.deals.name}` : ''}</div>
+                    <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.direction === 'inbound' ? c.from_number : c.to_number} · {c.status || '—'} · {fmtDur(c.duration_seconds)}</div>
+                    {/* F1: AI summary of what the call was about (from transcript) */}
+                    {c.summary && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 3, fontStyle: 'italic', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>🧠 {c.summary}</div>}
+                  </div>
+                  {c.recording_url && <span title="Has recording" style={{ fontSize: 14 }}>🎙</span>}
+                  <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(c.started_at)} ago</span>
+                </div>
+              );
+            })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Lead Engagement strip (Attention) ──────────────────────────────
 // Surfaces leads who opened their personalized /s/<token> link recently —
 // the REAL recipient, not team/preview clicks (v_personalized_link_engagement
@@ -14510,7 +14741,13 @@ function NotesDrawerTrigger({ count, onClick, isOpen }) {
 }
 
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, initialTab, peerNav, startCall, callStatus }) {
-  const [tab, setTab] = useState(initialTab || "overview");
+  // Tasks + Lauren were removed from the deal tab bar (5/27). If an old
+  // deep-link lands on one of those, fall back to overview so the user
+  // doesn't see content with no matching tab button.
+  const REMOVED_DEAL_TABS = ["tasks", "lauren"];
+  const [tab, setTab] = useState(
+    REMOVED_DEAL_TABS.includes(initialTab) ? "overview" : (initialTab || "overview")
+  );
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
   const [notesCount, setNotesCount] = useState(0);
@@ -14674,13 +14911,18 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
   // Stage 2 (2026-04-23): notes → files (merged w/ documents), vendors → contacts.
   // Old tabs remain as components; they're just not wired into the tab bar.
   const isWholesale = deal.type === "wholesale";
+  // 5/27 decision: Tasks + Lauren removed from the deal tab bar. Lauren lives
+  // globally (case-context-aware) and Tasks live in the global Tasks view.
+  // Files + Contacts stay. Tab CONTENT render blocks for tasks/lauren remain
+  // below but are no longer reachable from here (harmless dead branches; kept
+  // so any deep-link or future re-add is a one-line array change).
   const tabs = isAdmin
     ? (isFlip
-        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "tasks", "files", "lauren"]
+        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "files"]
         : isWholesale
-          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "tasks", "files", "lauren"]
-          : ["overview", "comms", "docket", "contacts", "tasks", "files", "lauren"])
-    : ["overview", "comms", "docket", "contacts", "tasks", "files"];
+          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "files"]
+          : ["overview", "comms", "docket", "contacts", "files"])
+    : ["overview", "comms", "docket", "contacts", "files"];
 
   return (
     <div>
@@ -14911,7 +15153,10 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
       {tab === "comms" && (
         <ErrorBoundary label="comms">
           <div>
-            <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
+            {/* AI-draft / outreach-queue panel intentionally removed from Comms
+                (5/27 decision). Drafts still surface in Today → Automations and
+                the Outreach workspace; outreach automation is moving to Relay.
+                Comms is now purely for working a case by phone/text. */}
             <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} />
             <div style={{ marginTop: 20 }}>
               <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
@@ -22025,6 +22270,12 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const [activeContact, setActiveContact] = useState(null);
   const [newMode, setNewMode]         = useState(false);
   const [newPhone, setNewPhone]       = useState('');
+  // B1 (5/27): the "+" flow now captures a name so the contact is real and
+  // linked to the deal — not a bare phone number. Makes callbacks identifiable.
+  const [newFirst, setNewFirst]       = useState('');
+  const [newLast, setNewLast]         = useState('');
+  const [creatingContact, setCreatingContact] = useState(false);
+  const [newContactErr, setNewContactErr] = useState(null);
   const [extraContacts, setExtraContacts] = useState([]);
   const [dcContacts, setDcContacts]   = useState([]);
   const [unmatched, setUnmatched]     = useState([]);
@@ -22857,17 +23108,86 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
 
   const handleKeyDown = e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send(); };
 
-  const startNew = () => {
-    const phone = newPhone.trim();
-    if (!phone) return;
-    const already = contacts.find(c => normalizePhone(c.phone) === normalizePhone(phone));
-    if (already) { setActiveContact(already); }
-    else {
-      const c = { name: phone, phone, _custom: true };
-      setExtraContacts(prev => [...prev, c]);
-      setActiveContact(c);
+  // B1 (5/27): create-contact-and-associate. The "+" flow now takes a
+  // name + phone, persists a real `contacts` row, links it to this deal via
+  // `contact_deals`, and selects the thread. The bare ephemeral `_custom`
+  // contact (name === phone) is gone — so when this person calls back, the
+  // inbound auto-association (B2) can resolve them to a name + this deal.
+  //
+  // Returns the resolved contact object (existing or newly created) so the
+  // caller can optionally place a call right after. Returns null on failure.
+  const createOrFindDealContact = async () => {
+    const rawPhone = newPhone.trim();
+    if (!rawPhone) { setNewContactErr('Phone number required'); return null; }
+    setNewContactErr(null);
+
+    // Store + match in E.164 so the inbound call/SMS auto-association
+    // (receive-sms / twilio-voice query `phone.eq.+1XXXXXXXXXX`) resolves
+    // this contact when they call or text back. Storing the raw typed string
+    // ("(513) 555-1234") would silently break that lookup.
+    const phone = normalizePhone(rawPhone);
+
+    // Already linked to this deal? Just select it.
+    const already = contacts.find(c => normalizePhone(c.phone) === phone);
+    if (already) return already;
+
+    setCreatingContact(true);
+    try {
+      const name = `${newFirst.trim()} ${newLast.trim()}`.trim() || phone;
+
+      // Reuse an existing company-wide contact with this number if one exists
+      // (avoids duplicate contacts when the same person touches multiple deals).
+      const { data: existingByPhone } = await sb.from('contacts')
+        .select('id, name, phone')
+        .eq('phone', phone)
+        .maybeSingle();
+
+      let contactId = existingByPhone?.id;
+      if (!contactId) {
+        const { data: inserted, error: insErr } = await sb.from('contacts')
+          .insert({ name, phone })
+          .select('id, name, phone')
+          .single();
+        if (insErr) throw insErr;
+        contactId = inserted.id;
+      }
+
+      // Link to this deal (idempotent — unique(contact_id, deal_id)).
+      const { error: linkErr } = await sb.from('contact_deals')
+        .upsert({ contact_id: contactId, deal_id: dealId }, { onConflict: 'contact_id,deal_id' });
+      if (linkErr) throw linkErr;
+
+      // Refresh the deal's contact list so the new row shows in the rail.
+      await loadDealContacts();
+
+      return { id: contactId, contact_id: contactId, name, phone };
+    } catch (e) {
+      setNewContactErr(e.message || 'Could not create contact');
+      return null;
+    } finally {
+      setCreatingContact(false);
     }
-    setNewMode(false); setNewPhone('');
+  };
+
+  const resetNewForm = () => {
+    setNewMode(false); setNewPhone(''); setNewFirst(''); setNewLast(''); setNewContactErr(null);
+  };
+
+  // "Start" — create + link + open the thread (no call yet).
+  const startNew = async () => {
+    const c = await createOrFindDealContact();
+    if (!c) return;
+    setActiveContact(c);
+    resetNewForm();
+  };
+
+  // "Call" — create + link + open the thread + dial immediately.
+  const startNewAndCall = async () => {
+    const c = await createOrFindDealContact();
+    if (!c) return;
+    setActiveContact(c);
+    resetNewForm();
+    if (c.phone && startCall) startCall(c);
   };
 
   // ── Hide thread ───────────────────────────────────────────────────────────
@@ -23326,14 +23646,40 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
 
       {/* New conversation input */}
       {newMode && (
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid #1c1917', background: '#141210', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <input autoFocus value={newPhone} onChange={e => setNewPhone(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && startNew()} placeholder="+1 (555) 000-0000"
-            style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
-          <button onClick={startNew} disabled={!newPhone.trim()}
-            style={{ background: newPhone.trim() ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: newPhone.trim() ? 'pointer' : 'default' }}>Start</button>
-          <button onClick={() => { setNewMode(false); if (visibleContacts.length > 0) setActiveContact(visibleContacts[0]); }}
-            style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+        <div style={{ padding: '10px 12px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+          {/* B1 (5/27): capture a name so the contact is real + linked to the
+              deal. "Call" dials immediately; "Start" just opens the thread.
+              Either way the contact is created and associated to this deal so
+              callbacks are identifiable. */}
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>
+            New contact for this deal
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <input autoFocus value={newFirst} onChange={e => setNewFirst(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && startNewAndCall()} placeholder="First name"
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, outline: 'none' }} />
+            <input value={newLast} onChange={e => setNewLast(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && startNewAndCall()} placeholder="Last name"
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input value={newPhone} onChange={e => setNewPhone(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && startNewAndCall()} placeholder="+1 (555) 000-0000"
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+            <button onClick={startNewAndCall} disabled={!newPhone.trim() || creatingContact || !!callStatus}
+              title="Create contact, link to deal, and call"
+              style={{ background: (newPhone.trim() && !creatingContact && !callStatus) ? '#16a34a' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: (newPhone.trim() && !creatingContact && !callStatus) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 5 }}>
+              📞 {creatingContact ? 'Saving…' : 'Call'}
+            </button>
+            <button onClick={startNew} disabled={!newPhone.trim() || creatingContact}
+              title="Create contact + link to deal (no call)"
+              style={{ background: (newPhone.trim() && !creatingContact) ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: (newPhone.trim() && !creatingContact) ? 'pointer' : 'default' }}>
+              Start
+            </button>
+            <button onClick={() => { resetNewForm(); if (visibleContacts.length > 0) setActiveContact(visibleContacts[0]); }}
+              style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+          </div>
+          {newContactErr && <div style={{ marginTop: 8, fontSize: 11, color: '#fca5a5' }}>⚠ {newContactErr}</div>}
         </div>
       )}
 
@@ -28157,12 +28503,33 @@ function LaurenDCC() {
   const [input, setInput] = useState('');
   const [error, setError] = useState(null);
   const [bypassMode, setBypassMode] = useState(false);
+  // A3 (5/27): case-context awareness. When Lauren opens while a deal is on
+  // screen, we capture that deal so her first reply is already scoped to it —
+  // like "Ask Gemini" knowing what's on the page. caseContext = {id, name};
+  // contextSentRef tracks whether we've already tagged a message with it (so
+  // we only prepend the "re:" context once per context, not every message).
+  const [caseContext, setCaseContext] = useState(null);
+  const contextSentRef = useRef(null);
   const msgsEl = useRef(null);
   const inputEl = useRef(null);
 
   // Boot: open-event listener + load user + ensure Lauren DM exists
   useEffect(() => {
-    const handler = () => setOpen(true);
+    const handler = async () => {
+      setOpen(true);
+      // Parse the active deal straight off the hash (#/deal/<id>/...) so we
+      // don't have to thread deal context through every dispatch site.
+      try {
+        const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
+        const dealId = parts[0] === 'deal' && parts[1] ? parts[1] : null;
+        if (dealId) {
+          const { data: d } = await sb.from('deals').select('id, name').eq('id', dealId).maybeSingle();
+          if (d) { setCaseContext({ id: d.id, name: d.name || d.id }); contextSentRef.current = null; }
+        } else {
+          setCaseContext(null);
+        }
+      } catch { /* non-fatal — Lauren still opens without context */ }
+    };
     window.addEventListener('dcc:open-lauren', handler);
     (async () => {
       try {
@@ -28274,8 +28641,15 @@ function LaurenDCC() {
 
   async function send() {
     if (busy || !input.trim() || !threadId || !me) return;
-    const text = input.trim();
+    let text = input.trim();
     setInput('');
+    // A3: on the first message after a case context is set, prefix a compact
+    // "re:" tag so Lauren's responder knows which deal we're working. We only
+    // do this once per context (contextSentRef) so follow-ups stay clean.
+    if (caseContext && contextSentRef.current !== caseContext.id) {
+      text = `(re: deal "${caseContext.name}", id ${caseContext.id}) ${text}`;
+      contextSentRef.current = caseContext.id;
+    }
     // Only show "Lauren typing" if Lauren is expected to respond — always
     // in her solo DM, only when @-mentioned in rooms / channels.
     const expectLaurenReply = thread?.thread_type === 'lauren_dm'
@@ -28506,6 +28880,18 @@ function LaurenDCC() {
             style: { width: 7, height: 7, borderRadius: '50%', background: '#78716c', animation: `dotPulse 1.2s ease-in-out ${i*0.2}s infinite` }
           }))
         )
+      ),
+      // A3: case-context chip — shows which deal Lauren is scoped to, with a
+      // clear (×) so the user can drop context and ask something general.
+      caseContext && React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderTop: '1px solid #292524', background: '#14110d', flexShrink: 0 }
+      },
+        React.createElement('span', { style: { fontSize: 11, color: '#fdba74', fontWeight: 600 } }, `📁 Talking about: ${caseContext.name}`),
+        React.createElement('button', {
+          onClick: () => { setCaseContext(null); contextSentRef.current = null; },
+          title: 'Clear case context',
+          style: { marginLeft: 'auto', background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 5, padding: '2px 8px', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }
+        }, '✕'),
       ),
       React.createElement('div', {
         style: { display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #292524', background: '#1c1917', flexShrink: 0 }
