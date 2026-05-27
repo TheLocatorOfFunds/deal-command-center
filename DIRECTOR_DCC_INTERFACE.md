@@ -1,6 +1,6 @@
 # Director ↔ DCC interface contract
 
-**Last updated:** 2026-05-27 (by Director / intel-main session — added confidenceTier/confidenceLabel meta keys for the walker-verified vs complaint-inferred tier differentiation)
+**Last updated:** 2026-05-27 PM (by Director / intel-main session — added confidenceTier/confidenceLabel + feePct=25 seed on push)
 **Living doc.** Either side updates as the contract evolves. Bump the date when you do.
 
 ## Domains
@@ -56,8 +56,11 @@ intel-main sets these via initial push + keeps them fresh on the 30-min sync cro
 | `buyerName` | `enrichment._hamilton_portal.buyer_name` / `_lake_portal.buyer` | (varies) |
 | `lastIntelSyncAt` | `now()` at sync time | `2026-05-16T…Z` |
 | `sourced_from`, `sourced_at`, `sourced_by` | set once on initial push | `intel-main` / iso ts / operator email |
+| `feePct` | **SET ONCE on initial push** (seeds RefundLocators' disclosed 25% surplus rate) — pushed deals bypass DCC's new-deal form, which would otherwise default this. **NOT touched by the 30-min sync** — so a team-negotiated rate on a worked deal is safe to edit and won't be clobbered. | `25` |
 
 **Null handling:** intel-main drops null/undefined keys from the patch before merging — it never overwrites an existing DCC value with `null`. So if a value disappears on the intel-main side, the prior DCC value persists until intel-main has a real replacement.
+
+**Set-once vs reconciled:** most keys above are re-pushed every sync tick (intel-main is source of truth). The exceptions — `sourced_*` and **`feePct`** — are written ONLY on the initial push and never reconciled, so DCC/team edits to them stick. If you change a deal's `feePct` in DCC, it stays.
 
 **Naming inconsistency to clean up later:** some keys are camelCase, some are snake_case (e.g. `walkerVerified` AND `walker_verified` both appear in the current cron output for backward compatibility). DCC's deal form reads camelCase; the snake_case ones are vestigial. Don't depend on the snake_case ones — they may go away.
 
