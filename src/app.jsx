@@ -10491,11 +10491,24 @@ function AttentionView({ deals, onSelect }) {
     }
   };
 
-  // Only blank to "Loading…" on the very first load. On background refreshes
-  // (the load re-fires on every `deals` realtime change), keep the current
-  // content on screen instead of flashing black — fixes the flicker, esp.
-  // during bursts of deal updates.
-  if (loading && rows.length === 0) return <div style={{ textAlign: 'center', padding: 40, color: '#78716c' }}>Loading…</div>;
+  // Attention = the Deadlines screen (per Nathan 2026-05-27): court response
+  // deadlines + appeal windows — the clocks you can't miss. The old per-deal
+  // "N items / Mark all seen" unread wall was noise already covered by Today +
+  // the 🔔 bell, so we render just the deadline + warm-lead strips. The per-deal
+  // load/rows/clear logic above + the old return below are now unused — left in
+  // place to keep this change small + trivially revertible; safe to prune later.
+  return (
+    <div>
+      <div style={{ marginBottom: 16 }}>
+        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0 }}>⏰ Deadlines</h2>
+        <div style={{ fontSize: 12, color: '#a8a29e', marginTop: 3 }}>
+          Court response deadlines &amp; appeal windows across your active cases — the clocks you can't miss. Unread messages &amp; drafts live on Today + the 🔔 bell.
+        </div>
+      </div>
+      <DeadlineAlertStrip onSelect={onSelect} />
+      <LeadEngagementStrip deals={deals} onSelect={onSelect} />
+    </div>
+  );
 
   const totalAll = rows.reduce((s, r) => s + r.total, 0);
   const totalDraftsOnly = rows.reduce((s, r) => s + (r.total === r.drafts_pending.length ? r.drafts_pending.length : 0), 0);
