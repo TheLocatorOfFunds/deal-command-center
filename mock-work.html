@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCC · Work (prototype)</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root{
+    --bg:#0c0a09; --panel:#111110; --panel2:#14110d; --line:#1f1c19; --line2:#292524;
+    --txt:#fafaf9; --dim:#a8a29e; --dim2:#78716c; --faint:#57534e;
+    --amber:#fbbf24; --amber2:#fdba74; --warm:#7c2d12;
+    --green:#6ee7b7; --blue:#7dd3fc; --purple:#c4b5fd; --red:#fca5a5;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer}
+  .mono{font-family:"DM Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+  .app{display:flex;min-height:100vh}
+  /* Sidebar */
+  .side{width:208px;min-width:208px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:14px 10px}
+  .brand{font-size:11px;font-weight:800;letter-spacing:.16em;color:var(--amber);padding:6px 10px 16px}
+  .nav{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--dim);
+    font-size:14px;font-weight:600;border:none;background:transparent;width:100%;text-align:left;margin-bottom:2px}
+  .nav .i{font-size:16px;width:20px;text-align:center}
+  .nav:hover{background:#1a1714;color:var(--txt)}
+  .nav.on{background:#1c1917;color:var(--txt)}
+  .nav .ct{margin-left:auto;font-size:11px;font-weight:800;background:var(--warm);color:var(--amber);
+    border-radius:999px;padding:1px 8px}
+  .side .sp{flex:1}
+  .who{margin-top:8px;border-top:1px solid var(--line);padding-top:12px}
+  .who .lbl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:0 12px 6px;font-weight:700}
+  .seg{display:flex;background:#0c0a09;border:1px solid var(--line2);border-radius:9px;padding:3px;gap:2px;margin:0 6px}
+  .seg button{flex:1;border:none;background:transparent;color:var(--dim2);font-size:11px;font-weight:700;
+    padding:6px 4px;border-radius:6px}
+  .seg button.on{background:#292524;color:var(--txt)}
+  /* Main */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column}
+  .top{display:flex;align-items:center;gap:14px;padding:18px 28px 6px}
+  .top .search{flex:1;max-width:340px;background:#1c1917;border:1px solid var(--line2);border-radius:10px;
+    color:var(--dim2);font-size:13px;padding:9px 13px}
+  .proto{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.1em;color:var(--amber2);
+    background:#2a1a0e;border:1px solid var(--warm);border-radius:999px;padding:4px 11px}
+  .hero{padding:6px 28px 14px}
+  .hero h1{margin:0;font-size:27px;font-weight:800;letter-spacing:-.02em}
+  .hero .sub{color:var(--dim);font-size:14px;margin-top:3px}
+  .hero .sub b{color:var(--amber)}
+  /* pipeline spine */
+  .spine{display:flex;gap:0;align-items:stretch;margin:8px 28px 6px;border:1px solid var(--line);
+    border-radius:12px;overflow:hidden;background:var(--panel)}
+  .stage{flex:1;padding:11px 12px;border-right:1px solid var(--line);position:relative}
+  .stage:last-child{border-right:none}
+  .stage .n{font-size:18px;font-weight:800}
+  .stage .t{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);font-weight:700;margin-top:1px}
+  .stage.kill .n{color:var(--dim2)} .stage.won .n{color:var(--green)}
+  .stage .arrow{position:absolute;right:-7px;top:50%;transform:translateY(-50%);z-index:2;color:var(--faint);font-size:12px}
+  /* filters */
+  .filters{display:flex;gap:7px;padding:10px 28px 4px;flex-wrap:wrap}
+  .chip{font-size:12px;font-weight:700;color:var(--dim);background:transparent;border:1px solid var(--line2);
+    border-radius:999px;padding:6px 13px}
+  .chip.on{background:var(--txt);color:#0c0a09;border-color:var(--txt)}
+  /* work list */
+  .list{padding:6px 22px 60px;max-width:920px}
+  .row{display:flex;align-items:center;gap:14px;width:100%;text-align:left;background:var(--panel);
+    border:1px solid var(--line);border-radius:13px;padding:14px 16px;margin:8px 6px}
+  .row:hover{border-color:var(--line2);background:#16130f}
+  .row .ic{font-size:20px;width:26px;text-align:center;flex-shrink:0}
+  .row .body{flex:1;min-width:0}
+  .row .who2{font-size:15px;font-weight:700;color:var(--txt)}
+  .row .who2 .meta{font-weight:500;color:var(--dim2);font-size:13px}
+  .row .why{font-size:13px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .act{flex-shrink:0;border:none;border-radius:9px;font-size:13px;font-weight:800;padding:9px 16px}
+  .act.call{background:#10b981;color:#04231a} .act.text{background:var(--amber);color:#231803}
+  .act.followup{background:#1c1917;color:var(--amber2);border:1px solid var(--warm)!important}
+  .act.work{background:#38bdf8;color:#04222e} .act.close{background:#a78bfa;color:#1a0f33}
+  .done{text-align:center;color:var(--dim2);font-size:13px;padding:26px;font-weight:600}
+  .done .big{font-size:15px;color:var(--green);font-weight:700}
+  /* drawer */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:40}
+  .drawer{position:fixed;top:0;right:0;height:100vh;width:430px;max-width:92vw;background:var(--panel);
+    border-left:1px solid var(--line2);z-index:41;padding:22px;overflow:auto;box-shadow:-12px 0 40px rgba(0,0,0,.5)}
+  .drawer h2{margin:0;font-size:21px;font-weight:800}
+  .drawer .x{position:absolute;top:16px;right:16px;background:#1c1917;border:1px solid var(--line2);
+    color:var(--dim);border-radius:8px;width:30px;height:30px;font-size:15px}
+  .kv{display:flex;gap:8px;font-size:13px;color:var(--dim);margin-top:5px}
+  .kv b{color:var(--txt);font-weight:700}
+  .card{background:var(--panel2);border:1px solid var(--line);border-radius:11px;padding:13px 15px;margin-top:14px}
+  .card .h{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);font-weight:800;margin-bottom:8px}
+  .bub{font-size:13px;color:var(--dim);line-height:1.5;margin:4px 0}
+  .bub b{color:var(--txt)}
+  .actions{display:flex;gap:9px;margin-top:18px;flex-wrap:wrap}
+  .big-btn{flex:1;min-width:120px;border:none;border-radius:11px;font-size:14px;font-weight:800;padding:13px}
+  .ghost{background:#1c1917;color:var(--dim);border:1px solid var(--line2)!important}
+  .kill{background:#1c1917;color:var(--red);border:1px solid #5b2424!important}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1917;
+    border:1px solid var(--line2);color:var(--txt);padding:11px 18px;border-radius:11px;font-size:13px;
+    font-weight:600;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .teamrow{display:flex;align-items:center;gap:12px;padding:11px 4px;border-bottom:1px solid var(--line)}
+  .teamrow:last-child{border:none}
+  .avatar{width:30px;height:30px;border-radius:50%;background:#292524;display:flex;align-items:center;
+    justify-content:center;font-size:13px;font-weight:800;color:var(--amber2)}
+  .bar{flex:1;height:8px;background:#1c1917;border-radius:999px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--amber)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState} = React;
+
+// ── Shared pipeline spine (the lifecycle everyone shares) ──
+const SPINE = [
+  {t:'New',      n:153, hint:'data flowing in'},
+  {t:'Research', n:26,  hint:'being qualified'},
+  {t:'Ready',    n:88,  hint:'qualified for outreach'},
+  {t:'Outreach', n:56,  hint:'call / text / follow-up'},
+  {t:'Engaged',  n:6,   hint:'replied / opened / chatting'},
+  {t:'Won',      n:1,   hint:'signed', cls:'won'},
+  {t:'Killed',   n:90,  hint:'dead + reason', cls:'kill'},
+];
+
+// ── Each role sees the SAME screen, scoped to THEIR stage ──
+const ROLES = {
+  outreach: {
+    label:'Outreach', person:'Nathan',
+    greeting:'Here’s who to reach today.',
+    filters:['All','Call','Text','Follow-up'],
+    rows:[
+      {ic:'🔥', who:'Matthew Grose', meta:'Wakeman, OH · ~$140k', why:'Opened his link 2× today — strike while warm', act:'Call', kind:'call', f:'Call'},
+      {ic:'💬', who:'Joy Baker', meta:'Canal Winchester, OH', why:'Replied 10m ago — “is this legit?”', act:'Reply', kind:'text', f:'Text'},
+      {ic:'⏰', who:'Teresa Grose', meta:'Huron County · ~$140k', why:'Redemption deadline in 6 days', act:'Call', kind:'call', f:'Call'},
+      {ic:'📨', who:'Heather Johnson', meta:'Franklin County', why:'Day-1 follow-up drafted & ready to send', act:'Send', kind:'text', f:'Text'},
+      {ic:'🆕', who:'Carol Cottrell', meta:'Delaware County · ~$189k', why:'New A-lead — never contacted', act:'Text', kind:'text', f:'Text'},
+      {ic:'😴', who:'Elaine Connelly', meta:'Cuyahoga County', why:'Signed 14 days ago — no movement since', act:'Follow up', kind:'followup', f:'Follow-up'},
+    ],
+  },
+  research: {
+    label:'Research', person:'Anam',
+    greeting:'Here’s what to qualify today.',
+    filters:['All','Verify surplus','Find phone','Confirm claimable'],
+    rows:[
+      {ic:'🔎', who:'5938 Mackenzie Rd', meta:'North Olmsted, OH', why:'Verify surplus amount before it goes to outreach', act:'Verify', kind:'work', f:'Verify surplus'},
+      {ic:'📞', who:'1820 Brevier Ave', meta:'Cleveland, OH', why:'No phone on file — skip-trace the owner', act:'Find #', kind:'work', f:'Find phone'},
+      {ic:'🏚', who:'13 Birdie Dr', meta:'Mt Vernon, OH', why:'Confirm funds still claimable (walker check)', act:'Confirm', kind:'work', f:'Confirm claimable'},
+      {ic:'⚖', who:'424 Brelsford Ave', meta:'Trenton, OH', why:'Pull docket + sale date from the county', act:'Pull', kind:'work', f:'Confirm claimable'},
+      {ic:'❓', who:'210 Elmwood Dr', meta:'Springboro, OH', why:'Owner appears deceased — find the heir', act:'Research', kind:'work', f:'Find phone'},
+    ],
+  },
+  ops: {
+    label:'Ops / Closer', person:'Eric',
+    greeting:'Here’s what needs a decision today.',
+    filters:['All','Prep gaps','Ready to close','Escalations'],
+    rows:[
+      {ic:'🤝', who:'Tammy Thacker', meta:'Marion, OH · engaged', why:'Agreed on the phone — send the retainer', act:'Send contract', kind:'close', f:'Ready to close'},
+      {ic:'🚩', who:'Kim Rock', meta:'replied — wants a callback', why:'Escalated from outreach — call back', act:'Call', kind:'call', f:'Escalations'},
+      {ic:'⚠', who:'Robert E. Denzer', meta:'Ashtabula, OH', why:'Missing phone + tier — prep before outreach', act:'Prep', kind:'work', f:'Prep gaps'},
+      {ic:'🆕', who:'Tax-foreclosure case', meta:'Lorain, OH', why:'Defendant lookup pending — assign to research', act:'Assign', kind:'work', f:'Prep gaps'},
+    ],
+  },
+  admin: {
+    label:'Admin', person:'Nathan',
+    greeting:'Pipeline + team at a glance.',
+    filters:[],
+    rows:[],
+  },
+};
+
+function Spine(){
+  return (
+    <div className="spine">
+      {SPINE.map((s,i)=>(
+        <div key={s.t} className={"stage "+(s.cls||"")}>
+          <div className="n">{s.n}</div>
+          <div className="t">{s.t}</div>
+          {i<SPINE.length-2 && <div className="arrow">→</div>}
+          {i===SPINE.length-2 && <div className="arrow" style={{color:'#44403c'}}>·</div>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Drawer({row, onClose, toast}){
+  if(!row) return null;
+  const isResearch = row.kind==='work';
+  return (
+    <>
+      <div className="scrim" onClick={onClose}/>
+      <div className="drawer">
+        <button className="x" onClick={onClose}>✕</button>
+        <div style={{fontSize:11,fontWeight:800,letterSpacing:'.1em',color:'#fdba74',textTransform:'uppercase'}}>{row.ic} {row.f}</div>
+        <h2 style={{marginTop:6}}>{row.who}</h2>
+        <div className="kv">{row.meta}</div>
+        <div className="kv"><b>Why now:</b> {row.why}</div>
+
+        <div className="card">
+          <div className="h">Recent activity</div>
+          <div className="bub"><b>You</b> · texted intro · 2 days ago</div>
+          <div className="bub"><b>System</b> · link opened · today 10:42a</div>
+          <div className="bub" style={{color:'#57534e'}}>Full case history one tap away — same context, no tab-hopping.</div>
+        </div>
+
+        <div className="actions">
+          {row.kind==='call' && <button className="big-btn" style={{background:'#10b981',color:'#04231a'}} onClick={()=>toast('📞 Calling '+row.who+'… (prototype)')}>📞 Call</button>}
+          {(row.kind==='text'||row.kind==='followup') && <button className="big-btn" style={{background:'#fbbf24',color:'#231803'}} onClick={()=>toast('💬 Opening message to '+row.who+'… (prototype)')}>💬 Send text</button>}
+          {row.kind==='close' && <button className="big-btn" style={{background:'#a78bfa',color:'#1a0f33'}} onClick={()=>toast('📝 Sending retainer… (prototype)')}>📝 Send contract</button>}
+          {isResearch && <button className="big-btn" style={{background:'#38bdf8',color:'#04222e'}} onClick={()=>toast('✅ '+row.f+' done — moved to Ready (prototype)')}>✓ {row.act} done</button>}
+          <button className="big-btn ghost" onClick={()=>toast('↪ Snoozed to tomorrow (prototype)')}>Snooze</button>
+        </div>
+        <div className="actions">
+          {!isResearch && <button className="big-btn" style={{background:'#10b981',color:'#04231a'}} onClick={()=>toast('🎉 Marked Signed → Won (prototype)')}>🎉 Mark signed</button>}
+          <button className="big-btn kill" onClick={()=>toast('🪦 Killed lead — pick a reason (prototype)')}>🪦 Kill lead</button>
+        </div>
+        <div style={{fontSize:11,color:'#57534e',marginTop:14,lineHeight:1.5}}>
+          Every item ends one of two ways — it <b style={{color:'#6ee7b7'}}>becomes a lead</b> (signed) or we <b style={{color:'#fca5a5'}}>kill it</b> with a reason. No limbo.
+        </div>
+      </div>
+    </>
+  );
+}
+
+function AdminView(){
+  const team=[
+    {n:'Nathan', r:'Outreach', load:12, pct:80},
+    {n:'Anam',   r:'Research', load:18, pct:100},
+    {n:'Eric',   r:'Ops / Closer', load:4, pct:30},
+    {n:'Justin', r:'Engineering', load:0, pct:5},
+  ];
+  return (
+    <div className="card" style={{margin:'8px 28px',maxWidth:880}}>
+      <div className="h">Team — who’s loaded today</div>
+      {team.map(t=>(
+        <div key={t.n} className="teamrow">
+          <div className="avatar">{t.n[0]}</div>
+          <div style={{width:150}}><div style={{fontWeight:700,fontSize:14}}>{t.n}</div><div style={{fontSize:11,color:'#78716c'}}>{t.r}</div></div>
+          <div className="bar"><i style={{width:t.pct+'%'}}/></div>
+          <div className="mono" style={{width:64,textAlign:'right',color:'#a8a29e',fontSize:13}}>{t.load} to do</div>
+        </div>
+      ))}
+      <div style={{fontSize:12,color:'#78716c',marginTop:12,lineHeight:1.5}}>
+        Admin sees the whole spine above + who’s carrying what. Everyone else just sees their own list — same screen, their slice.
+      </div>
+    </div>
+  );
+}
+
+function App(){
+  const [role,setRole]=useState('outreach');
+  const [filter,setFilter]=useState('All');
+  const [sel,setSel]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [navItem,setNavItem]=useState('work');
+  const fire=(m)=>{setToast(m);clearTimeout(window.__t);window.__t=setTimeout(()=>setToast(null),2200);};
+
+  const R=ROLES[role];
+  const rows = R.rows.filter(r=>filter==='All'||r.f===filter);
+
+  const navClick=(id)=>{ setNavItem(id); if(id!=='work') fire('“'+id+'” lives one layer down in the redesign — Work is home. (prototype)'); };
+
+  return (
+    <div className="app">
+      <div className="side">
+        <div className="brand">REFUNDLOCATORS</div>
+        <button className={"nav "+(navItem==='work'?'on':'')} onClick={()=>navClick('work')}><span className="i">🎯</span>Work <span className="ct">{role==='admin'?'—':rows.length||R.rows.length}</span></button>
+        <button className={"nav "+(navItem==='deals'?'on':'')} onClick={()=>navClick('deals')}><span className="i">🏠</span>Deals</button>
+        <button className={"nav "+(navItem==='chat'?'on':'')} onClick={()=>navClick('chat')}><span className="i">💬</span>Chat</button>
+        <button className={"nav "+(navItem==='more'?'on':'')} onClick={()=>navClick('more')}><span className="i">⋯</span>More</button>
+        <div className="sp"/>
+        <div className="who">
+          <div className="lbl">View as (demo)</div>
+          <div className="seg">
+            {Object.keys(ROLES).map(k=>(
+              <button key={k} className={role===k?'on':''} onClick={()=>{setRole(k);setFilter('All');setSel(null);}}>{ROLES[k].label.split(' ')[0]}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="main">
+        <div className="top">
+          <div className="search">🔍 Search people, cases…</div>
+          <div className="proto">● PROTOTYPE · fake data</div>
+        </div>
+
+        <div className="hero">
+          <h1>{role==='admin'?'Good morning, Nathan.':'Good morning, '+R.person+'.'}</h1>
+          <div className="sub">{role==='admin'? R.greeting : <>You have <b>{R.rows.length} {role==='research'?'cases':role==='ops'?'items':'people'}</b> to work. {R.greeting}</>}</div>
+        </div>
+
+        <Spine/>
+
+        {role==='admin' ? <AdminView/> : (
+          <>
+            <div className="filters">
+              {R.filters.map(f=>(
+                <button key={f} className={"chip "+(filter===f?'on':'')} onClick={()=>setFilter(f)}>{f}</button>
+              ))}
+            </div>
+            <div className="list">
+              {rows.map((r,i)=>(
+                <button key={i} className="row" onClick={()=>setSel(r)}>
+                  <span className="ic">{r.ic}</span>
+                  <span className="body">
+                    <span className="who2">{r.who} <span className="meta">· {r.meta}</span></span>
+                    <span className="why">{r.why}</span>
+                  </span>
+                  <span className={"act "+r.kind} onClick={(e)=>{e.stopPropagation();setSel(r);}}>{r.act}</span>
+                </button>
+              ))}
+              {rows.length===0 && <div className="done"><div className="big">✓ You’re all caught up.</div>Nothing left in this filter.</div>}
+              {rows.length>0 && <div className="done"><div className="big">✓ That’s everything.</div>When this list is empty, you’re done for the day.</div>}
+            </div>
+          </>
+        )}
+      </div>
+
+      <Drawer row={sel} onClose={()=>setSel(null)} toast={fire}/>
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
