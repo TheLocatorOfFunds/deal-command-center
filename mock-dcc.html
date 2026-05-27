@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DCC · Full Redesign Prototype</title>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  :root{
+    --bg:#0c0a09; --panel:#111110; --panel2:#16130f; --card:#14110d; --line:#1f1c19; --line2:#2b2723;
+    --txt:#fafaf9; --dim:#a8a29e; --dim2:#78716c; --faint:#57534e;
+    --amber:#fbbf24; --amber2:#fdba74; --warm:#7c2d12;
+    --green:#6ee7b7; --greenbg:#04231a; --blue:#7dd3fc; --purple:#c4b5fd; --red:#fca5a5;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  button{font-family:inherit;cursor:pointer;color:inherit}
+  .mono{font-family:"DM Mono",ui-monospace,Menlo,monospace}
+  .app{display:flex;min-height:100vh}
+  a{color:var(--amber2)}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:#241f1b;border-radius:6px}
+  /* Sidebar */
+  .side{width:210px;min-width:210px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;position:sticky;top:0;height:100vh;padding:14px 10px}
+  .brand{font-size:11px;font-weight:800;letter-spacing:.16em;color:var(--amber);padding:6px 10px 4px}
+  .brand small{display:block;color:var(--faint);font-weight:700;letter-spacing:.06em;font-size:8px;margin-top:3px}
+  .nav{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;color:var(--dim);
+    font-size:14px;font-weight:600;border:none;background:transparent;width:100%;text-align:left;margin-bottom:2px;transition:.12s}
+  .nav .i{font-size:16px;width:20px;text-align:center}
+  .nav:hover{background:#1a1714;color:var(--txt)}
+  .nav.on{background:#1c1917;color:var(--txt)}
+  .nav .ct{margin-left:auto;font-size:11px;font-weight:800;background:var(--warm);color:var(--amber);border-radius:999px;padding:1px 8px}
+  .side .sp{flex:1}
+  .who{margin-top:8px;border-top:1px solid var(--line);padding-top:10px}
+  .who .lbl{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:0 12px 6px;font-weight:700}
+  .seg{display:flex;background:#0c0a09;border:1px solid var(--line2);border-radius:9px;padding:3px;gap:2px;margin:0 6px}
+  .seg button{flex:1;border:none;background:transparent;color:var(--dim2);font-size:10px;font-weight:800;padding:6px 2px;border-radius:6px;transition:.1s}
+  .seg button.on{background:#332d28;color:var(--txt)}
+  /* Main */
+  .main{flex:1;min-width:0;display:flex;flex-direction:column;height:100vh;overflow:auto}
+  .top{display:flex;align-items:center;gap:14px;padding:16px 28px 0;position:sticky;top:0;background:linear-gradient(180deg,var(--bg) 70%,transparent);z-index:5}
+  .top .search{flex:1;max-width:360px;background:#1c1917;border:1px solid var(--line2);border-radius:10px;
+    color:var(--dim2);font-size:13px;padding:9px 13px;text-align:left;display:flex;gap:8px;align-items:center}
+  .top .search .k{margin-left:auto;font-size:10px;border:1px solid var(--line2);border-radius:5px;padding:1px 6px;color:var(--faint)}
+  .proto{margin-left:auto;font-size:10px;font-weight:800;letter-spacing:.1em;color:var(--amber2);background:#2a1a0e;border:1px solid var(--warm);border-radius:999px;padding:4px 11px}
+  .pagehead{padding:14px 28px 4px}
+  .pagehead h1{margin:0;font-size:26px;font-weight:800;letter-spacing:-.02em}
+  .pagehead .sub{color:var(--dim);font-size:14px;margin-top:3px}
+  .pagehead .sub b{color:var(--amber)}
+  /* spine */
+  .spine{display:flex;margin:10px 28px 4px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--panel)}
+  .stage{flex:1;padding:10px 12px;border-right:1px solid var(--line);position:relative;text-align:left;background:transparent;transition:.12s}
+  .stage:hover{background:#1a1714}.stage:last-child{border-right:none}
+  .stage .n{font-size:17px;font-weight:800}.stage.won .n{color:var(--green)}.stage.kill .n{color:var(--dim2)}
+  .stage .t{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);font-weight:700;margin-top:1px}
+  .stage .ar{position:absolute;right:-6px;top:50%;transform:translateY(-50%);color:var(--faint);font-size:11px;z-index:2}
+  /* filters / chips */
+  .chips{display:flex;gap:7px;padding:10px 28px 4px;flex-wrap:wrap}
+  .chip{font-size:12px;font-weight:700;color:var(--dim);background:transparent;border:1px solid var(--line2);border-radius:999px;padding:6px 13px;transition:.12s}
+  .chip.on{background:var(--txt);color:#0c0a09;border-color:var(--txt)}
+  .grouphdr{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);padding:18px 34px 2px}
+  /* rows */
+  .list{padding:2px 22px 80px;max-width:940px}
+  .row{display:flex;align-items:center;gap:14px;width:100%;text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:13px 16px;margin:8px 6px;transition:.12s}
+  .row:hover{border-color:var(--line2);background:var(--panel2);transform:translateY(-1px)}
+  .row .ic{font-size:19px;width:24px;text-align:center;flex-shrink:0}
+  .row .body{flex:1;min-width:0}
+  .row .who2{font-size:15px;font-weight:700}
+  .row .who2 .meta{font-weight:500;color:var(--dim2);font-size:13px}
+  .row .why{font-size:13px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .act{flex-shrink:0;border:none;border-radius:9px;font-size:13px;font-weight:800;padding:9px 15px;transition:.1s}
+  .act.call{background:#10b981;color:var(--greenbg)} .act.text{background:var(--amber);color:#231803}
+  .act.followup{background:#1c1917;color:var(--amber2);border:1px solid var(--warm)!important}
+  .act.work{background:#38bdf8;color:#04222e} .act.close{background:#a78bfa;color:#1a0f33}
+  .act:hover{filter:brightness(1.08)}
+  .done{text-align:center;color:var(--dim2);font-size:13px;padding:24px}.done .big{font-size:15px;color:var(--green);font-weight:700}
+  /* deals toolbar + grid/list */
+  .toolbar{display:flex;align-items:center;gap:10px;padding:8px 28px;flex-wrap:wrap}
+  .toggle{display:flex;background:#0c0a09;border:1px solid var(--line2);border-radius:9px;padding:3px}
+  .toggle button{border:none;background:transparent;color:var(--dim2);font-size:12px;font-weight:700;padding:6px 12px;border-radius:6px}
+  .toggle button.on{background:#332d28;color:var(--txt)}
+  .board{display:flex;gap:14px;padding:8px 28px 80px;overflow-x:auto}
+  .col{min-width:240px;width:240px;flex-shrink:0}
+  .col .h{font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--dim2);padding:4px 6px 8px;display:flex;justify-content:space-between}
+  .dcard{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:11px 12px;margin-bottom:9px;text-align:left;width:100%;transition:.12s}
+  .dcard:hover{border-color:var(--line2);background:var(--panel2)}
+  .dcard .nm{font-size:13.5px;font-weight:700}
+  .dcard .ad{font-size:11.5px;color:var(--dim2);margin-top:2px}
+  .dcard .ft{display:flex;gap:6px;margin-top:8px;align-items:center;flex-wrap:wrap}
+  .tier{font-size:9px;font-weight:800;border-radius:5px;padding:2px 6px}
+  .tA{background:#d8b560;color:#0c0a09}.tB{background:#8b5cf6;color:#fff}.tC{background:#44403c;color:#d6d3d1}
+  .pill{font-size:9px;font-weight:700;border-radius:5px;padding:2px 6px;background:#1c1917;color:var(--dim);border:1px solid var(--line2)}
+  .lst .dcard{margin:8px 6px;display:flex;align-items:center;gap:14px}
+  /* deal detail */
+  .detail{padding:0 28px 80px;max-width:880px}
+  .back{background:transparent;border:none;color:var(--dim);font-size:13px;font-weight:600;padding:14px 0 6px}
+  .dh{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
+  .dh h1{margin:0;font-size:25px;font-weight:800;letter-spacing:-.02em}
+  .dh .ad{color:var(--dim);font-size:13.5px;margin-top:3px}
+  .metricstrip{display:flex;gap:10px;margin:16px 0;flex-wrap:wrap}
+  .metric{flex:1;min-width:130px;background:var(--card);border:1px solid var(--line);border-radius:11px;padding:12px 14px}
+  .metric .l{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--dim2);font-weight:700}
+  .metric .v{font-size:20px;font-weight:800;margin-top:3px}
+  .stickyact{position:sticky;top:62px;display:flex;gap:9px;padding:12px 0;background:linear-gradient(180deg,var(--bg) 75%,transparent);flex-wrap:wrap;z-index:4}
+  .stickyact button{border:none;border-radius:10px;font-size:13.5px;font-weight:800;padding:11px 18px}
+  .dtabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-top:6px}
+  .dtab{background:transparent;border:none;border-bottom:2px solid transparent;color:var(--dim2);font-size:13px;font-weight:700;padding:10px 14px;margin-bottom:-1px}
+  .dtab.on{color:var(--txt);border-bottom-color:var(--amber)}
+  .sec{margin-top:16px}
+  .sec .h{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);font-weight:800;margin-bottom:8px}
+  .bub{display:flex;gap:9px;margin:8px 0;font-size:13px}
+  .bub .av{width:24px;height:24px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800}
+  .bub .tx{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 11px;color:var(--dim);line-height:1.45}
+  .bub.me .tx{background:#2a1d0e;border-color:var(--warm);color:var(--amber2)}
+  .factrow{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .factrow .k{color:var(--dim2)}.factrow .v{font-weight:600}
+  /* chat */
+  .chatwrap{display:flex;gap:0;height:calc(100vh - 130px);margin:8px 28px 0;border:1px solid var(--line);border-radius:13px;overflow:hidden}
+  .chanlist{width:210px;border-right:1px solid var(--line);padding:8px;overflow:auto;background:var(--panel)}
+  .chan{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;font-size:13px;font-weight:600;color:var(--dim);border:none;background:transparent;width:100%;text-align:left}
+  .chan:hover{background:#1a1714;color:var(--txt)}.chan.on{background:#1c1917;color:var(--txt)}
+  .chan .dot{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--amber)}
+  .thread{flex:1;display:flex;flex-direction:column}
+  .thread .msgs{flex:1;overflow:auto;padding:16px 18px}
+  .composer{border-top:1px solid var(--line);padding:12px 16px;display:flex;gap:9px}
+  .composer input{flex:1;background:#1c1917;border:1px solid var(--line2);border-radius:10px;color:var(--txt);padding:10px 13px;font-size:13px}
+  .composer button{background:var(--amber);color:#231803;border:none;border-radius:10px;font-weight:800;padding:0 18px}
+  /* insights */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(165px,1fr));gap:12px;padding:8px 28px}
+  .tile{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .tile .l{font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--dim2);font-weight:700}
+  .tile .v{font-size:25px;font-weight:800;margin-top:4px}.tile .d{font-size:11px;color:var(--dim2);margin-top:3px}
+  .panel-card{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:16px 18px;margin:14px 28px}
+  .panel-card .h{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim2);font-weight:800;margin-bottom:12px}
+  .funnel{display:flex;flex-direction:column;gap:7px}
+  .fbar{display:flex;align-items:center;gap:10px;font-size:13px}
+  .fbar .lab{width:120px;color:var(--dim)}
+  .fbar .track{flex:1;height:22px;background:#1c1917;border-radius:6px;overflow:hidden}
+  .fbar .fill{height:100%;display:flex;align-items:center;padding-left:9px;font-size:11px;font-weight:800;color:#0c0a09}
+  /* more grid */
+  .moregrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:8px 28px}
+  .moretile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:18px;text-align:left;transition:.12s}
+  .moretile:hover{border-color:var(--line2);background:var(--panel2)}
+  .moretile .ic{font-size:22px}.moretile .t{font-weight:700;margin-top:8px}.moretile .d{font-size:12px;color:var(--dim2);margin-top:3px}
+  /* drawer + palette + toast */
+  .scrim{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:40}
+  .drawer{position:fixed;top:0;right:0;height:100vh;width:430px;max-width:92vw;background:var(--panel);border-left:1px solid var(--line2);z-index:41;padding:22px;overflow:auto;box-shadow:-12px 0 40px rgba(0,0,0,.5)}
+  .drawer .x{position:absolute;top:16px;right:16px;background:#1c1917;border:1px solid var(--line2);color:var(--dim);border-radius:8px;width:30px;height:30px;font-size:15px}
+  .actions{display:flex;gap:9px;margin-top:16px;flex-wrap:wrap}
+  .big-btn{flex:1;min-width:120px;border:none;border-radius:11px;font-size:14px;font-weight:800;padding:12px}
+  .ghost{background:#1c1917;color:var(--dim);border:1px solid var(--line2)!important}
+  .kill{background:#1c1917;color:var(--red);border:1px solid #5b2424!important}
+  .palette{position:fixed;top:90px;left:50%;transform:translateX(-50%);width:560px;max-width:92vw;background:#1a1714;border:1px solid var(--line2);border-radius:14px;z-index:51;box-shadow:0 20px 60px rgba(0,0,0,.6);overflow:hidden}
+  .palette input{width:100%;background:transparent;border:none;border-bottom:1px solid var(--line);color:var(--txt);font-size:16px;padding:16px 18px;outline:none}
+  .palette .res{padding:6px;max-height:340px;overflow:auto}
+  .pres{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;font-size:13px;border:none;background:transparent;width:100%;text-align:left;color:var(--txt)}
+  .pres:hover{background:#241f1b}.pres .sub{color:var(--dim2);font-size:11px}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1c1917;border:1px solid var(--line2);color:var(--txt);padding:11px 18px;border-radius:11px;font-size:13px;font-weight:600;z-index:60;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  .teamrow{display:flex;align-items:center;gap:12px;padding:10px 2px;border-bottom:1px solid var(--line)}.teamrow:last-child{border:none}
+  .avatar{width:30px;height:30px;border-radius:50%;background:#292524;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:800;color:var(--amber2)}
+  .bar{flex:1;height:8px;background:#1c1917;border-radius:999px;overflow:hidden}.bar i{display:block;height:100%;background:var(--amber)}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect} = React;
+const money=(n)=> n? '$'+Math.round(n).toLocaleString():'—';
+
+// ── One coherent dataset powering every surface ──
+const DEALS=[
+ {id:'grose', name:'Teresa Grose', contact:'Matthew Grose (son)', addr:'2342 Fitchville River Rd, Wakeman', county:'Huron', tier:'A', surplus:140048, stage:'engaged', phone:'440-841-0543', signal:'🔥 Opened link 2× today', next:{kind:'call',act:'Call'}, deadline:'Redemption · 6 days'},
+ {id:'baker', name:'Joy Baker', contact:'Joy Baker', addr:'5331 John Browning Dr, Canal Winchester', county:'Franklin', tier:'A', surplus:96200, stage:'engaged', phone:'614-555-0142', signal:'💬 Replied 10m ago — “is this legit?”', next:{kind:'text',act:'Reply'}},
+ {id:'johnson', name:'Heather Johnson', contact:'Heather Johnson', addr:'655 Haleigh Wds Ct, Blacklick', county:'Franklin', tier:'A', surplus:112400, stage:'outreach', phone:'614-555-0188', signal:'📨 Day-1 follow-up drafted & ready', next:{kind:'text',act:'Send'}},
+ {id:'cottrell', name:'Carol Cottrell', contact:'Carol Cottrell', addr:'6863 S Section Line Rd, Delaware', county:'Delaware', tier:'A', surplus:189000, stage:'ready', phone:'740-555-0166', signal:'🆕 New A-lead — never contacted', next:{kind:'text',act:'Text'}},
+ {id:'connelly', name:'Elaine Connelly', contact:'Elaine Connelly', addr:'1270 Mallard Pond Cir, Broadview Hts', county:'Cuyahoga', tier:'B', surplus:134000, stage:'engaged', phone:'216-555-0173', signal:'😴 Signed 14d ago — no movement', next:{kind:'followup',act:'Follow up'}},
+ {id:'rock', name:'Kim Rock', contact:'Kim Rock', addr:'5938 Mackenzie Rd, North Olmsted', county:'Cuyahoga', tier:'A', surplus:88500, stage:'engaged', phone:'440-555-0111', signal:'🚩 Replied — wants a callback', next:{kind:'call',act:'Call'}},
+ {id:'thacker', name:'Tammy Thacker', contact:'Tammy Thacker', addr:'2939 Mautz Yeager Rd, Marion', county:'Marion', tier:'A', surplus:121000, stage:'engaged', phone:'740-555-0150', signal:'🤝 Agreed on phone — send retainer', next:{kind:'close',act:'Send contract'}},
+ {id:'riley', name:'Sandra Riley', contact:'Sandra Riley', addr:'1981 Old Fairfield Rd, Beavercreek', county:'Greene', tier:'A', surplus:157000, stage:'outreach', phone:'937-555-0190', signal:'Cadence Day-3 due today', next:{kind:'text',act:'Send'}},
+ {id:'mackenzie', name:'5938 Mackenzie Rd', contact:'owner unknown', addr:'North Olmsted', county:'Cuyahoga', tier:'?', surplus:0, stage:'research', phone:'', signal:'🔎 Verify surplus before outreach', next:{kind:'work',act:'Verify'}},
+ {id:'brevier', name:'1820 Brevier Ave', contact:'Pearl Owen', addr:'Cleveland', county:'Cuyahoga', tier:'A', surplus:104000, stage:'research', phone:'', signal:'📞 No phone — skip-trace owner', next:{kind:'work',act:'Find #'}},
+ {id:'birdie', name:'13 Birdie Dr', contact:'Tyler Glockner', addr:'Mt Vernon', county:'Knox', tier:'C', surplus:42000, stage:'research', phone:'740-555-0120', signal:'🏚 Confirm still claimable (walker)', next:{kind:'work',act:'Confirm'}},
+ {id:'denzer', name:'Robert E. Denzer', contact:'—', addr:'Ashtabula', county:'Ashtabula', tier:'?', surplus:0, stage:'new', phone:'', signal:'⚠ Missing phone + tier — prep', next:{kind:'work',act:'Prep'}},
+ {id:'mikol', name:'Richard Mikol', contact:'Richard Mikol', addr:'8744 Parkdale Dr, North Royalton', county:'Cuyahoga', tier:'A', surplus:0, stage:'killed', phone:'440-555-0199', signal:'🪦 Killed — no real surplus', next:null, reason:'No real surplus after debts/liens'},
+];
+const STAGES=[['new','New'],['research','Research'],['ready','Ready'],['outreach','Outreach'],['engaged','Engaged'],['won','Won'],['killed','Killed']];
+const spineCount=(s)=>({new:153,research:26,ready:88,outreach:56,engaged:6,won:1,killed:90}[s]);
+
+// role → which deals appear in My Work + the verb language
+const ROLES={
+  outreach:{label:'Outreach',person:'Nathan',
+    pick:(d)=>['engaged','outreach','ready'].includes(d.stage) && ['call','text','followup'].includes(d.next?.kind),
+    sub:'Here’s who to reach today.'},
+  research:{label:'Research',person:'Anam',
+    pick:(d)=>d.stage==='research'||(d.stage==='new'&&d.next?.kind==='work'),
+    sub:'Here’s what to qualify today.'},
+  ops:{label:'Ops',person:'Eric',
+    pick:(d)=>d.next?.kind==='close'||d.next?.kind==='work'||d.signal.includes('🚩'),
+    sub:'Here’s what needs a decision today.'},
+  admin:{label:'Admin',person:'Nathan', pick:()=>false, sub:'Pipeline + team at a glance.'},
+};
+const URGENCY=(d)=> d.signal.startsWith('🔥')||d.signal.startsWith('💬')||d.signal.startsWith('🚩')||(d.deadline)?'Now'
+  : d.next?.kind==='followup'||d.stage==='engaged'?'Today':'Today';
+
+function Spine({onStage}){return(
+  <div className="spine">{STAGES.map(([k,t],i)=>(
+    <button key={k} className={"stage "+(k==='won'?'won':k==='killed'?'kill':'')} onClick={()=>onStage(k)}>
+      <div className="n">{spineCount(k)}</div><div className="t">{t}</div>
+      {i<STAGES.length-2&&<div className="ar">→</div>}{i===STAGES.length-2&&<div className="ar" style={{color:'#44403c'}}>·</div>}
+    </button>))}
+  </div>);}
+
+function Row({d,onOpen,onAct}){return(
+  <button className="row" onClick={()=>onOpen(d)}>
+    <span className="ic">{d.signal.split(' ')[0]}</span>
+    <span className="body">
+      <span className="who2">{d.name} <span className="meta">· {d.county} Co.{d.surplus?` · ${money(d.surplus)}`:''}</span></span>
+      <span className="why">{d.signal.replace(/^\S+ /,'')}{d.deadline?` · ⏰ ${d.deadline}`:''}</span>
+    </span>
+    {d.next&&<span className={"act "+d.next.kind} onClick={(e)=>{e.stopPropagation();onAct(d);}}>{d.next.act}</span>}
+  </button>);}
+
+function WorkView({role,onOpen,onAct,onStage}){
+  const R=ROLES[role];
+  if(role==='admin') return <AdminWork onStage={onStage}/>;
+  const mine=DEALS.filter(R.pick);
+  const groups={Now:mine.filter(d=>URGENCY(d)==='Now'),Today:mine.filter(d=>URGENCY(d)!=='Now')};
+  return(<>
+    <div className="pagehead"><h1>Good morning, {R.person}.</h1>
+      <div className="sub">You have <b>{mine.length} {role==='research'?'cases':'to work'}</b>. {R.sub}</div></div>
+    <Spine onStage={onStage}/>
+    {Object.entries(groups).map(([g,arr])=> arr.length>0 && (
+      <div key={g}>
+        <div className="grouphdr">{g==='Now'?'🔴 Now — hot':'📋 Up next'}</div>
+        <div className="list">{arr.map(d=><Row key={d.id} d={d} onOpen={onOpen} onAct={onAct}/>)}</div>
+      </div>))}
+    <div className="done"><div className="big">✓ That’s everything.</div>When this list is empty, you’re done for the day.</div>
+  </>);
+}
+
+function AdminWork({onStage}){
+  const team=[{n:'Nathan',r:'Outreach',load:12,pct:80},{n:'Anam',r:'Research',load:18,pct:100},{n:'Eric',r:'Ops / Closer',load:4,pct:30},{n:'Justin',r:'Engineering',load:0,pct:6}];
+  return(<>
+   <div className="pagehead"><h1>Good morning, Nathan.</h1><div className="sub">Pipeline + team at a glance.</div></div>
+   <Spine onStage={onStage}/>
+   <div className="panel-card"><div className="h">Team — who’s loaded today</div>
+    {team.map(t=>(<div key={t.n} className="teamrow"><div className="avatar">{t.n[0]}</div>
+      <div style={{width:160}}><div style={{fontWeight:700,fontSize:14}}>{t.n}</div><div style={{fontSize:11,color:'#78716c'}}>{t.r}</div></div>
+      <div className="bar"><i style={{width:t.pct+'%'}}/></div><div className="mono" style={{width:70,textAlign:'right',color:'#a8a29e',fontSize:13}}>{t.load} to do</div></div>))}
+    <div style={{fontSize:12,color:'#78716c',marginTop:12,lineHeight:1.5}}>Everyone else sees only their own list — same screen, their slice.</div></div>
+  </>);
+}
+
+function DealsView({onOpen}){
+  const [layout,setLayout]=useState('board');
+  const [tier,setTier]=useState('All');
+  const ds=DEALS.filter(d=>tier==='All'||d.tier===tier);
+  return(<>
+    <div className="pagehead"><h1>Deals</h1><div className="sub">Your whole book — one place. {ds.length} cases.</div></div>
+    <div className="toolbar">
+      <div className="toggle"><button className={layout==='board'?'on':''} onClick={()=>setLayout('board')}>▦ Board</button><button className={layout==='list'?'on':''} onClick={()=>setLayout('list')}>☰ List</button></div>
+      {['All','A','B','C'].map(t=><button key={t} className={"chip "+(tier===t?'on':'')} onClick={()=>setTier(t)}>{t==='All'?'All tiers':'Tier '+t}</button>)}
+      <span style={{fontSize:11,color:'#57534e',marginLeft:'auto'}}>Flagged · Closed · Hygiene live here too — as filters, not tabs</span>
+    </div>
+    {layout==='board'?(
+      <div className="board">{STAGES.filter(([k])=>k!=='won').map(([k,t])=>{const col=ds.filter(d=>d.stage===k);return(
+        <div key={k} className="col"><div className="h"><span>{t}</span><span>{col.length||spineCount(k)}</span></div>
+          {col.map(d=><button key={d.id} className="dcard" onClick={()=>onOpen(d)}>
+            <div className="nm">{d.name}</div><div className="ad">{d.addr}</div>
+            <div className="ft"><span className={"tier t"+(d.tier==='?'?'C':d.tier)}>{d.tier==='?'?'—':d.tier}</span><span className="pill">{d.county}</span>{d.surplus>0&&<span className="pill">{money(d.surplus)}</span>}</div>
+          </button>)}
+          {col.length===0&&<div style={{fontSize:11,color:'#44403c',padding:'8px 6px'}}>+{spineCount(k)} more</div>}
+        </div>);})}</div>
+    ):(
+      <div className="lst" style={{padding:'2px 22px 80px',maxWidth:940}}>{ds.map(d=>(
+        <button key={d.id} className="dcard" onClick={()=>onOpen(d)}>
+          <span className={"tier t"+(d.tier==='?'?'C':d.tier)}>{d.tier==='?'?'—':d.tier}</span>
+          <span style={{flex:1,minWidth:0}}><div className="nm">{d.name}</div><div className="ad">{d.addr} · {d.county} Co.</div></span>
+          <span className="pill">{d.stage}</span><span className="mono" style={{fontSize:13,color:'#a8a29e',width:90,textAlign:'right'}}>{money(d.surplus)}</span>
+        </button>))}</div>
+    )}
+  </>);
+}
+
+function DealDetail({d,onBack,toast}){
+  const [tab,setTab]=useState('overview');
+  return(
+   <div className="detail">
+     <button className="back" onClick={onBack}>← All deals</button>
+     <div className="dh"><div style={{flex:1}}>
+       <h1>{d.name} {d.stage==='killed'&&<span style={{fontSize:13,color:'#fca5a5',fontWeight:700}}>🪦 killed</span>}</h1>
+       <div className="ad">{d.addr} · {d.county} County{d.contact!==d.name?` · contact: ${d.contact}`:''}</div>
+     </div></div>
+     <div className="metricstrip">
+       <div className="metric"><div className="l">Est. surplus</div><div className="v">{money(d.surplus)}</div></div>
+       <div className="metric"><div className="l">Tier</div><div className="v">{d.tier==='?'?'—':d.tier}</div></div>
+       <div className="metric"><div className="l">Stage</div><div className="v" style={{textTransform:'capitalize',fontSize:17}}>{d.stage}</div></div>
+       <div className="metric"><div className="l">Phone</div><div className="v" style={{fontSize:15}}>{d.phone||'—'}</div></div>
+     </div>
+     <div className="stickyact">
+       <button style={{background:'#10b981',color:'#04231a'}} onClick={()=>toast('📞 Calling '+d.name+'… (prototype)')}>📞 Call</button>
+       <button style={{background:'#fbbf24',color:'#231803'}} onClick={()=>toast('💬 Texting '+d.name+'… (prototype)')}>💬 Text</button>
+       <button className="ghost" onClick={()=>toast('🔗 Sent personalized link (prototype)')}>🔗 Send link</button>
+       <button style={{background:'#a78bfa',color:'#1a0f33'}} onClick={()=>toast('🎉 Marked signed → Won (prototype)')}>🎉 Mark signed</button>
+       <button className="kill" onClick={()=>toast('🪦 Kill lead — pick a reason (prototype)')}>🪦 Kill</button>
+     </div>
+     <div className="dtabs">
+       {[['overview','Overview'],['comms','Conversation'],['docket','Docket'],['files','Files']].map(([k,t])=>
+         <button key={k} className={"dtab "+(tab===k?'on':'')} onClick={()=>setTab(k)}>{t}</button>)}
+     </div>
+     {tab==='overview'&&<div className="sec">
+       <div className="h">Why this matters now</div>
+       <div style={{fontSize:14,color:'#d6d3d1',lineHeight:1.6}}>{d.signal}{d.deadline&&` Deadline: ${d.deadline}.`} {d.reason&&`Reason: ${d.reason}.`}</div>
+       <div className="sec"><div className="h">Case facts</div>
+         <div className="factrow"><span className="k">Property</span><span className="v">{d.addr}</span></div>
+         <div className="factrow"><span className="k">County</span><span className="v">{d.county}</span></div>
+         <div className="factrow"><span className="k">Est. surplus</span><span className="v">{money(d.surplus)}</span></div>
+         <div className="factrow"><span className="k">Contact</span><span className="v">{d.contact}</span></div>
+       </div></div>}
+     {tab==='comms'&&<div className="sec"><div className="h">Conversation</div>
+       <div className="bub"><div className="av" style={{background:'#292524',color:'#fdba74'}}>{d.name[0]}</div><div className="tx">Hi, is this about my property in {d.county} County?</div></div>
+       <div className="bub me" style={{justifyContent:'flex-end',flexDirection:'row-reverse'}}><div className="av" style={{background:'#2a1d0e',color:'#fbbf24'}}>N</div><div className="tx">Yes — there may be ~{money(d.surplus)} in surplus funds owed to you. Quick overview: refundlocators.com/s/…</div></div>
+       <div style={{fontSize:11,color:'#57534e',marginTop:10}}>Call, text, iMessage, email — all one thread. No separate Calls / Inbox / Outreach tabs.</div>
+     </div>}
+     {tab==='docket'&&<div className="sec"><div className="h">Docket</div><div className="factrow"><span className="k">Sale date</span><span className="v">Mar 3, 2026</span></div><div className="factrow"><span className="k">Confirmation</span><span className="v">Mar 19, 2026</span></div><div className="factrow"><span className="k">Redemption deadline</span><span className="v">Apr 21, 2026</span></div><div style={{fontSize:11,color:'#57534e',marginTop:10}}>Every event carries its PDF — one tap to view.</div></div>}
+     {tab==='files'&&<div className="sec"><div className="h">Files</div><div style={{fontSize:13,color:'#a8a29e'}}>📄 Retainer agreement · 📄 Sheriff deed · 📄 Surplus motion</div></div>}
+   </div>);
+}
+
+function ChatView({toast}){
+  const [chan,setChan]=useState('ops');
+  const chans=[['ops','# Ops',true],['leads','# Hot leads',true],['lauren','🤖 Lauren',false],['eric','Eric',false],['anam','Anam',false],['justin','Justin',false]];
+  const threads={
+    ops:[['Eric','Tammy Thacker agreed — sending retainer now'],['Nathan','🔥 nice. Matthew Grose opened his link twice today too'],['Lauren','Heads up: Joy Baker replied asking if we’re legit — drafted a reassurance reply for review']],
+    lauren:[['You','how many surplus leads opened their link this week?'],['Lauren','6 distinct recipients opened in the last 7 days — Matthew Grose & Kim Rock today. Want me to queue follow-up calls?']],
+    leads:[['Lauren','💬 Joy Baker → “is this legit?”'],['Lauren','🔥 Matthew Grose opened link 2×']],
+  };
+  const msgs=threads[chan]||[['—','Start of conversation']];
+  return(<>
+   <div className="pagehead"><h1>Chat</h1><div className="sub">Team + Lauren, one place. Replaces the separate Chat tab, Lauren FAB, and Lauren Control Center.</div></div>
+   <div className="chatwrap">
+     <div className="chanlist">{chans.map(([k,t,dot])=><button key={k} className={"chan "+(chan===k?'on':'')} onClick={()=>setChan(k)}>{t}{dot&&<span className="dot"/>}</button>)}</div>
+     <div className="thread"><div className="msgs">{msgs.map(([who,tx],i)=>(
+       <div key={i} className={"bub "+(who==='You'||who==='Nathan'?'me':'')} style={who==='You'||who==='Nathan'?{flexDirection:'row-reverse'}:{}}>
+         <div className="av" style={{background:who==='Lauren'?'#1a2e1f':'#292524',color:who==='Lauren'?'#6ee7b7':'#fdba74'}}>{who==='Lauren'?'🤖':who[0]}</div>
+         <div className="tx"><b style={{color:'#fafaf9'}}>{who}</b><br/>{tx}</div></div>))}
+     </div><div className="composer"><input placeholder={chan==='lauren'?'Ask Lauren anything…':'Message…'}/><button onClick={()=>toast('Sent (prototype)')}>Send</button></div></div>
+   </div>
+  </>);
+}
+
+function InsightsView(){
+  const funnel=[['Texted',229,'#8b5cf6'],['Opened link',64,'#06b6d4'],['Replied',22,'#fbbf24'],['Signed',6,'#10b981'],['Paid out',1,'#6ee7b7']];
+  const max=229;
+  return(<>
+   <div className="pagehead"><h1>Insights</h1><div className="sub">Reports, Analytics, Web traffic & Comms — merged into one calm dashboard.</div></div>
+   <div className="tiles">
+     <div className="tile"><div className="l">Pipeline value</div><div className="v">$2.4M</div><div className="d">88 ready + 56 in outreach</div></div>
+     <div className="tile"><div className="l">Texts sent · 30d</div><div className="v">229</div><div className="d">9 today</div></div>
+     <div className="tile"><div className="l">Link opens · 7d</div><div className="v">6</div><div className="d">2 today</div></div>
+     <div className="tile"><div className="l">Reply rate</div><div className="v">9.6%</div><div className="d">22 of 229</div></div>
+     <div className="tile"><div className="l">Signed · 30d</div><div className="v">6</div><div className="d">conversion 2.6%</div></div>
+   </div>
+   <div className="panel-card"><div className="h">Outreach funnel · last 30 days</div>
+     <div className="funnel">{funnel.map(([l,v,c])=>(
+       <div key={l} className="fbar"><div className="lab">{l}</div><div className="track"><div className="fill" style={{width:(v/max*100)+'%',background:c}}>{v}</div></div></div>))}</div>
+   </div>
+   <div className="panel-card"><div className="h">Web traffic · refundlocators.com</div>
+     <div style={{fontSize:13,color:'#a8a29e',lineHeight:1.7}}>1,240 visits · 64 personalized-link opens · 0 Lauren chats yet · top page: /s/ personalized links. <span style={{color:'#fdba74'}}>Lauren chat usage is the gap to close.</span></div>
+   </div>
+  </>);
+}
+
+function MoreView({toast}){
+  const items=[['👥','Contacts','Attorneys, investors, partners'],['📚','Library','Templates, SOPs, brand assets'],['📥','Import','Bring in new lead data'],['⏱','Time','Team time tracking (admin)'],['⚖','Docket','Court events across all cases'],['👤','Team','Manage access & roles'],['⚙','Account','Your settings'],['↪','Sign out','']];
+  return(<>
+   <div className="pagehead"><h1>More</h1><div className="sub">The occasional + reference stuff — out of your daily way, one tap when you need it.</div></div>
+   <div className="moregrid">{items.map(([ic,t,dsc])=>(
+     <button key={t} className="moretile" onClick={()=>toast(t+' — opens here in the redesign (prototype)')}><div className="ic">{ic}</div><div className="t">{t}</div><div className="d">{dsc}</div></button>))}</div>
+  </>);
+}
+
+function Palette({onClose,onOpenDeal}){
+  const [q,setQ]=useState('');
+  const res=DEALS.filter(d=>!q||d.name.toLowerCase().includes(q.toLowerCase())||d.county.toLowerCase().includes(q.toLowerCase()));
+  return(<><div className="scrim" onClick={onClose}/>
+   <div className="palette"><input autoFocus placeholder="Search people, cases, counties…  or type a command" value={q} onChange={e=>setQ(e.target.value)}/>
+     <div className="res">{res.slice(0,7).map(d=><button key={d.id} className="pres" onClick={()=>{onOpenDeal(d);onClose();}}>
+       <span>{d.signal.split(' ')[0]}</span><span style={{flex:1}}>{d.name}<div className="sub">{d.addr} · {d.county} Co.</div></span><span className="sub">{d.stage}</span></button>)}
+       {res.length===0&&<div style={{padding:14,color:'#78716c',fontSize:13}}>No matches.</div>}
+     </div></div></>);
+}
+
+function Drawer({d,onClose,toast}){
+  if(!d) return null;const k=d.next?.kind;
+  return(<><div className="scrim" onClick={onClose}/>
+   <div className="drawer"><button className="x" onClick={onClose}>✕</button>
+     <div style={{fontSize:11,fontWeight:800,letterSpacing:'.1em',color:'#fdba74',textTransform:'uppercase'}}>{d.signal.split(' ')[0]} Quick action</div>
+     <h2 style={{margin:'6px 0 2px',fontSize:21,fontWeight:800}}>{d.name}</h2>
+     <div style={{fontSize:13,color:'#a8a29e'}}>{d.addr} · {d.county} Co.{d.surplus?` · ${money(d.surplus)}`:''}</div>
+     <div style={{fontSize:13,color:'#d6d3d1',marginTop:10,lineHeight:1.5}}><b style={{color:'#fff'}}>Why now:</b> {d.signal.replace(/^\S+ /,'')}</div>
+     <div className="actions">
+       {k==='call'&&<button className="big-btn" style={{background:'#10b981',color:'#04231a'}} onClick={()=>toast('📞 Calling (prototype)')}>📞 Call now</button>}
+       {(k==='text'||k==='followup')&&<button className="big-btn" style={{background:'#fbbf24',color:'#231803'}} onClick={()=>toast('💬 Message opened (prototype)')}>💬 Send text</button>}
+       {k==='close'&&<button className="big-btn" style={{background:'#a78bfa',color:'#1a0f33'}} onClick={()=>toast('📝 Retainer sent (prototype)')}>📝 Send contract</button>}
+       {k==='work'&&<button className="big-btn" style={{background:'#38bdf8',color:'#04222e'}} onClick={()=>toast('✅ Done → Ready (prototype)')}>✓ {d.next.act} done</button>}
+       <button className="big-btn ghost" onClick={()=>toast('↪ Snoozed (prototype)')}>Snooze</button>
+     </div>
+     <div className="actions">
+       <button className="big-btn" style={{background:'#10b981',color:'#04231a'}} onClick={()=>toast('🎉 Signed → Won (prototype)')}>🎉 Mark signed</button>
+       <button className="big-btn kill" onClick={()=>toast('🪦 Kill — pick reason (prototype)')}>🪦 Kill lead</button>
+     </div>
+     <div style={{fontSize:11,color:'#57534e',marginTop:14,lineHeight:1.5}}>Every item ends one of two ways — <b style={{color:'#6ee7b7'}}>becomes a lead</b> or we <b style={{color:'#fca5a5'}}>kill it</b> with a reason. No limbo.</div>
+   </div></>);
+}
+
+function App(){
+  const [role,setRole]=useState('outreach');
+  const [view,setView]=useState('work');
+  const [deal,setDeal]=useState(null);
+  const [drawer,setDrawer]=useState(null);
+  const [pal,setPal]=useState(false);
+  const [toast,setToast]=useState(null);
+  const fire=(m)=>{setToast(m);clearTimeout(window.__t);window.__t=setTimeout(()=>setToast(null),2200);};
+  useEffect(()=>{const h=(e)=>{if((e.metaKey||e.ctrlKey)&&e.key==='k'){e.preventDefault();setPal(true);}};window.addEventListener('keydown',h);return()=>window.removeEventListener('keydown',h);},[]);
+  const openDeal=(d)=>{setDeal(d);setView('deal');};
+  const go=(v)=>{setView(v);setDeal(null);};
+  const NAV=[['work','🎯','Work'],['deals','🏠','Deals'],['chat','💬','Chat'],['insights','📊','Insights'],['more','⋯','More']];
+  const workCount=DEALS.filter(ROLES[role].pick).length;
+
+  return(<div className="app">
+   <div className="side">
+     <div className="brand">REFUNDLOCATORS<small>DEAL COMMAND CENTER</small></div>
+     {NAV.map(([k,ic,t])=><button key={k} className={"nav "+((view===k||(k==='deals'&&view==='deal'))?'on':'')} onClick={()=>go(k)}>
+       <span className="i">{ic}</span>{t}{k==='work'&&role!=='admin'&&<span className="ct">{workCount}</span>}</button>)}
+     <div className="sp"/>
+     <div className="who"><div className="lbl">View as (demo)</div>
+       <div className="seg">{Object.keys(ROLES).map(rk=><button key={rk} className={role===rk?'on':''} onClick={()=>{setRole(rk);go('work');}}>{ROLES[rk].label}</button>)}</div>
+     </div>
+   </div>
+   <div className="main">
+     <div className="top">
+       <button className="search" onClick={()=>setPal(true)}>🔍 Search people, cases…<span className="k">⌘K</span></button>
+       <span className="proto">● PROTOTYPE · fake data</span>
+     </div>
+     {view==='work'&&<WorkView role={role} onOpen={openDeal} onAct={(d)=>setDrawer(d)} onStage={()=>go('deals')}/>}
+     {view==='deals'&&<DealsView onOpen={openDeal}/>}
+     {view==='deal'&&deal&&<DealDetail d={deal} onBack={()=>go('deals')} toast={fire}/>}
+     {view==='chat'&&<ChatView toast={fire}/>}
+     {view==='insights'&&<InsightsView/>}
+     {view==='more'&&<MoreView toast={fire}/>}
+   </div>
+   {drawer&&<Drawer d={drawer} onClose={()=>setDrawer(null)} toast={fire}/>}
+   {pal&&<Palette onClose={()=>setPal(false)} onOpenDeal={openDeal}/>}
+   {toast&&<div className="toast">{toast}</div>}
+  </div>);
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
