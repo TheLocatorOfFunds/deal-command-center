@@ -159,25 +159,11 @@ export async function initVoice(): Promise<boolean> {
     return false
   }
 
-  // Initialize PushKit. This creates PKPushRegistry and asks iOS for the
-  // VoIP device token. Without this call, deviceTokenData is always nil,
-  // voice.register() always fails with "Failed to initialize PushKit device
-  // token", and the device is never registered — so Twilio never delivers
-  // call invites to this device (foreground or background).
-  //
-  // Must be called BEFORE register(). The VoIP token arrives asynchronously
-  // from iOS (typically 1-10 seconds), so the register() retry loop below
-  // polls for it via exponential backoff.
-  try {
-    await voice.initializePushRegistry()
-  } catch (e) {
-    console.warn('[voice] initializePushRegistry failed', e)
-    voice = null
-    return false
-  }
-
-  // Wait a beat after setting up PKPushRegistry so iOS has time to fire
-  // the pushRegistry:didUpdatePushCredentials: callback with the VoIP token.
+  // Wait a beat after constructing Voice so the SDK has time to create
+  // its PKPushRegistry instance and let iOS fire the credential callback.
+  // Without this, the first register() call almost always races and fails.
+  // NOTE: initializePushRegistry() does NOT exist on this SDK version -
+  // the internal PKPushRegistry is created by new Voice() itself.
   await sleep(1500)
 
   // Retry register() with backoff. The SDK throws synchronously if its
