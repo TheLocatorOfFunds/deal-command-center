@@ -12506,7 +12506,12 @@ function OutreachDraftPanel({ item, deal, onSent, onSkipped }) {
   const currentBody  = editMode ? editBody : (item?.draft_body || '');
   const charCount    = currentBody.length;
   const isLoading    = item?.status === 'queued' || item?.status === 'generating' || isGen;
-  const cadenceLabel = item?.cadence_day === 0 ? 'Day 0 · Intro' : `Day ${item?.cadence_day} · Follow-up`;
+  // Relay-originated rows (relay_enrollment_id set) now land in this shared
+  // queue too (post #233) — label them by Relay step, not the cadence ladder,
+  // so they're not mistaken for Automations follow-ups.
+  const cadenceLabel = item?.relay_enrollment_id
+    ? `Relay · step ${item?.relay_step_number ?? item?.cadence_day}`
+    : (item?.cadence_day === 0 ? 'Day 0 · Intro' : `Day ${item?.cadence_day} · Follow-up`);
 
   if (sentInfo) return (
     <div style={{ background: '#0a1f14', border: '1px solid #10b981', borderRadius: 8, padding: '12px 16px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -12810,6 +12815,7 @@ function AutomationsQueue({ onSelectDeal }) {
     const isStuck = item.status === 'generating' && staleMs > 3 * 60 * 1000;
     if (isStuck) return { text: '⚠ Draft timed out — tap to retry', color: '#fca5a5', stuck: true };
     if (item.status === 'queued' || item.status === 'generating') return { text: '⏳ Claude is drafting…', color: '#78716c', stuck: false };
+    if (item.relay_enrollment_id) return { text: `📡 Relay step ${item.relay_step_number ?? item.cadence_day} ready`, color: '#78716c', stuck: false };
     if (item.cadence_day === 0) return { text: 'Intro draft ready', color: '#78716c', stuck: false };
     return { text: `Day ${item.cadence_day} follow-up ready`, color: '#78716c', stuck: false };
   }
