@@ -2954,7 +2954,16 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const surplusAll = visible.filter(d => d.type === "surplus");
   const confWalkerCount = surplusAll.filter(d => d.meta?.confidenceTier === 'walker_verified').length;
   const confVerifyCount = surplusAll.filter(d => d.meta?.confidenceTier === 'complaint_inferred').length;
-  const surplus = confTierFilter === "all" ? surplusAll : surplusAll.filter(d => (d.meta?.confidenceTier || '') === confTierFilter);
+  let surplus = confTierFilter === "all" ? surplusAll : surplusAll.filter(d => (d.meta?.confidenceTier || '') === confTierFilter);
+  // #238 — New Leads: float highest potential surplus to the top so the team
+  // works the biggest money first. Uses the same surplus cascade as the fee math
+  // (estimatedSurplus → estimated_surplus → estimatedAvailableEquity). Leads with
+  // no number resolve to 0 and sort last. Scoped to leads-phase so the kanban
+  // (pipeline view, same `surplus` array) keeps its column ordering. Copy, no mutate.
+  if (view === "leads-phase") {
+    const surplusOf = (d) => Number((d.meta && (d.meta.estimatedSurplus || d.meta.estimated_surplus || d.meta.estimatedAvailableEquity)) || 0) || 0;
+    surplus = [...surplus].sort((a, b) => surplusOf(b) - surplusOf(a));
+  }
 
   // New Leads readiness counts + relative-phone fetch for deceased leads.
   const surplusLeads = leadDeals.filter(d => d.type === "surplus");
