@@ -170,18 +170,25 @@ The app subscribes to Postgres changes on `deals` (global) and on all 5 child ta
 
 No staging environment. Commits to `main` go live. Coordinate with the team before big changes.
 
-## Top-level views (nav order, left → right)
+## Top-level views (current sidebar, top → bottom)
 
-1. **📌 Today** — daily dashboard, AutomationsQueue (pending outreach drafts), team activity
-2. **🔔 Attention** — reactive: per-deal unread/unacked items + Castle scraper alerts strip + cross-deal deadline alerts strip
-3. **🚀 Outreach** — campaign workspace: 4 stats tiles + AutomationsQueue + ReplyInbox (cross-deal inbound SMS unread)
-4. **📅 Forecast** — proactive 7-14 day planning: court hearings, statutory deadlines, cadence drips, disbursement watch, stale active deals, sheriff sales
-5. **🧭 Pipeline** — kanban view filtered by lead_tier A/B/C, has the **🚀 Queue outreach · N A/B** bulk-queue button on the filter bar
-6. **✓ Tasks** — global task list across deals
-7. **Active / Flagged / Hygiene / Closed** — deal-list views by status filter
-8. **📈 Reports / 📊 Analytics / 🌐 Traffic** — admin-only metrics views (Reports has the per-agent ScraperHealthPanel)
+Several sidebar entries are **hubs** — one nav item whose second-level chip bar
+switches between sibling sub-views (see `groupBtn`/`chipBtn` in `src/app.jsx` ~line 3032).
 
-Plus modal entries from the top header: 🔍 search, ⚖ Docket overview, 👥 Contacts, 📚 Library, Team.
+1. **📌 Today** — daily dashboard: KPI tiles + pipeline funnel + AutomationsQueue (pending outreach drafts) + Prep Queue + Urgent + Team Activity (right rail)
+2. **⚡ Attention** — reactive: cross-deal deadline strip + 🔥 Lead Engagement strip (link opens + Lauren chats) + per-deal unread/unacked work
+3. **🎯 Outreach** (hub) — `outreach` (Drafts & Replies: 4 stat tiles + AutomationsQueue + ReplyInbox) · `inbox` · `leads` (LeadsOutreachView) · `forecast` (7–14 day plan)
+4. **📡 Relay** — cadence/sequence auto-enrollment engine (relay_enrollments, "Ohio Surplus Funds v1" sequences, approve/skip/regenerate per scheduled step)
+5. **🏠 Deals** (hub) — `active` · `flagged` · `hygiene` · `archive` (Closed) · `pipeline` (kanban) · `leads-phase` (New Leads / prep-readiness)
+6. **✅ Tasks** — global task list across deals
+7. **⏱ Time** — team time tracking (admin only)
+8. **📊 Insights** (hub, admin) — `reports` (+ ScraperHealthPanel) · `analytics` (financial) · `traffic` (web) · `comms` (CommsAnalyticsView)
+9. **📞 Calls** — call history (CallHistoryView)
+10. **💬 Chat** — team chat + Lauren (TeamView)
+
+Sidebar entries that open **modals** (not views): **👥 Contacts**, **⚖ Docket**, **📋 Leads** (intake/dup), **📥 Import** (admin), **📚 Library**. Header also has 🔍 Search (⌘K), the 🔔 notification bell, and the Phone dialpad popover. A mobile "More" sheet mirrors the secondary items.
+
+> **Known IA overlaps** (from the 2026-05-26 redesign audit; redesign shelved, see git `176549c`/`720a669`): two outreach engines run in parallel (Outreach `outreach_queue` "Automations" vs **Relay** sequences) and can queue the same lead; the AutomationsQueue + Team Activity render on both Today and Outreach; the Outreach "Drafts ready" tile counts ALL pending while the queue below shows only the active phase (A-tier verified surplus). Incremental cleanups tracked separately — don't assume these are intentional when navigating.
 
 ## Common change recipes
 
