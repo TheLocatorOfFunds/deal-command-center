@@ -10491,7 +10491,11 @@ function AttentionView({ deals, onSelect }) {
     }
   };
 
-  if (loading) return <div style={{ textAlign: 'center', padding: 40, color: '#78716c' }}>Loading…</div>;
+  // Only blank to "Loading…" on the very first load. On background refreshes
+  // (the load re-fires on every `deals` realtime change), keep the current
+  // content on screen instead of flashing black — fixes the flicker, esp.
+  // during bursts of deal updates.
+  if (loading && rows.length === 0) return <div style={{ textAlign: 'center', padding: 40, color: '#78716c' }}>Loading…</div>;
 
   const totalAll = rows.reduce((s, r) => s + r.total, 0);
   const totalDraftsOnly = rows.reduce((s, r) => s + (r.total === r.drafts_pending.length ? r.drafts_pending.length : 0), 0);
