@@ -2853,6 +2853,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const [tierFilter, setTierFilter] = useState("all");
   // New Leads → Outreach-readiness sub-filter (all / needs cleaning / ready).
   const [readyFilter, setReadyFilter] = useState("all");
+  // #8 — Closed view filter: isolate dead surplus leads with no disposition
+  // reason so the team can backfill them (intel-main reads deals.meta.dispositionReason).
+  const [deadReasonFilter, setDeadReasonFilter] = useState("all");
   // Relative/estate-phone presence for DECEASED New Leads in view, so the card
   // "missing: phone" warning is accurate (deceased leads have no homeowner
   // contact by design — the reachable number lives on a relative).
@@ -2887,6 +2890,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // (pre-engagement). Lead-phase deals live under the 🌱 New Leads chip.
   const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status) && !isLeadStatus(d));
   const archivedDeals = deals.filter(d => ARCHIVE_STATUSES.includes(d.status));
+  const deadNoReason = archivedDeals.filter(d => d.status === "dead" && d.type === "surplus" && !d.meta?.dispositionReason);
   const leadDeals = deals.filter(d => isLeadStatus(d));
 
   // Kanban drag-and-drop: persist the new status (and stamp closed_at
@@ -2930,6 +2934,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       if (contactFilter === "none" && lc) return false;
       if (contactFilter === "worked" && !lc) return false;
       if (contactFilter === "followup" && !(fu && fu <= t)) return false;
+    }
+    if (view === "archive" && deadReasonFilter === "missing") {
+      if (!(d.status === "dead" && d.type === "surplus" && !d.meta?.dispositionReason)) return false;
     }
     if (!applyAdvancedFilters(d, advancedFilters)) return false;
     return true;
@@ -3130,6 +3137,18 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("hygiene", "🩺 Hygiene")}
           {chipBtn("archive", `Closed${archivedDeals.length ? ` (${archivedDeals.length})` : ""}`)}
           {chipBtn("pipeline", "🧭 Kanban")}
+        </div>
+      )}
+      {view === "archive" && deadNoReason.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "#fca5a5", fontWeight: 700 }}>🪦 {deadNoReason.length} dead surplus lead{deadNoReason.length !== 1 ? "s" : ""} have no reason recorded</span>
+          <button onClick={() => setDeadReasonFilter(deadReasonFilter === "missing" ? "all" : "missing")} style={{
+            background: deadReasonFilter === "missing" ? "#7f1d1d" : "transparent",
+            color: deadReasonFilter === "missing" ? "#fecaca" : "#a8a29e",
+            border: "1px solid " + (deadReasonFilter === "missing" ? "#b91c1c" : "#44403c"),
+            padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+          }}>{deadReasonFilter === "missing" ? "✓ Showing only these" : "Show only missing-reason"}</button>
+          <span style={{ fontSize: 11, color: "#57534e" }}>open each → set the reason via the 🪦 chip</span>
         </div>
       )}
       {isAdmin && ["reports", "analytics", "traffic", "comms"].includes(view) && (
