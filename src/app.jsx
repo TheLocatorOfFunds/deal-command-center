@@ -1712,7 +1712,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
               {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
               {isTeam && navItem('_docket',   '⚖',  'Docket',   { onClick: () => setShowDocket(true),  badge: unackDocketCount })}
-              {isTeam && navItem('_leads',    '📋', 'Leads',    { onClick: () => setShowLeads(true),   badge: newLeadCount })}
+              {isTeam && navItem('_leads',    '📋', 'Intake',   { onClick: () => setShowLeads(true),   badge: newLeadCount })}
               {div()}
               {isAdmin && navItem('_import',  '📥', 'Import',   { onClick: () => setShowImport(true) })}
               {isTeam && navItem('_library',  '📚', 'Library',  { onClick: () => setShowLibrary(true) })}
@@ -2123,7 +2123,7 @@ function DealCommandCenter({ session, profile }) {
               ] : []),
               { sep: 'Quick access' },
               { label: '🤖 Chat with Lauren', onClick: () => window.dispatchEvent(new Event('dcc:open-lauren')), count: 0 },
-              { label: '📥 Leads',       onClick: () => setShowLeads(true),    count: newLeadCount },
+              { label: '📥 Intake',      onClick: () => setShowLeads(true),    count: newLeadCount },
               { label: '⚖ Docket',       onClick: () => setShowDocket(true),   count: unackDocketCount, show: isTeam },
               { label: '👥 Contacts',    onClick: () => setShowContacts(true), count: 0, show: isTeam },
               { label: '📚 Library',     onClick: () => setShowLibrary(true),  count: 0, show: isTeam },
