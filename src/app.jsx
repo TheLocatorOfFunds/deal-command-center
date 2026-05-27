@@ -29024,6 +29024,7 @@ function TimeTrackingView({ userId, isAdmin }) {
   const [teamEntries, setTeamEntries] = React.useState([]);
   const [rates, setRates] = React.useState({});
   const [payments, setPayments] = React.useState([]);
+  const [adjustments, setAdjustments] = React.useState({}); // user_id -> {adjusted_hours, note} for the active range
   const [adminRange, setAdminRange] = React.useState(() => rangePreset('current'));
 
   const period = computePayPeriod(new Date());
@@ -29055,7 +29056,9 @@ function TimeTrackingView({ userId, isAdmin }) {
     // handle_new_user. We then filter client-side to "anyone on payroll": has
     // role='va', OR clocked time in this range, OR has a configured rate.
     // This makes the payroll table self-healing: clock in once → appear in it.
-    const [{ data: profs }, { data: rateRows }, { data: tes }, { data: pmts }] = await Promise.all([
+    const rangeStartDate = adminRange.start.toISOString().slice(0, 10);
+    const rangeEndDateStr = adminRange.end.toISOString().slice(0, 10);
+    const [{ data: profs }, { data: rateRows }, { data: tes }, { data: pmts }, { data: adjRows }] = await Promise.all([
       sb.from('profiles').select('id, name, role'),
       sb.from('hourly_rates').select('*').order('effective_from', { ascending: false }),
       sb.from('time_entries').select('*')
@@ -29064,7 +29067,12 @@ function TimeTrackingView({ userId, isAdmin }) {
       sb.from('payments').select('*')
         .gte('period_end', new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
         .order('period_start', { ascending: false }),
+      sb.from('payroll_hour_adjustments').select('*')
+        .eq('period_start', rangeStartDate).eq('period_end', rangeEndDateStr),
     ]);
+    const adjByUser = {};
+    (adjRows || []).forEach(a => { adjByUser[a.user_id] = { adjusted_hours: Number(a.adjusted_hours), note: a.note }; });
+    setAdjustments(adjByUser);
     const teUserIds = new Set((tes || []).map(t => t.user_id));
     const rateUserIds = new Set((rateRows || []).map(r => r.user_id));
     const payrollProfs = (profs || []).filter(p =>
@@ -29252,7 +29260,7 @@ function TimeTrackingView({ userId, isAdmin }) {
             )
     ),
     isAdmin && React.createElement(AdminPayrollSection, {
-      vaProfiles, teamEntries, rates, payments,
+      vaProfiles, teamEntries, rates, payments, adjustments,
       adminRange, setAdminRange,
       onReload: loadAdmin,
     }),
@@ -29340,18 +29348,30 @@ function ManualEntryModal({ isAdmin, userId, vaProfiles, onClose, onSubmit, busy
   );
 }
 
-function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRange, setAdminRange, onReload }) {
+function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustments = {}, adminRange, setAdminRange, onReload }) {
   const [editingRateFor, setEditingRateFor] = React.useState(null);
   const [newRate, setNewRate] = React.useState('');
+  const [editingHoursFor, setEditingHoursFor] = React.useState(null);
+  const [newHours, setNewHours] = React.useState('');
   const [busy, setBusy] = React.useState(false);
 
   const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
 
-  const hoursByUser = {};
+  // Tracked hours (ms) per user, summed from raw time entries.
+  const trackedMsByUser = {};
   teamEntries.forEach(e => {
     if (!e.end_at) return;
     const ms = new Date(e.end_at) - new Date(e.start_at);
-    hoursByUser[e.user_id] = (hoursByUser[e.user_id] || 0) + ms;
+    trackedMsByUser[e.user_id] = (trackedMsByUser[e.user_id] || 0) + ms;
+  });
+  // Effective hours: admin override (payroll_hour_adjustments) wins over tracked.
+  const trackedHoursByUser = {};
+  const hoursByUser = {};            // effective hours used for pay
+  vaProfiles.forEach(p => {
+    const tracked = (trackedMsByUser[p.id] || 0) / 3600000;
+    trackedHoursByUser[p.id] = tracked;
+    const adj = adjustments[p.id];
+    hoursByUser[p.id] = (adj && adj.adjusted_hours != null) ? Number(adj.adjusted_hours) : tracked;
   });
 
   // Pay-period boundary strings — only meaningful when the range IS a pay period
@@ -29366,11 +29386,21 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
     });
   }
 
-  const markPaid = async (userId, ms, rate) => {
+  const markPaid = async (userId, hours, rate) => {
     if (busy || !adminRange.isPayPeriod) return;
-    const hours = ms / 3600000;
-    const amount = +(hours * rate).toFixed(2);
-    if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(amount)} as paid for this period?`)) return;
+    const base = +(hours * rate).toFixed(2);
+    if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(base)} as paid for this period?\n\n(Next: optionally add a bonus.)`)) return;
+    // Optional bonus, entered at pay time (Justin: "give a bonus when we run payroll")
+    let bonus = 0, bonusNote = null;
+    const bonusRaw = prompt('Bonus amount for this period? Leave blank or 0 for none.', '');
+    if (bonusRaw && bonusRaw.trim()) {
+      const b = parseFloat(bonusRaw.replace(/[^0-9.\-]/g, ''));
+      if (!isNaN(b) && b !== 0) {
+        bonus = +b.toFixed(2);
+        bonusNote = prompt('Bonus note (what it was for)?', '') || null;
+      }
+    }
+    const amount = +(base + bonus).toFixed(2);
     setBusy(true);
     const { data: { user } } = await sb.auth.getUser();
     const { error } = await sb.from('payments').insert({
@@ -29379,11 +29409,49 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
       period_end: rangeEndStr,
       hours_worked: hours.toFixed(2),
       rate_used: rate,
+      bonus,
+      bonus_note: bonusNote,
       amount_paid: amount,
       paid_by: user?.id,
     });
     setBusy(false);
     if (error) { alert('Mark-paid failed: ' + error.message); return; }
+    onReload();
+  };
+
+  // Edit the hours used for payroll for this (user, period). Writes an
+  // override row (preserves raw time_entries) + a note for bookkeeping.
+  // If the period is already paid, also corrects the payment record.
+  const saveHours = async (userId) => {
+    const h = parseFloat(newHours);
+    if (isNaN(h) || h < 0) { alert('Enter a valid number of hours.'); return; }
+    if (!adminRange.isPayPeriod) { alert('Hours can only be edited on a pay-period range (Current / Previous).'); return; }
+    const note = prompt('Note for this hours change (why)? Optional but recommended.', adjustments[userId]?.note || '') || null;
+    setBusy(true);
+    const { data: { user } } = await sb.auth.getUser();
+    const { error } = await sb.from('payroll_hour_adjustments').upsert({
+      user_id: userId,
+      period_start: rangeStartStr,
+      period_end: rangeEndStr,
+      adjusted_hours: h,
+      note,
+      adjusted_by: user?.id,
+      adjusted_at: new Date().toISOString(),
+    }, { onConflict: 'user_id,period_start,period_end' });
+    // If already paid for this period, correct the payment record too (Justin: yes).
+    const existingPaid = paidThisPeriod[userId];
+    if (!error && existingPaid) {
+      const rate = Number(existingPaid.rate_used) || rates[userId]?.rate || 0;
+      const bonus = Number(existingPaid.bonus || 0);
+      await sb.from('payments').update({
+        hours_worked: h.toFixed(2),
+        amount_paid: +(h * rate + bonus).toFixed(2),
+      }).eq('id', existingPaid.id);
+    }
+    setBusy(false);
+    if (error) { alert('Save-hours failed: ' + error.message); return; }
+    setEditingHoursFor(null);
+    setNewHours('');
     onReload();
   };
 
@@ -29398,9 +29466,15 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
   const saveRate = async (userId) => {
     const r = parseFloat(newRate);
     if (!r || r <= 0) { alert('Enter a valid hourly rate.'); return; }
+    const existing = rates[userId];
+    const note = prompt(
+      existing
+        ? `Note for this rate change (${fmtMoney(existing.rate)}/hr → ${fmtMoney(r)}/hr)? Optional.`
+        : 'Note for this rate? Optional.',
+      ''
+    ) || null;
     setBusy(true);
     const today = new Date().toISOString().slice(0, 10);
-    const existing = rates[userId];
     if (existing) {
       await sb.from('hourly_rates').update({ effective_to: today }).eq('id', existing.id);
     }
@@ -29409,6 +29483,7 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
       user_id: userId,
       rate: r,
       effective_from: today,
+      note,
       created_by: user?.id,
     });
     setBusy(false);
@@ -29501,15 +29576,35 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
             ),
             React.createElement('tbody', null,
               vaProfiles.map(p => {
-                const ms = hoursByUser[p.id] || 0;
-                const hours = ms / 3600000;
+                const hours = hoursByUser[p.id] || 0;
+                const tracked = trackedHoursByUser[p.id] || 0;
+                const adj = adjustments[p.id];
+                const isAdjusted = !!(adj && adj.adjusted_hours != null);
                 const rate = rates[p.id]?.rate;
                 const total = (rate && hours) ? hours * rate : 0;
                 const paid = paidThisPeriod[p.id];
                 const editing = editingRateFor === p.id;
+                const editingHrs = editingHoursFor === p.id;
+                const canEditHours = adminRange.isPayPeriod;
+                const adjTitle = isAdjusted
+                  ? `Tracked: ${tracked.toFixed(2)}h → Adjusted: ${Number(adj.adjusted_hours).toFixed(2)}h${adj.note ? ' · ' + adj.note : ''}`
+                  : (canEditHours ? 'Click to edit hours' : 'Hours editable on pay-period ranges only');
                 return React.createElement('tr', { key: p.id, style: { borderBottom: '1px solid #292524' } },
                   React.createElement('td', { style: { padding: '10px 4px', color: '#fafaf9' } }, p.name || '(unnamed)'),
-                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace" } }, hours.toFixed(2) + 'h'),
+                  // ── Hours cell: click-to-edit (mirrors the rate cell) ──
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
+                    editingHrs
+                      ? React.createElement('div', { style: { display: 'flex', gap: 4, justifyContent: 'flex-end' } },
+                          React.createElement('input', { type: 'number', step: '0.25', value: newHours, onChange: e => setNewHours(e.target.value), placeholder: tracked.toFixed(2), style: { width: 70, padding: '4px 6px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#fafaf9', fontSize: 12 } }),
+                          React.createElement('button', { onClick: () => saveHours(p.id), disabled: busy, style: { padding: '4px 8px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✓'),
+                          React.createElement('button', { onClick: () => { setEditingHoursFor(null); setNewHours(''); }, style: { padding: '4px 8px', background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✕')
+                        )
+                      : React.createElement('span', {
+                          onClick: canEditHours ? () => { setEditingHoursFor(p.id); setNewHours((isAdjusted ? Number(adj.adjusted_hours) : tracked).toFixed(2)); } : undefined,
+                          title: adjTitle,
+                          style: { color: isAdjusted ? '#fbbf24' : '#fafaf9', cursor: canEditHours ? 'pointer' : 'default', textDecoration: canEditHours ? 'underline dotted' : 'none', fontFamily: "'DM Mono', monospace" }
+                        }, hours.toFixed(2) + 'h' + (isAdjusted ? ' *' : ''))
+                  ),
                   React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
                     editing
                       ? React.createElement('div', { style: { display: 'flex', gap: 4, justifyContent: 'flex-end' } },
@@ -29517,17 +29612,17 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adminRa
                           React.createElement('button', { onClick: () => saveRate(p.id), disabled: busy, style: { padding: '4px 8px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✓'),
                           React.createElement('button', { onClick: () => { setEditingRateFor(null); setNewRate(''); }, style: { padding: '4px 8px', background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✕')
                         )
-                      : React.createElement('span', { onClick: () => { setEditingRateFor(p.id); setNewRate(rate || ''); }, style: { color: rate ? '#fafaf9' : '#fb923c', cursor: 'pointer', textDecoration: 'underline dotted', fontFamily: "'DM Mono', monospace" } }, rate ? fmtMoney(rate) + '/hr' : 'set rate')
+                      : React.createElement('span', { onClick: () => { setEditingRateFor(p.id); setNewRate(rate || ''); }, title: rates[p.id]?.note || 'Click to change rate', style: { color: rate ? '#fafaf9' : '#fb923c', cursor: 'pointer', textDecoration: 'underline dotted', fontFamily: "'DM Mono', monospace" } }, rate ? fmtMoney(rate) + '/hr' : 'set rate')
                   ),
                   React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700 } }, total > 0 ? fmtMoney(total) : '—'),
                   React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
                     paid
                       ? React.createElement('div', { style: { display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' } },
-                          React.createElement('span', { style: { color: '#10b981', fontSize: 11, fontWeight: 700 } }, '✓ Paid ' + new Date(paid.paid_at).toLocaleDateString()),
+                          React.createElement('span', { style: { color: '#10b981', fontSize: 11, fontWeight: 700 }, title: (Number(paid.bonus) > 0 ? `Incl. ${fmtMoney(paid.bonus)} bonus${paid.bonus_note ? ' (' + paid.bonus_note + ')' : ''}` : '') }, '✓ Paid ' + new Date(paid.paid_at).toLocaleDateString() + (Number(paid.bonus) > 0 ? ' +bonus' : '')),
                           React.createElement('button', { onClick: () => unmarkPaid(paid.id), style: { background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 10 }, title: 'Undo' }, '↶')
                         )
                       : adminRange.isPayPeriod
-                        ? React.createElement('button', { onClick: () => markPaid(p.id, ms, rate), disabled: !rate || ms === 0 || busy, style: { padding: '5px 12px', background: (!rate || ms === 0) ? '#44403c' : '#d97706', color: '#fafaf9', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: (!rate || ms === 0) ? 'not-allowed' : 'pointer', opacity: (!rate || ms === 0) ? 0.5 : 1 } }, 'Mark Paid')
+                        ? React.createElement('button', { onClick: () => markPaid(p.id, hours, rate), disabled: !rate || hours === 0 || busy, style: { padding: '5px 12px', background: (!rate || hours === 0) ? '#44403c' : '#d97706', color: '#fafaf9', border: 'none', borderRadius: 5, fontSize: 11, fontWeight: 700, cursor: (!rate || hours === 0) ? 'not-allowed' : 'pointer', opacity: (!rate || hours === 0) ? 0.5 : 1 } }, 'Mark Paid')
                         : React.createElement('span', { style: { color: '#78716c', fontSize: 10, fontStyle: 'italic' } }, 'report only')
                   )
                 );
