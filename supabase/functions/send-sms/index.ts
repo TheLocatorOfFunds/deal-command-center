@@ -150,8 +150,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Split body at punctuation boundaries if over 160 chars
-    const segments = splitAtPunctuation(body)
+    // Split body at punctuation boundaries if over 160 chars — but ONLY on the
+    // Twilio/SMS path, where real 160-char segments exist. On the mac_bridge
+    // (iMessage) path there's no length limit, so splitting just chops one
+    // message into several texts. Send it whole. (Nathan 2026-05-27 — #235)
+    const segments = gateway === 'mac_bridge' ? [(body || '').trim()] : splitAtPunctuation(body)
     const isSplit  = segments.length > 1
     const channel  = gateway === 'mac_bridge' ? 'imessage' : 'sms'
     const threadKey = deal_id
