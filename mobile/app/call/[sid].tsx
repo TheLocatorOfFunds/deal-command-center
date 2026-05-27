@@ -85,11 +85,11 @@ export default function CallScreen() {
     call.on(Call.Event.Ringing, onRinging)
     call.on(Call.Event.ConnectFailure, onConnectFailure)
 
-    // Pull custom params for the header — all three methods are synchronous,
-    // getCustomParameters() returns a ReadonlyMap<string, string>.
+    // Pull custom params for the header — all three methods are synchronous.
+    // getCustomParameters() returns Record<string, string> - plain object, no .get().
     try {
       const params = call.getCustomParameters()
-      setDealName(params?.get('dealName') ?? null)
+      setDealName(params?.['dealName'] ?? null)
       const from = call.getFrom()
       const to = call.getTo()
       setCounterparty(from || to || null)

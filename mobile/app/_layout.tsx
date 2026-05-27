@@ -87,8 +87,8 @@ function ProtectedRouter() {
       // Navigate only after the user accepts via CallKit — not on invite delivery.
       callInvite.on('accepted', (call: any) => {
         const sid = call.getSid?.() ?? callInvite.getCallSid?.() ?? ''
-        // getCustomParameters() returns a ReadonlyMap<string, string> synchronously.
-        const dealId = callInvite.getCustomParameters?.()?.get('dealId') ?? null
+        // getCustomParameters() returns Record<string, string> - plain object, no .get().
+        const dealId = callInvite.getCustomParameters?.()?.['dealId'] ?? null
         // Push deal first so it sits under the call modal; when the call
         // ends and the modal closes, the user lands directly on the deal.
         if (dealId) router.push(`/deal/${dealId}`)

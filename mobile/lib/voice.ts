@@ -219,13 +219,11 @@ export async function initVoice(): Promise<boolean> {
     // fired without needing to stream device console logs. Remove once
     // inbound calling is verified stable.
     try {
-      const { supabase } = await import('./supabase')
       const { data: session } = await supabase.auth.getSession()
       if (session.session) {
-        await supabase.from('call_logs')
+        void supabase.from('call_logs')
           .update({ status: 'ringing' })
-          .eq('twilio_call_sid', callInvite.getCallSid?.() ?? '')
-          .then(() => {}) // fire-and-forget
+          .eq('twilio_call_sid', callInvite.getCallSid() ?? '')
       }
     } catch {}
 
