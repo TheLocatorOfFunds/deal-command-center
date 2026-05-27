@@ -24,6 +24,7 @@
  */
 
 import { Platform } from 'react-native'
+import * as Application from 'expo-application'
 import { Voice, type Call, type CallInvite } from '@twilio/voice-react-native-sdk'
 import { supabase } from './supabase'
 
@@ -52,6 +53,46 @@ export function subscribeToCallInvite(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Write SDK registration status to Supabase so we can verify from the
+ * web app that initVoice() actually succeeded before testing inbound calls.
+ *
+ * Check voice_sdk_status in Supabase after installing any new build.
+ * If the most recent row is 'failed' or missing, the device is NOT
+ * registered with Twilio and inbound calls will never arrive — don't
+ * waste time testing CallKit until this shows 'registered'.
+ */
+async function writeVoiceSdkStatus(
+  status: 'registered' | 'failed' | 'error',
+  errorMessage?: string,
+): Promise<void> {
+  try {
+    const { data: sessionData } = await supabase.auth.getSession()
+    const userId = sessionData.session?.user?.id
+    if (!userId) return
+
+    let tokenPrefix: string | undefined
+    if (status === 'registered' && voice) {
+      try {
+        const tok = await voice.getDeviceToken()
+        tokenPrefix = tok ? tok.substring(0, 12) : undefined
+      } catch {}
+    }
+
+    await supabase.from('voice_sdk_status').insert({
+      user_id: userId,
+      device_id: Application.applicationId ?? 'unknown',
+      build_number: Application.nativeBuildVersion ?? 'unknown',
+      status,
+      error_message: errorMessage ?? null,
+      token_prefix: tokenPrefix ?? null,
+    })
+  } catch (e) {
+    // Best-effort — never let this crash initVoice
+    console.warn('[voice] writeVoiceSdkStatus failed', e)
+  }
 }
 
 /**
@@ -161,11 +202,19 @@ export async function initVoice(): Promise<boolean> {
     }
   }
   if (lastErr) {
+    const errMsg = lastErr instanceof Error ? lastErr.message : String(lastErr)
     console.warn('[voice] init failed after retries', lastErr)
+    // Write failure to Supabase so we can verify from the web app
+    // whether the SDK actually registered. Visible at Settings > Voice Status.
+    void writeVoiceSdkStatus('failed', errMsg)
     voice = null
     return false
   }
   console.log('[voice] registered with Twilio (PushKit ready)')
+
+  // Write success to Supabase — ground-truth confirmation the device is
+  // registered. Check this FIRST before testing inbound calls on any new build.
+  void writeVoiceSdkStatus('registered')
 
   // Refresh ~3 min before 12-hour token expires
   scheduleTokenRefresh(12 * 60 * 60 * 1000 - 3 * 60 * 1000)
