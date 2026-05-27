@@ -501,21 +501,56 @@ Claude can SSH directly into the Mac Mini to deploy bridge fixes without any man
 ssh defender-mini   # resolves to dealcommandcenter@defender-mini.local
 ```
 
-**After any change to `mac-bridge/bridge.js`**, always run this to deploy:
-```bash
-ssh defender-mini "cd /Users/dealcommandcenter/Documents/deal-command-center && git pull && launchctl unload ~/Library/LaunchAgents/com.refundlocators.bridge.plist && launchctl load ~/Library/LaunchAgents/com.refundlocators.bridge.plist && sleep 3 && tail -20 /tmp/dcc-bridge.log"
-```
+### Autostart mechanism changed 2026-05-27 — Login Item, NOT launchd
 
-Check bridge logs anytime:
+After the Sequoia restore, the `com.refundlocators.bridge` LaunchAgent
+got wedged (`launchctl bootstrap` → `Input/output error 5`, even from the
+GUI session; not a disabled-override, plist lint-clean, node fine — a
+corrupted launchd registration for that label). Rather than fight it, the
+bridge now autostarts via a **macOS Login Item**:
+
+- `~/Applications/DCCBridge.app` — a tiny AppleScript launcher that
+  `cd`s to the bridge dir, kills any stale `bridge.js`, and starts a fresh
+  `node bridge.js` detached (logging to `/tmp/dcc-bridge.log`). Registered
+  as a Login Item ("DCCBridge") for `dealcommandcenter`.
+- The old LaunchAgent plist was moved to
+  `~/Library/LaunchAgents/com.refundlocators.bridge.plist.disabled-superseded-by-loginitem`
+  so it can't double-start the bridge at login. Do NOT re-add it.
+
+**Why a Login Item and not launchd:** the bridge drives Messages.app via
+AppleScript, which ONLY works inside the logged-in Aqua/GUI session. A
+process started over SSH (or by a system daemon) gets
+`OSLaunchdErrorDomain Code=125 "Domain does not support specified action"`
+when it tries `open -a Messages`. The Login Item runs in the GUI session,
+so it can send. This is also why **you cannot fully deploy a bridge change
+over SSH** — see below.
+
+**Deploying a `mac-bridge/bridge.js` change (two steps; the restart can't
+be done over SSH):**
+```bash
+# 1. Pull the new code (works over SSH):
+ssh defender-mini "cd /Users/dealcommandcenter/Documents/deal-command-center && git pull && grep -c <your-new-symbol> mac-bridge/bridge.js"
+```
+Then **restart the bridge FROM THE GUI SESSION** (an SSH restart can't
+drive Messages.app). Either relaunch `~/Applications/DCCBridge.app`
+(double-click, or in a Terminal *on the Mini*: `open ~/Applications/DCCBridge.app`),
+or log out and back in — the Login Item re-fires with the new code.
+
+Check bridge logs anytime (read-only, fine over SSH):
 ```bash
 ssh defender-mini "tail -50 /tmp/dcc-bridge.log"
 ```
 
-SSH key: `~/.ssh/defender_mini` (ed25519, already authorized on Mac Mini)
-Plist: `com.refundlocators.bridge`
-**Bridge repo path** (the one the LaunchAgent actually runs from — see
-`~/Library/LaunchAgents/com.refundlocators.bridge.plist` ProgramArguments):
-`/Users/dealcommandcenter/Documents/deal-command-center/`
+SSH key: `~/.ssh/defender_mini` (ed25519). **Note (2026-05-27):** the
+Sequoia restore wiped `authorized_keys`; re-add with
+`ssh-copy-id -i ~/.ssh/defender_mini.pub dealcommandcenter@<ip>` if SSH
+stops working after a future restore. The host's `.local` name can also
+go stale — connect by LAN IP (e.g. `192.168.1.12`) if `defender-mini`
+times out.
+
+**Bridge repo path** (the one the Login Item runs from):
+`/Users/dealcommandcenter/Documents/deal-command-center/` — bridge starts
+with cwd = its `mac-bridge/` subdir so `dotenv` finds `mac-bridge/.env`.
 
 **⚠ Trap (2026-05-13):** there's ALSO a stale clone at
 `/Users/dealcommandcenter/Documents/DealCommand Center/deal-command-center/`
