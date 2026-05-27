@@ -97,6 +97,18 @@ Deno.serve(async (req) => {
   const sb = createClient(supabaseUrl, serviceRoleKey)
   const now = new Date().toISOString()
 
+  // ── Review-mode gate (Phase A.3, Justin 2026-05-27) ──────────────────────
+  // During testing, nothing auto-sends without human review. Relay SMS touches
+  // already route to outreach_queue at status='pending' (human approves), so
+  // those are fine. But RVM touches fire drop-rvm DIRECTLY with no human in the
+  // loop — so when auto_send_enabled is false we HOLD RVM touches (leave them
+  // 'pending') and let them fire once the flag flips at go-live.
+  const { data: relaySettings } = await sb.from('outreach_settings')
+    .select('auto_send_enabled')
+    .eq('id', 1)
+    .maybeSingle()
+  const autoSendEnabled = !!relaySettings?.auto_send_enabled
+
   // ── Fetch due touches ─────────────────────────────────────────────────────
   const { data: dueTouches, error: fetchErr } = await sb
     .from('relay_scheduled_touches')
@@ -241,6 +253,14 @@ Deno.serve(async (req) => {
       results.queued++
 
     } else if (touch.channel === 'rvm') {
+      // Review-mode hold: RVM fires with no human in the loop, so when
+      // auto-send is off we leave the touch 'pending' and skip it this run.
+      // It'll fire on a future run once outreach_settings.auto_send_enabled
+      // is flipped true at go-live.
+      if (!autoSendEnabled) {
+        results.skipped++
+        continue
+      }
       // RVM: call drop-rvm directly. No approval queue for RVMs in Phase 1.
       // The rvm_template_id on the step drives what script plays.
       if (!step.rvm_template_id) {

@@ -3281,7 +3281,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               }}
             />
           ) : view === "outreach" ? (
-            <OutreachView deals={deals} onSelect={onSelect} setView={setView} />
+            <OutreachView deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin} />
           ) : view === "inbox" || view === "communications" ? (
             /* Phase 3 (5/27): the new cross-deal Communications hub (Calls +
                Texting) supersedes the old InboxView/ReplyInbox. The "inbox"
@@ -8147,6 +8147,12 @@ function RelayView({ supabase, onOpenDeal }) {
   const [scanning, setScanning] = React.useState(false)
   const [scanResult, setScanResult] = React.useState(null)
   const [reviewPanel, setReviewPanel] = React.useState(null) // { deal, touch|null }
+  // RVM drops awaiting approval (Phase A.3 follow-up, 2026-05-27). RVM touches
+  // are held by relay-dispatcher in review mode (status stays 'pending' in
+  // relay_scheduled_touches). These surface here for one-tap Approve & Drop.
+  const [rvmTouches, setRvmTouches] = React.useState([])
+  const [rvmTemplateNames, setRvmTemplateNames] = React.useState({}) // id -> name
+  const [approvingRvm, setApprovingRvm] = React.useState({})         // touchId -> bool
   // Per-touch coach note + regen state — keyed by touch.id.
   // Coach notes are the actual training data; persisted to outreach_queue.coach_note
   // by generate-outreach Edge Function so we can mine them later.
@@ -8182,9 +8188,54 @@ function RelayView({ supabase, onOpenDeal }) {
       const pending = pendingRes.data || []
       setPendingTouches(pending)
 
+      // ── RVM drops awaiting approval ─────────────────────────────────────
+      // relay-dispatcher holds RVM touches (status stays 'pending') while
+      // review-mode is on. Resolve each to its sequence step's rvm_template_id
+      // + the enrollment's deal/contact so we can one-tap Approve & Drop.
+      const enrollById = Object.fromEntries(enrollmentList.map(e => [e.id, e]))
+      const { data: dueRvm } = await supabase.from('relay_scheduled_touches')
+        .select('id, enrollment_id, step_number, scheduled_at, status, channel')
+        .eq('channel', 'rvm')
+        .eq('status', 'pending')
+        .lte('scheduled_at', new Date().toISOString())
+        .order('scheduled_at', { ascending: true })
+        .limit(50)
+      const rvmList = (dueRvm || []).filter(t => enrollById[t.enrollment_id])
+      let rvmEnriched = []
+      if (rvmList.length) {
+        // Pull the rvm_template_id for each (sequence_id, step_number) pair.
+        const seqIds = [...new Set(rvmList.map(t => enrollById[t.enrollment_id]?.sequence_id).filter(Boolean))]
+        const { data: steps } = await supabase.from('relay_sequence_steps')
+          .select('sequence_id, step_number, rvm_template_id')
+          .in('sequence_id', seqIds)
+        const stepMap = {}
+        for (const s of (steps || [])) stepMap[`${s.sequence_id}:${s.step_number}`] = s.rvm_template_id
+        rvmEnriched = rvmList.map(t => {
+          const enr = enrollById[t.enrollment_id]
+          return {
+            ...t,
+            deal_id: enr?.deal_id || null,
+            contact_phone: enr?.contact_phone || null,
+            contact_data: enr?.contact_data || {},
+            sequence_id: enr?.sequence_id || null,
+            rvm_template_id: stepMap[`${enr?.sequence_id}:${t.step_number}`] || null,
+          }
+        })
+        // Template names for display
+        const tplIds = [...new Set(rvmEnriched.map(t => t.rvm_template_id).filter(Boolean))]
+        if (tplIds.length) {
+          const { data: tpls } = await supabase.from('rvm_templates').select('id, name').in('id', tplIds)
+          const nameMap = {}
+          for (const tpl of (tpls || [])) nameMap[tpl.id] = tpl.name
+          setRvmTemplateNames(nameMap)
+        }
+      }
+      setRvmTouches(rvmEnriched)
+
       const dealIds = [...new Set([
         ...enrollmentList.map(e => e.deal_id).filter(Boolean),
         ...pending.map(p => p.deal_id).filter(Boolean),
+        ...rvmEnriched.map(t => t.deal_id).filter(Boolean),
       ])]
       if (dealIds.length) {
         const { data: dealRows } = await supabase.from('deals').select('id, name, address').in('id', dealIds)
@@ -8195,6 +8246,60 @@ function RelayView({ supabase, onOpenDeal }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Approve & drop a held RVM touch. Calls drop-rvm (renders the template's
+  // script, generates audio via Nathan's voice clone, drops to Slybroadcast),
+  // then marks the scheduled_touch sent + advances the enrollment step. This
+  // is the RVM counterpart to approving a text — nothing drops without this tap.
+  async function handleApproveRvm(touch) {
+    if (approvingRvm[touch.id]) return
+    if (!touch.rvm_template_id) { alert('This step has no RVM template set — fix the sequence step first.'); return }
+    const deal = deals[touch.deal_id]
+    const who = deal?.address || deal?.name || touch.contact_phone || touch.deal_id || 'this contact'
+    const tplName = rvmTemplateNames[touch.rvm_template_id] || 'the step template'
+    if (!window.confirm(
+      `Drop the ringless voicemail for ${who}?\n\n` +
+      `Template: ${tplName}\nStep: ${touch.step_number}\n\n` +
+      `This generates the audio and pushes it to Slybroadcast for delivery. Cannot be undone.`
+    )) return
+    setApprovingRvm(prev => ({ ...prev, [touch.id]: true }))
+    try {
+      const firstName = (touch.contact_data && (touch.contact_data.first_name || touch.contact_data.firstName)) || undefined
+      const { data, error } = await supabase.functions.invoke('drop-rvm', {
+        body: {
+          template_id: touch.rvm_template_id,
+          deal_id: touch.deal_id || undefined,
+          to_number: touch.contact_phone || undefined,
+          override_first_name: firstName,
+          dry_run: false,
+        },
+      })
+      if (error) throw error
+      if (data?.error) throw new Error(data.details || data.error)
+      const status = data?.delivery_status
+      if (status === 'rvm_failed') throw new Error(data.delivery_error || 'Slybroadcast rejected the drop')
+      // Mark the touch sent + advance the enrollment step.
+      await supabase.from('relay_scheduled_touches')
+        .update({ status: 'sent', sent_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+        .eq('id', touch.id)
+      await supabase.from('relay_enrollments')
+        .update({ current_step: touch.step_number, updated_at: new Date().toISOString() })
+        .eq('id', touch.enrollment_id)
+      setRvmTouches(prev => prev.filter(t => t.id !== touch.id))
+    } catch (e) {
+      alert('RVM drop failed: ' + (e.message || 'unknown'))
+    } finally {
+      setApprovingRvm(prev => ({ ...prev, [touch.id]: false }))
+    }
+  }
+
+  async function handleSkipRvm(touch) {
+    if (!window.confirm('Skip this RVM step? It will not be dropped and the sequence moves on.')) return
+    await supabase.from('relay_scheduled_touches')
+      .update({ status: 'skipped', error_message: 'manually skipped in Relay view', updated_at: new Date().toISOString() })
+      .eq('id', touch.id)
+    setRvmTouches(prev => prev.filter(t => t.id !== touch.id))
   }
 
   async function handleApprove(queueId) {
@@ -8386,6 +8491,64 @@ function RelayView({ supabase, onOpenDeal }) {
           </button>
         </div>
       </div>
+
+      {/* RVM drops awaiting approval — held by relay-dispatcher in review mode.
+          Nothing drops without a human tap here (Phase A.3 follow-up). */}
+      {rvmTouches.length > 0 && (
+        <div style={{ marginBottom: 32 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+            📞 RVM Drops Awaiting Approval ({rvmTouches.length})
+            <span style={{ fontSize: 10, fontWeight: 500, color: '#64748b', textTransform: 'none', letterSpacing: 0 }}>review-mode · each drop is human-approved</span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {rvmTouches.map(touch => {
+              const deal = deals[touch.deal_id]
+              const tplName = rvmTemplateNames[touch.rvm_template_id] || '(no template set)'
+              const scheduledDate = touch.scheduled_at ? new Date(touch.scheduled_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'now'
+              const busy = !!approvingRvm[touch.id]
+              return (
+                <div key={touch.id} style={{ background: '#0f172a', border: '1px solid #3b2a52', borderLeft: '3px solid #a855f7', borderRadius: 8, padding: 16 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                    <div>
+                      <span style={{ fontSize: 12, color: '#c084fc', fontWeight: 600 }}>RVM · Step {touch.step_number}</span>
+                      {deal && touch.deal_id && (
+                        <button
+                          onClick={() => onOpenDeal && onOpenDeal(touch.deal_id)}
+                          style={{ background: 'none', border: 'none', padding: '0 0 0 8px', fontSize: 12, color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline' }}
+                        >
+                          {deal.address || deal.name || touch.deal_id}
+                        </button>
+                      )}
+                    </div>
+                    <span style={{ fontSize: 11, color: '#475569' }}>Scheduled {scheduledDate}</span>
+                  </div>
+                  <div style={{ fontSize: 13, color: '#e2e8f0', marginBottom: 12, padding: '10px 12px', background: '#1a1226', borderRadius: 6 }}>
+                    🎧 Voicemail script: <strong style={{ color: '#d8b4fe' }}>{tplName}</strong>
+                    {touch.contact_phone && <span style={{ color: '#64748b' }}> · to {touch.contact_phone}</span>}
+                    <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>Approving generates the audio (Nathan's voice) and drops it via Slybroadcast.</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      onClick={() => handleApproveRvm(touch)}
+                      disabled={busy}
+                      style={{ padding: '6px 16px', background: busy ? '#3b2a52' : '#7c3aed', color: '#fff', border: 'none', borderRadius: 6, cursor: busy ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
+                    >
+                      {busy ? 'Dropping…' : '📣 Approve & Drop'}
+                    </button>
+                    <button
+                      onClick={() => handleSkipRvm(touch)}
+                      disabled={busy}
+                      style={{ padding: '6px 16px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
+                    >
+                      Skip
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Pending approvals */}
       <div style={{ marginBottom: 32 }}>
@@ -8621,7 +8784,68 @@ function DoubleQueueGuard({ deals, onSelect }) {
   );
 }
 
-function OutreachView({ deals, onSelect, setView }) {
+// Review-mode banner + toggle (Phase A.3, 2026-05-27). Reads the singleton
+// outreach_settings.auto_send_enabled. While OFF, no text/RVM auto-sends —
+// every message is human-reviewed in the queue first. Admins can flip it at
+// go-live; VAs see the status read-only.
+function ReviewModeBanner({ isAdmin }) {
+  const [autoSend, setAutoSend] = useState(null); // null = loading
+  const [saving, setSaving] = useState(false);
+  const alive = useAliveRef();
+
+  const load = React.useCallback(async () => {
+    const { data } = await sb.from('outreach_settings').select('auto_send_enabled').eq('id', 1).maybeSingle();
+    if (alive.current) setAutoSend(data?.auto_send_enabled ?? false);
+  }, [alive]);
+
+  useEffect(() => {
+    load();
+    const ch = sb.channel('outreach-settings')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_settings' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  if (autoSend === null) return null;
+
+  const toggle = async () => {
+    if (!isAdmin || saving) return;
+    const next = !autoSend;
+    const confirmMsg = next
+      ? 'Turn AUTO-SEND ON? Texts and RVM drops will start sending WITHOUT human review. Only do this at go-live.'
+      : 'Turn auto-send OFF (back to review mode)? Every message will require human approval again.';
+    if (!window.confirm(confirmMsg)) return;
+    setSaving(true);
+    const { data: authData } = await sb.auth.getUser();
+    const { error } = await sb.from('outreach_settings')
+      .update({ auto_send_enabled: next, updated_by: authData?.user?.id || null })
+      .eq('id', 1);
+    setSaving(false);
+    if (error) { alert('Could not update: ' + error.message); return; }
+    setAutoSend(next);
+  };
+
+  const live = autoSend === true;
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid ' + (live ? '#7f1d1d' : '#14532d'), background: live ? '#2a0e0e' : '#0c1f14', borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 13, fontWeight: 700, color: live ? '#fca5a5' : '#6ee7b7' }}>
+        {live ? '🔴 AUTO-SEND LIVE' : '🟢 REVIEW MODE'}
+      </span>
+      <span style={{ fontSize: 12, color: '#a8a29e', flex: 1, minWidth: 200 }}>
+        {live
+          ? 'Texts + RVM are sending automatically without human review.'
+          : 'Every text + RVM is held for human review before it goes out. Nothing auto-sends.'}
+      </span>
+      {isAdmin && (
+        <button onClick={toggle} disabled={saving} style={{ fontSize: 11, fontWeight: 700, background: live ? '#14532d' : '#7f1d1d', border: '1px solid ' + (live ? '#10b981' : '#dc2626'), color: live ? '#6ee7b7' : '#fca5a5', borderRadius: 6, padding: '5px 11px', cursor: saving ? 'default' : 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+          {saving ? '…' : live ? 'Switch to review mode' : 'Turn on auto-send (go-live)'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function OutreachView({ deals, onSelect, setView, isAdmin }) {
   const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
   const alive = useAliveRef();
 
@@ -8669,6 +8893,8 @@ function OutreachView({ deals, onSelect, setView }) {
           <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· campaigns + replies + escalations, all in one place</span>
         </h2>
       </div>
+
+      <ReviewModeBanner isAdmin={isAdmin} />
 
       <DoubleQueueGuard deals={deals} onSelect={onSelect} />
 
@@ -12446,6 +12672,16 @@ function AutomationsQueue({ onSelectDeal }) {
     return (rawItems || []).filter(item => {
       const d = deals[item.deal_id];
       if (!d) return true;                       // unknown deal — keep
+
+      // Relay-owned rows (relay_enrollment_id set) are governed by Relay's own
+      // sequence targeting — who/what/when is decided upstream in relay.*.
+      // The Automations Phase-1 surplus gate must NOT apply to them, or it
+      // silently cancels Relay touches for pre-foreclosure / pre-auction
+      // sequences (non-surplus by design) and any non-A-tier enrollment.
+      // Phase A.2 (2026-05-27): bypass the gate, let Relay decide. These rows
+      // still render for human approval; Phase C consolidates the two UIs.
+      if (item.relay_enrollment_id) return true;
+
       if (!isLeadStatus(d)) { cancel(item.id, 'deal_past_lead_phase'); return false; }
 
       // Phase 1: surplus only
