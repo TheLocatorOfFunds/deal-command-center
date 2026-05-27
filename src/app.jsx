@@ -10302,7 +10302,7 @@ function CommunicationsView({ onSelect }) {
   // ── Load + group text threads across all deals ──────────────────────
   const loadThreads = React.useCallback(async () => {
     const { data: msgs } = await sb.from('messages_outbound')
-      .select('id, deal_id, contact_id, body, from_number, to_number, direction, created_at, read_by_team_at, channel, media_url, thread_key')
+      .select('id, deal_id, contact_id, body, from_number, to_number, direction, created_at, read_by_team_at, channel, media_url, thread_key, delivered_at, read_at')
       .order('created_at', { ascending: false })
       .limit(500);
     if (!alive.current) return;
@@ -10457,7 +10457,11 @@ function CommunicationsView({ onSelect }) {
                         {m.body}
                         {m.media_url && <div style={{ marginTop: 6 }}><img src={m.media_url} alt="media" style={{ maxWidth: 180, borderRadius: 8 }} /></div>}
                       </div>
-                      <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>{fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}</div>
+                      <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>
+                        {fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}
+                        {/* D1: iMessage delivery/read receipt on outbound bubbles */}
+                        {m.direction !== 'inbound' && (m.read_at ? ' · ✓✓ Read' : m.delivered_at ? ' · ✓ Delivered' : '')}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -28486,12 +28490,33 @@ function LaurenDCC() {
   const [input, setInput] = useState('');
   const [error, setError] = useState(null);
   const [bypassMode, setBypassMode] = useState(false);
+  // A3 (5/27): case-context awareness. When Lauren opens while a deal is on
+  // screen, we capture that deal so her first reply is already scoped to it —
+  // like "Ask Gemini" knowing what's on the page. caseContext = {id, name};
+  // contextSentRef tracks whether we've already tagged a message with it (so
+  // we only prepend the "re:" context once per context, not every message).
+  const [caseContext, setCaseContext] = useState(null);
+  const contextSentRef = useRef(null);
   const msgsEl = useRef(null);
   const inputEl = useRef(null);
 
   // Boot: open-event listener + load user + ensure Lauren DM exists
   useEffect(() => {
-    const handler = () => setOpen(true);
+    const handler = async () => {
+      setOpen(true);
+      // Parse the active deal straight off the hash (#/deal/<id>/...) so we
+      // don't have to thread deal context through every dispatch site.
+      try {
+        const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
+        const dealId = parts[0] === 'deal' && parts[1] ? parts[1] : null;
+        if (dealId) {
+          const { data: d } = await sb.from('deals').select('id, name').eq('id', dealId).maybeSingle();
+          if (d) { setCaseContext({ id: d.id, name: d.name || d.id }); contextSentRef.current = null; }
+        } else {
+          setCaseContext(null);
+        }
+      } catch { /* non-fatal — Lauren still opens without context */ }
+    };
     window.addEventListener('dcc:open-lauren', handler);
     (async () => {
       try {
@@ -28603,8 +28628,15 @@ function LaurenDCC() {
 
   async function send() {
     if (busy || !input.trim() || !threadId || !me) return;
-    const text = input.trim();
+    let text = input.trim();
     setInput('');
+    // A3: on the first message after a case context is set, prefix a compact
+    // "re:" tag so Lauren's responder knows which deal we're working. We only
+    // do this once per context (contextSentRef) so follow-ups stay clean.
+    if (caseContext && contextSentRef.current !== caseContext.id) {
+      text = `(re: deal "${caseContext.name}", id ${caseContext.id}) ${text}`;
+      contextSentRef.current = caseContext.id;
+    }
     // Only show "Lauren typing" if Lauren is expected to respond — always
     // in her solo DM, only when @-mentioned in rooms / channels.
     const expectLaurenReply = thread?.thread_type === 'lauren_dm'
@@ -28835,6 +28867,18 @@ function LaurenDCC() {
             style: { width: 7, height: 7, borderRadius: '50%', background: '#78716c', animation: `dotPulse 1.2s ease-in-out ${i*0.2}s infinite` }
           }))
         )
+      ),
+      // A3: case-context chip — shows which deal Lauren is scoped to, with a
+      // clear (×) so the user can drop context and ask something general.
+      caseContext && React.createElement('div', {
+        style: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderTop: '1px solid #292524', background: '#14110d', flexShrink: 0 }
+      },
+        React.createElement('span', { style: { fontSize: 11, color: '#fdba74', fontWeight: 600 } }, `📁 Talking about: ${caseContext.name}`),
+        React.createElement('button', {
+          onClick: () => { setCaseContext(null); contextSentRef.current = null; },
+          title: 'Clear case context',
+          style: { marginLeft: 'auto', background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 5, padding: '2px 8px', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }
+        }, '✕'),
       ),
       React.createElement('div', {
         style: { display: 'flex', gap: 8, padding: '10px 12px', borderTop: '1px solid #292524', background: '#1c1917', flexShrink: 0 }
