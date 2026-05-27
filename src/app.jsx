@@ -22026,6 +22026,12 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
   const [activeContact, setActiveContact] = useState(null);
   const [newMode, setNewMode]         = useState(false);
   const [newPhone, setNewPhone]       = useState('');
+  // B1 (5/27): the "+" flow now captures a name so the contact is real and
+  // linked to the deal — not a bare phone number. Makes callbacks identifiable.
+  const [newFirst, setNewFirst]       = useState('');
+  const [newLast, setNewLast]         = useState('');
+  const [creatingContact, setCreatingContact] = useState(false);
+  const [newContactErr, setNewContactErr] = useState(null);
   const [extraContacts, setExtraContacts] = useState([]);
   const [dcContacts, setDcContacts]   = useState([]);
   const [unmatched, setUnmatched]     = useState([]);
@@ -22858,17 +22864,86 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
 
   const handleKeyDown = e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send(); };
 
-  const startNew = () => {
-    const phone = newPhone.trim();
-    if (!phone) return;
-    const already = contacts.find(c => normalizePhone(c.phone) === normalizePhone(phone));
-    if (already) { setActiveContact(already); }
-    else {
-      const c = { name: phone, phone, _custom: true };
-      setExtraContacts(prev => [...prev, c]);
-      setActiveContact(c);
+  // B1 (5/27): create-contact-and-associate. The "+" flow now takes a
+  // name + phone, persists a real `contacts` row, links it to this deal via
+  // `contact_deals`, and selects the thread. The bare ephemeral `_custom`
+  // contact (name === phone) is gone — so when this person calls back, the
+  // inbound auto-association (B2) can resolve them to a name + this deal.
+  //
+  // Returns the resolved contact object (existing or newly created) so the
+  // caller can optionally place a call right after. Returns null on failure.
+  const createOrFindDealContact = async () => {
+    const rawPhone = newPhone.trim();
+    if (!rawPhone) { setNewContactErr('Phone number required'); return null; }
+    setNewContactErr(null);
+
+    // Store + match in E.164 so the inbound call/SMS auto-association
+    // (receive-sms / twilio-voice query `phone.eq.+1XXXXXXXXXX`) resolves
+    // this contact when they call or text back. Storing the raw typed string
+    // ("(513) 555-1234") would silently break that lookup.
+    const phone = normalizePhone(rawPhone);
+
+    // Already linked to this deal? Just select it.
+    const already = contacts.find(c => normalizePhone(c.phone) === phone);
+    if (already) return already;
+
+    setCreatingContact(true);
+    try {
+      const name = `${newFirst.trim()} ${newLast.trim()}`.trim() || phone;
+
+      // Reuse an existing company-wide contact with this number if one exists
+      // (avoids duplicate contacts when the same person touches multiple deals).
+      const { data: existingByPhone } = await sb.from('contacts')
+        .select('id, name, phone')
+        .eq('phone', phone)
+        .maybeSingle();
+
+      let contactId = existingByPhone?.id;
+      if (!contactId) {
+        const { data: inserted, error: insErr } = await sb.from('contacts')
+          .insert({ name, phone })
+          .select('id, name, phone')
+          .single();
+        if (insErr) throw insErr;
+        contactId = inserted.id;
+      }
+
+      // Link to this deal (idempotent — unique(contact_id, deal_id)).
+      const { error: linkErr } = await sb.from('contact_deals')
+        .upsert({ contact_id: contactId, deal_id: dealId }, { onConflict: 'contact_id,deal_id' });
+      if (linkErr) throw linkErr;
+
+      // Refresh the deal's contact list so the new row shows in the rail.
+      await loadDealContacts();
+
+      return { id: contactId, contact_id: contactId, name, phone };
+    } catch (e) {
+      setNewContactErr(e.message || 'Could not create contact');
+      return null;
+    } finally {
+      setCreatingContact(false);
     }
-    setNewMode(false); setNewPhone('');
+  };
+
+  const resetNewForm = () => {
+    setNewMode(false); setNewPhone(''); setNewFirst(''); setNewLast(''); setNewContactErr(null);
+  };
+
+  // "Start" — create + link + open the thread (no call yet).
+  const startNew = async () => {
+    const c = await createOrFindDealContact();
+    if (!c) return;
+    setActiveContact(c);
+    resetNewForm();
+  };
+
+  // "Call" — create + link + open the thread + dial immediately.
+  const startNewAndCall = async () => {
+    const c = await createOrFindDealContact();
+    if (!c) return;
+    setActiveContact(c);
+    resetNewForm();
+    if (c.phone && startCall) startCall(c);
   };
 
   // ── Hide thread ───────────────────────────────────────────────────────────
@@ -23327,14 +23402,40 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
 
       {/* New conversation input */}
       {newMode && (
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid #1c1917', background: '#141210', display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-          <input autoFocus value={newPhone} onChange={e => setNewPhone(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && startNew()} placeholder="+1 (555) 000-0000"
-            style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
-          <button onClick={startNew} disabled={!newPhone.trim()}
-            style={{ background: newPhone.trim() ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: newPhone.trim() ? 'pointer' : 'default' }}>Start</button>
-          <button onClick={() => { setNewMode(false); if (visibleContacts.length > 0) setActiveContact(visibleContacts[0]); }}
-            style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+        <div style={{ padding: '10px 12px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+          {/* B1 (5/27): capture a name so the contact is real + linked to the
+              deal. "Call" dials immediately; "Start" just opens the thread.
+              Either way the contact is created and associated to this deal so
+              callbacks are identifiable. */}
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>
+            New contact for this deal
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <input autoFocus value={newFirst} onChange={e => setNewFirst(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && startNewAndCall()} placeholder="First name"
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, outline: 'none' }} />
+            <input value={newLast} onChange={e => setNewLast(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && startNewAndCall()} placeholder="Last name"
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input value={newPhone} onChange={e => setNewPhone(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && startNewAndCall()} placeholder="+1 (555) 000-0000"
+              style={{ flex: 1, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+            <button onClick={startNewAndCall} disabled={!newPhone.trim() || creatingContact || !!callStatus}
+              title="Create contact, link to deal, and call"
+              style={{ background: (newPhone.trim() && !creatingContact && !callStatus) ? '#16a34a' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: (newPhone.trim() && !creatingContact && !callStatus) ? 'pointer' : 'default', display: 'flex', alignItems: 'center', gap: 5 }}>
+              📞 {creatingContact ? 'Saving…' : 'Call'}
+            </button>
+            <button onClick={startNew} disabled={!newPhone.trim() || creatingContact}
+              title="Create contact + link to deal (no call)"
+              style={{ background: (newPhone.trim() && !creatingContact) ? '#d97706' : '#292524', border: 'none', color: '#fafaf9', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: (newPhone.trim() && !creatingContact) ? 'pointer' : 'default' }}>
+              Start
+            </button>
+            <button onClick={() => { resetNewForm(); if (visibleContacts.length > 0) setActiveContact(visibleContacts[0]); }}
+              style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+          </div>
+          {newContactErr && <div style={{ marginTop: 8, fontSize: 11, color: '#fca5a5' }}>⚠ {newContactErr}</div>}
         </div>
       )}
 

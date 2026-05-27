@@ -57,9 +57,15 @@ Deno.serve(async (req: Request) => {
   let threadKey: string | null = null;
 
   try {
+    // Match E.164, the raw Twilio value, AND the bare 10-digit form so
+    // legacy contacts stored without a country code still resolve (parity
+    // with receive-sms, which already matches the bare form). New contacts
+    // created via the DCC "+" flow are stored E.164, so this mainly covers
+    // older rows.
+    const bare = from.replace(/^\+1/, '');
     const { data: contactRows } = await db.from('contacts')
       .select('id, contact_deals(deal_id)')
-      .or(`phone.eq.${from},phone.eq.${fromRaw}`);
+      .or(`phone.eq.${from},phone.eq.${fromRaw},phone.eq.${bare}`);
     const match = (contactRows || []).find((c: any) => c.contact_deals?.length > 0);
     if (match) {
       contactId = match.id;
