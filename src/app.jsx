@@ -3612,6 +3612,15 @@ function DealStatusBadges({ deal }) {
       {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
       {ready && <Pill label="✅ READY" title="Ready for Outreach — vetted: phone, contacts, and personalized URL all in place" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
       {cosDate && <Pill label="💰 SOS" title={`Surplus On Sale — confirmation of sale ${cosDate}; surplus dollar amount is locked, not estimated`} bg="#78350f" fg="#fbbf24" border="#d97706" />}
+      {/* Verified vs unverified surplus — meta.walkerVerified is the canonical
+          verification flag (intel-main, walker-confirmed). Surplus deals only,
+          and only while open. Green = confirmed claimable amount; amber = still
+          just an estimate. Per Nathan 2026-05-27. */}
+      {deal?.type === 'surplus' && !['closed', 'recovered', 'dead'].includes(deal?.status) && (m.estimatedSurplus || deal?.surplus_estimate || m.estimatedAvailableEquity) ? (
+        m.walkerVerified === true
+          ? <Pill label="✓ VERIFIED" title="Surplus VERIFIED — walker/records-confirmed (claimable amount confirmed, not just an estimate)" bg="#064e3b" fg="#6ee7b7" border="#10b981" />
+          : <Pill label="~ UNVERIFIED" title="Surplus is an ESTIMATE — not yet walker/records-verified" bg="#3a1d0e" fg="#fdba74" border="#a16207" />
+      ) : null}
     </span>
   );
 }
