@@ -12447,6 +12447,16 @@ function AutomationsQueue({ onSelectDeal }) {
     return (rawItems || []).filter(item => {
       const d = deals[item.deal_id];
       if (!d) return true;                       // unknown deal — keep
+
+      // Relay-owned rows (relay_enrollment_id set) are governed by Relay's own
+      // sequence targeting — who/what/when is decided upstream in relay.*.
+      // The Automations Phase-1 surplus gate must NOT apply to them, or it
+      // silently cancels Relay touches for pre-foreclosure / pre-auction
+      // sequences (non-surplus by design) and any non-A-tier enrollment.
+      // Phase A.2 (2026-05-27): bypass the gate, let Relay decide. These rows
+      // still render for human approval; Phase C consolidates the two UIs.
+      if (item.relay_enrollment_id) return true;
+
       if (!isLeadStatus(d)) { cancel(item.id, 'deal_past_lead_phase'); return false; }
 
       // Phase 1: surplus only
