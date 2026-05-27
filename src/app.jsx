@@ -14497,7 +14497,13 @@ function NotesDrawerTrigger({ count, onClick, isOpen }) {
 }
 
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, initialTab, peerNav, startCall, callStatus }) {
-  const [tab, setTab] = useState(initialTab || "overview");
+  // Tasks + Lauren were removed from the deal tab bar (5/27). If an old
+  // deep-link lands on one of those, fall back to overview so the user
+  // doesn't see content with no matching tab button.
+  const REMOVED_DEAL_TABS = ["tasks", "lauren"];
+  const [tab, setTab] = useState(
+    REMOVED_DEAL_TABS.includes(initialTab) ? "overview" : (initialTab || "overview")
+  );
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
   const [notesCount, setNotesCount] = useState(0);
@@ -14661,13 +14667,18 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
   // Stage 2 (2026-04-23): notes → files (merged w/ documents), vendors → contacts.
   // Old tabs remain as components; they're just not wired into the tab bar.
   const isWholesale = deal.type === "wholesale";
+  // 5/27 decision: Tasks + Lauren removed from the deal tab bar. Lauren lives
+  // globally (case-context-aware) and Tasks live in the global Tasks view.
+  // Files + Contacts stay. Tab CONTENT render blocks for tasks/lauren remain
+  // below but are no longer reachable from here (harmless dead branches; kept
+  // so any deep-link or future re-add is a one-line array change).
   const tabs = isAdmin
     ? (isFlip
-        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "tasks", "files", "lauren"]
+        ? ["overview", "comms", "docket", "contacts", "investor", "partner", "expenses", "files"]
         : isWholesale
-          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "tasks", "files", "lauren"]
-          : ["overview", "comms", "docket", "contacts", "tasks", "files", "lauren"])
-    : ["overview", "comms", "docket", "contacts", "tasks", "files"];
+          ? ["overview", "comms", "docket", "contacts", "partner", "expenses", "files"]
+          : ["overview", "comms", "docket", "contacts", "files"])
+    : ["overview", "comms", "docket", "contacts", "files"];
 
   return (
     <div>
@@ -14898,7 +14909,10 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
       {tab === "comms" && (
         <ErrorBoundary label="comms">
           <div>
-            <OutreachDraftPanelForDeal dealId={deal.id} deal={deal} />
+            {/* AI-draft / outreach-queue panel intentionally removed from Comms
+                (5/27 decision). Drafts still surface in Today → Automations and
+                the Outreach workspace; outreach automation is moving to Relay.
+                Comms is now purely for working a case by phone/text. */}
             <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} />
             <div style={{ marginTop: 20 }}>
               <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
