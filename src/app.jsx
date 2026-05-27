@@ -1701,7 +1701,8 @@ function DealCommandCenter({ session, profile }) {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
               {navItem('today',    '📌', 'Today')}
               {navItem('attention','⏰', 'Deadlines')}
-              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','inbox','communications','leads','forecast'] })}
+              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','leads','forecast'] })}
+              {navItem('communications', '💬', 'Comms', { groupIds: ['communications','inbox'] })}
               {navItem('relay',    '📡', 'Relay')}
               {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
