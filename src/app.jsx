@@ -1709,7 +1709,6 @@ function DealCommandCenter({ session, profile }) {
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
               {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
               {div()}
-              {navItem('calls',    '📞', 'Calls')}
               {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
               {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
               {isTeam && navItem('_docket',   '⚖',  'Docket',   { onClick: () => setShowDocket(true),  badge: unackDocketCount })}
@@ -1974,7 +1973,7 @@ function DealCommandCenter({ session, profile }) {
                             </div>
                           );
                         })}
-                        <button onClick={() => { setActiveDealId(null); setView('calls'); setShowPhonePopover(false); }}
+                        <button onClick={() => { setActiveDealId(null); setView('communications'); setShowPhonePopover(false); }}
                           style={{ width: '100%', padding: '10px 14px', background: 'transparent', border: 'none', borderTop: '1px solid #292524', color: '#78716c', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>
                           View full call history →
                         </button>
