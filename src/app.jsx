@@ -8526,7 +8526,48 @@ function RelayView({ supabase, onOpenDeal }) {
 // ReplyInbox (cross-deal inbound SMS oldest-unread first). Stats tiles
 // summarize the queue. This is the Monday-launch hub for A/B-tier
 // outreach campaigns.
-function OutreachView({ deals, onSelect }) {
+// ─── #1 Double-queue guard ──────────────────────────────────────────
+// Two outreach engines (outreach_queue "Automations" + relay_enrollments)
+// can both queue the SAME lead → double-text risk. This surfaces the overlap
+// where outreach work happens so it can be caught BEFORE sending. Read-only;
+// the automatic send-time skip is a backend change tracked separately.
+// Safe-fails to nothing if either table is unavailable.
+function DoubleQueueGuard({ deals, onSelect }) {
+  const [overlap, setOverlap] = useState([]);
+  const alive = useAliveRef();
+  useEffect(() => {
+    (async () => {
+      const [oq, re] = await Promise.all([
+        sb.from('outreach_queue').select('deal_id').in('status', ['queued', 'pending', 'generating']),
+        sb.from('relay_enrollments').select('deal_id').eq('status', 'active'),
+      ]);
+      if (!alive.current) return;
+      if ((oq && oq.error) || (re && re.error)) { setOverlap([]); return; }
+      const oqSet = new Set((oq.data || []).map(r => r.deal_id).filter(Boolean));
+      const both = [...new Set((re.data || []).map(r => r.deal_id).filter(Boolean))].filter(id => oqSet.has(id));
+      setOverlap(both);
+    })();
+  }, [alive]);
+  if (overlap.length === 0) return null;
+  const dealById = new Map(deals.map(d => [d.id, d]));
+  return (
+    <div style={{ marginBottom: 18, border: '1px solid #7c2d12', background: '#2a1a0e', borderRadius: 10, padding: '12px 16px' }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: '#fdba74' }}>⚠ {overlap.length} lead{overlap.length !== 1 ? 's' : ''} queued in BOTH Relay and Automations</div>
+      <div style={{ fontSize: 12, color: '#d6d3d1', marginTop: 4, lineHeight: 1.5 }}>
+        Sending from both engines can double-text the homeowner. Open each and cancel the duplicate before sending:
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+        {overlap.slice(0, 25).map(id => {
+          const d = dealById.get(id);
+          return <button key={id} onClick={() => onSelect && onSelect(id)} style={{ fontSize: 11, fontWeight: 600, background: '#1c1917', border: '1px solid #44403c', color: '#fafaf9', borderRadius: 6, padding: '4px 9px', cursor: 'pointer', fontFamily: 'inherit' }}>{(d && d.name) || id}</button>;
+        })}
+        {overlap.length > 25 && <span style={{ fontSize: 11, color: '#a8a29e', alignSelf: 'center' }}>+{overlap.length - 25} more</span>}
+      </div>
+    </div>
+  );
+}
+
+function OutreachView({ deals, onSelect, setView }) {
   const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
   const alive = useAliveRef();
 
@@ -8574,6 +8615,8 @@ function OutreachView({ deals, onSelect }) {
           <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· campaigns + replies + escalations, all in one place</span>
         </h2>
       </div>
+
+      <DoubleQueueGuard deals={deals} onSelect={onSelect} />
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
         <Tile label="Drafts ready to send" value={stats.pending_drafts} sub={stats.pending_drafts === 0 ? 'Nothing pending' : 'all phases · queue shows active phase'} color="#d8b560" />
