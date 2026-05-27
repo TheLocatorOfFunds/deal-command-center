@@ -10350,7 +10350,7 @@ function CommunicationsView({ onSelect }) {
   // ── Load calls across all deals ─────────────────────────────────────
   const loadCalls = React.useCallback(async () => {
     const { data } = await sb.from('call_logs')
-      .select('id, deal_id, contact_id, direction, from_number, to_number, status, duration_seconds, started_at, recording_url, contacts(name), deals(name, lead_tier)')
+      .select('id, deal_id, contact_id, direction, from_number, to_number, status, duration_seconds, started_at, recording_url, summary, contacts(name), deals(name, lead_tier)')
       .order('started_at', { ascending: false })
       .limit(200);
     if (!alive.current) return;
@@ -10479,6 +10479,8 @@ function CommunicationsView({ onSelect }) {
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{name}{c.deals?.name ? ` · ${c.deals.name}` : ''}</div>
                     <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.direction === 'inbound' ? c.from_number : c.to_number} · {c.status || '—'} · {fmtDur(c.duration_seconds)}</div>
+                    {/* F1: AI summary of what the call was about (from transcript) */}
+                    {c.summary && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 3, fontStyle: 'italic', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>🧠 {c.summary}</div>}
                   </div>
                   {c.recording_url && <span title="Has recording" style={{ fontSize: 14 }}>🎙</span>}
                   <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(c.started_at)} ago</span>

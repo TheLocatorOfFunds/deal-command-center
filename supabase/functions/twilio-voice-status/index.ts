@@ -122,6 +122,8 @@ Deno.serve(async (req: Request) => {
 <Response>
   <Say voice="Polly.Joanna">You've reached FundLocators. Please leave a message after the beep and we'll call you right back.</Say>
   <Record maxLength="120" playBeep="true"
+    transcribe="true"
+    transcribeCallback="${supabaseUrl}/functions/v1/twilio-transcription-callback"
     recordingStatusCallback="${supabaseUrl}/functions/v1/twilio-voice-status"
     recordingStatusCallbackMethod="POST"/>
 </Response>`, { status: 200, headers: { 'Content-Type': 'text/xml' } });
