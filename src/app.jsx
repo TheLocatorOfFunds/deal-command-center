@@ -13821,6 +13821,12 @@ const DELETE_REASONS = [
   { code: 'other',                  label: 'Other (specify)' },
 ];
 
+// Statuses where deleting is just "cleaning up a lead that never became a
+// case" — safe, no warning. Everything else means work is underway (or the
+// case is already won), so deleting pulls a live case out from under whoever
+// is recovering it. Those deletes get a hard warning + ack (Nathan, 2026-05-27).
+const SAFE_DELETE_STATUSES = new Set(['lead', 'new-lead', 'dead']);
+
 // ─── Lead-outcome feedback (the "why did this lead die" dropdown) ────
 // When a SURPLUS lead is set to status='dead', the caller must record WHY.
 // Stored on deals.meta (dispositionReason/At/By) — DCC-owned keys that
@@ -13895,10 +13901,28 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
+  // Guard: deleting a deal that's past the lead stage means pulling a live
+  // case out from under whoever's recovering it. Warn + require an ack.
+  const inRecovery = !!deal.status && !SAFE_DELETE_STATUSES.has(deal.status);
+  const completed = deal.status === 'recovered' || deal.status === 'closed';
+  const ownedByOther = !!deal.owner_id && deal.owner_id !== userId;
+  const [ack, setAck] = useState(false);
+  const [ownerName, setOwnerName] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (inRecovery && ownedByOther) {
+      sb.from('profiles').select('name').eq('id', deal.owner_id).maybeSingle()
+        .then(({ data }) => { if (!cancelled && data && data.name) setOwnerName(data.name); });
+    }
+    return () => { cancelled = true; };
+  }, [deal.owner_id, inRecovery, ownedByOther]);
+
   const otherRequired = reason === 'other' && !detail.trim();
+  const blocked = busy || otherRequired || (inRecovery && !ack);
 
   const submit = async () => {
-    if (busy || otherRequired) return;
+    if (blocked) return;
     setBusy(true);
     setErr(null);
     try {
@@ -13948,6 +13972,23 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
           {deal.meta?.courtCase ? ` · ${deal.meta.courtCase}` : ''}
         </div>
       </div>
+      {inRecovery && (
+        <div style={{ background: '#7f1d1d', border: '1px solid #b91c1c', borderRadius: 6, padding: 12, marginBottom: 14, fontSize: 12.5, color: '#fecaca', lineHeight: 1.55 }}>
+          <div style={{ fontWeight: 700, color: '#fff', marginBottom: 4, fontSize: 13 }}>
+            ⚠ This deal is in {completed ? 'a completed' : 'active'} recovery — status: {(deal.status || '').replace(/-/g, ' ')}
+          </div>
+          {ownerName
+            ? <>It belongs to <strong style={{ color: '#fff' }}>{ownerName}</strong>, who's working it. Deleting pulls it out from under them and cancels any pending outreach.</>
+            : <>Someone is working this case. Deleting pulls it out of everyone's active pipeline and cancels any pending outreach.</>}
+          <div style={{ marginTop: 6 }}>
+            If the case was real but just didn't convert, <strong style={{ color: '#fff' }}>mark it Dead with a reason</strong> instead — that keeps the record and the lead-quality signal the Director reads. Delete is for records that never should have entered the system (true duplicate, data error, sale unwound).
+          </div>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10, cursor: busy ? 'default' : 'pointer', color: '#fff', fontWeight: 600 }}>
+            <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} disabled={busy} style={{ marginTop: 2 }} />
+            <span>Yes — I understand this is in active recovery and still want to delete it.</span>
+          </label>
+        </div>
+      )}
       <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: 12, marginBottom: 16, fontSize: 12, color: '#a8a29e', lineHeight: 1.55 }}>
         This <strong style={{ color: '#fafaf9' }}>does not destroy</strong> sent SMS history,
         uploaded court PDFs, AI case summaries, personalized URLs, or the activity log.
@@ -13978,8 +14019,8 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
         <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
         <button
           onClick={submit}
-          disabled={busy || otherRequired}
-          style={{ ...btnPrimary, background: busy || otherRequired ? '#44403c' : '#dc2626', color: '#fafaf9', cursor: busy || otherRequired ? 'not-allowed' : 'pointer' }}
+          disabled={blocked}
+          style={{ ...btnPrimary, background: blocked ? '#44403c' : '#dc2626', color: '#fafaf9', cursor: blocked ? 'not-allowed' : 'pointer' }}
         >
           {busy ? 'Deleting…' : '🗑 Delete deal'}
         </button>
