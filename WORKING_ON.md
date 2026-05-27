@@ -216,8 +216,24 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-05-20 — legacy service_role key rotation (in progress) + Eric bug fixes
+**Status:** Active — 2026-05-27 — DCC cleanup + Relay/Automations coordination + #237 confidence tiers
 **Branch:** main (all work pushed)
+
+**Today (2026-05-27) — what shipped**
+
+- **#237 surplus confidence-tier badge + filter** (`57a692e`, closes #237). Card+detail badge from intel-main's read-only `meta.confidenceTier`: walker_verified→gold "Walker-verified", complaint_inferred→amber "Complaint-inferred · verify lien", untiered→none. Surplus-list filter `[All · Walker only (134) · Verify-first (8)]`. **Replaced** today's earlier binary verified/unverified pill (`8e3f296`) — confidenceTier supersedes it; don't re-add both. Verified live: 134/8/286.
+- **send-sms text-splitting fix** (`7ecdad8`, #235, **⚠ needs Justin to deploy**). mac_bridge/iMessage path now sends the whole body as one message instead of `splitAtPunctuation` chopping >160-char texts into pieces (Nathan hit it on the Novak thread). EF = Justin's domain + no EF-deploy access this session → committed + DM'd him the deploy command. Twilio fallback untouched.
+- **Delete guard** (`91b5a7e`). DeleteDealModal warns + requires an ack when deleting a deal past the lead stage (someone's active case), steers to "mark Dead with a reason". Routine junk-lead deletes unaffected.
+- **Relay/Automations coordination.** Reversed my mistaken Relay retirement (re-enabled crons 21/22 — Relay was ramping, not dead). DM'd Justin how to run both; verified his merge plan vs the code; sent handoff notes. Justin shipped Phase A (#233). Follow-up: Relay rows now land in the shared queue → labeled them "Relay · step N" (`ff28d4c`) so they don't read as Automations follow-ups.
+- **#Ops SOP for Eric+Inaam:** Delete vs Mark-Dead (worked-it→Mark Dead, keeps the Director's signal; never-should've-existed→Delete).
+- Earlier today: Attention→**Deadlines** rename + flicker fix (`8a10e7c`/`f4ef764`/`84e6201`), warm-leads strip→Today (`0775c48`), revenue-year picker on Profit Booked (`d431d02`).
+
+**Open follow-ups (Nathan's lane):**
+- **Justin deploys send-sms (#235)** — until then long manual texts still split. Match the live `verify_jwt` flag.
+- Mac-bridge key rotation still gates the legacy-key disable (carryover from 2026-05-20 below).
+- (optional) Phase A.3 send-time hard dedup (Justin's call) would let me retire the DoubleQueueGuard.
+
+**Gotchas this session (full detail in `session_archives/2026-05-27-...`):** supabase-dcc MCP is UNAUTHORIZED here (no SQL / EF deploy / function-config read) → worked around via the page's reconstructed supabase client; long-session JWT expiry needs `refreshSession(refresh_token)` + persisting it back to localStorage or the tab logs out; browser-extension conflict freezes CDP on heavy deal-list pages.
 
 **Today (2026-05-20) — what shipped**
 
