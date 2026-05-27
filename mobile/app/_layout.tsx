@@ -77,14 +77,21 @@ function ProtectedRouter() {
   }, [loading, session])
 
   // When the user accepts an inbound call via the native CallKit UI,
-  // the SDK fires the callInvite event. Navigate to the in-call screen
-  // so the app shows call controls (mute, speaker, hang up).
+  // the SDK fires the callInvite event. Navigate to the deal (if known)
+  // first, then open the in-call modal on top so the call controls float
+  // over the deal context. When the call ends the modal dismisses and the
+  // deal is already waiting underneath.
   useEffect(() => {
     if (loading || !session) return
     const unsub = subscribeToCallInvite((callInvite) => {
       // Navigate only after the user accepts via CallKit — not on invite delivery.
       callInvite.on('accepted', (call: any) => {
         const sid = call.getSid?.() ?? callInvite.getCallSid?.() ?? ''
+        // getCustomParameters() returns a ReadonlyMap<string, string> synchronously.
+        const dealId = callInvite.getCustomParameters?.()?.get('dealId') ?? null
+        // Push deal first so it sits under the call modal; when the call
+        // ends and the modal closes, the user lands directly on the deal.
+        if (dealId) router.push(`/deal/${dealId}`)
         router.push({ pathname: '/call/[sid]', params: { sid } })
       })
     })
