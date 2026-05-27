@@ -10517,11 +10517,16 @@ function ReplyInbox({ onSelect, limit = 100 }) {
 // thread marks its inbound messages seen. The standalone ReplyInbox/InboxView
 // is superseded by this (the "inbox" route now renders CommunicationsView).
 function CommunicationsView({ onSelect }) {
-  const [subtab, setSubtab] = useState('texting'); // 'texting' | 'calls'
+  // Unified conversation hub (Justin 2026-05-27): one combined, newest-at-top
+  // list of EVERY text thread and call across all deals — no more separate
+  // Texting/Calls tabs. Selecting a row opens it on the right (conversation
+  // for a text thread, call detail for a call). Clicking the name drills into
+  // the deal's Comms tab where the full composer lives. Realtime: a new text
+  // or call jumps to the top of the list.
   const [textFilter, setTextFilter] = useState('all'); // 'all' | 'unread'
   const [threads, setThreads] = useState(null);   // grouped text threads
   const [calls, setCalls] = useState(null);
-  const [activeKey, setActiveKey] = useState(null); // selected thread key
+  const [activeKey, setActiveKey] = useState(null); // selected feed item id
   const alive = useAliveRef();
 
   const fmtAge = (iso) => {
@@ -10609,125 +10614,172 @@ function CommunicationsView({ onSelect }) {
     loadThreads();
   };
 
-  const visibleThreads = (threads || []).filter(t => textFilter === 'all' || t.unread > 0);
-  const activeThread = (threads || []).find(t => t.key === activeKey) || null;
-
-  const tabBtn = (id, label, icon, badge) => (
-    <button onClick={() => { setSubtab(id); setActiveKey(null); }}
-      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', fontSize: 13, fontWeight: 700,
-        background: subtab === id ? '#1c1917' : 'transparent', color: subtab === id ? '#d97706' : '#78716c',
-        border: 'none', borderBottom: subtab === id ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer' }}>
-      <span>{icon}</span> {label}
-      {badge > 0 && <span style={{ background: '#ef4444', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 10, fontWeight: 700 }}>{badge}</span>}
-    </button>
-  );
-
   const totalUnread = (threads || []).reduce((n, t) => n + t.unread, 0);
+
+  // ── Unified feed: text threads + calls in one list, newest first ────
+  const feed = React.useMemo(() => {
+    const items = [];
+    (threads || []).forEach(t => items.push({
+      kind: 'thread', id: 'thread:' + t.key, ts: t.latest,
+      unread: t.unread, deal_id: t.deal_id, name: t.name, thread: t,
+    }));
+    (calls || []).forEach(c => {
+      const nm = c.contacts?.name || c.deals?.name || (c.direction === 'inbound' ? c.from_number : c.to_number) || 'Unknown';
+      items.push({ kind: 'call', id: 'call:' + c.id, ts: c.started_at, unread: 0, deal_id: c.deal_id, name: nm, call: c });
+    });
+    return items.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime());
+  }, [threads, calls]);
+
+  const loadingAll = threads === null && calls === null;
+  const visibleFeed = feed.filter(i => textFilter === 'all' || i.unread > 0);
+  const activeItem = feed.find(i => i.id === activeKey) || null;
+
+  const selectItem = (item) => {
+    setActiveKey(item.id);
+    if (item.kind === 'thread') markThreadSeen(item.thread);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 160px)', minHeight: 480 }}>
-      <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>📞 Communications</div>
-      <div style={{ fontSize: 12, color: '#78716c', marginBottom: 14 }}>Every text and call across all deals. Click a conversation to read it; click the name to drill into the deal.</div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>💬 Communications</div>
+      <div style={{ fontSize: 12, color: '#78716c', marginBottom: 14 }}>Every text and call across all deals, newest first. Click a row to open it; click the name to drill into the deal.</div>
 
-      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #292524', marginBottom: 12 }}>
-        {tabBtn('texting', 'Texting', '💬', totalUnread)}
-        {tabBtn('calls', 'Calls', '📞', 0)}
-      </div>
-
-      {subtab === 'texting' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 0, flex: 1, minHeight: 0, border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
-          {/* LEFT — thread history */}
-          <div style={{ borderRight: '1px solid #292524', display: 'flex', flexDirection: 'column', minHeight: 0, background: '#0f0d0c' }}>
-            <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1c1917', flexShrink: 0 }}>
-              {['all', 'unread'].map(f => (
-                <button key={f} onClick={() => setTextFilter(f)}
-                  style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
-                    background: textFilter === f ? '#d97706' : 'transparent', color: textFilter === f ? '#0c0a09' : '#78716c',
-                    border: `1px solid ${textFilter === f ? '#d97706' : '#292524'}` }}>
-                  {f === 'all' ? 'All' : `Unread${totalUnread ? ` (${totalUnread})` : ''}`}
-                </button>
-              ))}
-            </div>
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              {threads === null ? <div style={{ padding: 16, color: '#78716c', fontSize: 12 }}>Loading…</div>
-                : visibleThreads.length === 0 ? <div style={{ padding: 16, color: '#57534e', fontSize: 12 }}>{textFilter === 'unread' ? 'No unread messages.' : 'No conversations yet.'}</div>
-                : visibleThreads.map(t => (
-                  <button key={t.key} onClick={() => { setActiveKey(t.key); markThreadSeen(t); }}
-                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: activeKey === t.key ? '#1c1917' : 'transparent',
-                      border: 'none', borderBottom: '1px solid #1c1917', borderLeft: t.unread > 0 ? '3px solid #3b82f6' : '3px solid transparent', cursor: 'pointer' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 0, flex: 1, minHeight: 0, border: '1px solid #292524', borderRadius: 10, overflow: 'hidden' }}>
+        {/* LEFT — unified conversation list (texts + calls interleaved) */}
+        <div style={{ borderRight: '1px solid #292524', display: 'flex', flexDirection: 'column', minHeight: 0, background: '#0f0d0c' }}>
+          <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderBottom: '1px solid #1c1917', flexShrink: 0 }}>
+            {['all', 'unread'].map(f => (
+              <button key={f} onClick={() => setTextFilter(f)}
+                style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+                  background: textFilter === f ? '#d97706' : 'transparent', color: textFilter === f ? '#0c0a09' : '#78716c',
+                  border: `1px solid ${textFilter === f ? '#d97706' : '#292524'}` }}>
+                {f === 'all' ? 'All' : `Unread${totalUnread ? ` (${totalUnread})` : ''}`}
+              </button>
+            ))}
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            {loadingAll ? <div style={{ padding: 16, color: '#78716c', fontSize: 12 }}>Loading…</div>
+              : visibleFeed.length === 0 ? <div style={{ padding: 16, color: '#57534e', fontSize: 12 }}>{textFilter === 'unread' ? 'No unread messages.' : 'No conversations or calls yet.'}</div>
+              : visibleFeed.map(item => {
+                if (item.kind === 'thread') {
+                  const t = item.thread;
+                  return (
+                    <button key={item.id} onClick={() => selectItem(item)}
+                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: activeKey === item.id ? '#1c1917' : 'transparent',
+                        border: 'none', borderBottom: '1px solid #1c1917', borderLeft: t.unread > 0 ? '3px solid #3b82f6' : '3px solid transparent', cursor: 'pointer' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>💬 {t.name}</span>
+                        <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(t.latest)}</span>
+                      </div>
+                      <div style={{ fontSize: 11, color: '#a8a29e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+                        {t.lastDir === 'inbound' ? '' : '↩ '}{t.lastBody}
+                      </div>
+                    </button>
+                  );
+                }
+                // call row
+                const c = item.call;
+                return (
+                  <button key={item.id} onClick={() => selectItem(item)}
+                    style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: activeKey === item.id ? '#1c1917' : 'transparent',
+                      border: 'none', borderBottom: '1px solid #1c1917', borderLeft: '3px solid transparent', cursor: 'pointer' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</span>
-                      <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(t.latest)}</span>
+                      <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.direction === 'inbound' ? '📥' : '📤'} {item.name}
+                      </span>
+                      <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(c.started_at)}</span>
                     </div>
                     <div style={{ fontSize: 11, color: '#a8a29e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
-                      {t.lastDir === 'inbound' ? '' : '↩ '}{t.lastBody}
+                      📞 {c.direction === 'inbound' ? 'Inbound' : 'Outbound'} call · {c.status || '—'} · {fmtDur(c.duration_seconds)}{c.recording_url ? ' · 🎙' : ''}
                     </div>
                   </button>
-                ))}
-            </div>
+                );
+              })}
           </div>
-          {/* RIGHT — conversation */}
-          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, background: '#0c0a09' }}>
-            {!activeThread ? (
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13 }}>Select a conversation</div>
-            ) : (
-              <>
-                <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <button onClick={() => activeThread.deal && onSelect && onSelect(activeThread.deal.id)}
-                      disabled={!activeThread.deal}
-                      style={{ background: 'none', border: 'none', padding: 0, fontSize: 14, fontWeight: 700, color: activeThread.deal ? '#d97706' : '#fafaf9', cursor: activeThread.deal ? 'pointer' : 'default', textAlign: 'left' }}>
-                      {activeThread.name}{activeThread.deal ? ' →' : ''}
-                    </button>
-                    <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{activeThread.counterpart}{activeThread.deal ? ` · ${activeThread.deal.name}` : ''}</div>
-                  </div>
-                  {activeThread.deal && (
-                    <button onClick={() => onSelect && onSelect(activeThread.deal.id)} style={{ ...btnGhost, fontSize: 11, padding: '5px 10px' }}>Open in deal →</button>
-                  )}
+        </div>
+
+        {/* RIGHT — detail: conversation for a thread, call card for a call */}
+        <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, background: '#0c0a09' }}>
+          {!activeItem ? (
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13 }}>Select a conversation or call</div>
+          ) : activeItem.kind === 'thread' ? (
+            <>
+              <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <button onClick={() => activeItem.thread.deal && onSelect && onSelect(activeItem.thread.deal.id)}
+                    disabled={!activeItem.thread.deal}
+                    style={{ background: 'none', border: 'none', padding: 0, fontSize: 14, fontWeight: 700, color: activeItem.thread.deal ? '#d97706' : '#fafaf9', cursor: activeItem.thread.deal ? 'pointer' : 'default', textAlign: 'left' }}>
+                    {activeItem.thread.name}{activeItem.thread.deal ? ' →' : ''}
+                  </button>
+                  <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{activeItem.thread.counterpart}{activeItem.thread.deal ? ` · ${activeItem.thread.deal.name}` : ''}</div>
                 </div>
-                <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
-                  {activeThread.ordered.map(m => (
-                    <div key={m.id} style={{ alignSelf: m.direction === 'inbound' ? 'flex-start' : 'flex-end', maxWidth: '75%' }}>
-                      <div style={{ background: m.direction === 'inbound' ? '#1c1917' : '#1e3a5f', color: '#fafaf9', borderRadius: 12, padding: '8px 12px', fontSize: 13, lineHeight: 1.4 }}>
-                        {m.body}
-                        {m.media_url && <div style={{ marginTop: 6 }}><img src={m.media_url} alt="media" style={{ maxWidth: 180, borderRadius: 8 }} /></div>}
+                {activeItem.thread.deal && (
+                  <button onClick={() => onSelect && onSelect(activeItem.thread.deal.id)} style={{ ...btnGhost, fontSize: 11, padding: '5px 10px' }}>Open in deal →</button>
+                )}
+              </div>
+              <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
+                {activeItem.thread.ordered.map(m => (
+                  <div key={m.id} style={{ alignSelf: m.direction === 'inbound' ? 'flex-start' : 'flex-end', maxWidth: '75%' }}>
+                    <div style={{ background: m.direction === 'inbound' ? '#1c1917' : '#1e3a5f', color: '#fafaf9', borderRadius: 12, padding: '8px 12px', fontSize: 13, lineHeight: 1.4 }}>
+                      {m.body}
+                      {m.media_url && <div style={{ marginTop: 6 }}><img src={m.media_url} alt="media" style={{ maxWidth: 180, borderRadius: 8 }} /></div>}
+                    </div>
+                    <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>
+                      {fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}
+                      {m.direction !== 'inbound' && (m.read_at ? ' · ✓✓ Read' : m.delivered_at ? ' · ✓ Delivered' : '')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            /* call detail */
+            (() => {
+              const c = activeItem.call;
+              return (
+                <>
+                  <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <button onClick={() => c.deal_id && onSelect && onSelect(c.deal_id)}
+                        disabled={!c.deal_id}
+                        style={{ background: 'none', border: 'none', padding: 0, fontSize: 14, fontWeight: 700, color: c.deal_id ? '#d97706' : '#fafaf9', cursor: c.deal_id ? 'pointer' : 'default', textAlign: 'left' }}>
+                        {activeItem.name}{c.deal_id ? ' →' : ''}
+                      </button>
+                      <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.direction === 'inbound' ? c.from_number : c.to_number}{c.deals?.name ? ` · ${c.deals.name}` : ''}</div>
+                    </div>
+                    {c.deal_id && (
+                      <button onClick={() => onSelect && onSelect(c.deal_id)} style={{ ...btnGhost, fontSize: 11, padding: '5px 10px' }}>Open in deal →</button>
+                    )}
+                  </div>
+                  <div style={{ flex: 1, overflowY: 'auto', padding: '14px', minHeight: 0 }}>
+                    <div style={{ background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>
+                        {c.direction === 'inbound' ? '📥 Inbound call' : '📤 Outbound call'}
                       </div>
-                      <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>
-                        {fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}
-                        {/* D1: iMessage delivery/read receipt on outbound bubbles */}
-                        {m.direction !== 'inbound' && (m.read_at ? ' · ✓✓ Read' : m.delivered_at ? ' · ✓ Delivered' : '')}
+                      <div style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.7 }}>
+                        Status: <span style={{ color: '#e7e5e4' }}>{c.status || '—'}</span><br/>
+                        Duration: <span style={{ color: '#e7e5e4', fontFamily: "'DM Mono', monospace" }}>{fmtDur(c.duration_seconds)}</span><br/>
+                        When: <span style={{ color: '#e7e5e4' }}>{c.started_at ? new Date(c.started_at).toLocaleString() : '—'}</span>
                       </div>
                     </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      ) : (
-        /* CALLS sub-tab */
-        <div style={{ flex: 1, overflowY: 'auto', border: '1px solid #292524', borderRadius: 10, minHeight: 0 }}>
-          {calls === null ? <div style={{ padding: 16, color: '#78716c', fontSize: 12 }}>Loading…</div>
-            : calls.length === 0 ? <div style={{ padding: 16, color: '#57534e', fontSize: 12 }}>No calls yet.</div>
-            : calls.map(c => {
-              const name = c.contacts?.name || c.deals?.name || (c.direction === 'inbound' ? c.from_number : c.to_number) || 'Unknown';
-              return (
-                <div key={c.id} onClick={() => c.deal_id && onSelect && onSelect(c.deal_id)}
-                  style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderBottom: '1px solid #1c1917', cursor: c.deal_id ? 'pointer' : 'default' }}>
-                  <span style={{ fontSize: 18 }}>{c.direction === 'inbound' ? '📥' : '📤'}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{name}{c.deals?.name ? ` · ${c.deals.name}` : ''}</div>
-                    <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.direction === 'inbound' ? c.from_number : c.to_number} · {c.status || '—'} · {fmtDur(c.duration_seconds)}</div>
-                    {/* F1: AI summary of what the call was about (from transcript) */}
-                    {c.summary && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 3, fontStyle: 'italic', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>🧠 {c.summary}</div>}
+                    {c.recording_url && (
+                      <audio controls src={c.recording_url} style={{ width: '100%', height: 38, marginBottom: 12 }}>
+                        Your browser does not support audio playback.
+                      </audio>
+                    )}
+                    {c.summary && (
+                      <div style={{ background: '#0f0d0c', border: '1px solid #292524', borderRadius: 10, padding: '12px 14px' }}>
+                        <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>🧠 Call summary</div>
+                        <div style={{ fontSize: 13, color: '#e7e5e4', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>{c.summary}</div>
+                      </div>
+                    )}
                   </div>
-                  {c.recording_url && <span title="Has recording" style={{ fontSize: 14 }}>🎙</span>}
-                  <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(c.started_at)} ago</span>
-                </div>
+                </>
               );
-            })}
+            })()
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
