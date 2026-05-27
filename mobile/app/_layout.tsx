@@ -5,13 +5,14 @@
  */
 
 import { useEffect } from 'react'
+import { AppState } from 'react-native'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
 import { registerForPushAsync, subscribeToNotificationTaps } from '../lib/push'
-import { initVoice, teardownVoice } from '../lib/voice'
+import { initVoice, teardownVoice, subscribeToCallInvite, getVoice } from '../lib/voice'
 import { useUnreadCount } from '../lib/notifications'
 
 // Hold the splash screen until we've had ~1s to settle. Without this,
@@ -74,6 +75,46 @@ function ProtectedRouter() {
       teardownVoice().catch(() => {})
     }
   }, [loading, session])
+
+  // When the user accepts an inbound call via the native CallKit UI,
+  // the SDK fires the callInvite event. Navigate to the in-call screen
+  // so the app shows call controls (mute, speaker, hang up).
+  useEffect(() => {
+    if (loading || !session) return
+    const unsub = subscribeToCallInvite((callInvite) => {
+      // Navigate only after the user accepts via CallKit — not on invite delivery.
+      callInvite.on('accepted', (call: any) => {
+        const sid = call.getSid?.() ?? callInvite.getCallSid?.() ?? ''
+        router.push({ pathname: '/call/[sid]', params: { sid } })
+      })
+    })
+    return unsub
+  }, [loading, session, router])
+
+  // Dynamic Island / green pill tap: when iOS brings the app to the
+  // foreground while a call is active, navigate to the in-call screen.
+  // Without this, tapping the green pill opens the app but nothing
+  // happens because there's no code checking for an active call.
+  useEffect(() => {
+    if (loading || !session) return
+    const subscription = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active') return
+      const voice = getVoice()
+      if (!voice) return
+      try {
+        const calls = await voice.getCalls()
+        if (calls.size > 0) {
+          const sid = [...calls.keys()][0]
+          if (sid) {
+            router.push({ pathname: '/call/[sid]', params: { sid } })
+          }
+        }
+      } catch {
+        // No active calls or SDK unavailable — nothing to do.
+      }
+    })
+    return () => subscription.remove()
+  }, [loading, session, router])
 
   // Notification-tap routing. Different payloads land you in different
   // places. Set on the server side when firing the push.

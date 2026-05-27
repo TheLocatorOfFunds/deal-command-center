@@ -31,16 +31,20 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "racin2701@yahoo.com",
         "ascAppId": "6768752406",
-        "appleTeamId": "8RJDH7L35Q"
+        "appleTeamId": "8RJDH7L35Q",
+        "ascApiKeyPath": "/Users/justinjohnson/.appstoreconnect/private_keys/AuthKey_R79VDA2SMJ.p8",
+        "ascApiKeyIssuerId": "d6deea26-4f16-4e54-89e7-c52415af4921",
+        "ascApiKeyId": "R79VDA2SMJ"
       }
     },
     "preview": {
       "ios": {
-        "appleId": "racin2701@yahoo.com",
         "ascAppId": "6768752406",
-        "appleTeamId": "8RJDH7L35Q"
+        "appleTeamId": "8RJDH7L35Q",
+        "ascApiKeyPath": "/Users/justinjohnson/.appstoreconnect/private_keys/AuthKey_R79VDA2SMJ.p8",
+        "ascApiKeyIssuerId": "d6deea26-4f16-4e54-89e7-c52415af4921",
+        "ascApiKeyId": "R79VDA2SMJ"
       }
     }
   }

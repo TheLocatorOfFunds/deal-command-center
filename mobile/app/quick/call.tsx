@@ -30,6 +30,7 @@ import { Stack, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
+import { placeCallIn } from '../../lib/voice'
 
 type ContactHit = {
   id: string
@@ -78,6 +79,16 @@ export default function QuickCallScreen() {
     if (!target.trim() || busy) return
     setBusy(true)
     try {
+      // Try the SDK path first. If Voice SDK is initialized it returns a
+      // Call object — navigate to the in-call screen immediately.
+      const sdkResult = await placeCallIn(target)
+      if (sdkResult.ok && sdkResult.call) {
+        const sid = sdkResult.call.getSid?.() ?? ''
+        router.push({ pathname: '/call/[sid]', params: { sid } })
+        return
+      }
+
+      // SDK not initialized — fall back to the legacy bridge-callback flow.
       const result = await placeCall(target)
       if (result.ok) {
         Alert.alert(

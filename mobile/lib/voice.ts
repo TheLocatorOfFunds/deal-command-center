@@ -226,7 +226,7 @@ export async function initVoice(): Promise<boolean> {
   // eventually fires Call.Event.Connected. We notify subscribers (e.g.
   // the root layout) so the app can navigate to the in-call screen.
   voice.on(Voice.Event.CallInvite, async (callInvite: CallInvite) => {
-    const from = await callInvite.getFrom().catch(() => 'unknown')
+    const from = callInvite.getFrom() ?? 'unknown'
     console.log('[voice] callInvite received from', from)
 
     // Diagnostic write to Supabase — lets us confirm the callInvite event
@@ -238,7 +238,7 @@ export async function initVoice(): Promise<boolean> {
       if (session.session) {
         await supabase.from('call_logs')
           .update({ status: 'ringing' })
-          .eq('twilio_call_sid', callInvite.getCallSid ? await callInvite.getCallSid().catch(() => '') : '')
+          .eq('twilio_call_sid', callInvite.getCallSid?.() ?? '')
           .then(() => {}) // fire-and-forget
       }
     } catch {}
