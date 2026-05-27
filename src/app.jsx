@@ -1832,7 +1832,7 @@ function DealCommandCenter({ session, profile }) {
                     {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
                     {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
                     {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
-                    {engagementCount > 0 && <button onClick={() => { setActiveDealId(null); setView('attention'); try { localStorage.setItem('dcc_engagement_seen_at', new Date().toISOString()); } catch (e) {} setEngagementCount(0); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fdba74', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🔥 <span style={{ flex: 1 }}>{engagementCount} new lead signal{engagementCount !== 1 ? 's' : ''} (opens + chats)</span></button>}
+                    {engagementCount > 0 && <button onClick={() => { setActiveDealId(null); setView('today'); try { localStorage.setItem('dcc_engagement_seen_at', new Date().toISOString()); } catch (e) {} setEngagementCount(0); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fdba74', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🔥 <span style={{ flex: 1 }}>{engagementCount} new lead signal{engagementCount !== 1 ? 's' : ''} (opens + chats)</span></button>}
                     {pendingWalkthroughs.length > 0 && <button onClick={() => setShowWalkthroughs(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🏠 <span style={{ flex: 1 }}>{pendingWalkthroughs.length} walkthrough{pendingWalkthroughs.length !== 1 ? 's' : ''}</span></button>}
                     {pendingOffersCount > 0 && <button onClick={() => { sb.from('investor_offers').select('deal_id').in('status', ['new','pof-requested','pof-confirmed']).order('submitted_at', {ascending:false}).limit(1).then(({data}) => { if (data?.[0]) setActiveDealId(data[0].deal_id); }); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#6ee7b7', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>💰 <span style={{ flex: 1 }}>{pendingOffersCount} investor offer{pendingOffersCount !== 1 ? 's' : ''}</span></button>}
                     {isOwner && systemAlertCount > 0 && <button onClick={() => setShowSystemAlerts(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fca5a5', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚠ <span style={{ flex: 1 }}>{systemAlertCount} system alert{systemAlertCount !== 1 ? 's' : ''}</span></button>}
@@ -10506,7 +10506,6 @@ function AttentionView({ deals, onSelect }) {
         </div>
       </div>
       <DeadlineAlertStrip onSelect={onSelect} />
-      <LeadEngagementStrip deals={deals} onSelect={onSelect} />
     </div>
   );
 
@@ -12725,6 +12724,11 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
       {/* Conversion funnel — Prep → Ready → Texted → Responded → Signed */}
       <ConversionFunnel deals={deals} setView={setView} />
+
+      {/* 🔥 Warm leads — who opened their link / chatted with Lauren recently.
+          Relocated here from the Deadlines screen (2026-05-27) so it sits with
+          your daily work; the 🔔 bell's engagement row now lands here. */}
+      <LeadEngagementStrip deals={deals} onSelect={onSelect} />
 
       {/* AI Automations Queue — compact list, click navigates to deal Comms tab */}
       <AutomationsQueue onSelectDeal={onSelect} />
