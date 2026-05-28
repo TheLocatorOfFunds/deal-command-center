@@ -212,6 +212,11 @@ async function _doInitVoice(): Promise<boolean> {
     voice = null
     return false
   }
+  // Guard: teardownVoice() may have nulled voice while we were sleeping in the
+  // retry loop (e.g. user signed out during the 1.5s PushKit warm-up). In that
+  // case the loop breaks with lastErr=null (never set), so the check above
+  // doesn't fire. Bail here rather than crashing on voice.on() below.
+  if (!voice) return false
   console.log('[voice] registered with Twilio (PushKit ready)')
 
   // Write success to Supabase — ground-truth confirmation the device is

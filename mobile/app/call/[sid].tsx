@@ -13,7 +13,7 @@
  * output (matches iOS native call behavior).
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -31,6 +31,9 @@ export default function CallScreen() {
 
   const [call, setCall] = useState<Call | null>(null)
   const [state, setState] = useState<string>('connecting')
+  // Prevents the onDisconnected auto-dismiss from firing a second router.back()
+  // when the user tapped End themselves (hangUp already calls router.back()).
+  const hangingUpRef = useRef(false)
   const [muted, setMuted] = useState(false)
   const [onSpeaker, setOnSpeaker] = useState(false)
   const [dealName, setDealName] = useState<string | null>(null)
@@ -66,8 +69,13 @@ export default function CallScreen() {
     const onConnected = () => setState('connected')
     const onDisconnected = () => {
       setState('ended')
-      // Dismiss after a beat so the user sees "Ended"
-      setTimeout(() => router.back(), 1200)
+      // Dismiss after a beat so the user sees "Ended" — but only if hangUp()
+      // hasn't already called router.back() itself (e.g. user tapped End).
+      // Without this guard, hangUp triggers Disconnected which schedules a
+      // second back(), causing the deal page to also pop 1.2s later.
+      if (!hangingUpRef.current) {
+        setTimeout(() => router.back(), 1200)
+      }
     }
     const onReconnecting = () => setState('reconnecting')
     const onReconnected = () => setState('connected')
@@ -161,6 +169,9 @@ export default function CallScreen() {
       router.back()
       return
     }
+    // Set the flag BEFORE disconnect() — the Disconnected event can fire
+    // synchronously inside that await, and we need the guard in place.
+    hangingUpRef.current = true
     try {
       await call.disconnect()
     } catch {}
