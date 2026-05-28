@@ -677,6 +677,89 @@ Use the Claude-in-Chrome MCP tools to QA directly in the browser, not just by re
 - Realtime subscription not firing on edge-function DB writes → use polling fallback (3s interval already in place)
 - `firedRef` Set needed to prevent double-calling edge functions across React re-renders
 
+## Pre-ship verification — rules from real shipped-then-rebroke bugs
+
+Hard rules learned from regressions. **Add to this list every time we ship
+something that breaks in a recognizable pattern.** Boris Cherny's principle:
+*"Claude is eerily good at writing rules for itself from its own failures."*
+The moment something rebreaks, ask: "what rule would have caught this?" →
+append it here.
+
+### Multi-path EF changes — test BOTH gateway branches
+**Pattern:** `send-sms` has two code paths (`gateway === 'mac_bridge'` vs
+Twilio fallback). A fix on one branch is NOT a fix on the other. Today's
+text-splitting bug was shipped twice — first the iMessage path (`#235`,
+2026-05-27), then the Twilio path (2026-05-28) because PR #211 had already
+made Twilio the default sender on 5/24.
+
+**Rule:** Any change to `send-sms`, `receive-sms`, or any other EF with
+explicit `if (gateway === X)` branches must:
+1. Identify every branch the change might affect.
+2. Reason explicitly about whether each branch needs the same fix.
+3. After deploy, send a real test message on each gateway and verify in
+   `messages_outbound` that segment count = 1 (or expected value).
+
+Same principle for any EF with a router pattern (channel switching,
+provider failover, etc.).
+
+### Surplus disbursement math — verify the line items add to the sale price
+**Pattern:** A "no surplus" text to a homeowner is a high-cost error —
+if the homeowner later sees the disbursement and learns we wrote them
+off prematurely, the relationship is gone. On 2026-05-28 a draft "no
+surplus" text was almost sent for Joseph Beitko (case 2025-CV-00945)
+when in fact line (k) of the Confirmation Entry was a blank balance
+holding ~$27,944 pending further order.
+
+**Rule:** Before writing a "no surplus" text to a homeowner:
+1. Add up every itemized distribution (a-j in a standard Ohio Confirmation
+   Entry).
+2. Compute `balance = sale_price - sum(distributions)`.
+3. If `balance > 0`, the surplus exists. Use the `/surplus-math` skill to
+   formalize this — never eyeball it.
+4. A blank line (k) in the proposed entry means the court has not yet
+   filled in the balance — it does NOT mean the balance is zero.
+5. If we believe supplemental claims will consume the balance, NAME the
+   specific claim (post-judgment interest amount, attorney-fee motion, etc.)
+   rather than handwaving "Lakeview will probably take it." If we can't
+   name it, the homeowner has surplus.
+
+### Post-deploy verification — committed ≠ live
+**Pattern:** "I committed the fix" is not "the fix is running in prod."
+Today's send-sms regression: we declared #235 done because the commit
+landed, then it took Nathan hitting the bug again to learn the deploy
+either didn't take, didn't cover the active code path, or shipped to a
+function path that wasn't actually being called.
+
+**Rule:** After any EF deploy (Justin's or ours), verify the deployed
+behavior — not just the commit — before declaring done:
+1. Trigger the EF with a real test scenario (or query for the most recent
+   real invocation).
+2. Confirm the output matches the expected behavior.
+3. If the deploy is gated on a remote owner (Justin deploys, we wait),
+   the "done" flag waits with it. **The PR is "ready for deploy," not
+   "shipped."**
+
+Use the `verify-deploy` skill (`.claude/skills/verify-deploy/`) which
+encodes this for known EFs.
+
+### Article-derived: high-leverage habits to compound
+From the 2026-05-28 Claude Code Mastery review:
+
+- **Default to plan mode** for any change touching > 1 file. `Shift+Tab`
+  twice. Edit the plan with `Ctrl+G` before letting code generation start.
+- **Delegate, don't pair-program.** Cat Wu (Anthropic): *"The model performs
+  best if you treat it like an engineer you're delegating to."* For
+  well-bounded tasks (draft this text, ship this migration), set a `/goal`
+  and verify the output — don't narrate each step.
+- **Use `/voice` for prompting.** ~3× faster than typing per the article's
+  author; prompts get longer + more detailed.
+- **Worktrees as default for parallel sessions.** Right now Justin's session
+  and Nathan's session both push to `src/app.jsx` on `main` and constantly
+  rebase. `claude --worktree <feature>` isolates per stream. The Stop hook
+  already handles per-worktree subsections in `WORKING_ON.md`.
+- **`/code-review` before push to main** — when the plugin is installed,
+  run it on any change touching DCC UI, EFs, or migrations.
+
 ## Inventory & status outputs — verify before rendering
 
 Anytime a session is asked to produce a "what we have" / "what we use" /
