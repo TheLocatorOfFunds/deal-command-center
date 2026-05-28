@@ -2080,13 +2080,11 @@ function DealCommandCenter({ session, profile }) {
       {/* ── end header ── */}
       <div style={{ flex: 1, padding: '20px 24px', minWidth: 0, overflowY: 'auto' }}>
 
-      {/* Welcome-back unread chat banner. Persistent indicator that
-          messages are waiting — visible from EVERY view, not just the
-          chat tab. Click → opens chat. Dismisses on click or via the ×
-          button; reappears on the next new message (when unreadChatCount
-          climbs above the dismissal floor). Per Nathan 2026-05-01 — VAs
-          weren't noticing the small header badge when returning to DCC. */}
-      {isTeam && unreadChatCount > 0 && unreadChatCount > chatBannerDismissedAt && (
+      {/* Welcome-back unread chat banner — HIDDEN 2026-05-28 per Justin.
+          The Chat sidebar badge still shows the count; the full-width
+          banner above the page was redundant noise. Code preserved so we
+          can flip it back on if VAs miss the cue. */}
+      {false && isTeam && unreadChatCount > 0 && unreadChatCount > chatBannerDismissedAt && (
         <div
           onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); markAllChatRead(); }}
           style={{
@@ -3260,10 +3258,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       )}
 
       {/* Hub sub-chips — second-level nav inside sidebar sections.
-          Outreach:  Drafts & Replies · Inbox · Leads · Forecast
+          Outreach:  Drafts & Replies · Inbox · Leads · Forecast → HIDDEN 2026-05-28
+                     per Justin. AutomationsView owns Automations now; the old
+                     four-chip strip is dead weight. Code preserved so we can
+                     turn pieces back on selectively.
           Deals:     New Leads · Active · Flagged · Hygiene · Closed · Kanban
           Insights:  Reports · Analytics · Traffic */}
-      {["outreach", "inbox", "leads", "forecast"].includes(view) && (
+      {false && ["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("outreach", "🤖 Drafts & Replies")}
           {chipBtn("inbox", "📬 Inbox")}
@@ -3516,7 +3517,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && view !== "comms" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
