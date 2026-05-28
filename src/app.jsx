@@ -226,6 +226,50 @@ const isDeceased = (deal) => !!(deal?.death_signal || deal?.meta?.deceased);
 // it (the legacy ✓ CLEAN signal — merged 2026-05-21 so there's one status).
 const isReadyForOutreach = (deal) => !!(deal?.prepped_at || deal?.meta?.verified);
 
+// ─── Phase-1 deceased-lead readiness gate (Nathan 2026-05-28) ─────────
+// Before a deceased lead can be marked Ready for Outreach, the team needs:
+//   (1) Proof of death — an obituary / death-notice document attached.
+//   (2) At least one living, callable human linked as a contact (relative,
+//       heir, neighbor, friend). Keeping the homeowner's old phone numbers
+//       is fine for context, but they don't count as "ready" alone.
+// Pattern shared with the deceasedReachable effect — what we treat as a
+// living relative/heir/neighbor/friend in any contact_deals relationship.
+const RELATIVE_PATTERN = /(family|relative|spouse|husband|wife|child|children|daughter|son|parent|mother|father|sibling|brother|sister|cousin|niece|nephew|grandchild|heir|estate|executor|administrator|beneficiary|neighbou?r|in-law|friend)/i;
+
+// Does an attached document look like an obituary / death notice? Combines
+// Claude Vision OCR's document_type with filename + summary fallbacks so any
+// of the three signals counts as proof of death.
+const isObituaryDoc = (doc) => {
+  if (!doc) return false;
+  const dt = (doc.extracted && doc.extracted.document_type) || '';
+  if (/obit|death.?notice|death.?certificate/i.test(dt)) return true;
+  const name = (doc.name || '').toLowerCase();
+  if (/obit|death\W{0,3}notice|death\W{0,3}cert/i.test(name)) return true;
+  const summary = ((doc.extracted && doc.extracted.summary) || '').slice(0, 240);
+  if (/obituary|death notice|passed away|deceased/i.test(summary)) return true;
+  return false;
+};
+
+// Async deceased-readiness probe — for a deceased deal about to be marked
+// Ready, fetches the deal's documents + contact_deals and reports whether
+// the two Phase-1 requirements are met. Mark Ready handlers call this and
+// hard-block with a clear modal if either flag comes back false.
+async function fetchDeceasedReadinessExtras(dealId) {
+  const [docsRes, contactsRes] = await Promise.all([
+    sb.from('documents').select('id, name, extracted').eq('deal_id', dealId),
+    sb.from('contact_deals').select('relationship, contacts(kind, kind_other)').eq('deal_id', dealId),
+  ]);
+  const docs = docsRes.data || [];
+  const links = contactsRes.data || [];
+  const hasObituary = docs.some(isObituaryDoc);
+  const hasLivingContact = links.some(cd => {
+    const rel = (cd.relationship || '').trim();
+    const kind = ((cd.contacts && (cd.contacts.kind_other || cd.contacts.kind)) || '').trim();
+    return RELATIVE_PATTERN.test(rel) || RELATIVE_PATTERN.test(kind);
+  });
+  return { hasObituary, hasLivingContact };
+}
+
 // Shared lead-readiness check — what a surplus lead still needs before it's
 // Ready for Outreach. SINGLE SOURCE OF TRUTH used by BOTH the Today→Prep Queue
 // gate AND the Leads-list "Mark Ready" button, so the two can't drift (the
@@ -13211,6 +13255,23 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
   const prepMissing = (d) => leadMissing(d, deceasedReachable.has(d.id));
 
   const markPrepped = async (dealId) => {
+    // Phase-1 deceased gate (Nathan 2026-05-28): same hard block as the
+    // Leads-list Mark Ready button — can't prep a deceased lead without an
+    // obituary doc + a living contact.
+    const dealForGate = deals.find(d => d.id === dealId);
+    if (dealForGate && isDeceased(dealForGate)) {
+      const { hasObituary, hasLivingContact } = await fetchDeceasedReadinessExtras(dealId);
+      if (!hasObituary || !hasLivingContact) {
+        const needs = [];
+        if (!hasObituary) needs.push('• Obituary or death-notice doc attached to the deal');
+        if (!hasLivingContact) needs.push('• At least one living contact (relative / heir / neighbor / friend) linked');
+        alert(
+          `Can't mark Ready — ${dealForGate.name || dealId} is marked deceased. Prove it:\n\n${needs.join('\n')}\n\n` +
+          `Keeping old phone numbers for context is fine; you need a living human to actually call.`
+        );
+        return;
+      }
+    }
     // Optimistic: pull it out of the visible queue immediately.
     setRecentlyPrepped(prev => { const n = new Set(prev); n.add(dealId); return n; });
     const { error } = await sb.from('deals').update({ prepped_at: new Date().toISOString() }).eq('id', dealId);
@@ -13848,6 +13909,23 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
   const toggleReady = async (val) => {
     if (savingReady) return;
     setSavingReady(true);
+    // Phase-1 deceased gate (Nathan 2026-05-28): can't mark Ready unless an
+    // obituary doc is attached AND a living contact (relative/heir/neighbor)
+    // is linked. Pure block — the homeowner's old phones don't count alone.
+    if (val && isDeceased(deal)) {
+      const { hasObituary, hasLivingContact } = await fetchDeceasedReadinessExtras(deal.id);
+      if (!hasObituary || !hasLivingContact) {
+        setSavingReady(false);
+        const needs = [];
+        if (!hasObituary) needs.push('• Obituary or death-notice doc attached to the deal');
+        if (!hasLivingContact) needs.push('• At least one living contact (relative / heir / neighbor / friend) linked');
+        alert(
+          `Can't mark Ready — this lead is marked deceased. Prove it:\n\n${needs.join('\n')}\n\n` +
+          `Keeping the homeowner's old phone numbers is fine for context, but you need a living human to actually call.`
+        );
+        return;
+      }
+    }
     setReady(val); // optimistic
     const { error } = await sb.from('deals').update({
       prepped_at: val ? new Date().toISOString() : null,
