@@ -723,6 +723,43 @@ holding ~$27,944 pending further order.
    rather than handwaving "Lakeview will probably take it." If we can't
    name it, the homeowner has surplus.
 
+### AI-generated statute / legal citations — verify against the actual code before any action
+**Pattern:** The `case_intel_summary` AI brief on Sandra Riley's deal
+(`surplus-mohnmestadxr`, 2025 CV 0076, Greene County) opened with:
+*"Ohio's 60-day claim deadline under ORC §2329.52 expired 05/26/26 — we
+are 2 days past deadline today."* It then prescribed "Emergency action
+required TODAY: Call Greene County Clerk... ask if late claim motion is
+possible under §2329.52(B) extraordinary circumstances provision." On
+verification 2026-05-29: **ORC 2329.52 governs new appraisements + auction
+payment terms; it has no 60-day deadline, no §(B) extraordinary
+circumstances provision, no surplus-claim timing rules at all.** The AI
+fabricated the citation, the subsection, the deadline, AND the legal
+remedy. If a caller had acted on the brief: panic call at 11pm, possibly
+retain emergency counsel, possibly file an unnecessary motion — on a
+non-existent legal premise.
+
+**Rule:** AI-generated statute / case-law / legal-authority citations
+**must be verified against the actual code before any action is taken
+or any text is sent to a homeowner.** Specifically:
+
+1. **Never quote a section number from a case-intel brief without
+   pulling the actual text.** Don't trust pattern-matched citations
+   like "ORC §X.YY(B)" — the model invents subsection letters routinely.
+2. **No deadline urgency derived from an AI-cited statute** should
+   trigger a homeowner call, attorney retention, or any external action
+   without first opening the actual ORC section at codes.ohio.gov.
+3. **If the brief says "verify with counsel,"** that's the model
+   correctly disclaiming. If it says "deadline expired under §X.YY,"
+   that's the model overconfident — treat as suspect.
+4. Same applies to any AI-generated reference to USC sections, FRCP
+   numbers, state codes of any other jurisdiction, or named case law.
+   The model has no grounding source for these and will pattern-match.
+
+**Connected to:** issue #270 (prompt hardening for `generate-case-summary`),
+the `verify-deploy` skill (verify the function deployed), the `surplus-math`
+skill (verify the math). Same family of "verify before declaring done"
+extended to AI-cited legal authority.
+
 ### Post-deploy verification — committed ≠ live
 **Pattern:** "I committed the fix" is not "the fix is running in prod."
 Today's send-sms regression: we declared #235 done because the commit
