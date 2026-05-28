@@ -33,8 +33,7 @@
         "ITSAppUsesNonExemptEncryption": false
       },
       "entitlements": {
-        "aps-environment": "production",
-        "com.apple.developer.pushkit.unrestricted-voip": true
+        "aps-environment": "production"
       }
     },
     "android": {

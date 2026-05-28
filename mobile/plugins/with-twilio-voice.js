@@ -9,12 +9,10 @@
  *     SDK's pod when the Podfile picks it up — no manual link needed)
  *   - "voip" background mode in the UIBackgroundModes Info.plist key
  *
- * Does NOT add the VoIP entitlement here — that lives in app.json
- * as `com.apple.developer.pushkit.unrestricted-voip: true`. Without
- * that entitlement iOS never fires didUpdatePushCredentials on
- * PKPushRegistry and every voice.register() call fails with
- * "Failed to initialize PushKit device token". aps-environment does
- * NOT cover PushKit — they are separate entitlements.
+ * Does NOT touch entitlements — aps-environment in app.json covers
+ * standard APNs. PushKit VoIP token delivery requires a VoIP Services
+ * certificate registered on the App ID in the Apple Developer portal
+ * and uploaded to Twilio's console (not an app.json entitlement).
  *
  * Reference:
  *   https://docs.expo.dev/config-plugins/development-and-debugging/

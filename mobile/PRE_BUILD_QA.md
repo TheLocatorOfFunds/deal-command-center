@@ -29,18 +29,19 @@ Before using any SDK method, confirm it exists in the type definitions:
 grep -r "methodName" node_modules/@twilio/voice-react-native-sdk/lib/
 ```
 
-**VoIP entitlement (app.json) — MUST be present or PushKit never fires:**
-```json
-"entitlements": {
-  "aps-environment": "production",
-  "com.apple.developer.pushkit.unrestricted-voip": true
-}
-```
-`aps-environment` covers APNs only. PushKit (VoIP) requires its own separate
-entitlement. Without it, iOS never fires `didUpdatePushCredentials` on
-`PKPushRegistry`, and every `voice.register()` call fails with
-"Failed to initialize PushKit device token" — forever, regardless of retries.
-This was the root cause of ALL registration failures from Build 14 through Build 17.
+**VoIP push setup — what lives where:**
+- `app.json` entitlements: `aps-environment: production` only. Do NOT add
+  `com.apple.developer.pushkit.unrestricted-voip` — it is NOT a registerable
+  Apple Developer portal capability. Adding it causes a provisioning profile
+  code signing error on every build.
+- `UIBackgroundModes: voip + audio` — already handled by the Twilio plugin.
+- VoIP Services certificate — must exist in the Apple Developer portal for
+  `com.fundlocators.dcc` AND be uploaded to the Twilio console. Without it,
+  Apple never issues PushKit VoIP tokens to the device and `didUpdatePushCredentials`
+  never fires, causing every `voice.register()` to fail with
+  "Failed to initialize PushKit device token" regardless of retry count.
+  Check: developer.apple.com → Certificates → look for type "VoIP Services"
+  for bundle ID `com.fundlocators.dcc`. Also check Twilio Console → Voice → Push Credentials.
 
 **Known SDK gotchas (voice-react-native-sdk):**
 - `initializePushRegistry()` - DOES NOT EXIST. Removed in newer versions.
