@@ -8270,7 +8270,11 @@ function RelayDealPanel({ deal, touch, onApprove, onSkip, onClose, onOpenDeal, s
 }
 
 // ─── Relay View ──────────────────────────────────────────────────
-function RelayView({ supabase, onOpenDeal }) {
+// `mode` (added 2026-05-28 by Justin's restructure):
+//   'ready'    → render only Pending Approval + RVM approvals (the work-to-do surface)
+//   'enrolled' → render only Status bar + Enrollments table + Scan Now
+//   undefined  → render everything (legacy behavior, if anyone still mounts it bare)
+function RelayView({ supabase, onOpenDeal, mode }) {
   const [enrollments, setEnrollments] = React.useState([])
   const [sequences, setSequences] = React.useState({})
   const [pendingTouches, setPendingTouches] = React.useState([])
@@ -8370,7 +8374,12 @@ function RelayView({ supabase, onOpenDeal }) {
         ...rvmEnriched.map(t => t.deal_id).filter(Boolean),
       ])]
       if (dealIds.length) {
-        const { data: dealRows } = await supabase.from('deals').select('id, name, address').in('id', dealIds)
+        // Pull enough deal context for OutreachDraftPanel (the full coaching
+        // modal we embed per row in Ready to Approve) — it reads meta for
+        // county/surplus/phone and lead_tier for the header badges.
+        const { data: dealRows } = await supabase.from('deals')
+          .select('id, name, address, status, lead_tier, type, surplus_estimate, days_to_sale, meta')
+          .in('id', dealIds)
         const dealMap = {}
         for (const d of (dealRows || [])) dealMap[d.id] = d
         setDeals(dealMap)
@@ -8589,32 +8598,53 @@ function RelayView({ supabase, onOpenDeal }) {
     <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>Loading Relay...</div>
   )
 
+  // Section visibility driven by `mode` (Justin restructure 2026-05-28).
+  // 'ready'    → Pending Approval + RVM Approvals + Scan Now (work to do)
+  // 'enrolled' → Status bar + Enrollments table + Refresh (post-approval view)
+  // undefined  → everything (legacy)
+  const showReady    = !mode || mode === 'ready'
+  const showEnrolled = !mode || mode === 'enrolled'
+
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
 
-      {/* Status bar */}
+      {/* Status bar — count summary + Scan Now + Refresh. In split mode the
+          counts make most sense alongside Enrolled (it's the population they
+          describe); Scan Now belongs with Ready (it brings new approvals in). */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#16a34a' }} />
-          <span style={{ fontWeight: 600, fontSize: 15, color: '#16a34a' }}>Running</span>
-        </div>
-        <div style={{ color: '#94a3b8', fontSize: 13 }}>
-          {enrollments.length} enrollments, {activeCount} active, {pendingTouches.length} pending approval
-          {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
-        </div>
+        {showEnrolled && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#16a34a' }} />
+              <span style={{ fontWeight: 600, fontSize: 15, color: '#16a34a' }}>Running</span>
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: 13 }}>
+              {enrollments.length} enrollments, {activeCount} active, {pendingTouches.length} pending approval
+              {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
+            </div>
+          </>
+        )}
+        {showReady && !showEnrolled && (
+          <div style={{ color: '#94a3b8', fontSize: 13 }}>
+            {pendingTouches.length} text{pendingTouches.length === 1 ? '' : 's'} + {rvmTouches.length} RVM drop{rvmTouches.length === 1 ? '' : 's'} awaiting review
+            {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
+          </div>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           {scanResult && (
             <span style={{ fontSize: 12, color: scanResult.ok ? '#16a34a' : '#dc2626' }}>
               {scanResult.message}
             </span>
           )}
-          <button
-            onClick={handleScanNow}
-            disabled={scanning}
-            style={{ padding: '6px 14px', background: scanning ? '#1e293b' : '#0f3460', color: scanning ? '#475569' : '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: scanning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
-          >
-            {scanning ? 'Scanning...' : 'Scan Now'}
-          </button>
+          {showReady && (
+            <button
+              onClick={handleScanNow}
+              disabled={scanning}
+              style={{ padding: '6px 14px', background: scanning ? '#1e293b' : '#0f3460', color: scanning ? '#475569' : '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: scanning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
+            >
+              {scanning ? 'Scanning...' : 'Scan Now'}
+            </button>
+          )}
           <button
             onClick={loadData}
             style={{ padding: '6px 12px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
@@ -8626,7 +8656,7 @@ function RelayView({ supabase, onOpenDeal }) {
 
       {/* RVM drops awaiting approval — held by relay-dispatcher in review mode.
           Nothing drops without a human tap here (Phase A.3 follow-up). */}
-      {rvmTouches.length > 0 && (
+      {showReady && rvmTouches.length > 0 && (
         <div style={{ marginBottom: 32 }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#c084fc', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             📞 RVM Drops Awaiting Approval ({rvmTouches.length})
@@ -8682,7 +8712,11 @@ function RelayView({ supabase, onOpenDeal }) {
         </div>
       )}
 
-      {/* Pending approvals */}
+      {/* Pending approvals — each row embeds the full OutreachDraftPanel
+          (the same one that used to live in the Comms tab) so coach + edit +
+          regenerate + send all happen inline. Header row stays on top with
+          deal name + scheduled date + Quick Look slide-over. */}
+      {showReady && (
       <div style={{ marginBottom: 32 }}>
         <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
           Pending Approval ({pendingTouches.length})
@@ -8692,106 +8726,62 @@ function RelayView({ supabase, onOpenDeal }) {
             No messages waiting for approval
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             {pendingTouches.map(touch => {
               const deal = deals[touch.deal_id]
               const scheduledDate = touch.scheduled_for ? new Date(touch.scheduled_for).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'now'
+              const stepLabel = touch.relay_step_number
+                ? `Relay · Step ${touch.relay_step_number}`
+                : touch.cadence_day === 0 ? 'Day 0 · Intro' : `Day ${touch.cadence_day ?? '?'} · Follow-up`
+              // When the panel reports the touch sent or skipped, drop it
+              // from the local list so the row disappears. The deal will
+              // surface in Enrolled on its next cadence step.
+              const removeFromList = () => {
+                setPendingTouches(prev => prev.filter(t => t.id !== touch.id))
+              }
               return (
-                <div key={touch.id} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 16 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
-                    <div>
-                      <span style={{ fontSize: 12, color: '#d97706', fontWeight: 600 }}>
-                        Step {touch.relay_step_number}
-                      </span>
+                <div key={touch.id} style={{ background: '#0f172a', border: '1px solid #1e293b', borderRadius: 8, padding: 12 }}>
+                  {/* Row header — deal name + scheduled date + Quick Look */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: 12, color: '#d97706', fontWeight: 700 }}>{stepLabel}</span>
                       {deal && touch.deal_id && (
                         <button
                           onClick={() => onOpenDeal && onOpenDeal(touch.deal_id)}
-                          style={{ background: 'none', border: 'none', padding: '0 0 0 8px', fontSize: 12, color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline' }}
+                          style={{ background: 'none', border: 'none', padding: 0, fontSize: 13, color: '#93c5fd', cursor: 'pointer', textDecoration: 'underline', fontWeight: 600 }}
                         >
                           {deal.address || deal.name || touch.deal_id}
                         </button>
                       )}
+                      <span style={{ fontSize: 11, color: '#475569' }}>· Scheduled {scheduledDate}</span>
                     </div>
-                    <span style={{ fontSize: 11, color: '#475569' }}>Scheduled {scheduledDate}</span>
+                    {touch.deal_id && (
+                      <button
+                        onClick={() => openReview(touch.deal_id, touch)}
+                        style={{ padding: '4px 12px', background: '#0f3460', color: '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                      >
+                        🔎 Quick Look
+                      </button>
+                    )}
                   </div>
-                  <div
-                    onClick={() => touch.deal_id && onOpenDeal && onOpenDeal(touch.deal_id)}
-                    style={{ fontSize: 14, color: '#e2e8f0', lineHeight: 1.5, marginBottom: 12, padding: '10px 12px', background: '#162032', borderRadius: 6, fontFamily: 'inherit', cursor: touch.deal_id ? 'pointer' : 'default' }}
-                    title={touch.deal_id ? 'Open deal' : undefined}
-                  >
-                    {touch.draft_body}
-                  </div>
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button
-                      onClick={() => touch.deal_id ? openReview(touch.deal_id, touch) : handleApprove(touch.id)}
-                      style={{ padding: '6px 16px', background: '#0f3460', color: '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
-                    >
-                      Quick Look
-                    </button>
-                    <button
-                      onClick={() => handleApprove(touch.id)}
-                      style={{ padding: '6px 16px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      onClick={() => handleSkip(touch.id)}
-                      style={{ padding: '6px 16px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
-                    >
-                      Skip
-                    </button>
-                  </div>
-                  {/* Coach field — type anything: a correction for the message,
-                      a note on the lead tier ("wrong tier, homeowner deceased"),
-                      or general training input. Two save paths:
-                        ↺ Regenerate — regenerate the draft using the note + log it
-                        💾 Log — just log it (no regen), for non-message feedback
-                      Both write to agent_feedback (kind='coach') for training. */}
-                  {touch.deal_id && touch.draft_body && (() => {
-                    const note = (coachByTouch[touch.id] || '').trim()
-                    const busy = !!regenByTouch[touch.id]
-                    const enabled = !!note && !busy
-                    return (
-                      <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        <input
-                          type="text"
-                          value={coachByTouch[touch.id] || ''}
-                          onChange={e => setCoachByTouch(prev => ({ ...prev, [touch.id]: e.target.value }))}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter' && enabled) handleRegenerate(touch.id)
-                          }}
-                          disabled={busy}
-                          placeholder='Coach: about the message, the tier, the contact, anything…'
-                          style={{ flex: 1, minWidth: 200, background: '#0c0a09', border: '1px solid #334155', borderRadius: 6, color: '#e2e8f0', padding: '7px 10px', fontSize: 12, outline: 'none' }}
-                        />
-                        <button
-                          onClick={() => handleRegenerate(touch.id)}
-                          disabled={!enabled}
-                          title="Regenerate draft using this note"
-                          style={{ padding: '7px 12px', background: enabled ? '#1e293b' : '#0f172a', border: '1px solid #334155', borderRadius: 6, color: enabled ? '#93c5fd' : '#475569', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                          {busy ? 'Working…' : '↺ Regenerate'}
-                        </button>
-                        <button
-                          onClick={() => handleLogCoachNote(touch.id)}
-                          disabled={!enabled}
-                          title="Save note for training without regenerating"
-                          style={{ padding: '7px 12px', background: 'transparent', border: '1px solid #334155', borderRadius: 6, color: enabled ? '#cbd5e1' : '#475569', fontSize: 12, cursor: enabled ? 'pointer' : 'default', whiteSpace: 'nowrap', fontWeight: 600 }}>
-                          💾 Log
-                        </button>
-                      </div>
-                    )
-                  })()}
-                  {regenErrByTouch[touch.id] && (
-                    <div style={{ marginTop: 6, fontSize: 11, color: '#fca5a5' }}>⚠ {regenErrByTouch[touch.id]}</div>
-                  )}
+                  {/* Full coaching modal — same one from the Comms tab. Handles
+                      edit, send (=Approve), skip, coach + regen, char count. */}
+                  <OutreachDraftPanel
+                    item={touch}
+                    deal={deal}
+                    onSent={removeFromList}
+                    onSkipped={removeFromList}
+                  />
                 </div>
               )
             })}
           </div>
         )}
       </div>
+      )}
 
       {/* Enrollments table */}
+      {showEnrolled && (
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
           Enrollments ({enrollments.length})
@@ -8846,8 +8836,9 @@ function RelayView({ supabase, onOpenDeal }) {
           </div>
         )}
       </div>
+      )}
 
-      {/* Deal review panel */}
+      {/* Deal review panel — Quick Look slide-over, available in either mode */}
       {reviewPanel && (
         <>
           <div
@@ -9022,18 +9013,22 @@ function AutomationsView({ deals, onSelect, setView, isAdmin, initialSubtab }) {
   return (
     <div>
       <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>🎯 Automations</div>
-      <div style={{ fontSize: 12, color: '#78716c', marginBottom: 14 }}>Outreach + Relay unified. Approve drafts on the left tab; manage enrollments + RVM approvals on the right.</div>
+      <div style={{ fontSize: 12, color: '#78716c', marginBottom: 14 }}>Review drafts on the left; once approved, the deal moves to Enrolled and the cadence continues.</div>
+      {/* Review Mode toggle hoisted out of the tabs — it governs both sub-tabs,
+          so it lives once at the header level. (Justin 2026-05-28) */}
+      <ReviewModeBanner isAdmin={isAdmin} />
       <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #292524', marginBottom: 14 }}>
         {tabBtn('ready', 'Ready to Approve')}
         {tabBtn('enrolled', 'Enrolled')}
       </div>
-      {subtab === 'ready'
-        ? <OutreachView deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin} />
-        : <RelayView
-            supabase={sb}
-            onOpenDeal={(id) => { window.location.hash = `#/deal/${id}/comms`; }}
-          />
-      }
+      {/* DoubleQueueGuard surfaces deals queued in both engines — render once,
+          shared across both sub-tabs. */}
+      <DoubleQueueGuard deals={deals} onSelect={onSelect} />
+      <RelayView
+        supabase={sb}
+        mode={subtab}
+        onOpenDeal={(id) => { window.location.hash = `#/deal/${id}/comms`; }}
+      />
     </div>
   );
 }
