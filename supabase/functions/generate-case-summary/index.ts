@@ -22,7 +22,7 @@ const corsHeaders = {
 
 const SYSTEM_PROMPT = `You are a real-estate intelligence analyst briefing Nathan (founder of RefundLocators/FundLocators, non-coder, business-first) on one deal.
 
-You'll receive a JSON blob with everything we know: case docs, docket events, contacts, recent outbound/inbound messages, internal notes, deal parameters.
+You'll receive a JSON blob with everything we know: case docs (with extracted fields), docket events, contacts, recent outbound/inbound messages, calls (with summary + transcript preview), emails, internal notes, deal parameters, the homeowner's personalized-link page engagement counters (link_engagement), and any chat history the homeowner had with Lauren on the public site (lauren_chats).
 
 Produce a Case Intelligence briefing with this exact structure (Markdown):
 
@@ -31,6 +31,8 @@ Produce a Case Intelligence briefing with this exact structure (Markdown):
 **Facts Nathan + Justin need to know**
 - 3-6 bullets, most important first
 - Concrete dollar amounts, case numbers, dates, names — no filler
+- When a specific filing exists in docket_events or documents (motion, order, decree, supplemental distribution, etc.), NAME it with its dollar amount and date — do NOT generalize to "court activity pending" if a specific named filing is the top signal
+- Surface homeowner engagement when present (link_engagement: distinct viewers + last view; lauren_chats: what they asked Lauren about) — these are the strongest "ready to talk" tells for the caller
 - Flag discrepancies (e.g., homeowner phone missing, attorney not linked, judgment vs appraised mismatch)
 - Include what's been communicated (last text sent / last call) and what hasn't
 - Call out one-click action items: "Homeowner hasn't replied to intro SMS (sent 3d ago) — consider Day-3 follow-up"
@@ -76,6 +78,27 @@ Deno.serve(async (req) => {
 
     const deal = dealRes.data;
     if (!deal) return new Response(JSON.stringify({ error: 'Deal not found' }), { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+    // #241 — token-dependent fetches (run after deal arrives so we have the token):
+    //   * v_personalized_link_engagement — how many distinct viewers + when
+    //   * lauren_conversations — what the homeowner asked Lauren on the public site
+    // Direct table query (service-role bypasses RLS) instead of the admin-gated
+    // lauren_conversations_for_deal RPC, which wouldn't return rows for a
+    // service-role caller (auth.uid() is null → is_admin() false).
+    let linkEngagement: any = null;
+    let laurenChats: any[] = [];
+    if (deal.refundlocators_token) {
+      const [engRes, lrRes] = await Promise.all([
+        db.from('v_personalized_link_engagement').select('*').eq('token', deal.refundlocators_token).maybeSingle(),
+        db.from('lauren_conversations')
+          .select('started_at, last_message_at, message_count, submitted_claim, seed_message, transcript')
+          .eq('token', deal.refundlocators_token)
+          .order('last_message_at', { ascending: false })
+          .limit(5),
+      ]);
+      linkEngagement = engRes.data || null;
+      laurenChats = lrRes.data || [];
+    }
 
     // Build a compact context blob — strip fields that aren't useful for summarization
     const context = {
@@ -126,6 +149,25 @@ Deno.serve(async (req) => {
       })),
       open_tasks: (tasksRes.data || []).filter((t: any) => !t.done),
       done_tasks_count: (tasksRes.data || []).filter((t: any) => t.done).length,
+      // #241 — homeowner-behaviour signals: did they view their case page,
+      // and did they chat with Lauren on the public site? Strong "ready to
+      // talk" tells for the caller. Null when the personalized link
+      // hasn't been minted yet (deal.refundlocators_token not set).
+      link_engagement: linkEngagement ? {
+        distinct_external_viewers: linkEngagement.distinct_external_fingerprints,
+        external_views_last_24h: linkEngagement.external_views_last_24h,
+        external_views_last_7d: linkEngagement.external_views_last_7d,
+        last_external_view_at: linkEngagement.last_external_view_at,
+        total_external_views: linkEngagement.total_external_views,
+      } : null,
+      lauren_chats: laurenChats.map((c: any) => ({
+        when: c.last_message_at || c.started_at,
+        seed: c.seed_message,
+        message_count: c.message_count,
+        submitted_claim: c.submitted_claim,
+        // Trim transcript to keep token cost bounded — last ~10 turns is plenty.
+        transcript_tail: Array.isArray(c.transcript) ? c.transcript.slice(-10) : c.transcript,
+      })),
     };
 
     const userMsg = `Deal ID: ${deal_id}\nGenerated at: ${new Date().toISOString()}\n\nEverything we know (JSON):\n\n\`\`\`json\n${JSON.stringify(context, null, 2)}\n\`\`\``;
