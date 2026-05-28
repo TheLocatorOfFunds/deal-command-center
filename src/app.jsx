@@ -9021,9 +9021,10 @@ function AutomationsView({ deals, onSelect, setView, isAdmin, initialSubtab }) {
         {tabBtn('ready', 'Ready to Approve')}
         {tabBtn('enrolled', 'Enrolled')}
       </div>
-      {/* DoubleQueueGuard surfaces deals queued in both engines — render once,
-          shared across both sub-tabs. */}
-      <DoubleQueueGuard deals={deals} onSelect={onSelect} />
+      {/* DoubleQueueGuard hidden 2026-05-28 — Justin emptied the queue;
+          the overlap banner is noise until cases get re-added. Render is
+          a no-op when overlap.length === 0 anyway, but explicitly omitting
+          the call keeps the JSX clean while the queue is intentionally bare. */}
       <RelayView
         supabase={sb}
         mode={subtab}
