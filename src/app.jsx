@@ -3666,11 +3666,12 @@ function DealCardName({ deal }) {
   const first = (deal.name || '').split(' - ')[0] || deal.name || 'Unnamed';
   // "Estate of …" prefix fires for ANY deceased deal (tier-independent
   // per Eric 2026-05-07) plus tier B (which is deceased by definition
-  // even when meta hasn't caught up to that fact).
+  // even when meta hasn't caught up to that fact). Whole row goes red
+  // when deceased so it stays visible at-a-glance (per Nathan 2026-05-28).
   const isEstate = isDeceased(deal) || deal.lead_tier === 'B';
   return (
-    <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, color: '#fafaf9' }}>
-      {isEstate ? <span style={{ color: '#c4b5fd' }}>Estate of </span> : null}
+    <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.3, color: isEstate ? '#ef4444' : '#fafaf9' }}>
+      {isEstate ? <span>Estate of </span> : null}
       {first}
     </div>
   );
@@ -7048,17 +7049,22 @@ function InlineEditableName({ deal, canEdit, onSave }) {
   }
 
   // Life-status color on the deal name — quickly identify alive vs deceased
-  // at a glance when scanning between deals. Per Nathan: Tier A = alive
-  // (green), Tier B = deceased (red), C / unclassified = neutral white.
-  // Tier comes from the dropdown in Case Details; flipping it re-colors
-  // the name immediately because the parent re-renders this component.
+  // at a glance when scanning between deals. Tier A (alive) = green; ANY
+  // deceased deal = red, regardless of tier (per Nathan 2026-05-28: a C-tier
+  // lead like Reed Settle Bower marked deceased was sliding through as white).
+  // Tier comes from the dropdown in Case Details; flipping it (or the
+  // Deceased toggle) re-colors the name immediately because the parent
+  // re-renders this component.
   let nameColor = '#fafaf9'; // default white
   let nameTitle = 'Click to edit the client name';
-  if (deal.lead_tier === 'A') {
+  if (isDeceased(deal)) {
+    nameColor = '#ef4444'; // deceased
+    nameTitle = (deal.lead_tier ? `Tier ${deal.lead_tier} · ` : '') + 'deceased · click to edit';
+  } else if (deal.lead_tier === 'A') {
     nameColor = '#22c55e'; // alive
     nameTitle = 'Tier A · alive · click to edit';
   } else if (deal.lead_tier === 'B') {
-    nameColor = '#ef4444'; // deceased
+    nameColor = '#ef4444'; // tier-B implies deceased even if meta hasn't caught up
     nameTitle = 'Tier B · deceased · click to edit';
   }
 
@@ -13667,7 +13673,7 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}>{deal.name}<DealStatusBadges deal={deal} /></div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}><span style={isDeceased(deal) ? { color: '#ef4444' } : undefined}>{deal.name}</span><DealStatusBadges deal={deal} /></div>
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
@@ -13859,7 +13865,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
           {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
           <div>
-            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}>{deal.name}<DealStatusBadges deal={deal} /></div>
+            <div style={{ fontSize: 15, fontWeight: 700, display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 4 }}><span style={isDeceased(deal) ? { color: '#ef4444' } : undefined}>{deal.name}</span><DealStatusBadges deal={deal} /></div>
             <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
           </div>
         </div>
