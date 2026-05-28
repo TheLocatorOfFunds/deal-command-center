@@ -73,6 +73,30 @@ const SUPABASE_KEY = 'sb_publishable_...';
 
 This is safe — the publishable key is designed for client-side use. RLS is what actually protects data. **Never** put the service-role key in this file.
 
+### Supabase Personal Access Token (PAT) — for CLI deploys & Management API
+
+The team already has a working PAT — **do not ask the user to generate a new
+one** unless they explicitly say theirs has been revoked. It lives in two
+places:
+
+- **Justin's Mac (canonical):** `~/Library/Application Support/Claude/claude_desktop_config.json`
+  under `mcpServers.supabase-dcc.env.SUPABASE_ACCESS_TOKEN`. One-liner to extract:
+  ```bash
+  PAT=$(jq -r '.mcpServers["supabase-dcc"].env.SUPABASE_ACCESS_TOKEN' \
+    ~/Library/Application\ Support/Claude/claude_desktop_config.json)
+  ```
+- **GitHub Actions:** repo secret `SUPABASE_PAT` (used by `migrations-applied.yml`).
+
+Use it for:
+- `supabase functions deploy <name>` — when the CLI prompts for auth,
+  `export SUPABASE_ACCESS_TOKEN=$PAT` first
+- Management API calls: `curl -H "Authorization: Bearer $PAT" https://api.supabase.com/v1/...`
+- Checking applied migrations, vault secrets, function deploys, etc.
+
+**If you're a sandbox session without filesystem access to Justin's Mac**: ask
+the user to paste it once, then proceed — but be aware it grants full account
+access, so don't log it.
+
 ## Database schema
 
 Core tables, all in `public` schema:
