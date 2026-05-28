@@ -9,8 +9,12 @@
  *     SDK's pod when the Podfile picks it up — no manual link needed)
  *   - "voip" background mode in the UIBackgroundModes Info.plist key
  *
- * Doesn't touch entitlements directly — `aps-environment` is already
- * set to "production" in app.json, which covers PushKit too.
+ * Does NOT add the VoIP entitlement here — that lives in app.json
+ * as `com.apple.developer.pushkit.unrestricted-voip: true`. Without
+ * that entitlement iOS never fires didUpdatePushCredentials on
+ * PKPushRegistry and every voice.register() call fails with
+ * "Failed to initialize PushKit device token". aps-environment does
+ * NOT cover PushKit — they are separate entitlements.
  *
  * Reference:
  *   https://docs.expo.dev/config-plugins/development-and-debugging/

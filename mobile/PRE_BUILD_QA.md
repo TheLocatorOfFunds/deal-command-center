@@ -29,6 +29,19 @@ Before using any SDK method, confirm it exists in the type definitions:
 grep -r "methodName" node_modules/@twilio/voice-react-native-sdk/lib/
 ```
 
+**VoIP entitlement (app.json) — MUST be present or PushKit never fires:**
+```json
+"entitlements": {
+  "aps-environment": "production",
+  "com.apple.developer.pushkit.unrestricted-voip": true
+}
+```
+`aps-environment` covers APNs only. PushKit (VoIP) requires its own separate
+entitlement. Without it, iOS never fires `didUpdatePushCredentials` on
+`PKPushRegistry`, and every `voice.register()` call fails with
+"Failed to initialize PushKit device token" — forever, regardless of retries.
+This was the root cause of ALL registration failures from Build 14 through Build 17.
+
 **Known SDK gotchas (voice-react-native-sdk):**
 - `initializePushRegistry()` - DOES NOT EXIST. Removed in newer versions.
   `new Voice()` creates the internal PKPushRegistry automatically.
