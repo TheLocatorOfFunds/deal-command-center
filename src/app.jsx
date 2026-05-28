@@ -29831,6 +29831,10 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
   const [newRate, setNewRate] = React.useState('');
   const [editingHoursFor, setEditingHoursFor] = React.useState(null);
   const [newHours, setNewHours] = React.useState('');
+  // Inline bonus input per row, keyed by user id. Justin 5/27: "just have
+  // the bonus in there next to the total — add an amount or leave blank."
+  // Replaces the older prompt()-based bonus capture in markPaid().
+  const [bonusByUser, setBonusByUser] = React.useState({});
   const [busy, setBusy] = React.useState(false);
 
   const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
@@ -29867,18 +29871,17 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
   const markPaid = async (userId, hours, rate) => {
     if (busy || !adminRange.isPayPeriod) return;
     const base = +(hours * rate).toFixed(2);
-    if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(base)} as paid for this period?\n\n(Next: optionally add a bonus.)`)) return;
-    // Optional bonus, entered at pay time (Justin: "give a bonus when we run payroll")
-    let bonus = 0, bonusNote = null;
-    const bonusRaw = prompt('Bonus amount for this period? Leave blank or 0 for none.', '');
-    if (bonusRaw && bonusRaw.trim()) {
-      const b = parseFloat(bonusRaw.replace(/[^0-9.\-]/g, ''));
-      if (!isNaN(b) && b !== 0) {
-        bonus = +b.toFixed(2);
-        bonusNote = prompt('Bonus note (what it was for)?', '') || null;
-      }
+    // Bonus comes from the inline input next to Total (Justin 5/27) — no
+    // more prompt() chain. Blank input = no bonus.
+    const bonusRaw = bonusByUser[userId];
+    let bonus = 0;
+    if (bonusRaw && String(bonusRaw).trim()) {
+      const b = parseFloat(String(bonusRaw).replace(/[^0-9.\-]/g, ''));
+      if (!isNaN(b) && b !== 0) bonus = +b.toFixed(2);
     }
     const amount = +(base + bonus).toFixed(2);
+    const bonusLabel = bonus > 0 ? ` + ${fmtMoney(bonus)} bonus = ${fmtMoney(amount)}` : '';
+    if (!confirm(`Mark ${hours.toFixed(2)}h × ${fmtMoney(rate)}/hr = ${fmtMoney(base)}${bonusLabel} as paid for this period?`)) return;
     setBusy(true);
     const { data: { user } } = await sb.auth.getUser();
     const { error } = await sb.from('payments').insert({
@@ -29888,12 +29891,14 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
       hours_worked: hours.toFixed(2),
       rate_used: rate,
       bonus,
-      bonus_note: bonusNote,
+      bonus_note: null,
       amount_paid: amount,
       paid_by: user?.id,
     });
     setBusy(false);
     if (error) { alert('Mark-paid failed: ' + error.message); return; }
+    // Clear the inline bonus input for this user now that it's recorded.
+    setBonusByUser(prev => { const next = { ...prev }; delete next[userId]; return next; });
     onReload();
   };
 
@@ -30049,6 +30054,7 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
                 React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Hours'),
                 React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Rate'),
                 React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Total'),
+                React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Bonus'),
                 React.createElement('th', { style: { padding: '8px 4px', borderBottom: '1px solid #292524', textAlign: 'right' } }, 'Status')
               )
             ),
@@ -30077,11 +30083,19 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
                           React.createElement('button', { onClick: () => saveHours(p.id), disabled: busy, style: { padding: '4px 8px', background: '#10b981', color: '#fff', border: 'none', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✓'),
                           React.createElement('button', { onClick: () => { setEditingHoursFor(null); setNewHours(''); }, style: { padding: '4px 8px', background: 'transparent', color: '#78716c', border: '1px solid #44403c', borderRadius: 4, fontSize: 11, cursor: 'pointer' } }, '✕')
                         )
-                      : React.createElement('span', {
-                          onClick: canEditHours ? () => { setEditingHoursFor(p.id); setNewHours((isAdjusted ? Number(adj.adjusted_hours) : tracked).toFixed(2)); } : undefined,
-                          title: adjTitle,
-                          style: { color: isAdjusted ? '#fbbf24' : '#fafaf9', cursor: canEditHours ? 'pointer' : 'default', textDecoration: canEditHours ? 'underline dotted' : 'none', fontFamily: "'DM Mono', monospace" }
-                        }, hours.toFixed(2) + 'h' + (isAdjusted ? ' *' : ''))
+                      : React.createElement('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 } },
+                          React.createElement('span', {
+                            onClick: canEditHours ? () => { setEditingHoursFor(p.id); setNewHours((isAdjusted ? Number(adj.adjusted_hours) : tracked).toFixed(2)); } : undefined,
+                            title: adjTitle,
+                            style: { color: isAdjusted ? '#fbbf24' : '#fafaf9', cursor: canEditHours ? 'pointer' : 'default', textDecoration: canEditHours ? 'underline dotted' : 'none', fontFamily: "'DM Mono', monospace" }
+                          }, hours.toFixed(2) + 'h' + (isAdjusted ? ' *' : '')),
+                          // Surface the hours-adjustment note inline (Justin 5/27:
+                          // "need to be able to see the notes you leave when you change hours"
+                          // — was tooltip-only).
+                          (isAdjusted && adj && adj.note)
+                            ? React.createElement('span', { style: { fontSize: 10, color: '#a8a29e', fontStyle: 'italic', maxWidth: 220, textAlign: 'right', lineHeight: 1.3 } }, adj.note)
+                            : null
+                        )
                   ),
                   React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
                     editing
@@ -30093,6 +30107,26 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
                       : React.createElement('span', { onClick: () => { setEditingRateFor(p.id); setNewRate(rate || ''); }, title: rates[p.id]?.note || 'Click to change rate', style: { color: rate ? '#fafaf9' : '#fb923c', cursor: 'pointer', textDecoration: 'underline dotted', fontFamily: "'DM Mono', monospace" } }, rate ? fmtMoney(rate) + '/hr' : 'set rate')
                   ),
                   React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right', color: '#fafaf9', fontFamily: "'DM Mono', monospace", fontWeight: 700 } }, total > 0 ? fmtMoney(total) : '—'),
+                  // Bonus cell — inline input on unpaid pay-period rows (fills
+                  // bonusByUser; consumed by markPaid). On paid rows show what
+                  // was actually paid. Outside a pay period: dash.
+                  React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
+                    paid
+                      ? React.createElement('span', {
+                          style: { color: Number(paid.bonus) > 0 ? '#fbbf24' : '#57534e', fontFamily: "'DM Mono', monospace", fontSize: 12 },
+                          title: paid.bonus_note || ''
+                        }, Number(paid.bonus) > 0 ? fmtMoney(paid.bonus) : '—')
+                      : adminRange.isPayPeriod
+                        ? React.createElement('input', {
+                            type: 'number', step: '0.01', min: '0',
+                            value: bonusByUser[p.id] ?? '',
+                            onChange: e => setBonusByUser(prev => ({ ...prev, [p.id]: e.target.value })),
+                            placeholder: '$0',
+                            title: 'Bonus to include when you Mark Paid (blank = no bonus)',
+                            style: { width: 70, padding: '4px 6px', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 4, color: '#fafaf9', fontSize: 12, textAlign: 'right', fontFamily: "'DM Mono', monospace" }
+                          })
+                        : React.createElement('span', { style: { color: '#57534e', fontSize: 11 } }, '—')
+                  ),
                   React.createElement('td', { style: { padding: '10px 4px', textAlign: 'right' } },
                     paid
                       ? React.createElement('div', { style: { display: 'flex', gap: 6, justifyContent: 'flex-end', alignItems: 'center' } },
