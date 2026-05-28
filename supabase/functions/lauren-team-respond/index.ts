@@ -90,7 +90,7 @@ const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-5";
 const MAX_TOKENS = 1024;
 
-const SYSTEM_PROMPT_BASE = `You are Lauren, an AI teammate and exec assistant for Nathan and Justin at RefundLocators / FundLocators. You're in their internal team chat. Be concise, direct, operational. No fluff, no "I'd be happy to", no excess pleasantries. Plain text only (no markdown headers, no emoji unless the user used one first).
+const SYSTEM_PROMPT_BASE = `You are Lauren, an AI teammate and exec assistant for Nathan and Justin at RefundLocators / FundLocators. You're in their internal team chat. Be concise, direct, operational. No fluff, no "I'd be happy to", no excess pleasantries. Plain text only (no markdown headers, no emoji unless the user used one first). Markdown LINKS are allowed when get_deal_url or get_signed_url gave you a URL to render - format as [Label](url).
 
 Context:
 - RefundLocators recovers surplus funds for foreclosure victims (mostly Ohio).
@@ -109,6 +109,7 @@ READ TOOLS (always safe to call, no confirm):
 - get_deal_detail(deal_id): full deal record + current meta. Call before proposing a meta update so you don't overwrite values that are already set.
 - lookup_deal_notes(deal_id, limit?): team's free-text notes on a deal.
 - lookup_docket_events(deal_id, limit?): court docket events Castle has scraped — sale dates, judgment entries, "CLERK TO HOLD SALE FUNDS $X", etc.
+- get_deal_url(deal_id): clickable URL for a deal's detail page (Castle / intel-main when synced; DCC hash route otherwise). Call AFTER lookup_deal whenever a user says "show me the case", "give me the link", "go to X", "open X", or any "where can I see this" intent. Reply with a markdown link like [Casey Jennings](url). If multiple deals matched, return one link per deal.
 
 WRITE TOOLS (each PROPOSES an action):
 - propose_status_change(deal_id, new_status, reason)
@@ -397,6 +398,17 @@ const TOOLS = [
       required: ["deal_id"],
     },
   },
+  {
+    name: "get_deal_url",
+    description: "Return the internal Castle app URL for a deal detail page (or a DCC fallback URL when the deal hasn't been synced to Castle yet). Call this after lookup_deal when the user asks for a link to a case or wants to 'see' / 'go to' / 'open' a deal. Returns { url, deal_id, label, in_castle }. Render the link in your reply as [label](url).",
+    input_schema: {
+      type: "object",
+      properties: {
+        deal_id: { type: "string", description: "Deal id (e.g. 'sf-jennings-moa9iqzt')" },
+      },
+      required: ["deal_id"],
+    },
+  },
 ];
 
 // Read-only tool subset for the deal-card surface. Excludes every
@@ -546,6 +558,9 @@ async function handleDealCardSurface(req: Request, body: any, apiKey: string, db
             result = data;
           } else if (tu.name === "lookup_docket_events") {
             const { data } = await db.rpc("lauren_lookup_docket_events", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 30 });
+            result = data;
+          } else if (tu.name === "get_deal_url") {
+            const { data } = await db.rpc("lauren_get_deal_url", { p_deal_id: tu.input.deal_id });
             result = data;
           } else {
             result = { error: `tool '${tu.name}' not available in deal_card mode` };
@@ -804,6 +819,9 @@ Deno.serve(async (req) => {
             result = data;
           } else if (tu.name === "lookup_docket_events") {
             const { data } = await db.rpc("lauren_lookup_docket_events", { p_deal_id: tu.input.deal_id, p_limit: tu.input.limit ?? 30 });
+            result = data;
+          } else if (tu.name === "get_deal_url") {
+            const { data } = await db.rpc("lauren_get_deal_url", { p_deal_id: tu.input.deal_id });
             result = data;
           } else {
             result = { error: "unknown tool" };
