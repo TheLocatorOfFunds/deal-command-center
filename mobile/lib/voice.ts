@@ -34,6 +34,7 @@ const TOKEN_URL =
 let voice: Voice | null = null
 let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let cachedToken: string | null = null
+let _initInProgress = false
 const _callInviteHandlers: Array<(callInvite: CallInvite) => void> = []
 
 /**
@@ -146,7 +147,20 @@ async function fetchToken(): Promise<string | null> {
 export async function initVoice(): Promise<boolean> {
   if (Platform.OS !== 'ios') return false // iOS-only for V1
   if (voice) return true
+  // Prevent concurrent inits — the useEffect can fire multiple times during
+  // auth resolution (loading/session changes), causing parallel register()
+  // calls that collide with "Registration in progress" errors.
+  if (_initInProgress) return false
+  _initInProgress = true
 
+  try {
+    return await _doInitVoice()
+  } finally {
+    _initInProgress = false
+  }
+}
+
+async function _doInitVoice(): Promise<boolean> {
   const token = await fetchToken()
   if (!token) return false
   cachedToken = token
@@ -172,6 +186,8 @@ export async function initVoice(): Promise<boolean> {
   let lastErr: unknown = null
   for (const wait of delays) {
     if (wait > 0) await sleep(wait)
+    // teardownVoice() may have been called while we were sleeping (e.g. sign-out)
+    if (!voice) break
     try {
       await voice.register(token)
       lastErr = null
