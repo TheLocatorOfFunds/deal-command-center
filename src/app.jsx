@@ -17733,6 +17733,10 @@ function QuickNotes({ dealId, userId, userName, onJumpToTab }) {
 function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const [docs, setDocs] = useState([]);
   const [events, setEvents] = useState([]);
+  // #240 — receipts panel beneath the AI summary: recent calls + texts so the
+  // caller scans narrative + raw signal without flipping tabs.
+  const [recentCalls, setRecentCalls] = useState([]);
+  const [recentMsgs, setRecentMsgs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [summary, setSummary] = useState(deal?.meta?.case_intel_summary || null);
   const [summaryBusy, setSummaryBusy] = useState(false);
@@ -17753,7 +17757,7 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const skippedKeys = (deal?.meta?.case_intel_skipped || []);
 
   const load = async () => {
-    const [docsRes, eventsRes] = await Promise.all([
+    const [docsRes, eventsRes, callsRes, msgsRes] = await Promise.all([
       sb.from('documents')
         .select('id, name, extracted, extracted_at, extraction_status')
         .eq('deal_id', dealId)
@@ -17764,9 +17768,22 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
         .eq('deal_id', dealId)
         .order('event_date', { ascending: false })
         .limit(10),
+      // #240 — last 3 calls + 3 texts on this deal for the receipts panel.
+      sb.from('call_logs')
+        .select('id, direction, status, started_at, duration_seconds, summary, contacts(name)')
+        .eq('deal_id', dealId)
+        .order('started_at', { ascending: false })
+        .limit(3),
+      sb.from('messages_outbound')
+        .select('id, direction, body, created_at, contacts(name)')
+        .eq('deal_id', dealId)
+        .order('created_at', { ascending: false })
+        .limit(3),
     ]);
     setDocs(docsRes.data || []);
     setEvents(eventsRes.data || []);
+    setRecentCalls(callsRes.data || []);
+    setRecentMsgs(msgsRes.data || []);
     setLoading(false);
   };
 
@@ -17796,6 +17813,9 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
     const ch = sb.channel('case-intel-' + dealId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'documents', filter: `deal_id=eq.${dealId}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events', filter: `deal_id=eq.${dealId}` }, load)
+      // #240 — re-pull the receipts panel on new calls/texts
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs', filter: `deal_id=eq.${dealId}` }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound', filter: `deal_id=eq.${dealId}` }, load)
       .subscribe();
     return () => { sb.removeChannel(ch); };
     // eslint-disable-next-line
@@ -17966,6 +17986,60 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
         </div>
       )}
       {summaryErr && <div style={{ fontSize: 11, color: "#ef4444", marginBottom: 10 }}>⚠ {summaryErr}</div>}
+
+      {/* #240 — Recent activity receipts panel. Caller sees AI narrative on
+          top + raw signal here so nothing the AI summarized away gets missed.
+          Last 5 court events, 3 calls, 3 texts. Click-to-jump where useful. */}
+      {(() => {
+        const recentEvents = events.filter(e => !e.is_backfill).slice(0, 5);
+        if (recentEvents.length === 0 && recentCalls.length === 0 && recentMsgs.length === 0) return null;
+        const fmtDay = (iso) => iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
+        const rowStyle = (jumpTab) => ({ fontSize: 12, color: '#d6d3d1', padding: '3px 0', cursor: (onJumpToTab && jumpTab) ? 'pointer' : 'default', lineHeight: 1.45 });
+        const dateCell = { color: '#78716c', fontSize: 10, marginRight: 6, fontFamily: "'DM Mono', monospace" };
+        const labelCell = { color: '#a8a29e', fontWeight: 600 };
+        const tailCell = { color: '#78716c' };
+        return (
+          <div style={{ background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: '10px 12px', marginBottom: 14 }}>
+            <div style={{ fontSize: 9, fontWeight: 700, color: '#a8a29e', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>📋 Recent activity</div>
+            {recentEvents.length > 0 && (
+              <div style={{ marginBottom: (recentCalls.length + recentMsgs.length) > 0 ? 8 : 0 }}>
+                {recentEvents.map(e => (
+                  <div key={e.id} onClick={() => onJumpToTab && onJumpToTab('docket')} style={rowStyle('docket')} title={onJumpToTab ? 'Open in Docket tab' : undefined}>
+                    <span style={dateCell}>{fmtDay(e.event_date)}</span>
+                    <span style={{ color: '#fbbf24' }}>⚖</span>{' '}
+                    <span style={labelCell}>{(e.event_type || '').replace(/_/g, ' ')}</span>
+                    {e.description && <span style={tailCell}> · {String(e.description).slice(0, 140)}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {recentCalls.length > 0 && (
+              <div style={{ marginBottom: recentMsgs.length > 0 ? 8 : 0 }}>
+                {recentCalls.map(c => (
+                  <div key={c.id} onClick={() => onJumpToTab && onJumpToTab('comms')} style={rowStyle('comms')} title={onJumpToTab ? 'Open in Comms tab' : undefined}>
+                    <span style={dateCell}>{fmtDay(c.started_at)}</span>
+                    <span style={{ color: '#10b981' }}>📞</span>{' '}
+                    <span style={labelCell}>{c.direction === 'inbound' ? '⬅' : '➡'} {(c.contacts && c.contacts.name) || (c.direction === 'inbound' ? 'inbound' : 'outbound')}</span>
+                    {c.summary && <span style={tailCell}> · {String(c.summary).slice(0, 140)}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+            {recentMsgs.length > 0 && (
+              <div>
+                {recentMsgs.map(m => (
+                  <div key={m.id} onClick={() => onJumpToTab && onJumpToTab('comms')} style={rowStyle('comms')} title={onJumpToTab ? 'Open in Comms tab' : undefined}>
+                    <span style={dateCell}>{fmtDay(m.created_at)}</span>
+                    <span style={{ color: '#3b82f6' }}>💬</span>{' '}
+                    <span style={labelCell}>{m.direction === 'inbound' ? '⬅' : '➡'} {(m.contacts && m.contacts.name) || (m.direction === 'inbound' ? 'inbound' : 'outbound')}</span>
+                    {m.body && <span style={tailCell}> · {String(m.body).slice(0, 140)}</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {(plaintiff || defendant) && (
         <div style={{ fontSize: 14, fontWeight: 600, color: "#fafaf9", marginBottom: 4 }}>
