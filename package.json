@@ -5,7 +5,8 @@
   "description": "Pre-build step for the JSX bundle. Eliminates Babel-in-browser cold-load.",
   "scripts": {
     "build": "node build.js",
-    "vapi-create-assistant": "node scripts/vapi-create-assistant.mjs"
+    "vapi-create-assistant": "node scripts/vapi-create-assistant.mjs",
+    "vapi-smoke-test": "node scripts/vapi-smoke-test.mjs"
   },
   "devDependencies": {
     "esbuild": "^0.24.0"
