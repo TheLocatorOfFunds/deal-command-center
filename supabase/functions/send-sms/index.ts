@@ -164,11 +164,17 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Split body at punctuation boundaries if over 160 chars — but ONLY on the
-    // Twilio/SMS path, where real 160-char segments exist. On the mac_bridge
-    // (iMessage) path there's no length limit, so splitting just chops one
-    // message into several texts. Send it whole. (Nathan 2026-05-27 — #235)
-    const segments = gateway === 'mac_bridge' ? [(body || '').trim()] : splitAtPunctuation(body)
+    // Don't pre-split. Two reasons:
+    //   * mac_bridge / iMessage has no length limit (Nathan 2026-05-27 — #235).
+    //   * Twilio's REST API handles concatenated-SMS automatically when you
+    //     hand it ONE body up to 1,600 chars — the recipient's phone reassembles
+    //     the segments into one threaded message. When we pre-split and send N
+    //     separate Twilio API calls, the recipient sees N separate texts (same
+    //     UX bug as the iMessage path had). Per Nathan 2026-05-28: he hit this
+    //     after PR #211 made Twilio the default outbound gateway.
+    // splitAtPunctuation() is kept available above in case a future call path
+    // needs explicit segmentation, but the main send flow no longer uses it.
+    const segments = [(body || '').trim()]
     const isSplit  = segments.length > 1
     const channel  = gateway === 'mac_bridge' ? 'imessage' : 'sms'
     const threadKey = deal_id
