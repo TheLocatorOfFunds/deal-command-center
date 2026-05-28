@@ -839,6 +839,10 @@ function DealCommandCenter({ session, profile }) {
   const [showKeypad, setShowKeypad]       = useState(false);
   const [keypadBuffer, setKeypadBuffer]   = useState('');
   const [callSid, setCallSid]             = useState(null);
+  // After every outbound call ends, capture { sid, toNumber, contactName, direction }
+  // here so CallDispositionModal can prompt the operator for a disposition
+  // (connected / voicemail / no_answer / wrong_number / disconnected). Issue #244.
+  const [pendingDisposition, setPendingDisposition] = useState(null);
   const [addingToCall, setAddingToCall]   = useState(false);
   const [addToCallNumber, setAddToCallNumber] = useState('');
   const [addCallMsg, setAddCallMsg]       = useState(null); // { type: 'ok'|'error', text }
@@ -1024,9 +1028,37 @@ function DealCommandCenter({ session, profile }) {
         const sid = call.parameters?.CallSid || call.parameters?.callSid || null;
         if (sid) setCallSid(sid);
       });
-      call.on('disconnect', () => { setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('disconnect', () => {
+        setCallStatus('ended'); stopCallTimer(); resetCallOverlayState();
+        // Open the post-call disposition modal (issue #244). SID may come
+        // from on('accept') state, the call object's parameters, or null
+        // for calls that never connected — modal save handler falls back
+        // to "most-recent outbound to this number" if SID is missing.
+        const sid = call.parameters?.CallSid || call.parameters?.callSid || null;
+        setPendingDisposition({
+          sid,
+          toNumber: contact.phone,
+          contactName: contact.name || contact.phone,
+          direction: 'outbound',
+          startedAt: new Date().toISOString(),
+        });
+        setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
+      });
       call.on('cancel',     () => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; stopCallTimer(); resetCallOverlayState(); });
-      call.on('error',      (e) => { console.error('Call error:', e); setCallStatus('ended'); stopCallTimer(); resetCallOverlayState(); setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500); });
+      call.on('error',      (e) => {
+        console.error('Call error:', e);
+        setCallStatus('ended'); stopCallTimer(); resetCallOverlayState();
+        const sid = call.parameters?.CallSid || call.parameters?.callSid || null;
+        setPendingDisposition({
+          sid,
+          toNumber: contact.phone,
+          contactName: contact.name || contact.phone,
+          direction: 'outbound',
+          startedAt: new Date().toISOString(),
+          errored: true,
+        });
+        setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
+      });
     } catch (err) {
       console.error('startCall error:', err);
       setCallStatus(null);
@@ -2323,6 +2355,14 @@ function DealCommandCenter({ session, profile }) {
     )}
 
     {/* ── Old standalone dialpad removed — dialpad now lives in the header Phone popover ── */}
+
+    {/* ── Post-call disposition modal (issue #244) — global, fires on any outbound hangup ── */}
+    {pendingDisposition && (
+      <CallDispositionModal
+        pending={pendingDisposition}
+        onClose={() => setPendingDisposition(null)}
+      />
+    )}
 
     {/* ── Active call overlay — rendered at DCC level so it shows on every view ── */}
     {callStatus && callContact && (
@@ -14184,6 +14224,182 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
   );
 }
 
+// ─── Post-call disposition modal — issue #244 ──────────────────────────────
+//
+// Fires every time an outbound call ends (call.on('disconnect') + 'error'
+// stash a pendingDisposition payload). Operator picks one of 5 options;
+// the choice is written to call_logs.outcome, and outcomes that flag a
+// dead number propagate to contacts.phone_status (which gates future
+// send-sms and twilio-voice-outbound calls server-side).
+//
+// Two entry points:
+//   1. Fresh hangup        — pending = { sid, toNumber, contactName, ... }
+//   2. Edit past call log  — pending = { existing: <call_log row> }
+//      (clicked the badge on a past row in the Comms tab thread)
+function CallDispositionModal({ pending, onClose }) {
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError]   = React.useState(null);
+
+  if (!pending) return null;
+
+  const isEditing = Boolean(pending.existing);
+  const initial   = pending.existing?.outcome || null;
+
+  const OPTIONS = [
+    { code: 'connected',    label: '✓ Connected',    color: '#22c55e', desc: 'Spoke to homeowner' },
+    { code: 'voicemail',    label: '📨 Voicemail',   color: '#3b82f6', desc: 'Left a voicemail' },
+    { code: 'no_answer',    label: '⏱ No answer',    color: '#a8a29e', desc: "Didn't pick up" },
+    { code: 'wrong_number', label: '✗ Wrong number', color: '#f97316', desc: 'Reached someone else — blocks future SMS + voice' },
+    { code: 'disconnected', label: '🚫 Disconnected',color: '#ef4444', desc: 'Number not in service — blocks future SMS + voice + flags DNC' },
+  ];
+
+  const phoneStatusFor = (outcome) => {
+    if (outcome === 'connected')    return 'good';
+    if (outcome === 'wrong_number') return 'wrong_number';
+    if (outcome === 'disconnected') return 'disconnected';
+    return null; // voicemail / no_answer don't change phone status
+  };
+
+  async function pick(outcome) {
+    if (saving) return;
+    setSaving(true); setError(null);
+    try {
+      const { data: authData } = await sb.auth.getUser();
+      const userId = authData?.user?.id || null;
+      const now = new Date().toISOString();
+
+      // ── Step 1: write call_logs.outcome ──────────────────────────────────
+      let callLogId = pending.existing?.id || null;
+      if (!callLogId && pending.sid) {
+        const { data: bySid } = await sb.from('call_logs')
+          .select('id, contact_id, to_number')
+          .eq('twilio_call_sid', pending.sid)
+          .maybeSingle();
+        if (bySid?.id) callLogId = bySid.id;
+      }
+      // Fallback: most-recent outbound call to this number in the last 15 min.
+      // Covers the case where twilio-voice-outbound hadn't yet inserted the row
+      // when the SID lookup ran, or where the SID never resolved.
+      if (!callLogId && pending.toNumber) {
+        const sinceISO = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        const { data: recent } = await sb.from('call_logs')
+          .select('id, contact_id, to_number')
+          .eq('direction', 'outbound')
+          .eq('to_number', pending.toNumber)
+          .gte('started_at', sinceISO)
+          .order('started_at', { ascending: false })
+          .limit(1);
+        if (recent?.[0]?.id) callLogId = recent[0].id;
+      }
+
+      if (callLogId) {
+        await sb.from('call_logs').update({
+          outcome, outcome_set_at: now, outcome_set_by: userId,
+        }).eq('id', callLogId);
+      }
+
+      // ── Step 2: propagate to contacts.phone_status ──────────────────────
+      const phoneStatus = phoneStatusFor(outcome);
+      if (phoneStatus) {
+        const targetPhone = pending.existing?.to_number || pending.toNumber;
+        if (targetPhone) {
+          const bare = (targetPhone || '').replace(/^\+1/, '');
+          const updates = {
+            phone_status: phoneStatus,
+            phone_status_set_at: now,
+          };
+          // 'disconnected' is the strongest signal — also flip do_not_call so
+          // the cadence engine + voice gate refuse any future outreach.
+          if (outcome === 'disconnected') {
+            updates.do_not_call = true;
+            updates.dnd_set_at = now;
+            updates.dnd_reason = 'Number disconnected (post-call disposition)';
+          }
+          await sb.from('contacts').update(updates)
+            .or(`phone.eq.${targetPhone},phone.eq.${bare}`);
+        }
+      }
+
+      onClose();
+    } catch (e) {
+      console.error('[disposition] save failed', e);
+      setError(e instanceof Error ? e.message : 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const headline = isEditing ? 'Edit call disposition' : 'How did the call go?';
+  const sub = pending.existing
+    ? `${pending.existing.direction === 'inbound' ? 'Inbound call' : 'Outbound call'} · ${pending.existing.to_number}`
+    : `${pending.contactName} · ${pending.toNumber}`;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+        zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      }}>
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#1c1917', border: '1px solid #44403c', borderRadius: 12,
+          padding: 24, width: '100%', maxWidth: 460,
+          boxShadow: '0 12px 48px rgba(0,0,0,0.6)',
+        }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: '#fafaf9' }}>{headline}</div>
+            <div style={{ fontSize: 12, color: '#a8a29e', marginTop: 4 }}>{sub}</div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{ background: 'transparent', border: 'none', color: '#78716c', fontSize: 22, cursor: 'pointer', lineHeight: 1, padding: 0, marginLeft: 12 }}
+            aria-label="Skip — ask me later">
+            ×
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: '#57534e', marginTop: 8, marginBottom: 16 }}>
+          {isEditing ? 'Update what really happened.' : 'Take a second to mark it — dead numbers get auto-blocked next round.'}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {OPTIONS.map(o => {
+            const isCurrent = initial === o.code;
+            return (
+              <button
+                key={o.code}
+                onClick={() => pick(o.code)}
+                disabled={saving}
+                style={{
+                  background: isCurrent ? `${o.color}22` : '#0c0a09',
+                  border: `1px solid ${isCurrent ? o.color : '#292524'}`,
+                  borderLeft: `4px solid ${o.color}`,
+                  borderRadius: 8, padding: '12px 14px', textAlign: 'left',
+                  cursor: saving ? 'wait' : 'pointer',
+                  color: '#fafaf9', display: 'flex', flexDirection: 'column', gap: 2,
+                  transition: 'background 120ms ease',
+                  opacity: saving ? 0.6 : 1,
+                }}>
+                <div style={{ fontSize: 14, fontWeight: 600, color: o.color }}>{o.label}</div>
+                <div style={{ fontSize: 11, color: '#a8a29e' }}>{o.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+        {error && (
+          <div style={{ marginTop: 12, padding: '8px 12px', background: '#3f1d1d', border: '1px solid #7f1d1d', borderRadius: 6, fontSize: 12, color: '#fecaca' }}>
+            {error}
+          </div>
+        )}
+        <div style={{ marginTop: 14, fontSize: 10, color: '#57534e', textAlign: 'center' }}>
+          Close to skip — we'll ask again after the next call.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Modal({ onClose, title, children, wide }) {
   // Lock body scroll while modal is open
   useEffect(() => {
@@ -15608,7 +15824,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
                 (5/27 decision). Drafts still surface in Today → Automations and
                 the Outreach workspace; outreach automation is moving to Relay.
                 Comms is now purely for working a case by phone/text. */}
-            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} />
+            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} onOpenDisposition={setPendingDisposition} />
             <div style={{ marginTop: 20 }}>
               <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
             </div>
@@ -22813,7 +23029,7 @@ function normalizePhone(p) {
   return p;
 }
 
-function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
+function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpenDisposition }) {
   // Hoisted to the top: groupThreads useMemo below references this. Was
   // declared mid-function which caused a TDZ ReferenceError ('Cannot access
   // Ce before initialization') the first time a deal had messages with a
@@ -24362,6 +24578,55 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                 const label     = isMissed ? (isInbound ? '📵 Missed call' : '📵 Call unanswered')
                                            : (isInbound ? '📞 Inbound call' : '📞 Outbound call');
                 const color     = isMissed ? '#a83232' : '#22c55e';
+
+                // Disposition badge (issue #244). Shows current outcome if
+                // set, or a "Mark outcome" pill if not. Click either to open
+                // the disposition modal for editing.
+                const OUTCOME_META = {
+                  connected:    { label: '✓ Connected',    color: '#22c55e' },
+                  voicemail:    { label: '📨 Voicemail',   color: '#3b82f6' },
+                  no_answer:    { label: '⏱ No answer',    color: '#a8a29e' },
+                  wrong_number: { label: '✗ Wrong number', color: '#f97316' },
+                  disconnected: { label: '🚫 Disconnected',color: '#ef4444' },
+                };
+                const outcomeMeta = m.outcome ? OUTCOME_META[m.outcome] : null;
+                const canDispose = !isInbound && onOpenDisposition; // V1: outbound only
+                const dispositionBadge = canDispose ? (
+                  outcomeMeta ? (
+                    <button
+                      onClick={() => onOpenDisposition({ existing: m })}
+                      style={{
+                        background: `${outcomeMeta.color}22`,
+                        border: `1px solid ${outcomeMeta.color}66`,
+                        borderRadius: 999,
+                        padding: '2px 10px',
+                        fontSize: 10,
+                        fontWeight: 700,
+                        color: outcomeMeta.color,
+                        cursor: 'pointer',
+                        letterSpacing: '0.04em',
+                      }}
+                      title="Click to edit the disposition">
+                      {outcomeMeta.label}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => onOpenDisposition({ existing: m })}
+                      style={{
+                        background: 'transparent',
+                        border: '1px dashed #57534e',
+                        borderRadius: 999,
+                        padding: '2px 10px',
+                        fontSize: 10,
+                        color: '#78716c',
+                        cursor: 'pointer',
+                      }}
+                      title="Mark how this call went">
+                      + Mark outcome
+                    </button>
+                  )
+                ) : null;
+
                 return (
                   <div key={'c-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
                     <div style={{ maxWidth: '85%', background: '#1c1917', border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
@@ -24377,6 +24642,11 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus }) {
                         <audio controls src={m.recording_url} style={{ width: '100%', height: 32 }}>
                           Your browser does not support audio playback.
                         </audio>
+                      )}
+                      {dispositionBadge && (
+                        <div style={{ marginTop: m.recording_url ? 8 : 6, display: 'flex', justifyContent: 'flex-start' }}>
+                          {dispositionBadge}
+                        </div>
                       )}
                     </div>
                   </div>

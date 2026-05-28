@@ -113,23 +113,37 @@ Deno.serve(async (req) => {
              : toRaw
 
     // ────────────────────────────────────────────────────────────────────
-    // DND check (added 2026-04-25 by Nathan's session — see WORKING_ON.md)
-    // If the recipient phone is on contacts.do_not_text=true, refuse to
-    // send. Returns 403 + structured error so the caller (UI / cadence
-    // engine) can mark the queue row 'cancelled' with a clear reason.
+    // Refuse-list checks. Two gates, both keyed on the recipient phone:
+    //   1. DND          — contacts.do_not_text=true (manual flag or STOP)
+    //   2. Phone status — contacts.phone_status IN ('wrong_number','disconnected')
+    //                     set by the post-call disposition modal (issue #244)
+    // Either gate returns 403 + structured error so the caller (UI /
+    // cadence engine) can mark the queue row 'cancelled' with a reason.
     // ────────────────────────────────────────────────────────────────────
     const bareTo = to.replace(/^\+1/, '')
-    const { data: dndRows } = await sb
+    const { data: contactRows } = await sb
       .from('contacts')
-      .select('id, phone, do_not_text, dnd_reason')
+      .select('id, phone, do_not_text, dnd_reason, phone_status')
       .or(`phone.eq.${to},phone.eq.${bareTo}`)
-      .eq('do_not_text', true)
-      .limit(1)
-    if (dndRows && dndRows.length > 0) {
+      .limit(5)
+
+    const dndHit = (contactRows || []).find((c: any) => c.do_not_text === true)
+    if (dndHit) {
       return new Response(JSON.stringify({
         error: 'recipient_on_dnd',
-        details: dndRows[0].dnd_reason || 'do_not_text=true',
-        contact_id: dndRows[0].id,
+        details: dndHit.dnd_reason || 'do_not_text=true',
+        contact_id: dndHit.id,
+      }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    const badPhoneHit = (contactRows || []).find(
+      (c: any) => c.phone_status === 'wrong_number' || c.phone_status === 'disconnected'
+    )
+    if (badPhoneHit) {
+      return new Response(JSON.stringify({
+        error: 'bad_phone_status',
+        details: `phone_status=${badPhoneHit.phone_status}`,
+        contact_id: badPhoneHit.id,
       }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
     }
     // ────────────────────────────────────────────────────────────────────
