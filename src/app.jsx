@@ -26645,6 +26645,18 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
         <Field label="Company"><input value={contact.company || ''} onChange={e => onChange({ company: e.target.value })} style={inputStyle} /></Field>
         <Field label="Email"><input type="email" value={contact.email || ''} onChange={e => onChange({ email: e.target.value })} style={inputStyle} /></Field>
         <Field label="Phone"><input value={contact.phone || ''} onChange={e => onChange({ phone: e.target.value })} style={inputStyle} /></Field>
+        {/* Mailing address — optional, free-text. Per Eric 2026-05-28: when
+            skip-tracing / IDI Core / web research turns up a CURRENT address
+            for a homeowner or heir, paste it here. Different from the deal's
+            property address, which lives on the deal itself. */}
+        <Field label="Current mailing address (optional)" style={{ gridColumn: '1 / -1' }}>
+          <input
+            value={contact.mailing_address || ''}
+            onChange={e => onChange({ mailing_address: e.target.value })}
+            placeholder="Street, city, state, zip — paste whatever you find"
+            style={inputStyle}
+          />
+        </Field>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 12, marginTop: 12 }}>
