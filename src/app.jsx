@@ -274,8 +274,15 @@ async function fetchDeceasedReadinessExtras(dealId) {
 // Ready for Outreach. SINGLE SOURCE OF TRUTH used by BOTH the Today→Prep Queue
 // gate AND the Leads-list "Mark Ready" button, so the two can't drift (the
 // same drift class that caused the Charlotte Morrow "missing: phone" bug).
-// `relativePhoneOk` = a deceased lead has a relative/estate contact with a
-// phone (computed by the caller, which has the contact data).
+//
+// `relativePhoneOk` = a deceased lead has an heir/family contact (NOT a
+// neighbour or the decedent themselves) with a phone. Computed by the caller,
+// which has the contact data.
+//
+// Per Justin 2026-05-28: deceased leads also require an obituary pasted into
+// `meta.obituary` before they can be marked Ready. Eric/Inaam were marking
+// estates ready with no heir + no obituary (Isaac Irvin $226K, Choline Doory),
+// leaving us no one to call. The obituary gate forces the prep-research step.
 function leadMissing(deal, relativePhoneOk = false) {
   const m = deal?.meta || {};
   const cosDate = m.confirmationOfSaleDate || m.confirmation_of_sale_date || null;
@@ -288,6 +295,12 @@ function leadMissing(deal, relativePhoneOk = false) {
   if (isPostSale) {
     if (!deal?.refundlocators_token) missing.push('URL');
     if (!(m.estimatedSurplus ?? m.estimated_surplus)) missing.push('surplus est');
+  }
+  // Deceased-only: obituary must be pasted (or a research-failure note in its
+  // place) before the lead can be marked Ready. This is the gate that stops
+  // estates-with-no-callable-heir from slipping into the outreach queue.
+  if (isDeceased(deal) && !String(m.obituary || '').trim()) {
+    missing.push('obituary');
   }
   return missing;
 }
@@ -3059,7 +3072,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     if (!deceasedNeedingRel) { setDeceasedRelPhone(new Set()); return; }
     let cancelled = false;
     (async () => {
-      const RE = /(family|relative|spouse|husband|wife|child|children|daughter|son|parent|mother|father|sibling|brother|sister|cousin|niece|nephew|grandchild|heir|estate|executor|administrator|beneficiary|neighbou?r|in-law)/i;
+      // Heir / family roles only. Per Justin 2026-05-28: 'neighbour' is a LAST-
+      // RESORT contact (only after obituary + IDI Core + web research turn up
+      // nothing), not a primary heir signal, so it shouldn't satisfy the
+      // Ready-for-Outreach phone gate on its own.
+      const RE = /(family|relative|spouse|husband|wife|child|children|daughter|son|parent|mother|father|sibling|brother|sister|cousin|niece|nephew|grandchild|heir|estate|executor|administrator|beneficiary|in-law)/i;
       const { data } = await sb.from('contact_deals')
         .select('deal_id, relationship, contacts(phone, kind)')
         .in('deal_id', deceasedNeedingRel.split(','));
@@ -13293,7 +13310,10 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       // "Son-in-Law" appear too — so we substring-match. The pattern excludes
       // professional links (attorney/title/vendor/buyer/tenant/team) so their
       // phone never counts as the homeowner-side reachable number.
-      const RELATIVE_RE = /(family|relative|next of kin|\bkin\b|spouse|husband|wife|child|children|daughter|son|stepchild|grandchild|parent|mother|father|grandparent|grandmother|grandfather|sibling|brother|sister|cousin|niece|nephew|heir|estate|executor|administrator|beneficiary|neighbou?r|in-law)/i;
+      // Heir / family roles only. Neighbours dropped per Justin 2026-05-28:
+      // a neighbour is a LAST-RESORT contact (only after obituary + IDI + web
+      // turn up nothing), not a primary heir signal.
+      const RELATIVE_RE = /(family|relative|next of kin|\bkin\b|spouse|husband|wife|child|children|daughter|son|stepchild|grandchild|parent|mother|father|grandparent|grandmother|grandfather|sibling|brother|sister|cousin|niece|nephew|heir|estate|executor|administrator|beneficiary|in-law)/i;
       const { data } = await sb.from('contact_deals')
         .select('deal_id, relationship, contacts(phone, kind)')
         .in('deal_id', deceasedPrepKey.split(','));
@@ -18933,6 +18953,32 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               </label>
             </Field>
           </div>
+
+          {/* Obituary gate. When a lead is deceased, the obituary must be
+              pasted (or a research-failure note in its place) before "Mark
+              Ready" will unblock. Per Justin 2026-05-28: Eric/Inaam were
+              marking estates ready with no heir + no obituary, sending us
+              into outreach loops with no one to call. */}
+          {isDeceased(deal) && (
+            <div style={{ marginBottom: 14, padding: 12, background: m.obituary ? '#0c0a09' : '#1a0e1f', border: '1px solid ' + (m.obituary ? '#44403c' : '#5b21b6'), borderRadius: 8 }}>
+              <SubLabel>
+                {m.obituary
+                  ? '📰 Obituary on file'
+                  : '⚠️ Obituary required before Mark Ready'}
+              </SubLabel>
+              <textarea
+                value={m.obituary || ''}
+                onChange={e => updateMeta({ obituary: e.target.value, obituary_added_at: e.target.value ? (m.obituary_added_at || new Date().toISOString()) : null })}
+                placeholder={'Paste the obituary text here. Should mention heirs / family members so you can add them as contacts (with relationship "child" / "spouse" / "sibling" / "family"). If you cannot find an obituary, paste your research notes (what you searched: IDI Core, FB, web, neighbors and what came up) so the next person knows where to pick up.'}
+                style={{ width: '100%', minHeight: 90, padding: 10, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }}
+              />
+              {m.obituary && m.obituary_added_at && (
+                <div style={{ fontSize: 10, color: '#78716c', marginTop: 6 }}>
+                  Added {new Date(m.obituary_added_at).toLocaleDateString()} · {String(m.obituary).length} chars
+                </div>
+              )}
+            </div>
+          )}
 
           <SubLabel>Case Identity</SubLabel>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
