@@ -71,6 +71,19 @@ Only if you literally have no other option AND you have the source backed up. Fr
 ## Justin's session
 
 **Status:** Active — 2026-05-26
+
+**Latest shipped (2026-05-28 ~12:00pm ET):**
+- ✅ Deployed `generate-case-summary` (PRs #239 / #241 / `7adde80`) — case
+  briefs now name specific filings + factor in link-engagement + Lauren
+  chats. Nathan's auto-refresh trigger is live, so next docket event on
+  any deal will refresh against the new EF.
+- ✅ Deployed `send-sms` (PR #235 / `7ecdad8`) — iMessage path no longer
+  splits one-liners. Long iMessage sends now go as a single bubble.
+- 🔐 Added `CLAUDE.md` notes on (a) where the Supabase PAT actually
+  lives (Mac's Claude Desktop config / `.zshrc` / `~/.supabase`) and
+  (b) the Management-API IP allowlist that blocks edge-function deploys
+  from sandbox sessions.
+
 **Branch:** `claude/eloquent-brahmagupta-248dfb` (worktree)
 **Working on:** Backlog grooming — mined ~500MB of prior session transcripts
 to extract every "I want to build X" / "we need to fix Y" Justin said

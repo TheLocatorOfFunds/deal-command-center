@@ -97,6 +97,15 @@ Use it for:
 the user to paste it once, then proceed — but be aware it grants full account
 access, so don't log it.
 
+**⚠ IP allowlist gotcha (confirmed 2026-05-28):** the Supabase project has IP
+allowlisting enabled on the **Management API**. Even with a valid PAT,
+`supabase functions deploy` from a sandbox / cloud session returns
+`403 Host not in allowlist`. Edge-function deploys have to run from a
+whitelisted machine — Justin's Mac or the Defender Mini. Don't bother
+attempting from a Linux sandbox; tell the user to deploy locally instead.
+Read-only Management API calls (listing functions, reading vault secrets via
+SQL, etc.) are *not* affected — the allowlist only blocks writes/deploys.
+
 ## Database schema
 
 Core tables, all in `public` schema:
