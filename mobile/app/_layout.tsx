@@ -106,10 +106,15 @@ function ProtectedRouter() {
     if (loading || !session) return
     const subscription = AppState.addEventListener('change', async (nextState) => {
       if (nextState !== 'active') return
-      const voice = getVoice()
-      if (!voice) return
+      const v = getVoice()
+      if (!v) {
+        // Voice init failed or is still pending (PushKit token slow on first launch).
+        // Retry on every foreground — idempotent because initVoice() has a mutex.
+        initVoice().catch(() => {})
+        return
+      }
       try {
-        const calls = await voice.getCalls()
+        const calls = await v.getCalls()
         if (calls.size > 0) {
           const sid = [...calls.keys()][0]
           if (sid) {

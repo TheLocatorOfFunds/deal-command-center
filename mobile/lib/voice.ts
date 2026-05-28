@@ -182,7 +182,13 @@ async function _doInitVoice(): Promise<boolean> {
 
   // Retry register() with backoff. The SDK throws synchronously if its
   // internal deviceToken is still nil — we retry until iOS catches up.
-  const delays = [0, 1000, 2000, 3000, 5000, 8000, 10000] // ~29s total budget
+  //
+  // Extended budget: on first launch after a provisioning profile change,
+  // Apple can take 60-120+ seconds to issue a new PushKit VoIP token via
+  // didUpdatePushCredentials. The first 7 steps cover ~29s (fast retries
+  // to catch the common case); the remaining steps extend coverage to ~3
+  // minutes to handle slow APNs handshakes on fresh installs.
+  const delays = [0, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000, 30000, 45000, 60000] // ~3 min budget
   let lastErr: unknown = null
   for (const wait of delays) {
     if (wait > 0) await sleep(wait)
