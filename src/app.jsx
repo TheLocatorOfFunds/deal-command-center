@@ -341,6 +341,169 @@ const btnGhost = { background: "transparent", color: "#78716c", border: "1px sol
 const th = { textAlign: "left", padding: "10px 12px", fontSize: 10, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", textTransform: "uppercase" };
 const td = { padding: "10px 12px", verticalAlign: "top" };
 
+// ─── Phone helpers + dead-phone registry warning (#253) ──────────────
+//
+// `phoneToE164` normalises any phone format ("(513) 555-0100", "5135550100",
+// "513.555.0100", "+15135550100") into the canonical "+1NXXNXXXXXX" form
+// the registry stores. Used by PhoneInputWithWarning and any caller that
+// hits lookup_bad_phone.
+function phoneToE164(p) {
+  if (!p) return '';
+  const d = String(p).replace(/\D/g, '');
+  if (d.length === 10) return `+1${d}`;
+  if (d.length === 11 && d.startsWith('1')) return `+${d}`;
+  if (String(p).startsWith('+')) return String(p);
+  return d ? `+${d}` : '';
+}
+
+// `PhoneInputWithWarning` is the shared phone input every "add contact /
+// vendor / homeowner / lead" surface should use. After a 350ms debounce
+// it calls the lookup_bad_phone RPC. If the number is in the registry,
+// it renders an inline amber/red warning under the input — and exposes
+// the match + `acknowledged` flag back to the parent via `onWarning`,
+// so the parent can:
+//   - block save until the user clicks "Add anyway", OR
+//   - pre-flag the new contact's phone_status='disconnected' when
+//     `acknowledged===true` (per Justin's "pre-flag" decision)
+//
+// Props:
+//   value      — current string value (pass `contact.phone` etc.)
+//   onChange   — fn(newValue) — caller controls state, this stays dumb
+//   onWarning  — optional fn({ match, acknowledged }) — fires when the
+//                lookup resolves or acknowledged flips. Caller can use
+//                this to block submit or pre-flag.
+//   style      — merged into the <input>'s style (defaults to inputStyle)
+//   placeholder, type, inputMode — forwarded to <input>
+function PhoneInputWithWarning({ value, onChange, onWarning, placeholder, style, type = 'tel', inputMode = 'tel', autoFocus }) {
+  const [match, setMatch]               = React.useState(null);
+  const [loading, setLoading]           = React.useState(false);
+  const [acknowledged, setAcknowledged] = React.useState(false);
+  const lastQueriedRef                  = React.useRef('');
+
+  // Whenever the user edits the input, clear any prior acknowledgement
+  // so changing the number revokes the "Add anyway" override.
+  React.useEffect(() => {
+    setAcknowledged(false);
+  }, [value]);
+
+  // Debounced lookup. We only fire when the normalised form differs
+  // from the last query, so consecutive edits to formatting (e.g.
+  // adding parentheses) don't spam the RPC.
+  React.useEffect(() => {
+    const e164 = phoneToE164(value);
+    if (!e164 || e164.length < 12) {
+      setMatch(null);
+      lastQueriedRef.current = '';
+      return;
+    }
+    if (lastQueriedRef.current === e164) return;
+    const t = setTimeout(async () => {
+      lastQueriedRef.current = e164;
+      setLoading(true);
+      try {
+        const { data, error } = await sb.rpc('lookup_bad_phone', { p_phone: e164 });
+        if (error) {
+          console.warn('[bad-phone lookup] failed', error);
+          setMatch(null);
+        } else {
+          setMatch(Array.isArray(data) && data[0] ? data[0] : null);
+        }
+      } catch (e) {
+        console.warn('[bad-phone lookup] threw', e);
+        setMatch(null);
+      } finally {
+        setLoading(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [value]);
+
+  // Notify parent of warning state changes.
+  React.useEffect(() => {
+    if (onWarning) onWarning({ match, acknowledged });
+  }, [match, acknowledged, onWarning]);
+
+  const hasWarning = Boolean(match);
+  const inputBorder = hasWarning
+    ? (acknowledged ? '#f97316' : '#ef4444')
+    : '#44403c';
+
+  return (
+    <div>
+      <input
+        type={type}
+        inputMode={inputMode}
+        value={value || ''}
+        onChange={e => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus={autoFocus}
+        style={{ ...(style || inputStyle), borderColor: inputBorder }}
+      />
+      {hasWarning && (
+        <div
+          style={{
+            marginTop: 6, padding: '8px 10px',
+            background: acknowledged ? '#1f1408' : '#3f1d1d',
+            border: `1px solid ${acknowledged ? '#78350f' : '#7f1d1d'}`,
+            borderRadius: 6, fontSize: 11,
+            color: acknowledged ? '#fed7aa' : '#fecaca',
+            display: 'flex', alignItems: 'flex-start', gap: 8,
+          }}>
+          <div style={{ fontSize: 14, lineHeight: 1 }}>{acknowledged ? '⚠️' : '🚫'}</div>
+          <div style={{ flex: 1, lineHeight: 1.4 }}>
+            <div style={{ fontWeight: 700 }}>
+              {acknowledged ? 'Saving anyway — number will be pre-flagged disconnected.' : 'This number is in the dead-number registry.'}
+            </div>
+            <div style={{ marginTop: 2 }}>
+              Marked <strong>{match.reason}</strong> on{' '}
+              {new Date(match.first_marked_at).toLocaleDateString()}
+              {match.first_marked_contact_name && <> when calling <strong>{match.first_marked_contact_name}</strong></>}
+              {match.occurrence_count > 1 && <> · re-marked <strong>{match.occurrence_count}×</strong></>}.
+            </div>
+            {!acknowledged && (
+              <button
+                type="button"
+                onClick={() => setAcknowledged(true)}
+                style={{
+                  marginTop: 6, background: 'transparent', color: '#fca5a5',
+                  border: '1px solid #7f1d1d', borderRadius: 4,
+                  padding: '3px 9px', fontSize: 11, cursor: 'pointer', fontWeight: 600,
+                }}>
+                Add anyway
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {loading && !hasWarning && (
+        <div style={{ marginTop: 4, fontSize: 10, color: '#57534e' }}>Checking registry…</div>
+      )}
+    </div>
+  );
+}
+
+// Visual placeholder rendered wherever we'd normally show contact.phone,
+// when phone IS NULL and phone_status='disconnected' — i.e. the post-call
+// modal nulled the phone because it's in the bad-number registry.
+//
+// Caller pattern:
+//   {c.phone
+//     ? <a href={`tel:${c.phone}`}>{c.phone}</a>
+//     : <DisconnectedPhoneBadge status={c.phone_status} />}
+function DisconnectedPhoneBadge({ status, compact }) {
+  if (status !== 'disconnected' && status !== 'wrong_number') return null;
+  const label = status === 'disconnected' ? 'disconnected' : 'wrong number';
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      color: '#ef4444', fontSize: compact ? 11 : 12, fontWeight: 600,
+      letterSpacing: '0.02em',
+    }}>
+      ☎ <span style={{ textDecoration: 'line-through', opacity: 0.85 }}>({label})</span>
+    </span>
+  );
+}
+
 // ─── Shell ───────────────────────────────────────────────────────────
 function Shell({ children }) {
   return (
@@ -14337,14 +14500,24 @@ function CallDispositionModal({ pending, onClose }) {
       const userId = authData?.user?.id || null;
       const now = new Date().toISOString();
 
-      // ── Step 1: write call_logs.outcome ──────────────────────────────────
-      let callLogId = pending.existing?.id || null;
+      // ── Step 1: resolve the call_logs row (id + deal_id + contact_id) ──
+      // We need deal_id + contact_id to write the bad-phone registry note
+      // back to the originating deal, so we pull more columns than the
+      // original "just need the id" lookup.
+      let callLogId  = pending.existing?.id         || null;
+      let dealId     = pending.existing?.deal_id    || null;
+      let contactId  = pending.existing?.contact_id || null;
+
       if (!callLogId && pending.sid) {
         const { data: bySid } = await sb.from('call_logs')
-          .select('id, contact_id, to_number')
+          .select('id, contact_id, deal_id, to_number')
           .eq('twilio_call_sid', pending.sid)
           .maybeSingle();
-        if (bySid?.id) callLogId = bySid.id;
+        if (bySid?.id) {
+          callLogId = bySid.id;
+          dealId    = dealId    || bySid.deal_id;
+          contactId = contactId || bySid.contact_id;
+        }
       }
       // Fallback: most-recent outbound call to this number in the last 15 min.
       // Covers the case where twilio-voice-outbound hadn't yet inserted the row
@@ -14352,13 +14525,17 @@ function CallDispositionModal({ pending, onClose }) {
       if (!callLogId && pending.toNumber) {
         const sinceISO = new Date(Date.now() - 15 * 60 * 1000).toISOString();
         const { data: recent } = await sb.from('call_logs')
-          .select('id, contact_id, to_number')
+          .select('id, contact_id, deal_id, to_number')
           .eq('direction', 'outbound')
           .eq('to_number', pending.toNumber)
           .gte('started_at', sinceISO)
           .order('started_at', { ascending: false })
           .limit(1);
-        if (recent?.[0]?.id) callLogId = recent[0].id;
+        if (recent?.[0]?.id) {
+          callLogId = recent[0].id;
+          dealId    = dealId    || recent[0].deal_id;
+          contactId = contactId || recent[0].contact_id;
+        }
       }
 
       if (callLogId) {
@@ -14368,24 +14545,87 @@ function CallDispositionModal({ pending, onClose }) {
       }
 
       // ── Step 2: propagate to contacts.phone_status ──────────────────────
+      const targetPhone = pending.existing?.to_number || pending.toNumber;
+      const bare        = (targetPhone || '').replace(/^\+1/, '');
       const phoneStatus = phoneStatusFor(outcome);
-      if (phoneStatus) {
-        const targetPhone = pending.existing?.to_number || pending.toNumber;
-        if (targetPhone) {
-          const bare = (targetPhone || '').replace(/^\+1/, '');
-          const updates = {
-            phone_status: phoneStatus,
-            phone_status_set_at: now,
-          };
-          // 'disconnected' is the strongest signal — also flip do_not_call so
-          // the cadence engine + voice gate refuse any future outreach.
-          if (outcome === 'disconnected') {
-            updates.do_not_call = true;
-            updates.dnd_set_at = now;
-            updates.dnd_reason = 'Number disconnected (post-call disposition)';
+      if (phoneStatus && targetPhone) {
+        const updates = {
+          phone_status: phoneStatus,
+          phone_status_set_at: now,
+        };
+        // 'disconnected' is the strongest signal — also flip do_not_call so
+        // the cadence engine + voice gate refuse any future outreach.
+        if (outcome === 'disconnected') {
+          updates.do_not_call = true;
+          updates.dnd_set_at = now;
+          updates.dnd_reason = 'Number disconnected (post-call disposition)';
+        }
+        await sb.from('contacts').update(updates)
+          .or(`phone.eq.${targetPhone},phone.eq.${bare}`);
+      }
+
+      // ── Step 3: 'disconnected' → write number-keyed registry (#253) ─────
+      // The phone_status flag above is contact-scoped (gates SMS/voice
+      // refuse-lists per-contact). The bad_phone_numbers registry is
+      // number-scoped — so when someone later types this number into a
+      // NEW contact / lead / vendor anywhere in DCC, the shared phone
+      // input warns them before save. Justin clarification 2026-05-28:
+      // "It really needs to be categorized by number, not deal."
+      if (outcome === 'disconnected' && targetPhone) {
+        try {
+          // 3a. UPSERT into the registry. ON CONFLICT bumps occurrence_count
+          //     + last_marked_at, leaving first_marked_* as the original
+          //     audit trail.
+          const { data: existing } = await sb.from('bad_phone_numbers')
+            .select('phone, occurrence_count')
+            .eq('phone', targetPhone)
+            .maybeSingle();
+
+          if (existing) {
+            await sb.from('bad_phone_numbers').update({
+              occurrence_count: (existing.occurrence_count || 1) + 1,
+              last_marked_at:   now,
+              reason:           'disconnected',
+            }).eq('phone', targetPhone);
+          } else {
+            await sb.from('bad_phone_numbers').insert({
+              phone:                     targetPhone,
+              reason:                    'disconnected',
+              first_marked_at:           now,
+              last_marked_at:            now,
+              first_marked_by:           userId,
+              first_marked_deal_id:      dealId    || null,
+              first_marked_contact_id:   contactId || null,
+              first_marked_contact_name: pending.contactName || pending.existing?.contact_name || null,
+              occurrence_count:          1,
+            });
           }
-          await sb.from('contacts').update(updates)
+
+          // 3b. NULL out contacts.phone on every contact carrying this number.
+          //     Registry is now the source of truth; UI shows the red
+          //     "☎ (disconnected)" placeholder when phone IS NULL +
+          //     phone_status='disconnected'. We KEEP the contact row + the
+          //     phone_status flag so historical messages_outbound /
+          //     call_logs threads still resolve via thread_key.
+          await sb.from('contacts').update({ phone: null })
             .or(`phone.eq.${targetPhone},phone.eq.${bare}`);
+
+          // 3c. Write a deal_notes row on the originating deal so this
+          //     decision shows up in the deal's audit log. Skip if we
+          //     couldn't resolve a deal (orphan call that never bound).
+          if (dealId) {
+            await sb.from('deal_notes').insert({
+              deal_id:   dealId,
+              title:     'Number marked disconnected',
+              body:      `${targetPhone}${pending.contactName ? ' (' + pending.contactName + ')' : ''} reported as disconnected via post-call disposition. Removed from contact + added to dead-number registry. Future SMS, voice, and re-adds will be blocked.`,
+              author_id: userId,
+            });
+          }
+        } catch (e) {
+          // Registry write is best-effort — the contact-level gate
+          // (phone_status='disconnected') already blocks future outreach
+          // even if this fails. Log + keep going so the modal still closes.
+          console.error('[disposition] bad_phone_numbers registry write failed', e);
         }
       }
 
@@ -16853,7 +17093,13 @@ function HomeownerIntakeCard({ deal, userId }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))", gap: 8, marginBottom: 10 }}>
         <Field label="Homeowner name"><input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} style={inputStyle} placeholder="First and last" /></Field>
-        <Field label="Phone"><input value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} style={inputStyle} placeholder="(513) 555-0100" /></Field>
+        <Field label="Phone">
+          <PhoneInputWithWarning
+            value={form.phone}
+            onChange={(v) => setForm({ ...form, phone: v })}
+            placeholder="(513) 555-0100"
+          />
+        </Field>
         <Field label="Email"><input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} style={inputStyle} placeholder="optional" /></Field>
       </div>
       <button onClick={add} disabled={adding} style={btnPrimary}>{adding ? 'Generating…' : '+ Generate intake link'}</button>
@@ -26473,7 +26719,21 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
       kind: c.kind || 'other',
       kind_other: c.kind === 'other' ? ((c.kind_other || '').trim() || null) : null,
       tags: c.tags || [], notes: c.notes || null,
+      mailing_address: c.mailing_address || null,
     };
+    // Dead-phone registry pre-flag (#253). If the editor surfaced a
+    // bad-phone warning and the user clicked "Add anyway", the editor
+    // passes `c.__badPhoneAcknowledged` true. In that case we pre-flag
+    // the new contact as disconnected so the rest of the system (SMS
+    // refuse-list, voice gate, cadence engine) treats the number as
+    // already-known-bad without anyone having to call it again.
+    if (c.__badPhoneAcknowledged) {
+      patch.phone_status        = 'disconnected';
+      patch.phone_status_set_at = new Date().toISOString();
+      patch.do_not_call         = true;
+      patch.dnd_set_at          = new Date().toISOString();
+      patch.dnd_reason          = 'Pre-flagged from dead-number registry on contact create';
+    }
     if (isAdmin) patch.financial_notes = c.financial_notes || null;
     if (c.id) {
       const { error } = await sb.from('contacts').update(patch).eq('id', c.id);
@@ -26483,7 +26743,31 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
       patch.owner_id = userId;
       const { data, error } = await sb.from('contacts').insert(patch).select().single();
       if (error) setMsg({ type: 'error', text: error.message });
-      else { setEditing({ ...data, tags: data.tags || [] }); setMsg({ type: 'success', text: 'Contact created — now link them to deals below' }); }
+      else {
+        setEditing({ ...data, tags: data.tags || [] });
+        // Bump the bad_phone_numbers occurrence_count so re-adds get
+        // louder warnings each time.
+        if (c.__badPhoneAcknowledged && patch.phone) {
+          const e164 = phoneToE164(patch.phone);
+          if (e164) {
+            try {
+              const { data: existing } = await sb.from('bad_phone_numbers')
+                .select('phone, occurrence_count')
+                .eq('phone', e164)
+                .maybeSingle();
+              if (existing) {
+                await sb.from('bad_phone_numbers').update({
+                  occurrence_count: (existing.occurrence_count || 1) + 1,
+                  last_marked_at:   new Date().toISOString(),
+                }).eq('phone', e164);
+              }
+            } catch (_) { /* best-effort */ }
+          }
+        }
+        setMsg({ type: 'success', text: c.__badPhoneAcknowledged
+          ? 'Contact created — number pre-flagged as disconnected (outreach blocked).'
+          : 'Contact created — now link them to deals below' });
+      }
     }
     await load();
     setBusy(false);
@@ -26549,8 +26833,12 @@ function ContactsModal({ onClose, isAdmin, userId, deals, onJumpToDeal }) {
                       {c.name}
                       {c.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {c.company}</span>}
                     </div>
-                    <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
-                      {c.email || '—'}{c.phone && <> · <a href={`tel:${c.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{c.phone}</a></>}
+                    <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                      <span>{c.email || '—'}</span>
+                      {c.phone && <> · <a href={`tel:${c.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{c.phone}</a></>}
+                      {!c.phone && (c.phone_status === 'disconnected' || c.phone_status === 'wrong_number') && (
+                        <> · <DisconnectedPhoneBadge status={c.phone_status} compact /></>
+                      )}
                     </div>
                     {(c.tags || []).length > 0 && (
                       <div style={{ fontSize: 10, color: "#78716c", marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -26590,6 +26878,17 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
   const [linkLoading, setLinkLoading] = useState(false);
   const [linkPicker, setLinkPicker]   = useState('');
   const [relPicker, setRelPicker]     = useState('');
+  // Dead-phone registry (#253) — tracks lookup result + "Add anyway" ack
+  // so Save can be blocked (or contact pre-flagged) accordingly.
+  const [badPhone, setBadPhone]   = useState({ match: null, acknowledged: false });
+  const phoneChanged = contact.id
+    ? (phoneToE164(contact.phone) !== phoneToE164(contact.__original_phone ?? contact.phone))
+    : true;
+  // Only block save when (a) there's a hit, (b) the user hasn't ack'd
+  // it, and (c) for existing contacts only when they actually changed
+  // the number (don't block an edit on an existing contact that
+  // already carried this bad number — the registry pre-existed).
+  const blockSaveOnBadPhone = Boolean(badPhone.match) && !badPhone.acknowledged && phoneChanged;
 
   const loadLinks = async () => {
     if (!contact.id) { setLinks([]); return; }
@@ -26625,7 +26924,16 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
     const finalKindOther = contact.kind === 'other'
       ? ((contact.kind_other || '').trim() || null)
       : null;
-    onSave({ ...contact, tags: finalTags, kind_other: finalKindOther });
+    onSave({
+      ...contact,
+      tags: finalTags,
+      kind_other: finalKindOther,
+      // Tell saveContact to pre-flag this contact as disconnected if
+      // the user clicked "Add anyway" on the registry warning, and only
+      // when the phone actually changed (so re-saving an already-bad
+      // contact doesn't keep re-flagging).
+      __badPhoneAcknowledged: Boolean(badPhone.match) && badPhone.acknowledged && phoneChanged,
+    });
   };
 
   const unlinkedDeals = (deals || []).filter(d => !links.some(l => l.deal_id === d.id));
@@ -26636,7 +26944,13 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
         <button onClick={onBack} style={{ ...btnGhost, fontSize: 11 }}>← Back</button>
         <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
           {contact.id && <button onClick={onDelete} disabled={busy} style={{ ...btnGhost, color: "#ef4444", borderColor: "#7f1d1d", fontSize: 11 }}>Delete</button>}
-          <button onClick={handleSave} disabled={busy || !contact.name} style={btnPrimary}>{busy ? 'Saving…' : (contact.id ? 'Save' : 'Create contact')}</button>
+          <button
+            onClick={handleSave}
+            disabled={busy || !contact.name || blockSaveOnBadPhone}
+            title={blockSaveOnBadPhone ? 'This phone is in the dead-number registry — click "Add anyway" in the warning to override.' : undefined}
+            style={{ ...btnPrimary, opacity: blockSaveOnBadPhone ? 0.55 : 1, cursor: blockSaveOnBadPhone ? 'not-allowed' : 'pointer' }}>
+            {busy ? 'Saving…' : (contact.id ? 'Save' : 'Create contact')}
+          </button>
         </div>
       </div>
 
@@ -26644,7 +26958,13 @@ function ContactEditor({ contact, isAdmin, userId, deals, busy, onChange, onSave
         <Field label="Name *"><input value={contact.name || ''} onChange={e => onChange({ name: e.target.value })} style={inputStyle} placeholder="Full name" /></Field>
         <Field label="Company"><input value={contact.company || ''} onChange={e => onChange({ company: e.target.value })} style={inputStyle} /></Field>
         <Field label="Email"><input type="email" value={contact.email || ''} onChange={e => onChange({ email: e.target.value })} style={inputStyle} /></Field>
-        <Field label="Phone"><input value={contact.phone || ''} onChange={e => onChange({ phone: e.target.value })} style={inputStyle} /></Field>
+        <Field label="Phone">
+          <PhoneInputWithWarning
+            value={contact.phone || ''}
+            onChange={(v) => onChange({ phone: v })}
+            onWarning={setBadPhone}
+          />
+        </Field>
         {/* Mailing address — optional, free-text. Per Eric 2026-05-28: when
             skip-tracing / IDI Core / web research turns up a CURRENT address
             for a homeowner or heir, paste it here. Different from the deal's
@@ -26796,7 +27116,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
     setLoading(true);
     const [linksRes, contactsRes] = await Promise.all([
       sb.from('contact_deals')
-        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, kind, kind_other, tags)')
+        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, phone_status, kind, kind_other, tags)')
         .eq('deal_id', dealId)
         .order('created_at', { ascending: false }),
       sb.from('contacts').select('id, name, company, kind, kind_other, email').order('name'),
@@ -27047,7 +27367,12 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                         <Field label="Name *"><input value={editDraft.name} onChange={e => setEditDraft(d => ({ ...d, name: e.target.value }))} style={inputStyle} /></Field>
                         <Field label="Company"><input value={editDraft.company} onChange={e => setEditDraft(d => ({ ...d, company: e.target.value }))} style={inputStyle} /></Field>
                         <Field label="Email"><input type="email" value={editDraft.email} onChange={e => setEditDraft(d => ({ ...d, email: e.target.value }))} style={inputStyle} /></Field>
-                        <Field label="Phone"><input value={editDraft.phone} onChange={e => setEditDraft(d => ({ ...d, phone: e.target.value }))} style={inputStyle} /></Field>
+                        <Field label="Phone">
+                          <PhoneInputWithWarning
+                            value={editDraft.phone}
+                            onChange={(v) => setEditDraft(d => ({ ...d, phone: v }))}
+                          />
+                        </Field>
                         <Field label="Type">
                           <select value={editDraft.kind} onChange={e => setEditDraft(d => ({ ...d, kind: e.target.value, ...(e.target.value !== 'other' ? { kind_other: '' } : {}) }))} style={{ ...inputStyle, padding: "8px 10px" }}>
                             {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
@@ -27086,8 +27411,12 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                         {l.contacts?.name}
                         {l.contacts?.company && <span style={{ color: "#78716c", fontWeight: 500 }}> · {l.contacts.company}</span>}
                       </div>
-                      <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
-                        {l.contacts?.email || '—'}{l.contacts?.phone && <> · <a href={`tel:${l.contacts.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.contacts.phone}</a></>}
+                      <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                        <span>{l.contacts?.email || '—'}</span>
+                        {l.contacts?.phone && <> · <a href={`tel:${l.contacts.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.contacts.phone}</a></>}
+                        {!l.contacts?.phone && (l.contacts?.phone_status === 'disconnected' || l.contacts?.phone_status === 'wrong_number') && (
+                          <> · <DisconnectedPhoneBadge status={l.contacts.phone_status} compact /></>
+                        )}
                         {l.relationship && <> · {l.relationship}</>}
                       </div>
                     </div>
@@ -27140,7 +27469,12 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                 <Field label="Name *"><input value={quickNew.name} onChange={e => setQuickNew(q => ({ ...q, name: e.target.value }))} style={inputStyle} /></Field>
                 <Field label="Company"><input value={quickNew.company} onChange={e => setQuickNew(q => ({ ...q, company: e.target.value }))} style={inputStyle} /></Field>
                 <Field label="Email"><input type="email" value={quickNew.email} onChange={e => setQuickNew(q => ({ ...q, email: e.target.value }))} style={inputStyle} /></Field>
-                <Field label="Phone"><input value={quickNew.phone} onChange={e => setQuickNew(q => ({ ...q, phone: e.target.value }))} style={inputStyle} /></Field>
+                <Field label="Phone">
+                  <PhoneInputWithWarning
+                    value={quickNew.phone}
+                    onChange={(v) => setQuickNew(q => ({ ...q, phone: v }))}
+                  />
+                </Field>
                 <Field label="Type">
                   <select value={quickNew.kind} onChange={e => setQuickNew(q => ({ ...q, kind: e.target.value, ...(e.target.value !== 'other' ? { kind_other: '' } : {}) }))} style={{ ...inputStyle, padding: "8px 10px" }}>
                     {CONTACT_KINDS.map(k => <option key={k.key} value={k.key}>{k.icon} {k.label}</option>)}
