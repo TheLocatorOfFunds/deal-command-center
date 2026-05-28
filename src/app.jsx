@@ -26858,6 +26858,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
     setEditDraft({
       name: c.name || '', company: c.company || '', email: c.email || '',
       phone: c.phone || '', kind: c.kind || 'other', kind_other: c.kind_other || '',
+      mailing_address: c.mailing_address || '',
       relationship: link.relationship || '',
     });
     setEditingLinkId(link.id);
@@ -26878,6 +26879,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
       phone: editDraft.phone.trim() || null,
       kind: editDraft.kind,
       kind_other: editDraft.kind === 'other' ? editDraft.kind_other.trim() || null : null,
+      mailing_address: (editDraft.mailing_address || '').trim() || null,
     };
     const { error: cErr } = await sb.from('contacts').update(contactPatch).eq('id', link.contact_id);
     if (cErr) { setErr(cErr.message); setBusy(false); return; }
@@ -27052,6 +27054,15 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                           </select>
                         </Field>
                         <Field label="Relationship on this deal"><input value={editDraft.relationship} onChange={e => setEditDraft(d => ({ ...d, relationship: e.target.value }))} placeholder="e.g. son of homeowner, attorney of record" style={inputStyle} /></Field>
+                        {/* Mailing address — full-width row, mirrors the main ContactEditor */}
+                        <Field label="Current mailing address (optional)" style={{ gridColumn: '1 / -1' }}>
+                          <input
+                            value={editDraft.mailing_address || ''}
+                            onChange={e => setEditDraft(d => ({ ...d, mailing_address: e.target.value }))}
+                            placeholder="Street, city, state, zip — paste whatever you find"
+                            style={inputStyle}
+                          />
+                        </Field>
                       </div>
                       {editDraft.kind === 'other' && (
                         <Field label="Describe type *" style={{ marginTop: 10 }}>
