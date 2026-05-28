@@ -17737,6 +17737,14 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const [summary, setSummary] = useState(deal?.meta?.case_intel_summary || null);
   const [summaryBusy, setSummaryBusy] = useState(false);
   const [summaryErr, setSummaryErr] = useState(null);
+  // Auto-refresh-on-open: when a caller opens a deal whose cached summary is
+  // stale (>15 min) or missing, re-fire generate-case-summary in the background
+  // so the brief reflects whatever's happened since (docket events, calls,
+  // texts, OCR'd docs). morning-sweep only refreshes at 8am ET, so by afternoon
+  // the brief can miss meaningful filings (e.g. a supplemental-distribution
+  // motion). firedRef prevents re-firing across prop re-renders for the same
+  // deal. Per Nathan 2026-05-27.
+  const autoRefreshedRef = useRef(new Set());
   // Per-row "Skip" persistence — rows the user explicitly skipped on this
   // deal don't reappear until the user re-promotes via "Show all again".
   // Stored in deal.meta.case_intel_skipped (array of meta-keys / 'address').
@@ -17767,6 +17775,22 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   useEffect(() => {
     if (deal?.meta?.case_intel_summary) setSummary(deal.meta.case_intel_summary);
   }, [deal?.meta?.case_intel_summary]);
+
+  // Auto-refresh on open: fire generate-case-summary if the cached brief is
+  // missing or >15 min old. Runs once per dealId per session (firedRef). The
+  // existing refreshSummary() handles setSummaryBusy / setSummaryErr / state.
+  useEffect(() => {
+    if (!dealId) return;
+    if (autoRefreshedRef.current.has(dealId)) return;
+    const STALE_MS = 15 * 60 * 1000;
+    const cached = deal?.meta?.case_intel_summary;
+    const ageMs = cached?.generated_at ? Date.now() - new Date(cached.generated_at).getTime() : Infinity;
+    if (ageMs > STALE_MS) {
+      autoRefreshedRef.current.add(dealId);
+      refreshSummary();
+    }
+    // eslint-disable-next-line
+  }, [dealId]);
 
   useEffect(() => {
     const ch = sb.channel('case-intel-' + dealId)
