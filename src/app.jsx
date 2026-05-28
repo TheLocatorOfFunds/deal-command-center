@@ -2149,7 +2149,7 @@ function DealCommandCenter({ session, profile }) {
             nextDeal: peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null,
             onNav: setActiveDealId,
           };
-          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} onRequestDisposition={(d) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' } })} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
+          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} onRequestDisposition={(d) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' } })} onOpenCallDisposition={setPendingDisposition} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
         })()
       )}
 
@@ -15407,7 +15407,7 @@ function NotesDrawerTrigger({ count, onClick, isOpen }) {
   );
 }
 
-function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, initialTab, peerNav, startCall, callStatus }) {
+function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, initialTab, peerNav, startCall, callStatus, onOpenCallDisposition }) {
   // Tasks + Lauren were removed from the deal tab bar (5/27). If an old
   // deep-link lands on one of those, fall back to overview so the user
   // doesn't see content with no matching tab button.
@@ -15824,7 +15824,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
                 (5/27 decision). Drafts still surface in Today → Automations and
                 the Outreach workspace; outreach automation is moving to Relay.
                 Comms is now purely for working a case by phone/text. */}
-            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} onOpenDisposition={setPendingDisposition} />
+            <OutboundMessages dealId={deal.id} vendors={vendors} deal={deal} startCall={startCall} callStatus={callStatus} onOpenDisposition={onOpenCallDisposition} />
             <div style={{ marginTop: 20 }}>
               <MessagesTab dealId={deal.id} deal={deal} userId={userId} userName={userName} userRole={isAdmin ? 'admin' : 'va'} />
             </div>
