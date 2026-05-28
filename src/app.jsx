@@ -697,7 +697,7 @@ function DealCommandCenter({ session, profile }) {
     'tasks', 'time', 'reports', 'analytics', 'traffic', 'team',
     // Added 2026-05-15 per Justin: these were nav items but missing from
     // the whitelist, so refresh on these views bounced you back to today.
-    'relay', 'calls', 'comms', 'va-queue', 'communications',
+    'relay', 'calls', 'comms', 'va-queue', 'communications', 'automations',
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
@@ -1777,9 +1777,8 @@ function DealCommandCenter({ session, profile }) {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
               {navItem('today',    '📌', 'Today')}
               {navItem('attention','⏰', 'Deadlines')}
-              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','leads','forecast'] })}
+              {navItem('outreach', '🎯', 'Automations', { groupIds: ['outreach','automations','relay','leads','forecast'] })}
               {navItem('communications', '💬', 'Comms', { groupIds: ['communications','inbox'] })}
-              {navItem('relay',    '📡', 'Relay')}
               {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
@@ -3375,7 +3374,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
@@ -3383,19 +3382,13 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
-          ) : view === "relay" ? (
-            <RelayView
-              supabase={sb}
-              onOpenDeal={(id) => {
-                // When drilling in from Relay, the user almost always wants to
-                // look at the Comms thread for that deal — that's where the
-                // pending message and full conversation context live. Skip
-                // Overview and route straight there.
-                window.location.hash = `#/deal/${id}/comms`;
-              }}
+          ) : view === "relay" || view === "outreach" || view === "automations" ? (
+            // Phase 1 of the 5/27 Automations unification: one wrapper, two
+            // sub-tabs. `view='relay'` opens Enrolled; the others open Ready.
+            <AutomationsView
+              deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin}
+              initialSubtab={view === 'relay' ? 'enrolled' : (view === 'outreach' ? 'ready' : null)}
             />
-          ) : view === "outreach" ? (
-            <OutreachView deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin} />
           ) : view === "inbox" || view === "communications" ? (
             /* Phase 3 (5/27): the new cross-deal Communications hub (Calls +
                Texting) supersedes the old InboxView/ReplyInbox. The "inbox"
@@ -8967,6 +8960,67 @@ function ReviewModeBanner({ isAdmin }) {
   );
 }
 
+// ════════════════════════════════════════════════════════════════════
+// AutomationsView — unified Outreach + Relay surface (5/27 plan, Phase 1)
+// ════════════════════════════════════════════════════════════════════
+// Wraps OutreachView ("Ready to Approve") + RelayView ("Enrolled") with
+// a sub-tab switcher. Backend was already merged (one outreach_queue,
+// both engines feeding it, Relay rows labeled "Relay · step N" per
+// ff28d4c). This component is just the UI consolidation.
+//
+// Routing: view='outreach' / 'automations' open with the Ready tab;
+// view='relay' opens with the Enrolled tab. The active sub-tab is
+// persisted to localStorage so refreshes don't bounce you back
+// (closes #188, generalized from Relay-only).
+function AutomationsView({ deals, onSelect, setView, isAdmin, initialSubtab }) {
+  const STORAGE_KEY = 'dcc_automations_subtab';
+  const [subtab, setSubtabRaw] = useState(() => {
+    if (initialSubtab) return initialSubtab;
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored === 'ready' || stored === 'enrolled') return stored;
+    } catch {}
+    return 'ready';
+  });
+  const setSubtab = (t) => {
+    setSubtabRaw(t);
+    try { localStorage.setItem(STORAGE_KEY, t); } catch {}
+  };
+  // If the user lands here via setView('relay') after already having a
+  // saved sub-tab, honor the explicit intent (Enrolled).
+  useEffect(() => {
+    if (initialSubtab && initialSubtab !== subtab) setSubtab(initialSubtab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSubtab]);
+
+  const tabBtn = (id, label) => (
+    <button onClick={() => setSubtab(id)}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', fontSize: 13, fontWeight: 700,
+        background: subtab === id ? '#1c1917' : 'transparent', color: subtab === id ? '#d97706' : '#78716c',
+        border: 'none', borderBottom: subtab === id ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer' }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div>
+      <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>🎯 Automations</div>
+      <div style={{ fontSize: 12, color: '#78716c', marginBottom: 14 }}>Outreach + Relay unified. Approve drafts on the left tab; manage enrollments + RVM approvals on the right.</div>
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #292524', marginBottom: 14 }}>
+        {tabBtn('ready', 'Ready to Approve')}
+        {tabBtn('enrolled', 'Enrolled')}
+      </div>
+      {subtab === 'ready'
+        ? <OutreachView deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin} />
+        : <RelayView
+            supabase={sb}
+            onOpenDeal={(id) => { window.location.hash = `#/deal/${id}/comms`; }}
+          />
+      }
+    </div>
+  );
+}
+
 function OutreachView({ deals, onSelect, setView, isAdmin }) {
   const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
   const alive = useAliveRef();
@@ -9009,13 +9063,8 @@ function OutreachView({ deals, onSelect, setView, isAdmin }) {
 
   return (
     <div>
-      <div style={{ marginBottom: 18 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-          🚀 Outreach
-          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· campaigns + replies + escalations, all in one place</span>
-        </h2>
-      </div>
-
+      {/* The top-of-page heading is owned by AutomationsView now (parent
+          sub-tab wrapper). This component is the "Ready to Approve" body. */}
       <ReviewModeBanner isAdmin={isAdmin} />
 
       <DoubleQueueGuard deals={deals} onSelect={onSelect} />
