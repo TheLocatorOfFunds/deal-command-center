@@ -26786,7 +26786,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
   const [pick, setPick]               = useState('');
   const [rel, setRel]                 = useState('');
   const [showQuickNew, setShowQuickNew] = useState(false);
-  const [quickNew, setQuickNew]       = useState({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', notes: '' });
+  const [quickNew, setQuickNew]       = useState({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', mailing_address: '', notes: '' });
   const [busy, setBusy]               = useState(false);
   const [err, setErr]                 = useState(null);
   const [editingLinkId, setEditingLinkId] = useState(null);
@@ -26841,13 +26841,14 @@ function ContactsTab({ dealId, userId, isAdmin }) {
       name: quickNew.name, company: quickNew.company || null, email: quickNew.email || null,
       phone: quickNew.phone || null, kind: quickNew.kind || 'other',
       kind_other: quickNew.kind === 'other' ? (quickNew.kind_other || '').trim() || null : null,
+      mailing_address: (quickNew.mailing_address || '').trim() || null,
       notes: quickNew.notes || null,
       owner_id: userId,
     }).select().single();
     if (error) { setErr(error.message); setBusy(false); return; }
     const linkErr = (await sb.from('contact_deals').insert({ contact_id: c.id, deal_id: dealId, relationship: rel || null, created_by: userId })).error;
     if (linkErr) setErr(linkErr.message);
-    setQuickNew({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', notes: '' });
+    setQuickNew({ name: '', company: '', email: '', phone: '', kind: 'other', kind_other: '', mailing_address: '', notes: '' });
     setShowQuickNew(false); setRel('');
     await load();
     setBusy(false);
@@ -27155,6 +27156,16 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                     style={inputStyle} />
                 </Field>
               )}
+              {/* Mailing address — optional, full-width. Mirrors ContactEditor +
+                  inline-edit-on-deal forms. Per Eric 2026-05-29. */}
+              <Field label="Current mailing address (optional)" style={{ marginTop: 12 }}>
+                <input
+                  value={quickNew.mailing_address}
+                  onChange={e => setQuickNew(q => ({ ...q, mailing_address: e.target.value }))}
+                  placeholder="Street, city, state, zip — paste whatever you find"
+                  style={inputStyle}
+                />
+              </Field>
               <Field label="Notes" style={{ marginTop: 12 }}>
                 <textarea value={quickNew.notes} onChange={e => setQuickNew(q => ({ ...q, notes: e.target.value }))} rows={2} style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }} />
               </Field>
