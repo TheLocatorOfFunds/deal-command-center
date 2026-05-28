@@ -39,3 +39,6 @@ pitch.source.html
 # (eSignatures.com, future MCP servers, etc.)
 .mcp.json
 .mcp.json.local
+
+# Per-user Claude rules (Justin's personal patterns, never shared)
+CLAUDE.local.md
