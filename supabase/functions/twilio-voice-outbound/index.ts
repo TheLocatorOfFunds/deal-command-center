@@ -47,14 +47,39 @@ Deno.serve(async (req: Request) => {
     const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const db = createClient(supabaseUrl, serviceKey);
 
-    // Route: find deal + contact by `to` number (same as inbound routing)
+    // Route: find deal + contact by `to` number (same as inbound routing).
+    // Also fetch phone_status + do_not_call so we can refuse calls to
+    // numbers the team flagged disconnected/wrong-number via the
+    // post-call disposition modal (issue #244).
     let dealId: string | null = null;
     let contactId: string | null = null;
     let threadKey: string | null = null;
 
     const { data: contactRows } = await db.from('contacts')
-      .select('id, contact_deals(deal_id)')
+      .select('id, do_not_call, phone_status, contact_deals(deal_id)')
       .or(`phone.eq.${to},phone.eq.${to.replace('+1', '')}`);
+
+    // Refuse-list check: if ANY matching contact is DNC or has a bad
+    // phone status, hang up immediately with a synthesized message.
+    // We don't log the attempt to call_logs — there's nothing to log
+    // since we never dialed.
+    const blocked = (contactRows || []).find((c: any) =>
+      c.do_not_call === true
+      || c.phone_status === 'wrong_number'
+      || c.phone_status === 'disconnected'
+    );
+    if (blocked) {
+      const reason = blocked.phone_status || (blocked.do_not_call ? 'do_not_call' : 'blocked');
+      return new Response(
+        `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">This number is marked ${reason.replace(/_/g, ' ')} in the system. The call has been blocked.</Say>
+  <Hangup/>
+</Response>`,
+        { status: 200, headers: { 'Content-Type': 'text/xml' } }
+      );
+    }
+
     const match = (contactRows || []).find((c: any) => c.contact_deals?.length > 0);
     if (match) {
       contactId = match.id;
