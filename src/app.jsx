@@ -226,6 +226,46 @@ const isDeceased = (deal) => !!(deal?.death_signal || deal?.meta?.deceased);
 // it (the legacy ✓ CLEAN signal — merged 2026-05-21 so there's one status).
 const isReadyForOutreach = (deal) => !!(deal?.prepped_at || deal?.meta?.verified);
 
+// ─── Surplus lifecycle stage (Nathan 2026-05-29) ─────────────────────
+// The at-a-glance "where's the money" state for a surplus lead. SINGLE
+// SOURCE OF TRUTH for the card pill AND the Deals-list filter so they can't
+// drift (same discipline as leadMissing). Computed purely from existing meta
+// — no new data, no migration.
+//   'claimable_now'  🟢 post-sale + verified + not already-claimed/in-progress
+//                       → funds sitting at the county, claimable, no motion filed
+//   'potential_post' 🟠 post-sale, UNVERIFIED, has a surplus figure → sold,
+//                       likely surplus, not yet confirmed
+//   'potential_pre'  🔵 pre-sale, UNVERIFIED, has a surplus figure → auction
+//                       upcoming, estimated surplus
+//   null             → not an active surplus deal · no surplus figure yet ·
+//                       OR verified-but-already-claimed / claim-in-progress
+//                       (being worked — not "claimable now", not "potential")
+const SURPLUS_STAGE_META = {
+  claimable_now:  { short: 'Claimable now',          label: '🟢 CLAIMABLE NOW',       bg: '#064e3b', fg: '#6ee7b7', border: '#10b981',
+                    title: 'Post-sale + walker-verified surplus sitting at the county — not yet claimed, no motion filed. Work these first.' },
+  potential_post: { short: 'Potential · post-sale',  label: '🟠 POTENTIAL · post-sale', bg: '#3a1d0e', fg: '#fdba74', border: '#a16207',
+                    title: 'Sold at auction with a likely surplus, but NOT yet walker-verified. Confirm before heavy outreach.' },
+  potential_pre:  { short: 'Potential · pre-sale',   label: '🔵 POTENTIAL · pre-sale',  bg: '#172554', fg: '#93c5fd', border: '#2563eb',
+                    title: 'Auction has not happened yet — estimated surplus, unverified.' },
+};
+const SURPLUS_STAGE_ORDER = ['claimable_now', 'potential_post', 'potential_pre'];
+function surplusStage(deal) {
+  if (!deal || deal.type !== 'surplus') return null;
+  if (['closed', 'dead', 'recovered'].includes(deal.status)) return null;
+  const m = deal.meta || {};
+  const surplusVal = m.verifiedSurplus || m.estimatedSurplus || m.estimatedAvailableEquity || deal.surplus_estimate || 0;
+  if (!(surplusVal > 0)) return null;
+  const isPost = !!(m.confirmationOfSaleDate || m.confirmation_of_sale_date || m.isPostAuction || m.is_post_auction
+                 || (m.salePrice > 0) || (m.saleDate && new Date(m.saleDate).getTime() < Date.now()));
+  const verified = m.confidenceTier === 'walker_verified' || m.walkerVerified === true;
+  const claim = m.surplusClaimStatus || m.surplus_claim_status || '';
+  const stillOpen = !['already_claimed', 'claim_in_progress'].includes(claim);
+  if (verified && isPost && stillOpen) return 'claimable_now';
+  if (verified) return null; // verified-but-claimed / verified pre-sale (rare) — not a "potential" bucket
+  if (isPost) return 'potential_post';
+  return 'potential_pre';
+}
+
 // ─── Phase-1 deceased-lead readiness gate (Nathan 2026-05-28) ─────────
 // Before a deceased lead can be marked Ready for Outreach, the team needs:
 //   (1) Proof of death — an obituary / death-notice document attached.
@@ -2972,6 +3012,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // 'all' | 'walker_verified' | 'complaint_inferred'. Applies to the surplus
   // list only; untiered deals show only under 'all'.
   const [confTierFilter, setConfTierFilter] = useState("all");
+  // Surplus lifecycle filter (Nathan 2026-05-29): 'all' | claimable_now |
+  // potential_post | potential_pre — see surplusStage().
+  const [surplusStageFilter, setSurplusStageFilter] = useState("all");
   // Insights "Profit Booked" — which year's closed deals to total (default: now).
   const [revenueYear, setRevenueYear] = useState(new Date().getFullYear());
   // Relative/estate-phone presence for DECEASED New Leads in view, so the card
@@ -3067,6 +3110,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const confWalkerCount = surplusAll.filter(d => d.meta?.confidenceTier === 'walker_verified').length;
   const confVerifyCount = surplusAll.filter(d => d.meta?.confidenceTier === 'complaint_inferred').length;
   let surplus = confTierFilter === "all" ? surplusAll : surplusAll.filter(d => (d.meta?.confidenceTier || '') === confTierFilter);
+  // Surplus lifecycle stage filter + counts (Nathan 2026-05-29). Counts from the
+  // confidence-filtered set so they compose; the stage dropdown shows live counts.
+  const stageCounts = { claimable_now: 0, potential_post: 0, potential_pre: 0 };
+  for (const d of surplus) { const s = surplusStage(d); if (s) stageCounts[s]++; }
+  if (surplusStageFilter !== "all") surplus = surplus.filter(d => surplusStage(d) === surplusStageFilter);
   // #238 — New Leads: float highest potential surplus to the top so the team
   // works the biggest money first. Uses the same surplus cascade as the fee math
   // (estimatedSurplus → estimated_surplus → estimatedAvailableEquity). Leads with
@@ -3374,6 +3422,18 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               <option value="all">All confidence</option>
               <option value="walker_verified">Walker only ({confWalkerCount})</option>
               <option value="complaint_inferred">Verify-first ({confVerifyCount})</option>
+            </select>
+          )}
+          {/* Surplus lifecycle stage (Nathan 2026-05-29) — "where's the money".
+              Only shown when staged surplus is present in the current view. */}
+          {(stageCounts.claimable_now + stageCounts.potential_post + stageCounts.potential_pre) > 0 && (
+            <select value={surplusStageFilter} onChange={e => setSurplusStageFilter(e.target.value)}
+              title="Filter surplus leads by lifecycle stage — claimable-now (verified money at the county) vs potential (unverified, pre- or post-sale)"
+              style={{ ...selectStyle, minWidth: 200, ...(surplusStageFilter !== 'all' ? { borderColor: '#d97706', color: '#fbbf24' } : {}) }}>
+              <option value="all">All surplus stages</option>
+              <option value="claimable_now">🟢 Claimable now ({stageCounts.claimable_now})</option>
+              <option value="potential_post">🟠 Potential · post-sale ({stageCounts.potential_post})</option>
+              <option value="potential_pre">🔵 Potential · pre-sale ({stageCounts.potential_pre})</option>
             </select>
           )}
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
@@ -3735,6 +3795,8 @@ function DealStatusBadges({ deal }) {
   const isPostAuction = !!cosDate || !!m.isPostAuction || !!m.is_post_auction;
   const isPreAuction = !isPostAuction && (!!deal?.is_30dts || (m.saleDate && new Date(m.saleDate) > new Date()));
   const ready = isReadyForOutreach(deal);
+  const stage = surplusStage(deal); // 🟢/🟠/🔵 surplus lifecycle (Nathan 2026-05-29)
+  const stageMeta = stage ? SURPLUS_STAGE_META[stage] : null;
 
   const Pill = ({ label, title, bg, fg, border, mono = false }) => (
     <span title={title} style={{
@@ -3754,8 +3816,12 @@ function DealStatusBadges({ deal }) {
           deceased homeowners were visually indistinguishable from
           living ones, leading to incorrect outreach approach risk. */}
       <DeceasedBadge deal={deal} size="sm" />
-      {isPostAuction && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
-      {isPreAuction && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
+      {/* Surplus lifecycle pill — the "where's the money" state. Primary signal.
+          When it shows, the bare PRE/POST tags are suppressed (the stage label
+          already says post/pre) to cut clutter. Per Nathan 2026-05-29. */}
+      {stageMeta && <Pill label={stageMeta.label} title={stageMeta.title} bg={stageMeta.bg} fg={stageMeta.fg} border={stageMeta.border} />}
+      {isPostAuction && !stage && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
+      {isPreAuction && !stage && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
       {ready && <Pill label="✅ READY" title="Ready for Outreach — vetted: phone, contacts, and personalized URL all in place" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
       {cosDate && <Pill label="💰 SOS" title={`Surplus On Sale — confirmation of sale ${cosDate}; surplus dollar amount is locked, not estimated`} bg="#78350f" fg="#fbbf24" border="#d97706" />}
       {/* Surplus confidence tier — intel-main-managed meta.confidenceTier (read-only;
@@ -3764,7 +3830,7 @@ function DealStatusBadges({ deal }) {
           still-claimable, work first); complaint_inferred = amber "verify lien"
           (confirmed by inference — all tax foreclosures land here, a senior mortgage
           could still eat it); untiered (legacy/non-confirmed) = no badge. #237. */}
-      {m.confidenceTier === 'walker_verified' ? (
+      {m.confidenceTier === 'walker_verified' && stage !== 'claimable_now' ? (
         <Pill label={m.confidenceLabel || 'Walker-verified'} title="Walker-verified — a walker confirmed the surplus is real AND still claimable at the county. Highest confidence; work these first." bg="#064e3b" fg="#6ee7b7" border="#10b981" />
       ) : m.confidenceTier === 'complaint_inferred' ? (
         <Pill label={m.confidenceLabel || 'Complaint-inferred · verify lien'} title="Complaint-inferred — confirmed by inference (all tax foreclosures land here). A walker confirmed money is at the county but NOT that a senior mortgage won't eat it — verify the lien before investing outreach." bg="#3a1d0e" fg="#fdba74" border="#a16207" />
