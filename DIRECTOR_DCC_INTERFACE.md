@@ -1,6 +1,6 @@
 # Director ↔ DCC interface contract
 
-**Last updated:** 2026-05-27 PM (by Director / intel-main session — added confidenceTier/confidenceLabel + feePct=25 seed on push)
+**Last updated:** 2026-05-29 (by DCC/Nathan session — added Open coordination item: Director-side detection of docket vacate/withdrawal → auction_status flip; + new DCC disposition reason `sale_vacated` for the outcome-reason mapping)
 **Living doc.** Either side updates as the contract evolves. Bump the date when you do.
 
 ## Domains
@@ -140,6 +140,20 @@ outcome record when it sees the deal is no longer dead.
 
 ## Open coordination items
 
+- 🆕 **ASK FOR DIRECTOR (2026-05-29, from DCC/Nathan session): detect docket vacate/withdrawal-of-sale → flip `auction_status` so v6 demotion fires system-wide.**
+  **The gap:** a granted motion to vacate / withdraw the sheriff's sale = no sale = no surplus = dead lead. DCC just shipped a **Sale-Risk strip** on Today that keyword-scans `docket_events.description` and flags these. On a live scan it caught **13 active surplus leads** with vacate/withdrawal activity, several already GRANTED and still sitting as live `new-lead` with full surplus + grade:
+  - `sf-j` Matthew Thomas — **$208k** — *"ORDER CANCELLING JUNE 4 2026 SALE, VACATING JUDGMENT AND DISMISSING COMPLAINT"* (5/20) — granted
+  - `sf-j-2` Thomas/Matthew J — **$187k** — same case, dup, granted
+  - `sf-g` Ruth Doyle — **$113k** — *"ENTRY WITHDRAWING PROPERTY FROM SALE"* — granted
+  - `sf-coon` Thomas Coon — **$107k** — *"ENTRY WITHDRAWING PROPERTY FROM SHERIFF SALE"* — granted
+  - `sf-ltd` Kriman/Krimen 25 CV 4436 — **$122k** — *"MOTION VACATE ORDER OF SALE W/DRAW PROPERTY FROM SALE"* (5/29) — motion filed, pending
+  - ~$700k of phantom surplus total. v6 already demotes `auction_status IN (WITHDRAWN,CANCELLED,BANKRUPTCY,STAYED,HELD,POSTPONED)` (line in Recent 2026-05-14) — so the demotion logic exists; **what's missing is the detection that sets auction_status from these docket signals.**
+  **The architectural nuance:** these docket events live in **DCC's** Supabase (`docket_events`, fed by Castle), which intel-main can't read directly. So the Director has two paths — your call:
+    1. **Detect on the intel-main side** from your own scraper data (realauction / county feeds) — extend whatever sets `auction_status` to catch "ENTRY WITHDRAWING / ORDER CANCELLING SALE / RETURN ON ORDER OF SALE WITHDRAWN / ENTRY…VACATING" → `auction_status=WITHDRAWN/CANCELLED`. Cleanest if your feeds carry these events.
+    2. **Consume DCC's docket signal** via the long-planned DCC→intel-main feedback loop (the "Phase 2B" item below). DCC could expose flagged deal_ids + the granted/pending stage; intel-main reconciles into auction_status.
+  **DCC's classifier (reuse if helpful):** sale-risk = `desc` matches (vacat+sale | withdraw+(sale|property) | set-aside+sale | bankruptcy/automatic-stay | cancel+sale). **Granted** (vs a party's motion) = NOT containing the word "motion" AND matches (entry withdrawing | return on order of sale withdrawn | order cancelling+sale | entry+vacat | sale+(vacated|set-aside|cancelled)). The "order of sale" substring is a trap — don't key off bare "order".
+  **The payoff:** once `auction_status` flips, the 30-min `sync-deal-updates` cron carries `meta.auctionStatus` to DCC automatically, and DCC's strip / kill flow can key off the authoritative value instead of a UI-side keyword scan. Closes the loop system-wide (Indiana + Florida too, not just OH Franklin).
+  DCC side already done: Today Sale-Risk strip + one-click human-confirm kill (disposition reason `sale_vacated`, group 'real' — **please add to your outcome-reason mapping**; until then it maps to 'other' on your side, non-breaking). Commit `a16bd3d`.
 - 🚨 **ACTION FOR DCC (2026-05-20): clear 90 stale IN surplus leads from Eric's active queue.**
   Eric worked 20 of the 119 IN surplus leads pushed 5/19 → **100% kill rate**. Director
   re-walked all 260 IN `still_claimable` cases live through mycase with an evidence-based
