@@ -251,17 +251,35 @@ const isObituaryDoc = (doc) => {
 };
 
 // Async deceased-readiness probe — for a deceased deal about to be marked
-// Ready, fetches the deal's documents + contact_deals and reports whether
-// the two Phase-1 requirements are met. Mark Ready handlers call this and
-// hard-block with a clear modal if either flag comes back false.
+// Ready, fetches the deal's documents + contact_deals + meta.proof_of_death
+// and reports whether the two Phase-1 requirements are met. Mark Ready
+// handlers call this and hard-block with a clear modal if either flag comes
+// back false.
+//
+// v1.1 (Eric 2026-05-29 — Karla Bankard hit this): hasObituary now passes
+// if ANY of these are present:
+//   (a) a Claude-Vision-OCR'd document matching obituary patterns
+//       (filename / extracted.document_type / summary), OR
+//   (b) `meta.obituary` is populated — Justin's existing Case Details
+//       textarea (added 2026-05-28) captures pasted obit text, source
+//       URLs, OR research-failure notes when no obit exists. Any non-empty
+//       value counts. (The original Phase-1 gate only checked documents,
+//       which made Justin's UI a dead-end — Eric pasted the Karla Bankard
+//       obit there and the gate still blocked him.)
 async function fetchDeceasedReadinessExtras(dealId) {
-  const [docsRes, contactsRes] = await Promise.all([
+  const [docsRes, contactsRes, dealRes] = await Promise.all([
     sb.from('documents').select('id, name, extracted').eq('deal_id', dealId),
     sb.from('contact_deals').select('relationship, contacts(kind, kind_other)').eq('deal_id', dealId),
+    sb.from('deals').select('meta').eq('id', dealId).maybeSingle(),
   ]);
   const docs = docsRes.data || [];
   const links = contactsRes.data || [];
-  const hasObituary = docs.some(isObituaryDoc);
+  const meta = (dealRes.data && dealRes.data.meta) || {};
+
+  const docObit = docs.some(isObituaryDoc);
+  const pastedObit = !!((meta.obituary || '').trim());
+  const hasObituary = docObit || pastedObit;
+
   const hasLivingContact = links.some(cd => {
     const rel = (cd.relationship || '').trim();
     const kind = ((cd.contacts && (cd.contacts.kind_other || cd.contacts.kind)) || '').trim();
@@ -13369,7 +13387,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       const { hasObituary, hasLivingContact } = await fetchDeceasedReadinessExtras(dealId);
       if (!hasObituary || !hasLivingContact) {
         const needs = [];
-        if (!hasObituary) needs.push('• Obituary or death-notice doc attached to the deal');
+        if (!hasObituary) needs.push('• Proof of death — paste the obituary text (or research notes if no obit exists) into Case Details → Obituary, OR upload an obituary/death-notice doc via the 📁 Files tab');
         if (!hasLivingContact) needs.push('• At least one living contact (relative / heir / neighbor / friend) linked');
         alert(
           `Can't mark Ready — ${dealForGate.name || dealId} is marked deceased. Prove it:\n\n${needs.join('\n')}\n\n` +
@@ -14023,7 +14041,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
       if (!hasObituary || !hasLivingContact) {
         setSavingReady(false);
         const needs = [];
-        if (!hasObituary) needs.push('• Obituary or death-notice doc attached to the deal');
+        if (!hasObituary) needs.push('• Proof of death — paste the obituary text (or research notes if no obit exists) into Case Details → Obituary, OR upload an obituary/death-notice doc via the 📁 Files tab');
         if (!hasLivingContact) needs.push('• At least one living contact (relative / heir / neighbor / friend) linked');
         alert(
           `Can't mark Ready — this lead is marked deceased. Prove it:\n\n${needs.join('\n')}\n\n` +
