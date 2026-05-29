@@ -11150,6 +11150,152 @@ function saleRiskGranted(desc) {
     || (/sale/.test(d) && /(vacated|set aside|cancelled|canceled)/.test(d));
 }
 
+// ─── Daily Work Scorecard (Nathan 2026-05-29) ────────────────────────
+// Auto-tally of what each person got done TODAY, read from the activity feed
+// (user_id + action). Gives Eric/Inaam a self-serve "here's my day" + a team
+// rollup, and a one-click EOD report they post to #Ops — replaces the
+// hand-written end-of-day report with an auto-counted one they just confirm.
+// Note: we track what got DONE (actions that wrote to the DB), not raw clicks
+// (no click telemetry exists). "Marked ready" is now attributed via the
+// activity row added to markPrepped/toggleReady.
+const OPS_THREAD_ID = 'b72afbe7-371a-4535-8f7c-fe20e89e1f2d';
+const WORK_BUCKETS = [
+  { key: 'ready',   label: 'Marked ready',  test: a => /marked ready for outreach/i.test(a) },
+  { key: 'dead',    label: 'Marked dead',   test: a => /marked dead|moved to dead/i.test(a) },
+  { key: 'deleted', label: 'Deleted',       test: a => /soft-deleted/i.test(a) },
+  { key: 'docs',    label: 'Docs uploaded', test: a => /uploaded document/i.test(a) },
+  { key: 'urls',    label: 'URLs sent',     test: a => /generated personalized url/i.test(a) },
+];
+function classifyWork(action) {
+  for (const b of WORK_BUCKETS) if (b.test(action || '')) return b.key;
+  return 'other';
+}
+function DailyWorkScorecard() {
+  const [me, setMe] = useState(null);
+  const [rows, setRows] = useState(null);
+  const [eodText, setEodText] = useState(null); // null = closed
+  const [posting, setPosting] = useState(null); // null | 'posting' | 'posted' | 'error'
+  const alive = useAliveRef();
+  const load = React.useCallback(async () => {
+    const { data: { user } } = await sb.auth.getUser();
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const [actRes, profRes] = await Promise.all([
+      sb.from('activity').select('user_id, action, created_at').not('user_id', 'is', null).gte('created_at', start.toISOString()).limit(3000),
+      sb.from('profiles').select('id, name'),
+    ]);
+    if (!alive.current) return;
+    const nameById = new Map((profRes.data || []).map(p => [p.id, p.name]));
+    const agg = new Map();
+    for (const a of (actRes.data || [])) {
+      if (!agg.has(a.user_id)) agg.set(a.user_id, { userId: a.user_id, name: nameById.get(a.user_id) || a.user_id.slice(-6), counts: {}, total: 0 });
+      const r = agg.get(a.user_id);
+      const k = classifyWork(a.action);
+      r.counts[k] = (r.counts[k] || 0) + 1;
+      r.total++;
+    }
+    setMe({ id: user?.id || null, name: nameById.get(user?.id) || 'You' });
+    setRows([...agg.values()].sort((a, b) => b.total - a.total));
+  }, [alive]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('daily-work-scorecard').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity' }, load).subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  if (!rows) return null;
+  const mine = me && rows.find(r => r.userId === me.id);
+  const today = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+  const buildEod = (r) => {
+    const c = r.counts;
+    const lines = [`📋 EOD — ${r.name} · ${today}`];
+    for (const b of WORK_BUCKETS) if (c[b.key]) lines.push(`• ${b.label}: ${c[b.key]}`);
+    if (c.other) lines.push(`• Other actions: ${c.other}`);
+    lines.push(`Total actions today: ${r.total}`);
+    return lines.join('\n');
+  };
+  const openEod = () => { setPosting(null); setEodText(buildEod(mine || { name: me?.name || 'You', counts: {}, total: 0 })); };
+  const postEod = async () => {
+    setPosting('posting');
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      const { error } = await sb.from('team_messages').insert({ thread_id: OPS_THREAD_ID, sender_id: user.id, sender_kind: 'admin', body: eodText, attachments: [] });
+      setPosting(error ? 'error' : 'posted');
+    } catch (e) { setPosting('error'); }
+  };
+
+  const Stat = ({ label, val }) => (
+    <div style={{ minWidth: 64 }}>
+      <div style={{ fontSize: 20, fontWeight: 800, color: '#fafaf9', fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>{val || 0}</div>
+      <div style={{ fontSize: 9, color: '#a8a29e', textTransform: 'uppercase', letterSpacing: '0.05em', marginTop: 3 }}>{label}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ marginBottom: 16, padding: '12px 14px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📊 Today's work · {today}</div>
+        <button onClick={openEod} style={{ background: '#78350f', color: '#fbbf24', border: '1px solid #92400e', borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>📋 Generate my EOD report</button>
+      </div>
+
+      {/* Your day */}
+      <div style={{ padding: '10px 12px', background: '#1c1917', border: '1px solid #292524', borderRadius: 8, marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#5eead4', marginBottom: 8 }}>Your day{me?.name ? ` — ${me.name}` : ''}</div>
+        {mine ? (
+          <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+            {WORK_BUCKETS.map(b => <Stat key={b.key} label={b.label} val={mine.counts[b.key]} />)}
+            <Stat label="Total" val={mine.total} />
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: '#78716c', fontStyle: 'italic' }}>No work logged yet today — your tally appears here as you go.</div>
+        )}
+      </div>
+
+      {/* Team rollup */}
+      {rows.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ color: '#78716c', textAlign: 'left' }}>
+                <th style={{ padding: '4px 8px', fontWeight: 700 }}>Team today</th>
+                {WORK_BUCKETS.map(b => <th key={b.key} style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>{b.label}</th>)}
+                <th style={{ padding: '4px 8px', fontWeight: 700, textAlign: 'right' }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.userId} style={{ borderTop: '1px solid #1f1512', background: (me && r.userId === me.id) ? '#13110d' : 'transparent' }}>
+                  <td style={{ padding: '5px 8px', fontWeight: 700, color: '#fafaf9', whiteSpace: 'nowrap' }}>{r.name}</td>
+                  {WORK_BUCKETS.map(b => <td key={b.key} style={{ padding: '5px 8px', textAlign: 'right', color: r.counts[b.key] ? '#d6d3d1' : '#57534e', fontFamily: "'DM Mono', monospace" }}>{r.counts[b.key] || '·'}</td>)}
+                  <td style={{ padding: '5px 8px', textAlign: 'right', fontWeight: 800, color: '#fbbf24', fontFamily: "'DM Mono', monospace" }}>{r.total}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* EOD report editor */}
+      {eodText !== null && (
+        <div style={{ marginTop: 12, padding: 12, background: '#0f0d0c', border: '1px solid #44403c', borderRadius: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>Your EOD report — review &amp; post</div>
+          <textarea value={eodText} onChange={e => { setEodText(e.target.value); setPosting(null); }} rows={Math.min(10, eodText.split('\n').length + 1)}
+            style={{ width: '100%', padding: 10, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }} />
+          <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button onClick={postEod} disabled={posting === 'posting' || posting === 'posted'}
+              style={{ background: posting === 'posted' ? '#065f46' : '#78350f', color: posting === 'posted' ? '#6ee7b7' : '#fbbf24', border: '1px solid ' + (posting === 'posted' ? '#10b981' : '#92400e'), borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: posting ? 'default' : 'pointer', fontFamily: 'inherit' }}>
+              {posting === 'posting' ? '⏳ Posting…' : posting === 'posted' ? '✓ Posted to #Ops' : '📤 Post to #Ops'}
+            </button>
+            <button onClick={() => { try { navigator.clipboard.writeText(eodText); } catch (e) {} }} style={{ ...btnGhost, fontSize: 12 }}>Copy</button>
+            <button onClick={() => setEodText(null)} style={{ ...btnGhost, fontSize: 12 }}>Close</button>
+            {posting === 'error' && <span style={{ fontSize: 11, color: '#fca5a5' }}>Post failed — try Copy + paste into #Ops.</span>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SaleRiskStrip({ deals, onSelect, onRequestDisposition }) {
   // `flagged` is the deal-agnostic result of the docket scan: one entry per
   // deal_id that has sale-risk events, with stage + headline. The join to
@@ -13671,6 +13817,13 @@ function TodayView({ deals, onSelect, isAdmin, setView, onRequestDisposition }) 
       alert('Could not mark prepped: ' + error.message);
       return;
     }
+    // Attribution (Nathan 2026-05-29): prepped_at has no owner column, so log
+    // WHO marked it ready to the activity feed — powers the daily work
+    // scorecard. Best-effort; never blocks the prep.
+    try {
+      const { data: { user } } = await sb.auth.getUser();
+      await sb.from('activity').insert({ deal_id: dealId, user_id: user?.id || null, action: '✅ Marked ready for outreach', visibility: ['team'] });
+    } catch (e) { /* non-blocking */ }
 
     // Auto-queue Day-0 outreach for tier-A/B deals — closes the prep →
     // outreach loop per Nathan 2026-05-04. Mirrors BulkOutreachButton's
@@ -13744,6 +13897,11 @@ function TodayView({ deals, onSelect, isAdmin, setView, onRequestDisposition }) 
         {isAdmin && <PortfolioStat onClick={() => setView && setView("analytics")} label={`Projected Revenue · ${monthName}`} value={fmt(projectedRevenue)} sub={`Across ${payingThisMonth.length} case${payingThisMonth.length === 1 ? "" : "s"}`} color="#10b981" />}
         <PortfolioStat onClick={() => setView && setView("active")}  label={`Expected Payouts · ${monthName}`} value={payingThisMonth.length} sub={payingThisMonth.length === 0 ? "None expected" : payingThisMonth.length === 1 ? "1 case expected to close" : `${payingThisMonth.length} cases expected to close`} color="#f59e0b" />
       </div>
+
+      {/* Daily work scorecard — per-person auto-tally of today's work + one-click
+          EOD report to #Ops. Self-serve for Eric/Inaam, team rollup for all.
+          Per Nathan 2026-05-29. */}
+      <DailyWorkScorecard />
 
       {/* Conversion funnel — Prep → Ready → Texted → Responded → Signed */}
       <ConversionFunnel deals={deals} setView={setView} />
@@ -14326,7 +14484,15 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
       prepped_at: val ? new Date().toISOString() : null,
       meta: { ...(deal.meta || {}), verified: val },
     }).eq('id', deal.id);
-    if (error) { setReady(!val); alert('Could not update Ready status: ' + error.message); }
+    if (error) { setReady(!val); alert('Could not update Ready status: ' + error.message); setSavingReady(false); return; }
+    // Attribution (Nathan 2026-05-29): log who marked ready → daily scorecard.
+    // Only on mark-ready (not un-marking). Best-effort.
+    if (val) {
+      try {
+        const { data: { user } } = await sb.auth.getUser();
+        await sb.from('activity').insert({ deal_id: deal.id, user_id: user?.id || null, action: '✅ Marked ready for outreach', visibility: ['team'] });
+      } catch (e) { /* non-blocking */ }
+    }
     setSavingReady(false);
   };
   return (
