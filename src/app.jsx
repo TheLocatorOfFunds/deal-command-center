@@ -3369,7 +3369,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           <span style={{ fontSize: 11, color: "#57534e" }}>open each → set the reason via the 🪦 chip</span>
         </div>
       )}
-      {isAdmin && ["reports", "analytics", "traffic", "comms"].includes(view) && (
+      {/* Insights is now ONE page (InsightsView): headline numbers + collapsible
+          deep sections. The old 4-chip bar (Reports/Analytics/Traffic/Comms) is
+          retired — those views are embedded as expanders inside InsightsView.
+          Per Nathan 2026-05-29 ("less complicated and messy"). Chips preserved
+          (false &&) in case we want to re-promote any to its own tab. */}
+      {false && isAdmin && ["reports", "analytics", "traffic", "comms"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
           {chipBtn("reports", "📈 Reports")}
           {chipBtn("analytics", "📊 Analytics")}
@@ -3494,7 +3499,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "leads" ? (
             <LeadsOutreachView />
           ) : view === "reports" ? (
-            <ReportsView deals={deals} onSelect={onSelect} />
+            <InsightsView deals={deals} onSelect={onSelect} isAdmin={isAdmin} />
           ) : view === "analytics" ? (
             <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : view === "traffic" ? (
@@ -11754,6 +11759,49 @@ function AttentionView({ deals, onSelect }) {
       <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
         <b style={{ color: '#a8a29e' }}>How this works:</b> counts reflect per-user unread state. Opening a deal's Comms tab marks all Comms items seen for you; same for Docket. Justin's reads don't mark items seen for you, and vice versa. Docket items also clear when someone clicks Acknowledge on them. Pending drafts are from Justin's outreach_queue and clear when you send or skip from the AutomationsQueue on Today.
       </div>
+    </div>
+  );
+}
+
+// ─── Insights (single curated page) — Nathan 2026-05-29 ──────────────
+// Collapses the old 4-tab Insights hub (Reports / Analytics / Traffic / Comms)
+// into ONE page. The headline numbers come from the shared "Portfolio summary"
+// block that already renders above this view (with the revenue-year selector);
+// this view is just the four dense reports behind collapsible expanders,
+// rendered only when opened (page loads fast, no wall of charts). Nothing
+// deleted — just tucked behind a click.
+function InsightsView({ deals, onSelect, isAdmin }) {
+  const [open, setOpen] = useState({});
+  const toggle = (k) => setOpen(o => ({ ...o, [k]: !o[k] }));
+  const Section = ({ id, icon, title, sub, children }) => (
+    <div style={{ border: '1px solid #292524', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+      <button onClick={() => toggle(id)} style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, padding: '12px 14px', background: open[id] ? '#1c1917' : '#0f0d0c', border: 'none', cursor: 'pointer', fontFamily: 'inherit', color: '#fafaf9', textAlign: 'left' }}>
+        <span style={{ fontSize: 13, fontWeight: 700 }}>{icon} {title} <span style={{ color: '#78716c', fontWeight: 400, fontSize: 11 }}>· {sub}</span></span>
+        <span style={{ color: '#78716c', fontSize: 11, whiteSpace: 'nowrap' }}>{open[id] ? '▲ hide' : '▼ show'}</span>
+      </button>
+      {open[id] && <div style={{ padding: 14, borderTop: '1px solid #292524' }}>{children}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#57534e', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>Detailed breakdowns — open what you need</div>
+      <Section id="reports" icon="📈" title="Pipeline & ops report" sub="funnel · scraper health · velocity · intake">
+        <ReportsView deals={deals} onSelect={onSelect} />
+      </Section>
+      {isAdmin && (
+        <Section id="analytics" icon="📊" title="Financial analytics" sub="cash flow · ROI · attorney & county performance">
+          <AnalyticsView deals={deals} onSelect={onSelect} />
+        </Section>
+      )}
+      <Section id="traffic" icon="🌐" title="Web traffic" sub="pageviews · referrers · visits">
+        <WebTrafficView />
+      </Section>
+      {isAdmin && (
+        <Section id="comms" icon="💬" title="Comms analytics" sub="calls · texts">
+          <CommsAnalyticsView />
+        </Section>
+      )}
     </div>
   );
 }
