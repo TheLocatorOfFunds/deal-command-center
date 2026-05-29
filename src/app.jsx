@@ -11175,10 +11175,13 @@ function DailyWorkScorecard() {
   const [rows, setRows] = useState(null);
   const [eodText, setEodText] = useState(null); // null = closed
   const [posting, setPosting] = useState(null); // null | 'posting' | 'posted' | 'error'
+  const [period, setPeriod] = useState('today'); // 'today' | 'week'
   const alive = useAliveRef();
   const load = React.useCallback(async () => {
     const { data: { user } } = await sb.auth.getUser();
-    const start = new Date(); start.setHours(0, 0, 0, 0);
+    let start;
+    if (period === 'week') { start = new Date(Date.now() - 7 * 86400_000); }
+    else { start = new Date(); start.setHours(0, 0, 0, 0); }
     const [actRes, profRes] = await Promise.all([
       sb.from('activity').select('user_id, action, created_at').not('user_id', 'is', null).gte('created_at', start.toISOString()).limit(3000),
       sb.from('profiles').select('id, name'),
@@ -11195,7 +11198,7 @@ function DailyWorkScorecard() {
     }
     setMe({ id: user?.id || null, name: nameById.get(user?.id) || 'You' });
     setRows([...agg.values()].sort((a, b) => b.total - a.total));
-  }, [alive]);
+  }, [alive, period]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     const ch = sb.channel('daily-work-scorecard').on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity' }, load).subscribe();
@@ -11204,14 +11207,16 @@ function DailyWorkScorecard() {
 
   if (!rows) return null;
   const mine = me && rows.find(r => r.userId === me.id);
+  const isWeek = period === 'week';
   const today = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const rangeLabel = isWeek ? `last 7 days (through ${today})` : today;
 
   const buildEod = (r) => {
     const c = r.counts;
-    const lines = [`📋 EOD — ${r.name} · ${today}`];
+    const lines = [`${isWeek ? '🗓 Weekly summary' : '📋 EOD'} — ${r.name} · ${rangeLabel}`];
     for (const b of WORK_BUCKETS) if (c[b.key]) lines.push(`• ${b.label}: ${c[b.key]}`);
     if (c.other) lines.push(`• Other actions: ${c.other}`);
-    lines.push(`Total actions today: ${r.total}`);
+    lines.push(`Total actions ${isWeek ? 'this week' : 'today'}: ${r.total}`);
     return lines.join('\n');
   };
   const openEod = () => { setPosting(null); setEodText(buildEod(mine || { name: me?.name || 'You', counts: {}, total: 0 })); };
@@ -11234,20 +11239,28 @@ function DailyWorkScorecard() {
   return (
     <div style={{ marginBottom: 16, padding: '12px 14px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-        <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📊 Today's work · {today}</div>
-        <button onClick={openEod} style={{ background: '#78350f', color: '#fbbf24', border: '1px solid #92400e', borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>📋 Generate my EOD report</button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📊 Work · {isWeek ? 'last 7 days' : today}</div>
+          <div style={{ display: 'flex', gap: 2, background: '#1c1917', borderRadius: 6, padding: 2, border: '1px solid #292524' }}>
+            {[['today', 'Today'], ['week', '7 days']].map(([k, lbl]) => (
+              <button key={k} onClick={() => { setPeriod(k); setEodText(null); }}
+                style={{ background: period === k ? '#292524' : 'transparent', color: period === k ? '#fafaf9' : '#78716c', border: 'none', padding: '3px 10px', borderRadius: 4, fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{lbl}</button>
+            ))}
+          </div>
+        </div>
+        <button onClick={openEod} style={{ background: '#78350f', color: '#fbbf24', border: '1px solid #92400e', borderRadius: 6, padding: '5px 12px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{isWeek ? '🗓 Generate weekly summary' : '📋 Generate my EOD report'}</button>
       </div>
 
-      {/* Your day */}
+      {/* Your day / week */}
       <div style={{ padding: '10px 12px', background: '#1c1917', border: '1px solid #292524', borderRadius: 8, marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#5eead4', marginBottom: 8 }}>Your day{me?.name ? ` — ${me.name}` : ''}</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#5eead4', marginBottom: 8 }}>{isWeek ? 'Your last 7 days' : 'Your day'}{me?.name ? ` — ${me.name}` : ''}</div>
         {mine ? (
           <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
             {WORK_BUCKETS.map(b => <Stat key={b.key} label={b.label} val={mine.counts[b.key]} />)}
             <Stat label="Total" val={mine.total} />
           </div>
         ) : (
-          <div style={{ fontSize: 12, color: '#78716c', fontStyle: 'italic' }}>No work logged yet today — your tally appears here as you go.</div>
+          <div style={{ fontSize: 12, color: '#78716c', fontStyle: 'italic' }}>No work logged {isWeek ? 'in the last 7 days' : 'yet today'} — your tally appears here as you go.</div>
         )}
       </div>
 
@@ -11257,7 +11270,7 @@ function DailyWorkScorecard() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ color: '#78716c', textAlign: 'left' }}>
-                <th style={{ padding: '4px 8px', fontWeight: 700 }}>Team today</th>
+                <th style={{ padding: '4px 8px', fontWeight: 700 }}>{isWeek ? 'Team · 7 days' : 'Team today'}</th>
                 {WORK_BUCKETS.map(b => <th key={b.key} style={{ padding: '4px 8px', fontWeight: 600, textAlign: 'right', whiteSpace: 'nowrap' }}>{b.label}</th>)}
                 <th style={{ padding: '4px 8px', fontWeight: 700, textAlign: 'right' }}>Total</th>
               </tr>
