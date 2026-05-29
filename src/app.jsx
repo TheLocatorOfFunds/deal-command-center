@@ -218,7 +218,17 @@ const dealMetaPhone = (meta) => {
 // Any reader that gates outreach behavior or renders a deceased indicator
 // should use this helper so the answer is consistent across cards,
 // kanban, detail header, compose flows, and the prep-queue gate.
-const isDeceased = (deal) => !!(deal?.death_signal || deal?.meta?.deceased);
+// Deceased iff the scraper's death_signal OR the meta.deceased hand-flag — BUT
+// an explicit human "owner alive" (meta.deceased === literal false) WINS over a
+// stale scraper death_signal. Eric hit this on sf-healey 2026-05-29: lead came
+// in death_signal=true, he researched + toggled "owner alive" (meta.deceased
+// =false), but the name stayed red because death_signal still OR'd to true.
+// Only the Deceased toggle ever writes a literal false, so false = a deliberate
+// human override. (undefined/absent = untouched → scraper signal still governs.)
+const isDeceased = (deal) => {
+  if (deal?.meta?.deceased === false) return false;
+  return !!(deal?.death_signal || deal?.meta?.deceased);
+};
 
 // A lead is "Ready for Outreach" once it's been vetted — phone, tier, county,
 // case #, URL, surplus est all in place. `prepped_at` is the canonical flag
@@ -6642,7 +6652,7 @@ function applyAdvancedFilters(d, f) {
   if (!matchBool(dealMetaPhone(m), f.has_phone)) return false;
   if (!matchBool(d.refundlocators_token, f.has_url)) return false;
   if (!matchBool(m.attorney, f.has_attorney)) return false;
-  if (!matchBool(d.death_signal || m.deceased, f.deceased)) return false;
+  if (!matchBool(isDeceased(d), f.deceased)) return false;
 
   return true;
 }
