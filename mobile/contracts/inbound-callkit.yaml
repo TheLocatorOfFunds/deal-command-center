@@ -1,0 +1,128 @@
+# Release contract: inbound-callkit
+#
+# A contract is the FULL list of things that must be true for a capability to
+# work, across EVERY layer - not just code. The release-readiness agent walks
+# each link and returns VERIFIED / BROKEN / NEEDS-HUMAN with evidence.
+#
+# A build is GO only when every pre_build link is VERIFIED.
+# NEEDS-HUMAN is NOT a pass - it means "go confirm this yourself before building."
+#
+# This contract exists because inbound calls broke at Build 14 and stayed broken
+# through Build 22. Nobody had the chain written down, so each session re-derived
+# it and fixed one link per build. This file makes the whole chain visible at once.
+
+feature: inbound-callkit
+goal: >
+  An inbound call to the FundLocators number rings THIS device via CallKit
+  through the Twilio Voice SDK - not only via Nathan's cell fallback leg
+  (+15139982306), which is what masked the breakage before.
+owner: Justin
+last_verified: null   # the agent stamps this only on a full-GO run
+
+links:
+  - id: app-entitlement-aps
+    layer: code/config (mobile/app.json)
+    phase: pre_build
+    verifiable_from_here: true
+    description: aps-environment entitlement must be 'production'.
+    check: grep ios.entitlements in mobile/app.json
+    pass_when: "ios.entitlements['aps-environment'] == 'production'"
+    fix: set it in mobile/app.json -> ios.entitlements
+    owner: claude
+
+  - id: app-no-forbidden-voip-entitlement
+    layer: code/config (mobile/app.json)
+    phase: pre_build
+    verifiable_from_here: true
+    description: >
+      Must NOT contain com.apple.developer.pushkit.unrestricted-voip. It is not
+      a registerable Apple capability; EAS cannot sync it and Xcode rejects the
+      build (Builds 17-20 lesson).
+    check: grep mobile/app.json for the forbidden string
+    pass_when: "string absent"
+    fix: remove it from app.json entitlements
+    owner: claude
+
+  - id: apple-voip-cert
+    layer: apple developer portal
+    phase: pre_build
+    verifiable_from_here: false   # needs Apple login or an App Store Connect API key
+    description: A VoIP Services certificate exists and is not expired for com.fundlocators.dcc.
+    check: >
+      If an App Store Connect API key is configured for EAS, query the ASC API
+      for certificates. Otherwise NEEDS-HUMAN: confirm at developer.apple.com ->
+      Certificates. Use the REAL team Apple ID, NOT racin2701@yahoo.com.
+    pass_when: "VoIP Services cert present, not expired, matches provisioning"
+    fix: create a VoIP Services cert at developer.apple.com, then re-upload to Twilio
+    owner: justin_or_nathan
+
+  - id: twilio-push-credential
+    layer: twilio console
+    phase: pre_build
+    verifiable_from_here: partial   # via Twilio API if creds present, else needs-human
+    expected_sid: CR7fd8d05f8deefcc8e94e7de4c357d11c
+    description: A Mobile Push Credential (Type APN, Sandbox unchecked = production) exists.
+    check: >
+      If TWILIO_ACCOUNT_SID + auth token are available, GET
+      https://voice.twilio.com/v1/Credentials and find the APN credential.
+      Else NEEDS-HUMAN: Twilio console -> Voice -> Voice credentials ->
+      Mobile Push credentials. Confirm Type=APN and Sandbox UNCHECKED.
+    pass_when: "APN push credential exists, sandbox=false, SID == expected_sid"
+    fix: upload the Apple VoIP cert to Twilio as a Mobile Push Credential
+    owner: justin_or_nathan
+    note: "Confirmed to exist 2026-05-29 (other session). Created 2026-05-13, production."
+
+  - id: supabase-push-secret
+    layer: supabase secrets
+    phase: pre_build
+    verifiable_from_here: true
+    description: Secret TWILIO_VOICE_PUSH_CREDENTIAL_SID must be set and equal the Twilio push-cred SID.
+    check: >
+      SELECT existence + (length(decrypted_secret) > 0) from vault.decrypted_secrets
+      WHERE name = 'TWILIO_VOICE_PUSH_CREDENTIAL_SID'. NEVER print the value.
+      Then confirm it equals the expected Twilio cred SID.
+    pass_when: "secret set, non-empty, == CR7fd8d05f8deefcc8e94e7de4c357d11c"
+    fix: "supabase secrets set TWILIO_VOICE_PUSH_CREDENTIAL_SID=CR7fd8... (sensitive; Justin approves)"
+    owner: justin
+    note: "As of 2026-05-29 this secret is EMPTY - this is the current top break."
+
+  - id: edge-twilio-token-pushon
+    layer: supabase edge function
+    phase: pre_build
+    verifiable_from_here: true
+    description: twilio-token deployed AND a recent invocation logs 'push: on' (not 'push: off').
+    check: list_edge_functions for twilio-token; get_logs and look for 'push: on'
+    pass_when: "deployed AND logs 'push: on'"
+    fix: "no redeploy needed - 'push: off' is downstream of the empty supabase-push-secret"
+    owner: claude_diagnose
+
+  - id: edge-twilio-voice
+    layer: supabase edge function
+    phase: pre_build
+    verifiable_from_here: true
+    description: twilio-voice inbound webhook deployed (routes to SDK client identity + Nathan fallback).
+    check: list_edge_functions for twilio-voice
+    pass_when: "deployed"
+    fix: deploy twilio-voice
+    owner: claude_diagnose
+
+  - id: runtime-registered
+    layer: device runtime
+    phase: post_build   # only meaningful AFTER install
+    verifiable_from_here: true
+    description: The latest voice_sdk_status row for the current build == 'registered'.
+    check: >
+      SELECT build_number, status, error_message, created_at FROM voice_sdk_status
+      ORDER BY created_at DESC LIMIT 5. Match build_number to the installed build.
+    pass_when: "latest row for current build status == 'registered'"
+    fix: >
+      'Failed to initialize PushKit device token' -> apple-voip-cert or
+      twilio-push-credential is broken (Apple never issued a token).
+      'register of null' / 'Registration in progress' -> init race (code mutex).
+    owner: claude_diagnose
+
+decision_rule: >
+  GO only if every pre_build link is VERIFIED. Any BROKEN = NO-GO (fix first).
+  Any NEEDS-HUMAN = STOP and get a human to confirm that link before building.
+  Building cannot fix a config link. runtime-registered is checked only on the
+  post_build pass, after install.
