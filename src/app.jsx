@@ -13387,7 +13387,7 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
       const { hasObituary, hasLivingContact } = await fetchDeceasedReadinessExtras(dealId);
       if (!hasObituary || !hasLivingContact) {
         const needs = [];
-        if (!hasObituary) needs.push('• Proof of death — paste the obituary text (or research notes if no obit exists) into Case Details → Obituary, OR upload an obituary/death-notice doc via the 📁 Files tab');
+        if (!hasObituary) needs.push('• Obituary — paste the obit text or link into Case Details → Obituary (the obit itself or a URL like forevermissed.com / legacy.com both work). No physical death doc needed. If no obit exists online, paste your research notes there instead so the next caller knows where you looked.');
         if (!hasLivingContact) needs.push('• At least one living contact (relative / heir / neighbor / friend) linked');
         alert(
           `Can't mark Ready — ${dealForGate.name || dealId} is marked deceased. Prove it:\n\n${needs.join('\n')}\n\n` +
@@ -14041,7 +14041,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
       if (!hasObituary || !hasLivingContact) {
         setSavingReady(false);
         const needs = [];
-        if (!hasObituary) needs.push('• Proof of death — paste the obituary text (or research notes if no obit exists) into Case Details → Obituary, OR upload an obituary/death-notice doc via the 📁 Files tab');
+        if (!hasObituary) needs.push('• Obituary — paste the obit text or link into Case Details → Obituary (the obit itself or a URL like forevermissed.com / legacy.com both work). No physical death doc needed. If no obit exists online, paste your research notes there instead so the next caller knows where you looked.');
         if (!hasLivingContact) needs.push('• At least one living contact (relative / heir / neighbor / friend) linked');
         alert(
           `Can't mark Ready — this lead is marked deceased. Prove it:\n\n${needs.join('\n')}\n\n` +
