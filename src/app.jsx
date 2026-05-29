@@ -3110,10 +3110,19 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const confWalkerCount = surplusAll.filter(d => d.meta?.confidenceTier === 'walker_verified').length;
   const confVerifyCount = surplusAll.filter(d => d.meta?.confidenceTier === 'complaint_inferred').length;
   let surplus = confTierFilter === "all" ? surplusAll : surplusAll.filter(d => (d.meta?.confidenceTier || '') === confTierFilter);
-  // Surplus lifecycle stage filter + counts (Nathan 2026-05-29). Counts from the
-  // confidence-filtered set so they compose; the stage dropdown shows live counts.
+  // Surplus lifecycle stage filter + counts + $ sums (Nathan 2026-05-29).
+  // Counts/sums from the confidence-filtered set so they compose; the stage
+  // TAB ROW (SurplusStageTabs, rendered atop the deal list) shows live count + $.
   const stageCounts = { claimable_now: 0, potential_post: 0, potential_pre: 0 };
-  for (const d of surplus) { const s = surplusStage(d); if (s) stageCounts[s]++; }
+  const stageSums   = { claimable_now: 0, potential_post: 0, potential_pre: 0 };
+  for (const d of surplus) {
+    const s = surplusStage(d);
+    if (s) {
+      stageCounts[s]++;
+      const sm = d.meta || {};
+      stageSums[s] += (sm.verifiedSurplus || sm.estimatedSurplus || sm.estimatedAvailableEquity || d.surplus_estimate || 0);
+    }
+  }
   if (surplusStageFilter !== "all") surplus = surplus.filter(d => surplusStage(d) === surplusStageFilter);
   // #238 — New Leads: float highest potential surplus to the top so the team
   // works the biggest money first. Uses the same surplus cascade as the fee math
@@ -3424,18 +3433,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               <option value="complaint_inferred">Verify-first ({confVerifyCount})</option>
             </select>
           )}
-          {/* Surplus lifecycle stage (Nathan 2026-05-29) — "where's the money".
-              Only shown when staged surplus is present in the current view. */}
-          {(stageCounts.claimable_now + stageCounts.potential_post + stageCounts.potential_pre) > 0 && (
-            <select value={surplusStageFilter} onChange={e => setSurplusStageFilter(e.target.value)}
-              title="Filter surplus leads by lifecycle stage — claimable-now (verified money at the county) vs potential (unverified, pre- or post-sale)"
-              style={{ ...selectStyle, minWidth: 200, ...(surplusStageFilter !== 'all' ? { borderColor: '#d97706', color: '#fbbf24' } : {}) }}>
-              <option value="all">All surplus stages</option>
-              <option value="claimable_now">🟢 Claimable now ({stageCounts.claimable_now})</option>
-              <option value="potential_post">🟠 Potential · post-sale ({stageCounts.potential_post})</option>
-              <option value="potential_pre">🔵 Potential · pre-sale ({stageCounts.potential_pre})</option>
-            </select>
-          )}
+          {/* Surplus lifecycle moved to the SurplusStageTabs row above the deal
+              list (Nathan 2026-05-29) — tabs, not a dropdown. */}
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} style={{ ...selectStyle, minWidth: 140 }}>
             <option value="all">All Statuses</option>
             <optgroup label="Flip Statuses">
@@ -3516,6 +3515,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             isAdmin ? <CommsAnalyticsView /> : null
           ) : layoutMode === "kanban" ? (
             <div>
+              <SurplusStageTabs value={surplusStageFilter} onChange={setSurplusStageFilter} counts={stageCounts} sums={stageSums} />
               {flips.length > 0 && (
                 <div style={{ marginBottom: 28 }}>
                   <SectionLabel icon="🏠" label="Flips — Kanban" />
@@ -3536,6 +3536,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           ) : (
             <div>
+              <SurplusStageTabs value={surplusStageFilter} onChange={setSurplusStageFilter} counts={stageCounts} sums={stageSums} />
               {view === "leads-phase" && (
                 <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
                   <span style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", marginRight: 2 }}>Outreach readiness</span>
@@ -3788,6 +3789,56 @@ function TierBadge({ tier, size = 11 }) {
 // (Surplus On Sale — confirmation_of_sale_date present, dollar amount
 // locked rather than estimated). Mutually exclusive PRE/POST keys off
 // confirmation date → is_30dts/isPostAuction → future saleDate.
+// Surplus-stage TAB ROW above the deal list (Nathan 2026-05-29). Promotes the
+// surplusStage buckets from a filter dropdown to prominent tabs, grouped by
+// Nathan's mental model: "money's IN THERE now" (claimable_now) vs "POTENTIAL,
+// nobody's claimed yet" (post-sale + pre-sale). Live count + $ total per bucket.
+// Drives the shared surplusStageFilter state. Renders only when the current
+// view has staged surplus.
+function SurplusStageTabs({ value, onChange, counts, sums }) {
+  const total = counts.claimable_now + counts.potential_post + counts.potential_pre;
+  if (total === 0) return null;
+  const totalSum = sums.claimable_now + sums.potential_post + sums.potential_pre;
+  const fmt$ = (n) => !n ? '$0'
+    : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'
+    : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k'
+    : '$' + Math.round(n);
+  const Tab = ({ id, label, count, sum, activeBg, activeFg, activeBorder }) => {
+    const active = value === id;
+    return (
+      <button onClick={() => onChange(id)} title={SURPLUS_STAGE_META[id]?.title}
+        style={{
+          display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1,
+          padding: '6px 12px', borderRadius: 8, cursor: 'pointer', fontFamily: 'inherit',
+          background: active ? activeBg : '#1c1917', color: active ? activeFg : '#a8a29e',
+          border: '1px solid ' + (active ? activeBorder : '#292524'),
+        }}>
+        <span style={{ fontSize: 11, fontWeight: 800, whiteSpace: 'nowrap' }}>{label} <span style={{ opacity: 0.8 }}>({count})</span></span>
+        <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono', monospace", opacity: 0.85 }}>{fmt$(sum)}</span>
+      </button>
+    );
+  };
+  const Group = ({ children, color }) => (
+    <span style={{ fontSize: 8.5, fontWeight: 800, color, letterSpacing: '0.1em', textTransform: 'uppercase', alignSelf: 'center', whiteSpace: 'nowrap' }}>{children}</span>
+  );
+  const Divider = () => <div style={{ width: 1, background: '#292524', margin: '2px 2px', alignSelf: 'stretch' }} />;
+  return (
+    <div style={{ marginBottom: 16, padding: '12px 14px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 10 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>💰 Surplus stage — where's the money?</div>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 8, flexWrap: 'wrap' }}>
+        <Tab id="all" label="All surplus" count={total} sum={totalSum} activeBg="#292524" activeFg="#fafaf9" activeBorder="#57534e" />
+        <Divider />
+        <Group color="#34d399">Money's in there →</Group>
+        <Tab id="claimable_now" label="🟢 Claimable now" count={counts.claimable_now} sum={sums.claimable_now} activeBg="#064e3b" activeFg="#6ee7b7" activeBorder="#10b981" />
+        <Divider />
+        <Group color="#fdba74">Potential · unclaimed →</Group>
+        <Tab id="potential_post" label="🟠 Post-sale" count={counts.potential_post} sum={sums.potential_post} activeBg="#3a1d0e" activeFg="#fdba74" activeBorder="#a16207" />
+        <Tab id="potential_pre" label="🔵 Pre-sale" count={counts.potential_pre} sum={sums.potential_pre} activeBg="#172554" activeFg="#93c5fd" activeBorder="#2563eb" />
+      </div>
+    </div>
+  );
+}
+
 function DealStatusBadges({ deal }) {
   const m = deal?.meta || {};
   const tier = (deal?.lead_tier || '').toUpperCase();
