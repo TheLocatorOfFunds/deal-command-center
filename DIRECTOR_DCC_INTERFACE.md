@@ -105,6 +105,29 @@ DCC only owns the three `disposition*` meta keys. Resurrecting a dead lead
 (status off `dead`) needs no cleanup on DCC's side — intel-main clears its own
 outcome record when it sees the deal is no longer dead.
 
+### Research-Agent enrichment (the `fundlocators-research-agent`, under Director command 2026-05-29)
+
+The Research Agent enriches Director-confirmed leads (skip-trace owner/heirs, fill
+contacts, write the research narrative). It writes to DCC-side homes ONLY — never the
+intel-main-managed `deals.meta` keys above. Authoritative mapping (decided in
+`FundLocators-Vault/06-Decisions/2026-05-29 - Research Agent under Director command...`
++ the `ra-2026-05-29-1200` ferry):
+
+| Enrichment | Lands in | Owner |
+|---|---|---|
+| property address | `deals.address` (top-level column, NOT meta) | RA writes; intel-main sync never touches the column |
+| owner / heirs / relatives (name, phone, email, mailing, deceased, phone_status) | `contacts` rows (`kind` = homeowner/heir/relative) | RA |
+| contact↔deal link + relationship | `contact_deals` | RA |
+| per-contact claim URL | **NOT written by RA** — `sweep_mint_homeowner_tokens()` cron mints `personalized_links` FROM contacts | DCC cron / Castle |
+| research narrative + surplus-math + agent decision + signals | **`deals.meta.research`** (nested object: `{enrichedAt, enrichedBy, narrative, surplusMath, signalsUsed, decision, decisionReason}`) | **DCC-owned (RA writes)** |
+| approve/reject outcome | the `disposition*` keys above | RA / DCC UI |
+
+**`meta.research` is DCC-owned and safe from the intel-main sync:** `sync-deal-updates`
+merges (`newMeta = {...current, ...diff}`) and only ever patches its own managed keys, so
+`meta.research` is preserved indefinitely — intel-main never reconciles it. The RA matches
+the existing deal on `meta.intel_case_id` / `meta.courtCase` and UPDATEs (never INSERTs;
+the Director already created the deal). The RA never writes `intel_case`.
+
 ## Cron jobs in play
 
 | Cron | Owner | Schedule | What it does |
