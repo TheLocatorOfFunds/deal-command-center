@@ -27083,7 +27083,7 @@ function ContactsTab({ dealId, userId, isAdmin }) {
     setLoading(true);
     const [linksRes, contactsRes] = await Promise.all([
       sb.from('contact_deals')
-        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, kind, kind_other, tags)')
+        .select('id, relationship, deal_id, contact_id, created_at, contacts(id, name, company, email, phone, kind, kind_other, tags, mailing_address)')
         .eq('deal_id', dealId)
         .order('created_at', { ascending: false }),
       sb.from('contacts').select('id, name, company, kind, kind_other, email').order('name'),
@@ -27378,6 +27378,11 @@ function ContactsTab({ dealId, userId, isAdmin }) {
                         {l.contacts?.email || '—'}{l.contacts?.phone && <> · <a href={`tel:${l.contacts.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{l.contacts.phone}</a></>}
                         {l.relationship && <> · {l.relationship}</>}
                       </div>
+                      {l.contacts?.mailing_address && (
+                        <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>
+                          ✉ {l.contacts.mailing_address}
+                        </div>
+                      )}
                     </div>
                     <span style={{ fontSize: 10, color: "#57534e", textTransform: "uppercase", letterSpacing: "0.06em" }}>{kindLabel(l.contacts)}</span>
                     <button onClick={() => startEdit(l)} style={{ ...btnGhost, fontSize: 10, padding: "3px 10px" }}>Edit</button>
