@@ -3413,7 +3413,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
-            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} />
+            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' } })} />
           ) : view === "calls" ? (
             <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
@@ -10994,6 +10994,155 @@ function CommunicationsView({ onSelect }) {
 // real opens. Click → jump to the deal. Stays live via a realtime sub on
 // personalized_link_views inserts. Renders nothing when no lead has engaged
 // in the last 7 days (or if the engagement view is unavailable).
+// ─── Sale-Risk Strip (Today) ─────────────────────────────────────────
+// Surfaces active surplus leads where the docket shows a motion to vacate /
+// withdraw the sheriff's sale — because a granted vacate/withdrawal = no sale
+// = no surplus = dead lead. Per Nathan 2026-05-29 (Krimen 25 CV 4436 was the
+// trigger). The signal lives in docket_events.description free-text (Castle
+// dumps most rows into the coarse 'docket_updated' type), so we keyword-scan
+// the description with a tight sale-context filter to avoid false hits like
+// "motion to withdraw as counsel".
+//
+// Two stages:
+//   🟠 PENDING  — a MOTION to vacate/withdraw/cancel was filed; sale at risk,
+//                 but the owner could lose the motion. Watch, don't kill.
+//   🔴 GRANTED  — the court ENTERED the withdrawal/cancellation/vacation; the
+//                 sale is off. Ready to kill (one-click → human confirms via
+//                 the disposition modal with reason 'sale_vacated').
+// Per Nathan: NEVER auto-kill — a misread docket line shouldn't nuke a
+// six-figure lead. Detect + surface + one-click human kill.
+function saleRiskKind(desc) {
+  const d = (desc || '').toLowerCase();
+  if (/vacat/.test(d) && /(sale|order of sale)/.test(d)) return 'vacate';
+  if (/withdraw/.test(d) && /(sale|property)/.test(d))   return 'withdraw';
+  if (/set aside/.test(d) && /sale/.test(d))             return 'set_aside';
+  if (/(bankrupt|automatic stay|suggestion of bankruptcy)/.test(d)) return 'bankruptcy';
+  if (/cancel/.test(d) && /sale/.test(d))                return 'cancel';
+  return null;
+}
+// A court GRANT (vs a party's motion). Careful: "order of sale" contains the
+// word "order", so we can't key off bare /order/ — we look for the specific
+// court-entry phrasings and explicitly exclude rows that are a "motion".
+function saleRiskGranted(desc) {
+  const d = (desc || '').toLowerCase();
+  if (/\bmotion\b/.test(d)) return false; // a party's motion = pending, not granted
+  return /entry withdrawing/.test(d)
+    || /return on order of sale withdrawn/.test(d)
+    || (/order cancelling/.test(d) && /sale/.test(d))
+    || (/\bentry\b/.test(d) && /vacat/.test(d))
+    || (/sale/.test(d) && /(vacated|set aside|cancelled|canceled)/.test(d));
+}
+
+function SaleRiskStrip({ deals, onSelect, onRequestDisposition }) {
+  // `flagged` is the deal-agnostic result of the docket scan: one entry per
+  // deal_id that has sale-risk events, with stage + headline. The join to
+  // `deals` (surplus filter, $ amount, name) happens at RENDER time so load()
+  // doesn't depend on the deals array (which changes identity constantly) —
+  // that keeps the realtime channel subscribed once instead of resubscribing
+  // on every parent render. Mirrors LeadEngagementStrip.
+  const [flagged, setFlagged] = useState([]);
+  const alive = useAliveRef();
+  const load = React.useCallback(async () => {
+    const since = new Date(Date.now() - 180 * 86400_000).toISOString().slice(0, 10);
+    const { data, error } = await sb.from('docket_events')
+      .select('deal_id, event_date, description')
+      .or('description.ilike.*vacate*,description.ilike.*withdraw*,description.ilike.*set aside*,description.ilike.*bankrupt*,description.ilike.*cancel*')
+      .gte('event_date', since)
+      .not('deal_id', 'is', null)
+      .order('event_date', { ascending: false })
+      .limit(400);
+    if (!alive.current) return;
+    if (error || !data) { setFlagged([]); return; }
+
+    const byDeal = new Map();
+    for (const e of data) {
+      const kind = saleRiskKind(e.description);
+      if (!kind) continue;
+      if (!byDeal.has(e.deal_id)) byDeal.set(e.deal_id, []);
+      byDeal.get(e.deal_id).push({ ...e, kind, granted: saleRiskGranted(e.description) });
+    }
+    const out = [];
+    for (const [dealId, evs] of byDeal) {
+      const granted = evs.some(e => e.granted);
+      const headline = (evs.filter(e => e.granted).sort((a, b) => b.event_date.localeCompare(a.event_date))[0])
+                    || (evs.sort((a, b) => b.event_date.localeCompare(a.event_date))[0]);
+      out.push({
+        deal_id: dealId,
+        stage: granted ? 'granted' : 'pending',
+        headline_desc: (headline.description || '').replace(/\s+/g, ' ').trim(),
+        headline_date: headline.event_date,
+      });
+    }
+    setFlagged(out);
+  }, [alive]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    const ch = sb.channel('sale-risk-strip')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, [load]);
+
+  // Join to deals at render: active surplus only, attach $ + name + county.
+  const dealById = new Map(deals.map(d => [d.id, d]));
+  const rows = flagged.map(f => {
+    const d = dealById.get(f.deal_id);
+    if (!d || d.type !== 'surplus' || ['dead', 'closed', 'recovered'].includes(d.status)) return null;
+    return {
+      ...f,
+      name: d.name || f.deal_id,
+      surplus: d.meta?.estimatedSurplus ?? d.surplus_estimate ?? null,
+      county: d.meta?.county || '',
+    };
+  }).filter(Boolean).sort((a, b) => {
+    if (a.stage !== b.stage) return a.stage === 'granted' ? -1 : 1;
+    return (b.surplus || 0) - (a.surplus || 0);
+  });
+
+  if (rows.length === 0) return null;
+  const grantedCount = rows.filter(r => r.stage === 'granted').length;
+  const fmtMoney = (v) => v ? '$' + Math.round(v).toLocaleString('en-US') : '—';
+  const fmtDay = (iso) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid #7f1d1d', borderRadius: 10, background: 'linear-gradient(180deg,#1c1010,#140c0c)', overflow: 'hidden' }}>
+      <div style={{ padding: '9px 14px', fontSize: 11, fontWeight: 700, color: '#fca5a5', letterSpacing: '0.1em', textTransform: 'uppercase', borderBottom: '1px solid #292017', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        ⚠️ Sale at risk — vacate / withdrawal on the docket
+        <span style={{ fontSize: 10, color: '#a8a29e', fontWeight: 600, letterSpacing: '0.04em', textTransform: 'none' }}>
+          {rows.length} lead{rows.length !== 1 ? 's' : ''}{grantedCount > 0 ? ` · ${grantedCount} sale already vacated` : ''} · a granted vacate = no sale = no surplus
+        </span>
+      </div>
+      <div>
+        {rows.map(r => (
+          <div key={r.deal_id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', borderBottom: '1px solid #1f1512' }}>
+            <span style={{
+              fontSize: 9, fontWeight: 800, padding: '3px 7px', borderRadius: 4, whiteSpace: 'nowrap', letterSpacing: '0.04em',
+              background: r.stage === 'granted' ? '#7f1d1d' : '#3a1d0e',
+              color: r.stage === 'granted' ? '#fecaca' : '#fdba74',
+              border: '1px solid ' + (r.stage === 'granted' ? '#b91c1c' : '#a16207'),
+            }}>{r.stage === 'granted' ? '🔴 VACATED' : '🟠 PENDING'}</span>
+            <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => onSelect(r.deal_id)}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {r.name} <span style={{ color: '#78716c', fontWeight: 400 }}>· {fmtMoney(r.surplus)}{r.county ? ` · ${r.county}` : ''}</span>
+              </div>
+              <div style={{ fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1 }}>
+                {fmtDay(r.headline_date)} · {r.headline_desc.slice(0, 90)}
+              </div>
+            </div>
+            <button onClick={(e) => { e.stopPropagation(); onSelect(r.deal_id); }}
+              style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0 }}>Open</button>
+            {onRequestDisposition && (
+              <button onClick={(e) => { e.stopPropagation(); const d = deals.find(x => x.id === r.deal_id); if (d) onRequestDisposition(d); }}
+                title="Mark this lead dead — sale vacated, no surplus to recover"
+                style={{ background: r.stage === 'granted' ? '#7f1d1d' : 'transparent', color: r.stage === 'granted' ? '#fecaca' : '#fca5a5', border: '1px solid ' + (r.stage === 'granted' ? '#b91c1c' : '#7f1d1d'), borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0 }}>🪦 Kill</button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function LeadEngagementStrip({ deals, onSelect }) {
   const [rows, setRows] = useState([]);
   const alive = useAliveRef();
@@ -13223,7 +13372,7 @@ function ConversionFunnel({ deals, setView }) {
   );
 }
 
-function TodayView({ deals, onSelect, isAdmin, setView }) {
+function TodayView({ deals, onSelect, isAdmin, setView, onRequestDisposition }) {
   const now = new Date();
   const year = now.getFullYear();
   const month = now.getMonth();
@@ -13481,6 +13630,11 @@ function TodayView({ deals, onSelect, isAdmin, setView }) {
 
       {/* Conversion funnel — Prep → Ready → Texted → Responded → Signed */}
       <ConversionFunnel deals={deals} setView={setView} />
+
+      {/* Sale-risk strip — leads where the docket shows a vacate/withdrawal of
+          the sheriff's sale. Granted = dead lead (no sale, no surplus). Per
+          Nathan 2026-05-29. One-click → human-confirm kill via disposition. */}
+      <SaleRiskStrip deals={deals} onSelect={onSelect} onRequestDisposition={onRequestDisposition} />
 
       {/* 🔥 Warm leads — who opened their link / chatted with Lauren recently.
           Relocated here from the Deadlines screen (2026-05-27) so it sits with
@@ -14553,6 +14707,7 @@ const DISPOSITION_REASONS = [
   { group: 'real', code: 'no_response',      label: "Couldn't reach the homeowner" },
   { group: 'real', code: 'declined',         label: 'Homeowner declined' },
   { group: 'real', code: 'hired_competitor', label: 'Signed with a competitor' },
+  { group: 'real', code: 'sale_vacated',     label: 'Sale vacated / withdrawn — no sale, no surplus' },
   { group: 'real', code: 'other',            label: 'Other' },
 ];
 const dispositionLabel = (code) => DISPOSITION_REASONS.find(r => r.code === code)?.label || code || '—';
