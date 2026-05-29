@@ -1,6 +1,6 @@
 # Director ↔ DCC interface contract
 
-**Last updated:** 2026-05-29 (by DCC/Nathan session — added Open coordination item: Director-side detection of docket vacate/withdrawal → auction_status flip; + new DCC disposition reason `sale_vacated` for the outcome-reason mapping)
+**Last updated:** 2026-05-29 (by DCC/Nathan session — added 2 coordination items: docket case# format mismatch leaving 213 covered-county leads unmatched [#275], and docket vacate/withdrawal → auction_status flip [#274]; + new DCC disposition reason `sale_vacated`)
 **Living doc.** Either side updates as the contract evolves. Bump the date when you do.
 
 ## Domains
@@ -163,6 +163,10 @@ the Director already created the deal). The RA never writes `intel_case`.
 
 ## Open coordination items
 
+- 🆕 **ASK FOR DIRECTOR/CASTLE (2026-05-29, from DCC/Nathan session): 213 covered-county surplus leads ($14.8M) aren't pulling dockets — case# format mismatch. Full detail + reproducing query in GH issue #275.**
+  Nathan asked "of the surplus, how many have live docket pulling?" Answer: 222 are in the 5 docket counties (Franklin/Hamilton/Cuyahoga/Butler/Montgomery), but only ~6–16 actually pull events. The other **213 ($14.8M)** are subscribed (221/222 have an `intel_subscriptions` row — NOT a subscription gap) but stuck at `status='no_match'` (189) or `county_unbuilt` (25); only 6 `matched`. `court_pull_requests`: 94/142 failed.
+  **Root cause = case-number format.** Matched cases use hyphenated/zero-padded (`CV-25-119683`, `CV-2025-04-0879`); the no_match ones use space-delimited/non-padded (`24 CV 8011`, `CV 2025 06 1461`, `25 CV 497`). Castle's matcher keys on the former. Secondary: Hamilton A-prefix (`A 2401769`) unbuilt (0 of 53 matched); `"<County> County"` trailing-word variants → county_unbuilt; one IN-format case mislabeled OH (`sf-casey`).
+  **Fix is Director/Castle-side** (DCC can't touch `courtCase`/`intel_subscriptions` per this contract): normalize case_number in the matcher (strip spaces → county-canonical hyphen+pad), build Hamilton A-prefix + county-name-variant handling, then re-run matching → 213 backfill. Once they match, the Sale-Risk strip (#274 item below) starts working on them too — right now it's blind on all 213.
 - 🆕 **ASK FOR DIRECTOR (2026-05-29, from DCC/Nathan session): detect docket vacate/withdrawal-of-sale → flip `auction_status` so v6 demotion fires system-wide.**
   **The gap:** a granted motion to vacate / withdraw the sheriff's sale = no sale = no surplus = dead lead. DCC just shipped a **Sale-Risk strip** on Today that keyword-scans `docket_events.description` and flags these. On a live scan it caught **13 active surplus leads** with vacate/withdrawal activity, several already GRANTED and still sitting as live `new-lead` with full surplus + grade:
   - `sf-j` Matthew Thomas — **$208k** — *"ORDER CANCELLING JUNE 4 2026 SALE, VACATING JUDGMENT AND DISMISSING COMPLAINT"* (5/20) — granted
