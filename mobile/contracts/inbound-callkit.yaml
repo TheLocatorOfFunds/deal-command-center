@@ -29,6 +29,15 @@ links:
     pass_when: "ios.entitlements['aps-environment'] == 'production'"
     fix: set it in mobile/app.json -> ios.entitlements
     owner: claude
+    note: >
+      NECESSARY BUT NOT SUFFICIENT. app.json carrying the entitlement does not
+      guarantee the BUILT IPA embeds it - the Expo Twilio plugin + EAS-managed
+      provisioning must inject aps-environment AND the 'voip' background mode at
+      build time. The bundle-level PUSH_NOTIFICATIONS capability is confirmed ON via
+      asc-verify.mjs, but the device-side "Failed to initialize PushKit device token"
+      failure (Builds 17, 22) is most consistent with the built binary NOT carrying
+      these, or a PushKit registration code/timing issue. Verifying the actual IPA
+      entitlements requires inspecting the build artifact, not just app.json.
 
   - id: app-no-forbidden-voip-entitlement
     layer: code/config (mobile/app.json)
@@ -46,15 +55,27 @@ links:
   - id: apple-voip-cert
     layer: apple developer portal
     phase: pre_build
-    verifiable_from_here: false   # needs Apple login or an App Store Connect API key
-    description: A VoIP Services certificate exists and is not expired for com.fundlocators.dcc.
+    verifiable_from_here: partial   # ASC key configured, but push/VoIP certs are NOT exposed by the ASC API
+    description: A VoIP push certificate exists, unexpired, for com.fundlocators.dcc, and is the .p12 uploaded to Twilio.
     check: >
-      If an App Store Connect API key is configured for EAS, query the ASC API
-      for certificates. Otherwise NEEDS-HUMAN: confirm at developer.apple.com ->
-      Certificates. Use the REAL team Apple ID, NOT racin2701@yahoo.com.
-    pass_when: "VoIP Services cert present, not expired, matches provisioning"
-    fix: create a VoIP Services cert at developer.apple.com, then re-upload to Twilio
+      Run `node mobile/contracts/asc-verify.mjs` (ASC API key R79VDA2SMJ, Admin,
+      configured 2026-05-13). It VERIFIES the surrounding facts: app record, bundle
+      PUSH_NOTIFICATIONS capability, and signing-cert expiry. BUT the VoIP *push*
+      cert itself is NOT visible via the ASC API (/v1/certificates returns signing
+      certs only), so that sub-fact stays NEEDS-HUMAN: confirm at developer.apple.com
+      -> Certificates AND that the same cert (.p12) is the Mobile Push Credential in
+      the Twilio console. The runtime voice_sdk_status=registered row is the real
+      end-to-end proof.
+    pass_when: "VoIP push cert present, not expired, == the .p12 uploaded to Twilio (human/runtime confirmed)"
+    fix: create/renew a VoIP push cert at developer.apple.com, export .p12, re-upload to Twilio as the Mobile Push Credential
     owner: justin_or_nathan
+    note: >
+      2026-06-01 via asc-verify.mjs: account is CORRECT (team 8RJDH7L35Q owns app id
+      6768752406, matches eas.json - the old "NOT racin2701@yahoo.com" warning was
+      wrong). Bundle PUSH_NOTIFICATIONS capability = ON. IOS_DISTRIBUTION cert valid
+      to 2027-05-12. So the Apple-ACCOUNT config is clean; the residual risk is (a)
+      the VoIP push .p12 in Twilio and (b) whether the built IPA actually embeds
+      aps-environment + the voip background mode (see app-entitlement-aps + runtime).
 
   - id: twilio-push-credential
     layer: twilio console
