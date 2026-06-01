@@ -229,8 +229,15 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-05-27 — DCC cleanup + Relay/Automations coordination + #237 confidence tiers
+**Status:** Active — 2026-06-01 — performance pass (deals-payload re-pull fixes) + Today-view docket coverage
 **Branch:** main (all work pushed)
+
+**Today (2026-06-01) — what shipped**
+
+- **Performance pass** (`dec5bbc` + `15f176d`, both deploy-hash-verified live). Root issue: the app re-pulled the full deals list (428 rows / ~1.28MB) far more often than needed. Four fixes: (1) **debounce the realtime deals reload** so an intel-main sync burst = one reload, not dozens; (2) **skip the 60s auto-refresh when the tab is hidden**; (3) **DocketCoverageStrip → new `surplus_docket_pulling_ids()` RPC** (server-side DISTINCT, ~67 ids) instead of pulling ~8,190 docket rows to derive them; (4) **debounce SaleRiskStrip's** docket re-scan. ⚠ **Not pixel-verified** — browser froze all session; logic unchanged + DB-verified, but I didn't watch the Today strips paint.
+- **Migration `20260601000000_surplus_docket_pulling_ids.sql`** — read-only STABLE SECURITY INVOKER helper; applied to DB + committed. Returns 67 ids (verified).
+- **Deferred (Nathan's call, 2026-06-01):** trimming `case_intel_summary` (347KB = **27%** of the 1.28MB deals payload) out of the list load. Held until the browser's responsive enough to click-test, because **both** RelayDealPanel (outreach review) and CaseIntelligence read it — they'd need to fetch it on open. Next-session pickup if perf still matters.
+- **MCP state change:** supabase-dcc MCP is **AUTHORIZED again** this session — `execute_sql` + `apply_migration` both work. The 2026-05-27 "UNAUTHORIZED" gotcha below **no longer applies**.
 
 **Today (2026-05-27) — what shipped**
 
