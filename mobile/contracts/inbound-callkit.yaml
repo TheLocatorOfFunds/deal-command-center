@@ -73,18 +73,28 @@ links:
     note: "Confirmed to exist 2026-05-29 (other session). Created 2026-05-13, production."
 
   - id: supabase-push-secret
-    layer: supabase secrets
+    layer: supabase EDGE FUNCTION secrets (NOT Vault)
     phase: pre_build
     verifiable_from_here: true
-    description: Secret TWILIO_VOICE_PUSH_CREDENTIAL_SID must be set and equal the Twilio push-cred SID.
+    description: Edge Function secret TWILIO_VOICE_PUSH_CREDENTIAL_SID must be set so twilio-token issues tokens with push_credential_sid.
     check: >
-      SELECT existence + (length(decrypted_secret) > 0) from vault.decrypted_secrets
-      WHERE name = 'TWILIO_VOICE_PUSH_CREDENTIAL_SID'. NEVER print the value.
-      Then confirm it equals the expected Twilio cred SID.
-    pass_when: "secret set, non-empty, == CR7fd8d05f8deefcc8e94e7de4c357d11c"
+      DO NOT query vault.decrypted_secrets - Edge Function secrets and Vault are
+      SEPARATE stores; twilio-token reads this via Deno.env.get, which is NOT
+      SQL-queryable. Authoritative signal = the twilio-token log line
+      "[twilio-token] issuing identity: dcc-fundlocators push: on" on a recent
+      invocation (push: off means the secret is missing). Confirm the secret in
+      the Supabase dashboard (Edge Functions -> Secrets) or via `supabase secrets list`.
+    pass_when: "twilio-token logs 'push: on' on a recent invocation"
     fix: "supabase secrets set TWILIO_VOICE_PUSH_CREDENTIAL_SID=CR7fd8... (sensitive; Justin approves)"
     owner: justin
-    note: "As of 2026-05-29 this secret is EMPTY - this is the current top break."
+    note: >
+      CORRECTION 2026-06-01: this secret IS set (Edge Function secrets, dashboard-
+      confirmed, created 2026-05-13). An earlier vault.decrypted_secrets query said
+      "empty" - that was the WRONG STORE. This link is NOT the blocker. IMPORTANT:
+      this secret is necessary-but-not-sufficient and is INDEPENDENT of the device-
+      side "Failed to initialize PushKit device token" error - the push credential
+      only matters once a device is registered; it does nothing for getting the
+      device its PushKit token in the first place (that is apple-voip-cert).
 
   - id: edge-twilio-token-pushon
     layer: supabase edge function
