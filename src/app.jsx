@@ -1616,6 +1616,13 @@ function DealCommandCenter({ session, profile }) {
     setLoaded(true);
   };
 
+  // Coalesce realtime deals-change bursts into ONE reload. intel-main's 30-min
+  // sync updates many deals at once → one postgres_changes event per row →
+  // without this the full ~MB deals payload was re-pulled dozens of times in a
+  // burst, hammering the app. Debounce to a single reload after the burst
+  // settles. Perf pass, Nathan 2026-05-29.
+  const dealsReloadTimer = React.useRef(null);
+
   // ── Auto-refresh: keep `deals` fresh without a hard reload ────────
   // Per Nathan 2026-05-05: "I want the DCC to have auto-refresh where
   // the screen is continuously always refreshing." We refetch every
@@ -1626,7 +1633,11 @@ function DealCommandCenter({ session, profile }) {
   // fresh in case a realtime channel dropped a message.
   useEffect(() => {
     const REFRESH_MS = 60_000;
-    const tick = () => { loadDeals(); };
+    // Skip the periodic full-deals reload (~1.3MB) when the tab is hidden —
+    // operators keep DCC open in background tabs all day, and realtime + the
+    // on-visible refresh below already catch them up the moment they return.
+    // Perf pass, Nathan 2026-05-29.
+    const tick = () => { if (document.visibilityState === 'visible') loadDeals(); };
     const id = setInterval(tick, REFRESH_MS);
     const onVis = () => {
       if (document.visibilityState === 'visible') tick();
@@ -1671,7 +1682,12 @@ function DealCommandCenter({ session, profile }) {
   // realtime: any change to deals triggers refresh
   useEffect(() => {
     const ch = sb.channel('deals-ch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, loadDeals)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, () => {
+        // Debounced: coalesce burst updates (intel-main sync re-writes many
+        // deals at once) into a single reload of the full deals payload.
+        if (dealsReloadTimer.current) clearTimeout(dealsReloadTimer.current);
+        dealsReloadTimer.current = setTimeout(loadDeals, 1200);
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
@@ -11336,13 +11352,25 @@ const DOCKET_COVERED_COUNTIES = new Set(['franklin', 'hamilton', 'cuyahoga', 'bu
 function DocketCoverageStrip({ deals, setView }) {
   const [pullingIds, setPullingIds] = useState(null);
   const alive = useAliveRef();
+  // Only the active-surplus deal_ids matter here, so query just those (chunked)
+  // instead of scanning the entire — ever-growing — docket_events table. The
+  // old `limit(20000)` both pulled non-surplus rows we never use AND would
+  // silently truncate (undercounting coverage) once the table passed 20k.
+  // Keyed on a stable id signature so it doesn't re-query on every parent
+  // re-render. Perf pass, Nathan 2026-05-29.
+  const surplusIds = deals.filter(d => d.type === 'surplus' && !['closed', 'dead', 'recovered'].includes(d.status)).map(d => d.id);
+  const idsKey = surplusIds.slice().sort().join(',');
   const load = React.useCallback(async () => {
-    const { data } = await sb.from('docket_events').select('deal_id').not('deal_id', 'is', null).limit(20000);
-    if (!alive.current) return;
+    if (!idsKey) { if (alive.current) setPullingIds(new Set()); return; }
+    const ids = idsKey.split(',');
     const has = new Set();
-    for (const e of (data || [])) has.add(e.deal_id);
+    for (let i = 0; i < ids.length; i += 100) {
+      const { data } = await sb.from('docket_events').select('deal_id').in('deal_id', ids.slice(i, i + 100));
+      for (const e of (data || [])) has.add(e.deal_id);
+    }
+    if (!alive.current) return;
     setPullingIds(has);
-  }, [alive]);
+  }, [alive, idsKey]);
   useEffect(() => { load(); }, [load]);
 
   if (!pullingIds) return null;
@@ -11428,9 +11456,15 @@ function SaleRiskStrip({ deals, onSelect, onRequestDisposition }) {
     setFlagged(out);
   }, [alive]);
   useEffect(() => { load(); }, [load]);
+  const riskReloadTimer = React.useRef(null);
   useEffect(() => {
     const ch = sb.channel('sale-risk-strip')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, load)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, () => {
+        // Debounce: a docket sync inserts many events at once; coalesce into one
+        // re-scan instead of re-running the ilike query per row. Perf pass.
+        if (riskReloadTimer.current) clearTimeout(riskReloadTimer.current);
+        riskReloadTimer.current = setTimeout(load, 1500);
+      })
       .subscribe();
     return () => { sb.removeChannel(ch); };
   }, [load]);
