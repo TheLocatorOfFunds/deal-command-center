@@ -11324,6 +11324,67 @@ function DailyWorkScorecard() {
   );
 }
 
+// ─── Docket Coverage strip (Nathan 2026-05-29) ──────────────────────
+// Makes the docket BLIND SPOT visible. The Sale-Risk strip can only flag leads
+// whose dockets we actually pull — and we only pull a fraction. This strip
+// shows, across the active surplus book, how many leads are: pulling live
+// dockets (we'd catch a vacate/kill) vs blind (we would NOT). Two blind kinds:
+// county-covered-but-stuck (the #275 case# mismatch — fixable) and
+// county-not-monitored (no docket scraper for that county at all).
+// One query (which deal_ids have any docket_events); buckets computed at render.
+const DOCKET_COVERED_COUNTIES = new Set(['franklin', 'hamilton', 'cuyahoga', 'butler', 'montgomery']);
+function DocketCoverageStrip({ deals, setView }) {
+  const [pullingIds, setPullingIds] = useState(null);
+  const alive = useAliveRef();
+  const load = React.useCallback(async () => {
+    const { data } = await sb.from('docket_events').select('deal_id').not('deal_id', 'is', null).limit(20000);
+    if (!alive.current) return;
+    const has = new Set();
+    for (const e of (data || [])) has.add(e.deal_id);
+    setPullingIds(has);
+  }, [alive]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!pullingIds) return null;
+  const norm = (c) => (c || '').trim().replace(/\s*county\s*$/i, '').toLowerCase();
+  const surplus = deals.filter(d => d.type === 'surplus' && !['closed', 'dead', 'recovered'].includes(d.status));
+  let live = 0, stuck = 0, unmonitored = 0, blindSum = 0;
+  for (const d of surplus) {
+    if (pullingIds.has(d.id)) { live++; continue; }
+    const m = d.meta || {};
+    const v = m.verifiedSurplus || m.estimatedSurplus || m.estimatedAvailableEquity || d.surplus_estimate || 0;
+    blindSum += v;
+    if (DOCKET_COVERED_COUNTIES.has(norm(m.county))) stuck++; else unmonitored++;
+  }
+  const total = surplus.length;
+  if (total === 0) return null;
+  const blind = stuck + unmonitored;
+  const pct = total ? Math.round(live / total * 100) : 0;
+  const fmt$ = (n) => !n ? '$0' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + Math.round(n);
+  const Seg = ({ n, label, color }) => (
+    <div style={{ minWidth: 96 }}>
+      <div style={{ fontSize: 18, fontWeight: 800, color, fontFamily: "'DM Mono', monospace", lineHeight: 1 }}>{n}</div>
+      <div style={{ fontSize: 9, color: '#a8a29e', textTransform: 'uppercase', letterSpacing: '0.04em', marginTop: 3 }}>{label}</div>
+    </div>
+  );
+  return (
+    <div style={{ marginBottom: 16, border: '1px solid ' + (pct < 50 ? '#7f1d1d' : '#292524'), borderRadius: 10, background: 'linear-gradient(180deg,#14110d,#0f0d0c)', padding: '12px 14px' }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color: '#fca5a5', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 10 }}>
+        📡 Docket coverage — are we even watching these cases?
+      </div>
+      <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <Seg n={live} label="🟢 Pulling live" color="#6ee7b7" />
+        <Seg n={stuck} label="🟠 Covered · stuck (#275)" color="#fdba74" />
+        <Seg n={unmonitored} label="🔴 County not monitored" color="#fca5a5" />
+        <Seg n={`${pct}%`} label={`of ${total} watched`} color="#fafaf9" />
+      </div>
+      <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 10, lineHeight: 1.5 }}>
+        <strong style={{ color: '#fecaca' }}>{blind} of {total} surplus leads ({fmt$(blindSum)}) aren't pulling dockets</strong> — a vacate, kill, or distribution could land on these and we'd never see it. The 🟠 stuck ones are a case-number format fix on the Director side (#275); the 🔴 ones are counties with no docket scraper yet.
+      </div>
+    </div>
+  );
+}
+
 function SaleRiskStrip({ deals, onSelect, onRequestDisposition }) {
   // `flagged` is the deal-agnostic result of the docket scan: one entry per
   // deal_id that has sale-risk events, with stage + headline. The join to
@@ -13981,6 +14042,11 @@ function TodayView({ deals, onSelect, isAdmin, setView, onRequestDisposition }) 
           the sheriff's sale. Granted = dead lead (no sale, no surplus). Per
           Nathan 2026-05-29. One-click → human-confirm kill via disposition. */}
       <SaleRiskStrip deals={deals} onSelect={onSelect} onRequestDisposition={onRequestDisposition} />
+
+      {/* Docket coverage — how many surplus leads are actually pulling dockets
+          vs blind. Makes the gap behind the Sale-Risk strip visible. Per Nathan
+          2026-05-29 ("how can we tell if all our leads have docket updates"). */}
+      <DocketCoverageStrip deals={deals} setView={setView} />
 
       {/* 🔥 Warm leads — who opened their link / chatted with Lauren recently.
           Relocated here from the Deadlines screen (2026-05-27) so it sits with
