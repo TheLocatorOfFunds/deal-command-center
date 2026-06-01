@@ -30533,18 +30533,37 @@ function dateKey(d) {
   return dt.toISOString().slice(0, 10);
 }
 
+// Step back N pay periods from today. n=0 is the current period, n=1 previous, etc.
+// Stepping from (periodStart minus 1 day) lands cleanly in the prior period across
+// month boundaries. The semi-monthly model has uneven period lengths, so a fixed
+// day-count subtraction isn't reliable.
+function payPeriodBack(n) {
+  let p = computePayPeriod(new Date());
+  for (let i = 0; i < n; i++) {
+    const dayBefore = new Date(p.periodStart.getTime() - 24 * 60 * 60 * 1000);
+    p = computePayPeriod(dayBefore);
+  }
+  return p;
+}
+
+// Build the last N pay periods (current first), each as a range preset object.
+// Used by the "All periods" dropdown.
+function listPayPeriods(count) {
+  return Array.from({ length: count }, (_, i) => {
+    const p = payPeriodBack(i);
+    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+  });
+}
+
 // Range presets for the admin payroll view. Each returns {start, end, label, isPayPeriod}.
+// 'pN' = the Nth pay period back (p0 = current). 'current'/'previous' kept as aliases.
 function rangePreset(name) {
   const today = new Date();
-  if (name === 'current') {
-    const p = computePayPeriod(today);
-    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
-  }
-  if (name === 'previous') {
-    // Subtract 15 days to land in the previous half-month, then compute that period
-    const prior = new Date(today.getTime() - 15 * 24 * 60 * 60 * 1000);
-    const p = computePayPeriod(prior);
-    return { start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p };
+  const periodRange = (p) => ({ start: p.periodStart, end: p.periodEnd, label: p.label, isPayPeriod: true, period: p });
+  if (name === 'current') return periodRange(payPeriodBack(0));
+  if (name === 'previous') return periodRange(payPeriodBack(1));
+  if (typeof name === 'string' && /^p\d+$/.test(name)) {
+    return periodRange(payPeriodBack(parseInt(name.slice(1), 10)));
   }
   if (name === 'thisMonth') {
     const yr = today.getFullYear(); const mo = today.getMonth();
@@ -30919,6 +30938,9 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
   // Replaces the older prompt()-based bonus capture in markPaid().
   const [bonusByUser, setBonusByUser] = React.useState({});
   const [busy, setBusy] = React.useState(false);
+  // "All periods" dropdown — lets the admin jump to any prior pay period
+  // beyond the 5 quick tabs (Justin 6/1).
+  const [showAllPeriods, setShowAllPeriods] = React.useState(false);
 
   const card = { background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: 16 };
 
@@ -31103,12 +31125,52 @@ function AdminPayrollSection({ vaProfiles, teamEntries, rates, payments, adjustm
       ),
       // ----- Range picker bar -----
       React.createElement('div', { style: { display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14, padding: 8, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 } },
-        presetBtn('current', 'Current period'),
-        presetBtn('previous', 'Previous period'),
-        presetBtn('thisMonth', 'This month'),
-        presetBtn('lastMonth', 'Last month'),
-        presetBtn('last7', 'Last 7'),
-        presetBtn('last30', 'Last 30'),
+        // Five quick tabs: current pay period + the four preceding ones, each
+        // labeled by its actual date range (Justin 6/1).
+        presetBtn('p0', 'Current period'),
+        presetBtn('p1', rangePreset('p1').label),
+        presetBtn('p2', rangePreset('p2').label),
+        presetBtn('p3', rangePreset('p3').label),
+        presetBtn('p4', rangePreset('p4').label),
+        // "All periods" dropdown — jump to any earlier pay period.
+        React.createElement('div', { style: { position: 'relative' } },
+          React.createElement('button', {
+            onClick: () => setShowAllPeriods(v => !v),
+            style: {
+              padding: '5px 10px', fontSize: 11, fontWeight: 600,
+              background: showAllPeriods ? '#292524' : 'transparent',
+              color: showAllPeriods ? '#fafaf9' : '#a8a29e',
+              border: '1px solid ' + (showAllPeriods ? '#44403c' : 'transparent'),
+              borderRadius: 5, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+            }
+          }, 'All periods ▾'),
+          showAllPeriods && React.createElement('div', {
+            style: {
+              position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 30,
+              minWidth: 220, maxHeight: 320, overflowY: 'auto',
+              background: '#1c1917', border: '1px solid #44403c', borderRadius: 8,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.5)', padding: 4,
+            }
+          },
+            listPayPeriods(24).map((r, i) => {
+              const isSel = adminRange.isPayPeriod && adminRange.label === r.label;
+              return React.createElement('button', {
+                key: r.label + i,
+                onClick: () => { setAdminRange(r); setShowAllPeriods(false); },
+                style: {
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
+                  width: '100%', textAlign: 'left', padding: '7px 10px', fontSize: 12, fontWeight: 600,
+                  background: isSel ? '#292524' : 'transparent',
+                  color: isSel ? '#fafaf9' : '#d6d3d1',
+                  border: 'none', borderRadius: 5, cursor: 'pointer',
+                }
+              },
+                React.createElement('span', null, (i === 0 ? 'Current · ' : '') + r.label),
+                React.createElement('span', { style: { color: '#78716c', fontSize: 10, whiteSpace: 'nowrap' } }, 'pay ' + r.period.payDate.toLocaleDateString())
+              );
+            })
+          )
+        ),
         React.createElement('div', { style: { width: 1, height: 18, background: '#292524', margin: '0 6px' } }),
         React.createElement('input', {
           type: 'date', value: inputDateValue(adminRange.start),
