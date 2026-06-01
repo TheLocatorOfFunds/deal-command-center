@@ -11352,25 +11352,16 @@ const DOCKET_COVERED_COUNTIES = new Set(['franklin', 'hamilton', 'cuyahoga', 'bu
 function DocketCoverageStrip({ deals, setView }) {
   const [pullingIds, setPullingIds] = useState(null);
   const alive = useAliveRef();
-  // Only the active-surplus deal_ids matter here, so query just those (chunked)
-  // instead of scanning the entire — ever-growing — docket_events table. The
-  // old `limit(20000)` both pulled non-surplus rows we never use AND would
-  // silently truncate (undercounting coverage) once the table passed 20k.
-  // Keyed on a stable id signature so it doesn't re-query on every parent
-  // re-render. Perf pass, Nathan 2026-05-29.
-  const surplusIds = deals.filter(d => d.type === 'surplus' && !['closed', 'dead', 'recovered'].includes(d.status)).map(d => d.id);
-  const idsKey = surplusIds.slice().sort().join(',');
+  // Server-side DISTINCT via RPC (surplus_docket_pulling_ids): returns just the
+  // ~67 active-surplus deal_ids that have >=1 docket event. The old client query
+  // pulled ~8,190 event rows to derive those 67 ids — and the original before
+  // that scanned the whole docket_events table via limit(20000), which would
+  // silently truncate once the table passed 20k. Perf pass, 2026-06-01.
   const load = React.useCallback(async () => {
-    if (!idsKey) { if (alive.current) setPullingIds(new Set()); return; }
-    const ids = idsKey.split(',');
-    const has = new Set();
-    for (let i = 0; i < ids.length; i += 100) {
-      const { data } = await sb.from('docket_events').select('deal_id').in('deal_id', ids.slice(i, i + 100));
-      for (const e of (data || [])) has.add(e.deal_id);
-    }
+    const { data, error } = await sb.rpc('surplus_docket_pulling_ids');
     if (!alive.current) return;
-    setPullingIds(has);
-  }, [alive, idsKey]);
+    setPullingIds(new Set(error ? [] : (data || []).map(r => r.deal_id)));
+  }, [alive]);
   useEffect(() => { load(); }, [load]);
 
   if (!pullingIds) return null;
