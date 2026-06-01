@@ -99,23 +99,25 @@ links:
     verifiable_from_here: true
     description: Edge Function secret TWILIO_VOICE_PUSH_CREDENTIAL_SID must be set so twilio-token issues tokens with push_credential_sid.
     check: >
-      DO NOT query vault.decrypted_secrets - Edge Function secrets and Vault are
-      SEPARATE stores; twilio-token reads this via Deno.env.get, which is NOT
-      SQL-queryable. Authoritative signal = the twilio-token log line
-      "[twilio-token] issuing identity: dcc-fundlocators push: on" on a recent
-      invocation (push: off means the secret is missing). Confirm the secret in
-      the Supabase dashboard (Edge Functions -> Secrets) or via `supabase secrets list`.
-    pass_when: "twilio-token logs 'push: on' on a recent invocation"
+      Run `supabase secrets list --project-ref rcfaashkfpurkvtmsmeb` (Bash) and
+      confirm TWILIO_VOICE_PUSH_CREDENTIAL_SID is present with a non-empty DIGEST
+      (the CLI shows a SHA256 digest, never the value). That is the verifiable
+      signal. DO NOT query vault.decrypted_secrets - Edge Function secrets and Vault
+      are SEPARATE stores (Deno.env.get, not SQL-queryable). NOTE: the twilio-token
+      "push: on" console line is the runtime confirmation, but Supabase get_logs
+      only returns HTTP request summaries, NOT console.log bodies, so that line is
+      NOT visible to the agent - use the CLI list instead.
+    pass_when: "supabase secrets list shows TWILIO_VOICE_PUSH_CREDENTIAL_SID with a non-empty digest"
     fix: "supabase secrets set TWILIO_VOICE_PUSH_CREDENTIAL_SID=CR7fd8... (sensitive; Justin approves)"
     owner: justin
     note: >
-      CORRECTION 2026-06-01: this secret IS set (Edge Function secrets, dashboard-
-      confirmed, created 2026-05-13). An earlier vault.decrypted_secrets query said
-      "empty" - that was the WRONG STORE. This link is NOT the blocker. IMPORTANT:
-      this secret is necessary-but-not-sufficient and is INDEPENDENT of the device-
-      side "Failed to initialize PushKit device token" error - the push credential
-      only matters once a device is registered; it does nothing for getting the
-      device its PushKit token in the first place (that is apple-voip-cert).
+      VERIFIED 2026-06-01 via `supabase secrets list`: present, digest eadeda27...
+      (non-empty = set). Independently confirms the other session's 2026-05-13
+      dashboard setup. This link is NOT the blocker. IMPORTANT: it is necessary-but-
+      not-sufficient and INDEPENDENT of the device-side "Failed to initialize PushKit
+      device token" error - the push credential governs push DELIVERY to an already-
+      registered device, not the device obtaining its PushKit token (that is the
+      built-IPA entitlements / PushKit registration; see runtime-registered).
 
   - id: edge-twilio-token-pushon
     layer: supabase edge function
@@ -147,8 +149,14 @@ links:
       ORDER BY created_at DESC LIMIT 5. Match build_number to the installed build.
     pass_when: "latest row for current build status == 'registered'"
     fix: >
-      'Failed to initialize PushKit device token' -> apple-voip-cert or
-      twilio-push-credential is broken (Apple never issued a token).
+      'Failed to initialize PushKit device token' -> the device never obtained a
+      VoIP token from iOS. This is UPSTREAM of and INDEPENDENT from apple-voip-cert
+      and twilio-push-credential (those govern push DELIVERY, not token issuance, so
+      no cert/credential fix can resolve this error). Real suspects, in order: the
+      BUILT IPA missing aps-environment or the 'voip' UIBackgroundMode (Expo Twilio
+      plugin / EAS provisioning did not inject them), the provisioning profile
+      lacking push, or PushKit (PKPushRegistry) registration code/timing. Inspect the
+      IPA entitlements + the registration code - NOT the Twilio cred.
       'register of null' / 'Registration in progress' -> init race (code mutex).
     owner: claude_diagnose
 
