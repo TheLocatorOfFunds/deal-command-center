@@ -59,14 +59,24 @@ LAST_SEEN=$(cat "${STATE_FILE}")
 # PostgREST: ilike with * as wildcard. We strip @ from MY_TAG for
 # the URL pattern because curl's --data-urlencode handles encoding,
 # but we keep the explicit %-encoded version for clarity.
-RESPONSE=$(curl -fsS -G "${SUPABASE_URL}/rest/v1/team_messages" \
+# We use -f (fail fast on HTTP error) and 2> /tmp/poll_error.log to capture detailed error info.
+RESPONSE=$(curl -fSs -G "${SUPABASE_URL}/rest/v1/team_messages" \
   --data-urlencode "select=id,thread_id,sender_id,sender_kind,body,created_at" \
   --data-urlencode "body=ilike.*${MY_TAG}*" \
   --data-urlencode "created_at=gt.${LAST_SEEN}" \
   --data-urlencode "deleted_at=is.null" \
   --data-urlencode "order=created_at.asc" \
   -H "apikey: ${KEY}" \
-  -H "Authorization: Bearer ${KEY}")
+  -H "Authorization: Bearer ${KEY}" 2> /tmp/poll_error.log)
+
+if [ $? -ne 0 ]; then
+  echo "[poll-inbox] Failed to query Supabase:" >&2
+  cat /tmp/poll_error.log >&2
+  echo "Internal Server Error" >&2
+  rm -f /tmp/poll_error.log
+  exit 1
+fi
+rm -f /tmp/poll_error.log
 
 # Count of total returned (incl. AI replies we'll skip below)
 TOTAL=$(echo "${RESPONSE}" | jq 'length')
