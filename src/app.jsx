@@ -2187,7 +2187,7 @@ function DealCommandCenter({ session, profile }) {
       {showImport && <ImportLeadsModal onClose={() => setShowImport(false)} userId={session.user.id} onDone={() => loadDeals()} />}
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
       {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
-      {dispositionDeal && <DispositionModal deal={dispositionDeal.deal} initialReason={dispositionDeal.deal?.meta?.dispositionReason || ''} onConfirm={confirmDisposition} onClose={() => setDispositionDeal(null)} />}
+      {dispositionDeal && <DispositionModal deal={dispositionDeal.deal} initialReason={dispositionDeal.deal?.meta?.dispositionReason || ''} presetReason={dispositionDeal.presetReason} onConfirm={confirmDisposition} onClose={() => setDispositionDeal(null)} />}
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
@@ -2227,7 +2227,7 @@ function DealCommandCenter({ session, profile }) {
             nextDeal: peerIndex >= 0 && peerIndex < peers.length - 1 ? peers[peerIndex + 1] : null,
             onNav: setActiveDealId,
           };
-          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} onRequestDisposition={(d) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' } })} onOpenCallDisposition={setPendingDisposition} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
+          return <DealDetail key={activeDeal.id} deal={activeDeal} userName={userName} userId={session.user.id} teamMembers={teamMembers} isAdmin={isAdmin} onUpdateDeal={(patch) => updateDealMeta(activeDeal.id, patch)} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} onOpenCallDisposition={setPendingDisposition} initialTab={parseHash().tab} peerNav={peerNav} startCall={startCall} callStatus={callStatus} />;
         })()
       )}
 
@@ -3487,7 +3487,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
-            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' } })} />
+            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} />
           ) : view === "calls" ? (
             <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
@@ -11423,7 +11423,7 @@ function SaleRiskStrip({ deals, onSelect, onRequestDisposition }) {
             <button onClick={(e) => { e.stopPropagation(); onSelect(r.deal_id); }}
               style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0 }}>Open</button>
             {onRequestDisposition && (
-              <button onClick={(e) => { e.stopPropagation(); const d = deals.find(x => x.id === r.deal_id); if (d) onRequestDisposition(d); }}
+              <button onClick={(e) => { e.stopPropagation(); const d = deals.find(x => x.id === r.deal_id); if (d) onRequestDisposition(d, 'sale_vacated'); }}
                 title="Mark this lead dead — sale vacated, no surplus to recover"
                 style={{ background: r.stage === 'granted' ? '#7f1d1d' : 'transparent', color: r.stage === 'granted' ? '#fecaca' : '#fca5a5', border: '1px solid ' + (r.stage === 'granted' ? '#b91c1c' : '#7f1d1d'), borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap', flexShrink: 0 }}>🪦 Kill</button>
             )}
@@ -15066,8 +15066,13 @@ const DISPOSITION_REASONS = [
 ];
 const dispositionLabel = (code) => DISPOSITION_REASONS.find(r => r.code === code)?.label || code || '—';
 
-function DispositionModal({ deal, initialReason, onConfirm, onClose }) {
-  const [reason, setReason] = useState(initialReason || '');
+function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClose }) {
+  // presetReason pre-selects the dropdown (e.g. 'sale_vacated' when killing from
+  // the Sale-Risk strip — the docket already tells us why) so the "Mark dead"
+  // button is live on open = one click. Unlike initialReason it does NOT flip
+  // the modal into edit mode. Per Nathan 2026-05-29 (Kill button felt dead
+  // because the confirm button is disabled until a reason is chosen).
+  const [reason, setReason] = useState(initialReason || presetReason || '');
   const [busy, setBusy] = useState(false);
   const editing = !!initialReason;
   const G1 = DISPOSITION_REASONS.filter(r => r.group === 'bad');
