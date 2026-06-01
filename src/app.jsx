@@ -779,6 +779,7 @@ function DealCommandCenter({ session, profile }) {
     // Added 2026-05-15 per Justin: these were nav items but missing from
     // the whitelist, so refresh on these views bounced you back to today.
     'relay', 'calls', 'comms', 'va-queue', 'communications', 'automations',
+    'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
@@ -811,6 +812,7 @@ function DealCommandCenter({ session, profile }) {
   const [showSearch, setShowSearch] = useState(false);
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
+  const [followupDueCount, setFollowupDueCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [unreadSmsCount, setUnreadSmsCount] = useState(0);
@@ -1379,6 +1381,19 @@ function DealCommandCenter({ session, profile }) {
     setUnackDocketCount(data || 0);
   };
 
+  // Follow-ups due badge — count of open follow-up reminder tasks (created by
+  // log_deal_activity's "Follow up on" field) whose due date is today or past.
+  // Drives the 📞 Follow-ups nav badge. Nathan 2026-06-01.
+  const loadFollowupCount = async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const { count } = await sb.from('tasks')
+      .select('*', { count: 'exact', head: true })
+      .ilike('title', 'follow up%')
+      .eq('done', false)
+      .lte('due_date', today);
+    setFollowupDueCount(count || 0);
+  };
+
   // Unacked system alerts — the in-DCC monitoring queue. Drives the ⚠
   // header badge so silent EF/cron failures surface immediately.
   const loadSystemAlertCount = async () => {
@@ -1658,7 +1673,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -1690,6 +1705,7 @@ function DealCommandCenter({ session, profile }) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, loadFollowupCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, loadDocketCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'walkthrough_requests' }, loadPendingWalkthroughs)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'investor_offers' }, loadPendingOffersCount)
@@ -1878,6 +1894,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('communications', '💬', 'Comms', { groupIds: ['communications','inbox'] })}
               {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
+              {navItem('followups','📞', 'Follow-ups', { badge: followupDueCount })}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
               {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
               {div()}
@@ -3440,7 +3457,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on views where deal-search is irrelevant — Today, Time tracking, Reports, etc.) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -3500,7 +3517,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} />
@@ -3534,6 +3551,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <HygieneDashboard deals={deals} onSelect={onSelect} />
           ) : view === "pipeline" ? (
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
+          ) : view === "followups" ? (
+            <FollowupsView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "time" ? (
@@ -3627,7 +3646,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             </div>
           )}
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -6096,6 +6115,213 @@ function GlobalTasksView({ deals, onJumpToDeal }) {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// ─── Follow-ups queue ─────────────────────────────────────────────
+// The dedicated "leads waiting on a callback from me" page. Reads the follow-up
+// reminder tasks (auto-created by log_deal_activity's "Follow up on" field + the
+// quick ⏰ Follow up button — both title them "Follow up: <note>"), joins to
+// deals, and surfaces them overdue-first so a warm lead never slips. Only shows
+// follow-ups on deals we can still act on (deal present, not dead/closed). The
+// checkbox marks the follow-up done (drops it off the queue). Nathan 2026-06-01.
+function FollowupsView({ deals, onJumpToDeal }) {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('due'); // due | overdue | today | week | all | done
+  const [updating, setUpdating] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('tasks')
+      .select('*')
+      .ilike('title', 'follow up%')
+      .order('due_date', { ascending: true, nullsLast: true })
+      .order('created_at', { ascending: true })
+      .limit(500);
+    setTasks(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const ch = sb.channel('followups-global')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const markDone = async (t, done) => {
+    setUpdating(t.id);
+    await sb.from('tasks').update({ done }).eq('id', t.id);
+    setUpdating(null);
+    load();
+  };
+
+  const dealsById = {};
+  deals.forEach(d => { dealsById[d.id] = d; });
+  const today = new Date().toISOString().slice(0, 10);
+  const weekFromNow = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10);
+  const DEAD = ['dead', 'closed', 'recovered'];
+  const surplusOf = (d) => { const m = d?.meta || {}; return m.verifiedSurplus || m.estimatedSurplus || m.estimatedAvailableEquity || d?.surplus_estimate || 0; };
+  const fmt$ = (n) => !n ? '' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + Math.round(n);
+  const noteOf = (title) => (title || '').replace(/^follow up:?\s*/i, '').trim();
+
+  const enriched = tasks
+    .map(t => ({ ...t, deal: dealsById[t.deal_id], isOverdue: t.due_date && !t.done && t.due_date < today, isToday: t.due_date === today }))
+    .filter(t => t.deal && !DEAD.includes(t.deal.status));
+
+  let filtered;
+  if (filter === 'done') filtered = enriched.filter(t => t.done);
+  else if (filter === 'overdue') filtered = enriched.filter(t => t.isOverdue);
+  else if (filter === 'today') filtered = enriched.filter(t => !t.done && t.due_date === today);
+  else if (filter === 'week') filtered = enriched.filter(t => !t.done && t.due_date && t.due_date <= weekFromNow && t.due_date >= today);
+  else if (filter === 'all') filtered = enriched.filter(t => !t.done);
+  else filtered = enriched.filter(t => !t.done && t.due_date && t.due_date <= today); // 'due' = today or overdue
+
+  filtered.sort((a, b) => {
+    if (a.due_date && b.due_date) return a.due_date.localeCompare(b.due_date);
+    if (a.due_date) return -1;
+    if (b.due_date) return 1;
+    return 0;
+  });
+
+  const openTasks = enriched.filter(t => !t.done);
+  const counts = {
+    due: openTasks.filter(t => t.due_date && t.due_date <= today).length,
+    overdue: enriched.filter(t => t.isOverdue).length,
+    today: openTasks.filter(t => t.due_date === today).length,
+    week: openTasks.filter(t => t.due_date && t.due_date <= weekFromNow && t.due_date >= today).length,
+    all: openTasks.length,
+    done: enriched.filter(t => t.done).length,
+  };
+
+  const chip = (id, label) => (
+    <button key={id} onClick={() => setFilter(id)} style={{
+      fontSize: 12, padding: '6px 14px', borderRadius: 6,
+      background: filter === id ? '#292524' : 'transparent',
+      color: filter === id ? '#fafaf9' : '#78716c',
+      border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'),
+      fontWeight: filter === id ? 700 : 500, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em',
+    }}>{label} · {counts[id]}</button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, padding: 16, background: "#1c1917", border: "1px solid #292524", borderRadius: 10 }}>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📞 Follow-ups</div>
+          <div style={{ fontSize: 13, color: '#a8a29e', marginTop: 4, lineHeight: 1.5 }}>
+            Leads &amp; deals waiting on a callback from you.{' '}
+            {counts.overdue > 0 ? <span style={{ color: '#fca5a5', fontWeight: 700 }}>{counts.overdue} overdue</span> : <span style={{ color: '#6ee7b7' }}>none overdue</span>}
+            {' '}· {counts.today} due today · {counts.week} this week
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap' }}>
+          {chip('due', 'Due now')}
+          {chip('overdue', 'Overdue')}
+          {chip('today', 'Today')}
+          {chip('week', 'This week')}
+          {chip('all', 'All open')}
+          {chip('done', 'Done')}
+        </div>
+      </div>
+
+      {loading && <div style={{ padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 }}>Loading…</div>}
+      {!loading && filtered.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>
+          {filter === 'overdue' ? '🎉 Nothing overdue.' : filter === 'done' ? 'No completed follow-ups yet.' : '✅ No follow-ups waiting. Set one from any deal with the ⏰ Follow up button.'}
+        </div>
+      )}
+
+      {filtered.map(t => {
+        const d = t.deal;
+        const note = noteOf(t.title);
+        const surplus = fmt$(surplusOf(d));
+        return (
+          <div key={t.id} style={{ marginBottom: 8, padding: "11px 14px", background: '#1c1917', border: '1px solid ' + (t.isOverdue ? '#7f1d1d' : '#292524'), borderLeft: '3px solid ' + (t.isOverdue ? '#ef4444' : t.isToday ? '#fcd34d' : '#44403c'), borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <input type="checkbox" checked={!!t.done} onChange={e => markDone(t, e.target.checked)} disabled={updating === t.id} title="Mark this follow-up done" style={{ flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 220 }}>
+              <div style={{ fontSize: 13, color: t.done ? '#78716c' : '#fafaf9', textDecoration: t.done ? 'line-through' : 'none', marginBottom: 3, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, cursor: 'pointer' }} onClick={() => onJumpToDeal(d.id)}>{(d.meta?.homeownerName || d.name || d.id).split(' - ')[0]}</span>
+                {d.lead_tier && <TierBadge deal={d} />}
+                {surplus && <span style={{ fontSize: 11, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{surplus}</span>}
+              </div>
+              <div style={{ fontSize: 12, color: t.done ? '#57534e' : '#d6d3d1', marginBottom: 2 }}>{note ? '↳ ' + note : <span style={{ color: '#78716c', fontStyle: 'italic' }}>↳ (no note)</span>}</div>
+              <div style={{ fontSize: 10, color: '#78716c', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                {t.due_date && <span style={{ color: t.isOverdue ? '#ef4444' : t.isToday ? '#fcd34d' : '#a8a29e', fontFamily: "'DM Mono', monospace", fontWeight: (t.isOverdue || t.isToday) ? 700 : 400 }}>{t.isOverdue ? 'OVERDUE · ' : t.isToday ? 'DUE TODAY · ' : 'due '}{new Date(t.due_date + 'T00:00:00').toLocaleDateString()}</span>}
+                {t.assigned_to && <span style={{ color: '#a8a29e' }}>· {t.assigned_to}</span>}
+                {d.meta?.county && <span>· {d.meta.county}</span>}
+              </div>
+            </div>
+            <button onClick={() => onJumpToDeal(d.id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Quick "⏰ Follow up" button — set/replace a follow-up reminder on a deal in one
+// tap, straight from a conversation. Lives in the deal header (visible on every
+// tab incl. Comms). Uses the same log_deal_activity engine as the Log-call form,
+// so the reminder task + timeline entry are identical. Marks any prior open
+// follow-up on this deal done first, so each deal carries one live follow-up.
+// Nathan 2026-06-01.
+function FollowupButton({ deal, reload }) {
+  const [open, setOpen] = useState(false);
+  const [date, setDate] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const iso = (ms) => new Date(Date.now() + ms).toISOString().slice(0, 10);
+  const quick = { 'Tomorrow': iso(1 * 86400_000), 'In 3 days': iso(3 * 86400_000), 'Next week': iso(7 * 86400_000) };
+
+  const save = async () => {
+    if (!date) { alert('Pick a follow-up date'); return; }
+    setSaving(true);
+    try {
+      // Supersede any prior open follow-up on this deal so the queue stays clean.
+      await sb.from('tasks').update({ done: true }).eq('deal_id', deal.id).eq('done', false).ilike('title', 'follow up%');
+      const { error } = await sb.rpc('log_deal_activity', {
+        p_deal_id: deal.id,
+        p_type: 'note',
+        p_outcome: null,
+        p_body: note.trim() ? ('Follow-up set: ' + note.trim()) : 'Follow-up scheduled',
+        p_next_followup_date: date,
+        p_next_followup_note: note.trim() || null,
+      });
+      if (error) throw error;
+      setOpen(false); setDate(''); setNote('');
+      reload && reload();
+    } catch (e) { alert('Could not save follow-up: ' + e.message); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button onClick={() => setOpen(v => !v)} title="Set a reminder to follow up with this lead"
+        style={{ background: "transparent", border: "1px solid #44403c", color: "#fcd34d", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
+        ⏰ Follow up
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: 14, width: 280, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>Remind me to follow up</div>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap' }}>
+              {Object.entries(quick).map(([label, val]) => (
+                <button key={label} onClick={() => setDate(val)} style={{ fontSize: 11, padding: '5px 10px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, border: '1px solid ' + (date === val ? '#a16207' : '#44403c'), background: date === val ? '#78350f33' : 'transparent', color: date === val ? '#fcd34d' : '#a8a29e' }}>{label}</button>
+              ))}
+            </div>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} style={{ ...inputStyle, fontSize: 12, width: '100%', marginBottom: 10 }} />
+            <input value={note} onChange={e => setNote(e.target.value)} placeholder="What to follow up about" style={{ ...inputStyle, fontSize: 12, width: '100%', marginBottom: 12 }} />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setOpen(false)} style={{ ...btnGhost, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={save} disabled={saving} style={{ ...btnPrimary, cursor: 'pointer', opacity: saving ? 0.6 : 1 }}>{saving ? 'Saving…' : 'Set follow-up'}</button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -16374,6 +16600,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
           </button>
         )}
         <PersonalizedUrlControl deal={deal} reload={loadAll} logAct={logAct} />
+        <FollowupButton deal={deal} reload={loadAll} />
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
           const val = e.target.value || null;
