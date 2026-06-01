@@ -16170,21 +16170,34 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
 
   const loadAll = async () => {
     setLoaded(false);
-    const [e, t, v, n, a, d] = await Promise.all([
+    // Resilience + speed (Nathan 2026-05-29 — flip-2533 stuck on "Loading deal
+    // data" + general slowness). Two fixes:
+    //   (1) Promise.allSettled — ONE failing or timing-out query can no longer
+    //       leave the page hung forever on "Loading deal data". We render with
+    //       whatever loaded. (Old Promise.all rejected the whole batch on any
+    //       single rejection, and setLoaded(true) was never reached.)
+    //   (2) The documents query carries the heavy OCR `extracted` jsonb and is
+    //       by far the slowest on doc-heavy deals — it now loads AFTER the page
+    //       renders instead of blocking it. The page is usable immediately; the
+    //       Documents tab fills a beat later.
+    const core = await Promise.allSettled([
       sb.from('expenses').select('*').eq('deal_id', deal.id).order('date', { ascending: false }),
       sb.from('tasks').select('*').eq('deal_id', deal.id).order('done').order('created_at'),
       sb.from('vendors').select('*').eq('deal_id', deal.id).order('created_at'),
       sb.from('deal_notes').select('*, profiles:author_id(name)').eq('deal_id', deal.id).order('updated_at', { ascending: false }),
       sb.from('activity').select('*, profiles(name)').eq('deal_id', deal.id).order('created_at', { ascending: false }).limit(60),
-      sb.from('documents').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false }),
     ]);
-    setExpenses(e.data || []);
-    setTasks(t.data || []);
-    setVendors(v.data || []);
-    setNotes(n.data || []);
-    setActivity(a.data || []);
-    setDocuments(d.data || []);
-    setLoaded(true);
+    const val = (i) => (core[i].status === 'fulfilled' ? (core[i].value.data || []) : []);
+    setExpenses(val(0));
+    setTasks(val(1));
+    setVendors(val(2));
+    setNotes(val(3));
+    setActivity(val(4));
+    setLoaded(true); // render now — don't block the whole page on the heavy documents query
+    try {
+      const { data } = await sb.from('documents').select('*').eq('deal_id', deal.id).order('created_at', { ascending: false });
+      setDocuments(data || []);
+    } catch (e) { /* page already usable; Documents tab fills via realtime / retry */ }
   };
 
   useEffect(() => { loadAll(); }, [deal.id]);
