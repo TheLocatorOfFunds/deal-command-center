@@ -162,13 +162,22 @@ export async function initVoice(): Promise<boolean> {
 
 async function _doInitVoice(): Promise<boolean> {
   const token = await fetchToken()
-  if (!token) return false
+  if (!token) {
+    // Captured so we can distinguish "never reached retry loop" from
+    // "retry loop ran but PushKit timed out" in voice_sdk_status.
+    void writeVoiceSdkStatus('error', 'fetchToken returned null (no session or network error)')
+    return false
+  }
   cachedToken = token
 
   try {
     voice = new Voice()
   } catch (e) {
+    // new Voice() failing means the native Twilio module couldn't initialize.
+    // Write the exact error so we can see it in Supabase without streaming device logs.
+    const errMsg = e instanceof Error ? e.message : String(e)
     console.warn('[voice] new Voice() failed', e)
+    void writeVoiceSdkStatus('error', `new Voice() threw: ${errMsg}`)
     voice = null
     return false
   }
