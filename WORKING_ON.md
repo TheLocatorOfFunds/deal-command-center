@@ -70,6 +70,37 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
+### ✅ SHIPPED 2026-06-03 — Capture + link EVERY call (call-capture-linking)
+
+Merged to `main` (`bb83c1a`). Every inbound/outbound call now links to a
+deal/contact through ONE shared resolver instead of four brittle number
+matches. Fixes the Robert Donaghy orphan (SDK sent `dealId=sf-daggs`,
+`twilio-voice-outbound` discarded it + number-matched a contact whose
+phone column held 3 numbers in one CSV string).
+
+- **NEW** `public.resolve_call_link(p_number)` migration
+  `20260603120000` — splits multi-number contact phones on `, / ;`,
+  matches each number's last-10, falls back to `find_deal_by_phone`.
+  SECURITY DEFINER, search_path pinned. Reviewer-confirmed injection-safe.
+- 4 EFs wired to it + deployed: `twilio-voice` v65, `twilio-voice-outbound`
+  v38, `mobile-place-call` v11, `twilio-voice-status` v60 (verify_jwt
+  preserved: 3 webhooks=false, mobile-place-call=true).
+- `twilio-voice-status` also got a safety-net backfill (links a finalized
+  orphan if resolvable) AND a **DND gate** on the missed-call auto-SMS
+  (was firing with no do_not_text/deceased/phone_status check — pre-existing
+  landmine, now closed; inbound-only + fail-safe).
+- Web: global Call History (`CallHistoryView`) now renders recording
+  players (was the one call surface missing them; comms hub already had it).
+- Mobile (OTA, runtime 0.1.0, both platforms): deal screen + quick-call
+  typeahead now pass `contactId` at dial for contact-level threads.
+- Backfill: 14 orphan calls linked to 6 deals (contact-linked-to-1-deal
+  only). Orphans 61→47. Test numbers (`+15136661089`, `+14799354177`,
+  Indiana 33-min, Justin's Google #) left as orphans by design.
+- QA: comms-reviewer GO; live Chrome confirmed Robert's 16:56 call on
+  sf-daggs + recordings in both call surfaces; no app console errors.
+
+---
+
 ### 🔗 HANDOFF 2026-06-01 (eloquent-brahmagupta-248dfb) -> the Build 22/23 / voice.ts session
 
 Ran the new config-chain gate `/release-check inbound-callkit`. **These links are VERIFIED - stop re-checking them:**
