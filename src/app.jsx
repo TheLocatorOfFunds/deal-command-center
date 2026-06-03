@@ -2937,7 +2937,7 @@ function CallHistoryView({ onSelect }) {
   const loadCalls = async () => {
     setLoaded(false);
     const { data } = await sb.from('call_logs')
-      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, ended_at, deal_id, contact_id, contacts(name), deals(name)')
+      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, ended_at, deal_id, contact_id, recording_url, recording_sid, recording_duration, contacts(name), deals(name)')
       .order('started_at', { ascending: false })
       .limit(100);
     setCalls(data || []);
@@ -3002,7 +3002,8 @@ function CallHistoryView({ onSelect }) {
             const contactName = c.contacts?.name || null;
             const dealName = c.deals?.name || null;
             return (
-              <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '12px 16px', borderBottom: i < filtered.length-1 ? '1px solid #1c1917' : 'none', cursor: 'default' }}>
+              <div key={c.id} style={{ padding: '12px 16px', borderBottom: i < filtered.length-1 ? '1px solid #1c1917' : 'none' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                 {/* Direction indicator */}
                 <div style={{ width: 32, height: 32, borderRadius: '50%', background: '#1c1917', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 14 }}>
                   {isInbound ? '↙' : '↗'}
@@ -3029,6 +3030,13 @@ function CallHistoryView({ onSelect }) {
                   <div style={{ fontSize: 11, color: '#57534e' }}>{fmtTime(c.started_at)}</div>
                   <div style={{ fontSize: 10, color: '#44403c', textTransform: 'capitalize' }}>{c.direction}</div>
                 </div>
+                </div>
+                {/* Recording player — renders on any call (linked or orphan) that has one */}
+                {c.recording_url && (
+                  <audio controls preload="none" src={c.recording_url} style={{ width: '100%', height: 34, marginTop: 10 }}>
+                    Your browser does not support audio playback.
+                  </audio>
+                )}
               </div>
             );
           })}
