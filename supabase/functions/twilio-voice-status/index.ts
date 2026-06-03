@@ -218,6 +218,36 @@ async function maybeBackfillLink(db: ReturnType<typeof createClient>, row: any) 
 async function maybeSendMissedCallSms(db: ReturnType<typeof createClient>, row: any, isMissed: boolean) {
   if (!row || !isMissed || row.auto_sms_sent) return;
 
+  // Only INBOUND missed calls get the courtesy text-back. For an outbound
+  // missed call we rang them, so the template ("saw I missed your call")
+  // is wrong, and row.from_number would be our own business number.
+  if (row.direction !== 'inbound') return;
+
+  const recipient = row.from_number || '';
+  if (!recipient) return;
+
+  // DND / deceased / bad-number gate — never auto-text a flagged party.
+  // Mirrors the dial-time refuse block in twilio-voice-outbound. Fail SAFE:
+  // if we can't verify the recipient, do NOT text (hard rule: never text a
+  // real client from a wrong path). Matches by contact_id (reliably set post
+  // call-link) AND by phone (E.164 + bare 10-digit) to cover orphan rows.
+  const d10 = recipient.replace(/\D/g, '').slice(-10);
+  try {
+    const { data: flags, error: flagErr } = await db.from('contacts')
+      .select('do_not_text, deceased, phone_status')
+      .or(`id.eq.${row.contact_id || '00000000-0000-0000-0000-000000000000'},phone.eq.${recipient},phone.eq.${d10}`);
+    if (flagErr) return; // fail safe
+    const blocked = (flags || []).some((c: any) =>
+      c.do_not_text === true
+      || c.deceased === true
+      || c.phone_status === 'wrong_number'
+      || c.phone_status === 'disconnected'
+    );
+    if (blocked) return;
+  } catch (_) {
+    return; // fail safe
+  }
+
   const twilioSid   = Deno.env.get('TWILIO_ACCOUNT_SID');
   const twilioToken = Deno.env.get('TWILIO_AUTH_TOKEN');
   if (!twilioSid || !twilioToken) return;
