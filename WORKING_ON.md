@@ -70,6 +70,23 @@ Only if you literally have no other option AND you have the source backed up. Fr
 
 ## Justin's session
 
+### 🔗 HANDOFF 2026-06-01 (eloquent-brahmagupta-248dfb) -> the Build 22/23 / voice.ts session
+
+Ran the new config-chain gate `/release-check inbound-callkit`. **These links are VERIFIED - stop re-checking them:**
+- Apple account is correct: team `8RJDH7L35Q` owns app `6768752406` (matches eas.json). The old "not racin2701@yahoo.com" warning was WRONG.
+- Bundle `com.fundlocators.dcc`: PUSH_NOTIFICATIONS capability ON. `IOS_DISTRIBUTION` cert valid to 2027-05-12.
+- `app.json`: `aps-environment=production`; no forbidden `pushkit.unrestricted-voip` entitlement.
+- Supabase secret `TWILIO_VOICE_PUSH_CREDENTIAL_SID` is SET - verified via `supabase secrets list` (digest eadeda27...). The Vault "empty" reading was the WRONG store (Edge Function secrets are not in `vault.decrypted_secrets`).
+- `twilio-token` v39 + `twilio-voice` v64 deployed ACTIVE.
+
+**Still NEEDS-HUMAN (console-only):** Apple VoIP push cert (ASC API does not expose push certs); Twilio Mobile Push Credential `CR7fd8d05f8deefcc8e94e7de4c357d11c` sandbox-unchecked.
+
+**Do NOT chase the cred/secret:** `Failed to initialize PushKit device token` (Builds 17, 22) is the device failing to get a VoIP token from iOS - UPSTREAM of push delivery. Real suspects: built IPA missing `aps-environment` / `voip` UIBackgroundMode (verify the actual IPA, not app.json), provisioning lacking push, or PKPushRegistry code/timing. Retry-window tuning cannot fix token issuance. No `voice_sdk_status` row has ever reached `registered` (Builds 14-22) -> inbound-callkit is **NO-GO** until it does.
+
+Contract + verifier now on main: `mobile/contracts/inbound-callkit.yaml` + `mobile/contracts/asc-verify.mjs` (re-runs the Apple checks). Run `/release-check inbound-callkit` to reproduce. Full detail in `memory/mobile_release_gate_inbound_callkit.md`.
+
+---
+
 **Status:** Active — 2026-05-26
 
 **Latest shipped (2026-05-28 ~12:00pm ET):**

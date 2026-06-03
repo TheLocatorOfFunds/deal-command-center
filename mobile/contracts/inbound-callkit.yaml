@@ -1,0 +1,167 @@
+# Release contract: inbound-callkit
+#
+# A contract is the FULL list of things that must be true for a capability to
+# work, across EVERY layer - not just code. The release-readiness agent walks
+# each link and returns VERIFIED / BROKEN / NEEDS-HUMAN with evidence.
+#
+# A build is GO only when every pre_build link is VERIFIED.
+# NEEDS-HUMAN is NOT a pass - it means "go confirm this yourself before building."
+#
+# This contract exists because inbound calls broke at Build 14 and stayed broken
+# through Build 22. Nobody had the chain written down, so each session re-derived
+# it and fixed one link per build. This file makes the whole chain visible at once.
+
+feature: inbound-callkit
+goal: >
+  An inbound call to the FundLocators number rings THIS device via CallKit
+  through the Twilio Voice SDK - not only via Nathan's cell fallback leg
+  (+15139982306), which is what masked the breakage before.
+owner: Justin
+last_verified: null   # the agent stamps this only on a full-GO run
+
+links:
+  - id: app-entitlement-aps
+    layer: code/config (mobile/app.json)
+    phase: pre_build
+    verifiable_from_here: true
+    description: aps-environment entitlement must be 'production'.
+    check: grep ios.entitlements in mobile/app.json
+    pass_when: "ios.entitlements['aps-environment'] == 'production'"
+    fix: set it in mobile/app.json -> ios.entitlements
+    owner: claude
+    note: >
+      NECESSARY BUT NOT SUFFICIENT. app.json carrying the entitlement does not
+      guarantee the BUILT IPA embeds it - the Expo Twilio plugin + EAS-managed
+      provisioning must inject aps-environment AND the 'voip' background mode at
+      build time. The bundle-level PUSH_NOTIFICATIONS capability is confirmed ON via
+      asc-verify.mjs, but the device-side "Failed to initialize PushKit device token"
+      failure (Builds 17, 22) is most consistent with the built binary NOT carrying
+      these, or a PushKit registration code/timing issue. Verifying the actual IPA
+      entitlements requires inspecting the build artifact, not just app.json.
+
+  - id: app-no-forbidden-voip-entitlement
+    layer: code/config (mobile/app.json)
+    phase: pre_build
+    verifiable_from_here: true
+    description: >
+      Must NOT contain com.apple.developer.pushkit.unrestricted-voip. It is not
+      a registerable Apple capability; EAS cannot sync it and Xcode rejects the
+      build (Builds 17-20 lesson).
+    check: grep mobile/app.json for the forbidden string
+    pass_when: "string absent"
+    fix: remove it from app.json entitlements
+    owner: claude
+
+  - id: apple-voip-cert
+    layer: apple developer portal
+    phase: pre_build
+    verifiable_from_here: partial   # ASC key configured, but push/VoIP certs are NOT exposed by the ASC API
+    description: A VoIP push certificate exists, unexpired, for com.fundlocators.dcc, and is the .p12 uploaded to Twilio.
+    check: >
+      Run `node mobile/contracts/asc-verify.mjs` (ASC API key R79VDA2SMJ, Admin,
+      configured 2026-05-13). It VERIFIES the surrounding facts: app record, bundle
+      PUSH_NOTIFICATIONS capability, and signing-cert expiry. BUT the VoIP *push*
+      cert itself is NOT visible via the ASC API (/v1/certificates returns signing
+      certs only), so that sub-fact stays NEEDS-HUMAN: confirm at developer.apple.com
+      -> Certificates AND that the same cert (.p12) is the Mobile Push Credential in
+      the Twilio console. The runtime voice_sdk_status=registered row is the real
+      end-to-end proof.
+    pass_when: "VoIP push cert present, not expired, == the .p12 uploaded to Twilio (human/runtime confirmed)"
+    fix: create/renew a VoIP push cert at developer.apple.com, export .p12, re-upload to Twilio as the Mobile Push Credential
+    owner: justin_or_nathan
+    note: >
+      2026-06-01 via asc-verify.mjs: account is CORRECT (team 8RJDH7L35Q owns app id
+      6768752406, matches eas.json - the old "NOT racin2701@yahoo.com" warning was
+      wrong). Bundle PUSH_NOTIFICATIONS capability = ON. IOS_DISTRIBUTION cert valid
+      to 2027-05-12. So the Apple-ACCOUNT config is clean; the residual risk is (a)
+      the VoIP push .p12 in Twilio and (b) whether the built IPA actually embeds
+      aps-environment + the voip background mode (see app-entitlement-aps + runtime).
+
+  - id: twilio-push-credential
+    layer: twilio console
+    phase: pre_build
+    verifiable_from_here: partial   # via Twilio API if creds present, else needs-human
+    expected_sid: CR7fd8d05f8deefcc8e94e7de4c357d11c
+    description: A Mobile Push Credential (Type APN, Sandbox unchecked = production) exists.
+    check: >
+      If TWILIO_ACCOUNT_SID + auth token are available, GET
+      https://voice.twilio.com/v1/Credentials and find the APN credential.
+      Else NEEDS-HUMAN: Twilio console -> Voice -> Voice credentials ->
+      Mobile Push credentials. Confirm Type=APN and Sandbox UNCHECKED.
+    pass_when: "APN push credential exists, sandbox=false, SID == expected_sid"
+    fix: upload the Apple VoIP cert to Twilio as a Mobile Push Credential
+    owner: justin_or_nathan
+    note: "Confirmed to exist 2026-05-29 (other session). Created 2026-05-13, production."
+
+  - id: supabase-push-secret
+    layer: supabase EDGE FUNCTION secrets (NOT Vault)
+    phase: pre_build
+    verifiable_from_here: true
+    description: Edge Function secret TWILIO_VOICE_PUSH_CREDENTIAL_SID must be set so twilio-token issues tokens with push_credential_sid.
+    check: >
+      Run `supabase secrets list --project-ref rcfaashkfpurkvtmsmeb` (Bash) and
+      confirm TWILIO_VOICE_PUSH_CREDENTIAL_SID is present with a non-empty DIGEST
+      (the CLI shows a SHA256 digest, never the value). That is the verifiable
+      signal. DO NOT query vault.decrypted_secrets - Edge Function secrets and Vault
+      are SEPARATE stores (Deno.env.get, not SQL-queryable). NOTE: the twilio-token
+      "push: on" console line is the runtime confirmation, but Supabase get_logs
+      only returns HTTP request summaries, NOT console.log bodies, so that line is
+      NOT visible to the agent - use the CLI list instead.
+    pass_when: "supabase secrets list shows TWILIO_VOICE_PUSH_CREDENTIAL_SID with a non-empty digest"
+    fix: "supabase secrets set TWILIO_VOICE_PUSH_CREDENTIAL_SID=CR7fd8... (sensitive; Justin approves)"
+    owner: justin
+    note: >
+      VERIFIED 2026-06-01 via `supabase secrets list`: present, digest eadeda27...
+      (non-empty = set). Independently confirms the other session's 2026-05-13
+      dashboard setup. This link is NOT the blocker. IMPORTANT: it is necessary-but-
+      not-sufficient and INDEPENDENT of the device-side "Failed to initialize PushKit
+      device token" error - the push credential governs push DELIVERY to an already-
+      registered device, not the device obtaining its PushKit token (that is the
+      built-IPA entitlements / PushKit registration; see runtime-registered).
+
+  - id: edge-twilio-token-pushon
+    layer: supabase edge function
+    phase: pre_build
+    verifiable_from_here: true
+    description: twilio-token deployed AND a recent invocation logs 'push: on' (not 'push: off').
+    check: list_edge_functions for twilio-token; get_logs and look for 'push: on'
+    pass_when: "deployed AND logs 'push: on'"
+    fix: "no redeploy needed - 'push: off' is downstream of the empty supabase-push-secret"
+    owner: claude_diagnose
+
+  - id: edge-twilio-voice
+    layer: supabase edge function
+    phase: pre_build
+    verifiable_from_here: true
+    description: twilio-voice inbound webhook deployed (routes to SDK client identity + Nathan fallback).
+    check: list_edge_functions for twilio-voice
+    pass_when: "deployed"
+    fix: deploy twilio-voice
+    owner: claude_diagnose
+
+  - id: runtime-registered
+    layer: device runtime
+    phase: post_build   # only meaningful AFTER install
+    verifiable_from_here: true
+    description: The latest voice_sdk_status row for the current build == 'registered'.
+    check: >
+      SELECT build_number, status, error_message, created_at FROM voice_sdk_status
+      ORDER BY created_at DESC LIMIT 5. Match build_number to the installed build.
+    pass_when: "latest row for current build status == 'registered'"
+    fix: >
+      'Failed to initialize PushKit device token' -> the device never obtained a
+      VoIP token from iOS. This is UPSTREAM of and INDEPENDENT from apple-voip-cert
+      and twilio-push-credential (those govern push DELIVERY, not token issuance, so
+      no cert/credential fix can resolve this error). Real suspects, in order: the
+      BUILT IPA missing aps-environment or the 'voip' UIBackgroundMode (Expo Twilio
+      plugin / EAS provisioning did not inject them), the provisioning profile
+      lacking push, or PushKit (PKPushRegistry) registration code/timing. Inspect the
+      IPA entitlements + the registration code - NOT the Twilio cred.
+      'register of null' / 'Registration in progress' -> init race (code mutex).
+    owner: claude_diagnose
+
+decision_rule: >
+  GO only if every pre_build link is VERIFIED. Any BROKEN = NO-GO (fix first).
+  Any NEEDS-HUMAN = STOP and get a human to confirm that link before building.
+  Building cannot fix a config link. runtime-registered is checked only on the
+  post_build pass, after install.
