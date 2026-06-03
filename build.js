@@ -21,7 +21,28 @@ esbuild.build({
   legalComments: 'none',
   logLevel: 'info',
 }).then(() => {
-  const stats = require('fs').statSync('app.js');
+  const fs = require('fs');
+  const crypto = require('crypto');
+  const stats = fs.statSync('app.js');
+
+  // Cache-bust: stamp index.html's `app.js?v=…` with a content hash of the
+  // freshly-built bundle. Previously this was a hand-typed static string
+  // (`?v=20260505i`) that nobody remembered to bump — so every deploy reused
+  // the same URL and browsers kept serving the OLD app.js from cache. Operators
+  // keep the DCC tab open all day (it auto-refreshes DATA, never the JS), so a
+  // fix could be live for days while they still ran a months-old bundle. The
+  // 2026-06-03 "Kill button still broken" report was exactly this. Now the URL
+  // changes whenever the bundle changes, and the in-app version checker (see
+  // VersionWatcher in src/app.jsx) reads this token to detect a new deploy.
+  const hash = crypto.createHash('sha256').update(fs.readFileSync('app.js')).digest('hex').slice(0, 12);
+  const html = fs.readFileSync('index.html', 'utf8');
+  const stamped = html.replace(/app\.js\?v=[^"']*/g, `app.js?v=${hash}`);
+  if (stamped !== html) {
+    fs.writeFileSync('index.html', stamped);
+    console.log(`✓ Stamped index.html → app.js?v=${hash}`);
+  } else {
+    console.log(`✓ index.html already at app.js?v=${hash}`);
+  }
   console.log(`✓ Built app.js — ${(stats.size / 1024).toFixed(1)} KB`);
 }).catch((err) => {
   console.error('Build failed:', err);
