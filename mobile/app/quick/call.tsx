@@ -74,11 +74,18 @@ export default function QuickCallScreen() {
     }
   }, [name])
 
-  const callTarget = async (target: string, label?: string) => {
+  const callTarget = async (
+    target: string,
+    label?: string,
+    contactId?: string,
+  ) => {
     if (!target.trim() || busy) return
     setBusy(true)
     try {
-      const result = await placeCall(target)
+      const result = await placeCall(
+        target,
+        contactId ? { contactId } : undefined,
+      )
       if (result.ok) {
         Alert.alert(
           'Calling…',
@@ -102,7 +109,10 @@ export default function QuickCallScreen() {
                   Alert.alert('Could not save', saved.message ?? '')
                   return
                 }
-                const retry = await placeCall(target)
+                const retry = await placeCall(
+                  target,
+                  contactId ? { contactId } : undefined,
+                )
                 if (retry.ok) {
                   Alert.alert('Calling…', retry.message, [
                     { text: 'OK', onPress: () => router.back() },
@@ -179,6 +189,7 @@ export default function QuickCallScreen() {
                       callTarget(
                         item.phone!,
                         item.name ?? item.company ?? 'contact',
+                        item.id,
                       )
                     }
                   >

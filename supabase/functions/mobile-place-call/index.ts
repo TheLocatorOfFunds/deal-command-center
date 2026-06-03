@@ -193,7 +193,8 @@ Deno.serve(async (req: Request) => {
       const row = Array.isArray(link) ? link[0] : link
       if (row?.deal_id) {
         logDealId = row.deal_id
-        logContactId = row.contact_id || null
+        // Keep the client-supplied contact (quick-call typeahead) if present.
+        if (!logContactId) logContactId = row.contact_id || null
       }
     } catch {
       // Non-fatal — leave unlinked; status callback safety-net will retry.

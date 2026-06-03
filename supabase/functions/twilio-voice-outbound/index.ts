@@ -86,28 +86,27 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // Priority 1: client-supplied params (the deal/contact the user dialed from).
-    if (paramDealId) {
-      dealId    = paramDealId;
-      contactId = paramContactId || null;
-      threadKey = contactId
-        ? `${dealId}:contact:${contactId}`
-        : `${dealId}:phone:${to}`;
-    }
+    // Priority 1: client-supplied params (the deal/contact the user dialed
+    // from). These win for whatever they provide — the quick-call typeahead
+    // sends contactId without a dealId, the deal screen sends both.
+    dealId    = paramDealId || null;
+    contactId = paramContactId || null;
 
     // Priority 2: shared resolver (multi-number-CSV aware; contact link, then
-    // homeowner/vendor via find_deal_by_phone). Returns nothing for true orphans.
+    // homeowner/vendor via find_deal_by_phone). Fills in whatever the client
+    // didn't supply. Returns nothing for true orphans.
     if (!dealId) {
       const { data: link } = await db.rpc('resolve_call_link', { p_number: to });
       const row = Array.isArray(link) ? link[0] : link;
       if (row?.deal_id) {
-        dealId    = row.deal_id;
-        contactId = row.contact_id || null;
-        threadKey = contactId
-          ? `${dealId}:contact:${contactId}`
-          : `${dealId}:phone:${to}`;
+        dealId = row.deal_id;
+        if (!contactId) contactId = row.contact_id || null;
       }
     }
+
+    threadKey = dealId
+      ? (contactId ? `${dealId}:contact:${contactId}` : `${dealId}:phone:${to}`)
+      : null;
 
     await db.from('call_logs').insert({
       deal_id:         dealId,

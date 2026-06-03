@@ -373,9 +373,9 @@ export default function DealDetailScreen() {
   }
 
   const dial = useCallback(
-    async (phone: string | null | undefined) => {
+    async (phone: string | null | undefined, contactId?: string) => {
       if (!phone) return
-      const result = await placeCall(phone, { dealId: id })
+      const result = await placeCall(phone, { dealId: id, contactId })
 
       if (result.ok) {
         Alert.alert(
@@ -403,7 +403,7 @@ export default function DealDetailScreen() {
                   return
                 }
                 // retry
-                const retry = await placeCall(phone, { dealId: id })
+                const retry = await placeCall(phone, { dealId: id, contactId })
                 if (retry.ok) {
                   Alert.alert('Calling…', retry.message)
                 } else {
@@ -692,6 +692,7 @@ export default function DealDetailScreen() {
                 phone={cl.contacts.phone}
                 email={cl.contacts.email}
                 doNotCall={cl.contacts.do_not_call}
+                contactId={cl.contacts.id}
                 onDial={dial}
               />
             ) : null,
@@ -1223,7 +1224,8 @@ function ContactRow(props: {
   phone: string | null | undefined
   email: string | null | undefined
   doNotCall?: boolean | null
-  onDial: (phone: string | null | undefined) => void
+  contactId?: string
+  onDial: (phone: string | null | undefined, contactId?: string) => void
 }) {
   const callable = !!props.phone && !props.doNotCall
   const emailable = !!props.email
@@ -1231,7 +1233,7 @@ function ContactRow(props: {
     <View style={styles.contactRow}>
       <TouchableOpacity
         activeOpacity={callable ? 0.6 : 1}
-        onPress={() => callable && props.onDial(props.phone)}
+        onPress={() => callable && props.onDial(props.phone, props.contactId)}
         style={{ flex: 1 }}
         disabled={!callable}
       >
@@ -1262,7 +1264,7 @@ function ContactRow(props: {
         )}
         {callable && (
           <TouchableOpacity
-            onPress={() => props.onDial(props.phone)}
+            onPress={() => props.onDial(props.phone, props.contactId)}
             style={styles.contactIconBtn}
           >
             <Ionicons name="call" size={18} color="#d97706" />
