@@ -11,6 +11,15 @@
         "resourceClass": "m-medium"
       }
     },
+    "adhoc": {
+      "distribution": "internal",
+      "channel": "preview",
+      "autoIncrement": true,
+      "ios": {
+        "resourceClass": "m-medium",
+        "simulator": false
+      }
+    },
     "preview": {
       "distribution": "store",
       "channel": "preview",
