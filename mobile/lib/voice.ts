@@ -182,11 +182,31 @@ async function _doInitVoice(): Promise<boolean> {
     return false
   }
 
-  // Wait a beat after constructing Voice so the SDK has time to create
-  // its PKPushRegistry instance and let iOS fire the credential callback.
-  // Without this, the first register() call almost always races and fails.
-  // NOTE: initializePushRegistry() does NOT exist on this SDK version -
-  // the internal PKPushRegistry is created by new Voice() itself.
+  // CRITICAL (root cause of Builds 14-24 "Failed to initialize PushKit device
+  // token"): new Voice() does NOT create the PKPushRegistry. In SDK 1.7.0 the
+  // native module's init() (TwilioVoiceReactNative.m:79-104) only registers the
+  // NSNotification *observer*; it never instantiates the registry. The
+  // PKPushRegistry - which calls updatePushRegistry() / sets desiredPushTypes =
+  // [.voIP], the thing that makes iOS issue the VoIP token - is created ONLY by
+  // voice.initializePushRegistry() (native voice_initializePushRegistry,
+  // TwilioVoiceReactNative.m:106-109,457-462). Without this call deviceTokenData
+  // stays nil forever, getDeviceToken() returns "" (EMPTY), and register() rejects
+  // with "Failed to initialize PushKit device token" no matter how long we retry.
+  // The prior comment here wrongly claimed this method doesn't exist on 1.7.0 - it
+  // does (Voice.js:453). That wrong assumption is what broke inbound calls.
+  try {
+    await voice.initializePushRegistry()
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e)
+    console.warn('[voice] initializePushRegistry() failed', e)
+    void writeVoiceSdkStatus('error', `initializePushRegistry threw: ${errMsg}`)
+    voice = null
+    return false
+  }
+
+  // Now that the registry exists and desiredPushTypes is set, iOS fires
+  // didUpdatePushCredentials asynchronously (APNs handshake, ~1-30s). Give it a
+  // beat before the first register(); the retry loop below covers the rest.
   await sleep(1500)
 
   // Retry register() with backoff. The SDK throws synchronously if its
