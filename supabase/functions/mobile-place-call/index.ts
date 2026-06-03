@@ -181,16 +181,35 @@ Deno.serve(async (req: Request) => {
   }
   const callSid = twilioData.sid as string
 
+  // ── Resolve deal/contact for the log ──────────────────────────────────
+  // Honor the client-supplied deal/contact first. When the app didn't pass a
+  // deal (raw dial from the keypad), fall back to the shared resolver so the
+  // call still lands on the right deal/contact if the number is known.
+  let logDealId: string | null = body.deal_id ?? null
+  let logContactId: string | null = body.contact_id ?? null
+  if (!logDealId) {
+    try {
+      const { data: link } = await sb.rpc('resolve_call_link', { p_number: toNumber })
+      const row = Array.isArray(link) ? link[0] : link
+      if (row?.deal_id) {
+        logDealId = row.deal_id
+        logContactId = row.contact_id || null
+      }
+    } catch {
+      // Non-fatal — leave unlinked; status callback safety-net will retry.
+    }
+  }
+
   // ── Log the call (best-effort, don't fail the response) ───────────────
-  const threadKey = body.deal_id
-    ? body.contact_id
-      ? `${body.deal_id}:contact:${body.contact_id}`
-      : `${body.deal_id}:phone:${toNumber}`
+  const threadKey = logDealId
+    ? logContactId
+      ? `${logDealId}:contact:${logContactId}`
+      : `${logDealId}:phone:${toNumber}`
     : null
   try {
     await sb.from('call_logs').insert({
-      deal_id: body.deal_id ?? null,
-      contact_id: body.contact_id ?? null,
+      deal_id: logDealId,
+      contact_id: logContactId,
       thread_key: threadKey,
       direction: 'outbound',
       from_number: BUSINESS_NUMBER,

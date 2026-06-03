@@ -51,48 +51,27 @@ Deno.serve(async (req: Request) => {
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const db = createClient(supabaseUrl, serviceKey);
 
-  // Route: contacts.phone → contact_deals → deal. Fallback to homeowner phone.
+  // Route via the shared resolver: contacts.phone (multi-number-CSV aware) →
+  // contact_deals → deal, then homeowner/vendor via find_deal_by_phone. Returns
+  // nothing for a true orphan (cold call from an unknown number) — that row
+  // stays in the global Call History but on no deal.
   let dealId: string | null = null;
   let contactId: string | null = null;
   let threadKey: string | null = null;
 
   try {
-    // Match E.164, the raw Twilio value, AND the bare 10-digit form so
-    // legacy contacts stored without a country code still resolve (parity
-    // with receive-sms, which already matches the bare form). New contacts
-    // created via the DCC "+" flow are stored E.164, so this mainly covers
-    // older rows.
-    const bare = from.replace(/^\+1/, '');
-    const { data: contactRows } = await db.from('contacts')
-      .select('id, contact_deals(deal_id)')
-      .or(`phone.eq.${from},phone.eq.${fromRaw},phone.eq.${bare}`);
-    const match = (contactRows || []).find((c: any) => c.contact_deals?.length > 0);
-    if (match) {
-      contactId = match.id;
-      dealId = match.contact_deals[0].deal_id;
-      threadKey = `${dealId}:contact:${contactId}`;
+    const { data: link } = await db.rpc('resolve_call_link', { p_number: from });
+    const row = Array.isArray(link) ? link[0] : link;
+    if (row?.deal_id) {
+      dealId    = row.deal_id;
+      contactId = row.contact_id || null;
+      threadKey = contactId
+        ? `${dealId}:contact:${contactId}`
+        : `${dealId}:phone:${from}`;
     }
   } catch (_) {
-    // ignore, try fallback
-  }
-
-  if (!dealId) {
-    // Fallback: homeowner phone lookup via RPC.
-    // find_deal_by_phone returns an array of rows [{id: "deal-id"}] when defined
-    // as RETURNS TABLE, or a plain string when RETURNS text. Handle both shapes.
-    try {
-      const { data } = await db.rpc('find_deal_by_phone', { phone_e164: from, phone_bare: from.replace('+', '') });
-      if (data) {
-        if (typeof data === 'string') {
-          dealId = data;
-        } else if (Array.isArray(data) && data.length > 0) {
-          dealId = data[0]?.id ?? null;
-        } else if (typeof data === 'object' && data !== null) {
-          dealId = (data as any).id ?? null;
-        }
-        if (dealId) threadKey = `${dealId}:phone:${from}`;
-      }
-    } catch (_) {}
+    // Non-fatal — leave unlinked; the call still logs + the status callback
+    // safety-net will retry the resolve once the call completes.
   }
 
   // Resolve deal name for the browser overlay

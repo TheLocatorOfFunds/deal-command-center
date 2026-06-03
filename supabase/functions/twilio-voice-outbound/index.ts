@@ -33,6 +33,12 @@ Deno.serve(async (req: Request) => {
   const to        = normalizePhone(form.get('To')?.toString() || '');
   const callSid   = form.get('CallSid')?.toString() || '';
   const callerId  = form.get('CallerId')?.toString() || BUSINESS_NUMBER;
+  // The DCC/mobile Voice SDK passes the originating deal + contact as custom
+  // connect() params. Honor them FIRST — the user dialed FROM that deal/contact,
+  // so they're authoritative, and they fix the case where a contact's phone
+  // column holds several numbers in one string (number-matching misses those).
+  const paramDealId    = (form.get('dealId')?.toString() || '').trim();
+  const paramContactId = (form.get('contactId')?.toString() || '').trim();
 
   if (!to) {
     return new Response(
@@ -80,21 +86,26 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const match = (contactRows || []).find((c: any) => c.contact_deals?.length > 0);
-    if (match) {
-      contactId = match.id;
-      dealId    = match.contact_deals[0].deal_id;
-      threadKey = `${dealId}:contact:${contactId}`;
+    // Priority 1: client-supplied params (the deal/contact the user dialed from).
+    if (paramDealId) {
+      dealId    = paramDealId;
+      contactId = paramContactId || null;
+      threadKey = contactId
+        ? `${dealId}:contact:${contactId}`
+        : `${dealId}:phone:${to}`;
     }
 
+    // Priority 2: shared resolver (multi-number-CSV aware; contact link, then
+    // homeowner/vendor via find_deal_by_phone). Returns nothing for true orphans.
     if (!dealId) {
-      const { data } = await db.rpc('find_deal_by_phone', {
-        phone_e164: to,
-        phone_bare: to.replace('+', '').replace(/^1/, ''),
-      });
-      if (data?.[0]?.id) {
-        dealId    = data[0].id;
-        threadKey = `${dealId}:phone:${to}`;
+      const { data: link } = await db.rpc('resolve_call_link', { p_number: to });
+      const row = Array.isArray(link) ? link[0] : link;
+      if (row?.deal_id) {
+        dealId    = row.deal_id;
+        contactId = row.contact_id || null;
+        threadKey = contactId
+          ? `${dealId}:contact:${contactId}`
+          : `${dealId}:phone:${to}`;
       }
     }
 

@@ -31,6 +31,8 @@ const normalizePhone = (p: string): string => {
   return p.startsWith('+') ? p : '+' + digits;
 };
 
+const BUSINESS_NUMBER = '+15139985440'; // FundLocators / Cincinnati Twilio main
+
 const MISSED_CALL_TEMPLATE = `Hey, it's Nathan with RefundLocators — just saw I missed your call. Reply here and I'll get right back to you, or call again anytime at (513) 998-5440.`;
 
 const TWIML_OK = new Response('<Response/>', {
@@ -96,6 +98,7 @@ Deno.serve(async (req: Request) => {
       .single();
     if (updateErr) console.error('call_logs status UPDATE error:', JSON.stringify(updateErr), { callSid, dialStatus, finalStatus });
 
+    await maybeBackfillLink(db, row);
     await maybeSendMissedCallSms(db, row, isMissed);
 
     // Missed inbound call → either hand off to the Vapi voice agent
@@ -164,14 +167,53 @@ Deno.serve(async (req: Request) => {
         ended_at:         new Date().toISOString(),
       })
       .eq('twilio_call_sid', parentCallSid)
-      .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent')
+      .select('id, deal_id, contact_id, from_number, to_number, auto_sms_sent, direction')
       .single();
 
+    await maybeBackfillLink(db, row);
     await maybeSendMissedCallSms(db, row, isMissed);
   }
 
   return TWIML_OK;
 });
+
+// The non-business party of the call — what we resolve to a deal/contact.
+function counterpartNumber(row: any): string {
+  if (row?.direction === 'inbound')  return row.from_number || row.to_number || '';
+  if (row?.direction === 'outbound') return row.to_number   || row.from_number || '';
+  // direction unknown (Case 3 child-leg select) — pick whichever isn't us.
+  if (row?.to_number   && row.to_number   !== BUSINESS_NUMBER) return row.to_number;
+  if (row?.from_number && row.from_number !== BUSINESS_NUMBER) return row.from_number;
+  return row?.to_number || row?.from_number || '';
+}
+
+// Safety net: if a call finalized still unlinked (deal_id null) but its
+// counterpart number IS resolvable, link it now. Guarantees nothing that
+// CAN map to a deal stays orphaned. Mutates `row` so a subsequent
+// missed-call SMS writes to the correct deal/contact thread.
+async function maybeBackfillLink(db: ReturnType<typeof createClient>, row: any) {
+  if (!row || row.deal_id) return;
+  const num = counterpartNumber(row);
+  if (!num) return;
+  try {
+    const { data: link } = await db.rpc('resolve_call_link', { p_number: num });
+    const r = Array.isArray(link) ? link[0] : link;
+    if (r?.deal_id) {
+      const threadKey = r.contact_id
+        ? `${r.deal_id}:contact:${r.contact_id}`
+        : `${r.deal_id}:phone:${normalizePhone(num)}`;
+      await db.from('call_logs').update({
+        deal_id:    r.deal_id,
+        contact_id: r.contact_id || null,
+        thread_key: threadKey,
+      }).eq('id', row.id);
+      row.deal_id    = r.deal_id;
+      row.contact_id = r.contact_id || null;
+    }
+  } catch (_) {
+    // Non-fatal — row stays orphan, still visible in global Call History.
+  }
+}
 
 async function maybeSendMissedCallSms(db: ReturnType<typeof createClient>, row: any, isMissed: boolean) {
   if (!row || !isMissed || row.auto_sms_sent) return;
