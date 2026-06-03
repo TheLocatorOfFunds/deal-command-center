@@ -11613,11 +11613,25 @@ function DocketCoverageStrip({ deals, setView }) {
   const load = React.useCallback(async () => {
     const { data, error } = await sb.rpc('surplus_docket_pulling_ids');
     if (!alive.current) return;
-    setPullingIds(new Set(error ? [] : (data || []).map(r => r.deal_id)));
+    // Distinguish a FAILED load from "genuinely zero pulling". An errored RPC
+    // must NOT render as "0 live / 100% blind" — that fabricated zero is exactly
+    // what made this strip scream "0% · 308 of 308 aren't pulling" on a stale
+    // bundle (2026-06-03) when the real number was 72/308 (~23%). On error, show
+    // a retry state, never a fake zero.
+    if (error) { setPullingIds('error'); return; }
+    setPullingIds(new Set((data || []).map(r => r.deal_id)));
   }, [alive]);
   useEffect(() => { load(); }, [load]);
 
-  if (!pullingIds) return null;
+  if (pullingIds === null) return null; // still loading — render nothing
+  if (pullingIds === 'error') {
+    return (
+      <div style={{ marginBottom: 16, border: '1px solid #292524', borderRadius: 10, background: '#14110d', padding: '12px 14px', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 11, color: '#a8a29e' }}>📡 Docket coverage — couldn't load right now (not "0%" — the check failed).</span>
+        <button onClick={() => { setPullingIds(null); load(); }} style={{ ...btnGhost, fontSize: 11, cursor: 'pointer' }}>Retry</button>
+      </div>
+    );
+  }
   const norm = (c) => (c || '').trim().replace(/\s*county\s*$/i, '').toLowerCase();
   const surplus = deals.filter(d => d.type === 'surplus' && !['closed', 'dead', 'recovered'].includes(d.status));
   let live = 0, stuck = 0, unmonitored = 0, blindSum = 0;

@@ -1,6 +1,6 @@
 # Director ↔ DCC interface contract
 
-**Last updated:** 2026-05-29 (by DCC/Nathan session — added 2 coordination items: docket case# format mismatch leaving 213 covered-county leads unmatched [#275], and docket vacate/withdrawal → auction_status flip [#274]; + new DCC disposition reason `sale_vacated`)
+**Last updated:** 2026-06-03 (by DCC/Nathan session — docket coverage made the main focus; added executable target spec `docs/DOCKET_COVERAGE_TARGET.md` + refreshed #275 numbers: 72/308 pulling, 110 stuck/$4.89M, 126 no-scraper/$9.11M)
 **Living doc.** Either side updates as the contract evolves. Bump the date when you do.
 
 ## Domains
@@ -163,6 +163,7 @@ the Director already created the deal). The RA never writes `intel_case`.
 
 ## Open coordination items
 
+- ⭐ **2026-06-03 — NATHAN MADE DOCKET COVERAGE THE MAIN FOCUS. Full executable spec (dollar-ranked targets, per-county case# evidence, 3-lever plan): [`docs/DOCKET_COVERAGE_TARGET.md`](./docs/DOCKET_COVERAGE_TARGET.md).** Refreshed numbers: **72 of 308 active surplus leads pull dockets (~23%, $5.06M)**; **110 stuck in the 5 covered counties ($4.89M) — the #275 fix below**; **126 in no-scraper counties ($9.11M)** (top OH to build: Lorain $1.37M/25, Warren $651k/12, Fairfield $700k/8; several are Indiana → IN pipeline). intel_subscriptions now: no_match=208, county_unbuilt=93, matched=4. Lever 1 (#275 normalization) is the highest-ROI move: ~23% → ~59% with zero new scrapers.
 - 🆕 **ASK FOR DIRECTOR/CASTLE (2026-05-29, from DCC/Nathan session): 213 covered-county surplus leads ($14.8M) aren't pulling dockets — case# format mismatch. Full detail + reproducing query in GH issue #275.**
   Nathan asked "of the surplus, how many have live docket pulling?" Answer: 222 are in the 5 docket counties (Franklin/Hamilton/Cuyahoga/Butler/Montgomery), but only ~6–16 actually pull events. The other **213 ($14.8M)** are subscribed (221/222 have an `intel_subscriptions` row — NOT a subscription gap) but stuck at `status='no_match'` (189) or `county_unbuilt` (25); only 6 `matched`. `court_pull_requests`: 94/142 failed.
   **Root cause = case-number format.** Matched cases use hyphenated/zero-padded (`CV-25-119683`, `CV-2025-04-0879`); the no_match ones use space-delimited/non-padded (`24 CV 8011`, `CV 2025 06 1461`, `25 CV 497`). Castle's matcher keys on the former. Secondary: Hamilton A-prefix (`A 2401769`) unbuilt (0 of 53 matched); `"<County> County"` trailing-word variants → county_unbuilt; one IN-format case mislabeled OH (`sf-casey`).
