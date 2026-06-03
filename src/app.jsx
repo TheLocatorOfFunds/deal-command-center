@@ -2221,6 +2221,7 @@ function DealCommandCenter({ session, profile }) {
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
       {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
       {dispositionDeal && <DispositionModal deal={dispositionDeal.deal} initialReason={dispositionDeal.deal?.meta?.dispositionReason || ''} presetReason={dispositionDeal.presetReason} onConfirm={confirmDisposition} onClose={() => setDispositionDeal(null)} />}
+      <VersionWatcher />
 
       {!activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
@@ -15382,6 +15383,57 @@ const DISPOSITION_REASONS = [
   { group: 'real', code: 'other',            label: 'Other' },
 ];
 const dispositionLabel = (code) => DISPOSITION_REASONS.find(r => r.code === code)?.label || code || '—';
+
+// Detects when a NEW app.js has been deployed while this tab stayed open, and
+// offers a one-click reload. DCC tabs stay open all day and only auto-refresh
+// DATA — never the JavaScript — so a shipped fix could sit unloaded for days
+// while the operator runs a stale bundle. That's the 2026-06-03 "Kill button
+// still broken" report: the fix was live + correct, but Nathan's tab was still
+// running a months-old app.js (the cache-bust string had been frozen at
+// `?v=20260505i`). build.js now stamps `app.js?v=<contenthash>` on every build;
+// this watcher reads the token THIS tab loaded with, polls index.html for the
+// current token, and surfaces a reload prompt when they differ. Fail-safe: if it
+// can't read a token from either side, it never nags.
+function VersionWatcher() {
+  const [stale, setStale] = useState(false);
+  const runningRef = React.useRef(null);
+
+  useEffect(() => {
+    const tag = document.querySelector('script[src*="app.js"]');
+    const src = tag && tag.getAttribute('src');
+    const m = src && src.match(/app\.js\?v=([^"'&]+)/);
+    runningRef.current = m ? m[1] : null;
+    if (!runningRef.current) return; // can't identify our version — never nag
+
+    let cancelled = false;
+    const check = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const base = window.location.href.split('#')[0].split('?')[0];
+        const res = await fetch(base + '?_vcheck=' + Date.now(), { cache: 'no-store' });
+        if (!res.ok) return;
+        const html = await res.text();
+        const mm = html.match(/app\.js\?v=([^"'&]+)/);
+        const latest = mm ? mm[1] : null;
+        if (!cancelled && latest && latest !== runningRef.current) setStale(true);
+      } catch (e) { /* offline / transient — ignore, try again next tick */ }
+    };
+    const iv = setInterval(check, 4 * 60 * 1000);
+    const onVis = () => { if (document.visibilityState === 'visible') check(); };
+    document.addEventListener('visibilitychange', onVis);
+    const t = setTimeout(check, 15000); // first check shortly after load
+    return () => { cancelled = true; clearInterval(iv); clearTimeout(t); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+
+  if (!stale) return null;
+  return (
+    <div style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', zIndex: 9999, background: '#0c4a6e', border: '1px solid #0ea5e9', borderRadius: 10, padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 12, boxShadow: '0 8px 28px rgba(0,0,0,0.55)' }}>
+      <span style={{ fontSize: 13, color: '#e0f2fe', fontWeight: 600 }}>🔄 A new version of DCC is available.</span>
+      <button onClick={() => window.location.reload()} style={{ background: '#0ea5e9', color: '#082f49', border: 'none', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Reload now</button>
+      <button onClick={() => setStale(false)} title="Hide until the next check" style={{ background: 'transparent', color: '#7dd3fc', border: '1px solid #0369a1', borderRadius: 6, padding: '6px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Later</button>
+    </div>
+  );
+}
 
 function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClose }) {
   // presetReason pre-selects the dropdown (e.g. 'sale_vacated' when killing from
