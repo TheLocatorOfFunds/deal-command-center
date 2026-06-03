@@ -406,6 +406,19 @@ const inputStyle = { width: "100%", background: "#0c0a09", border: "1px solid #4
 const selectStyle = { background: "#1c1917", border: "1px solid #44403c", color: "#fafaf9", padding: "6px 10px", borderRadius: 6, fontSize: 12, fontWeight: 600 };
 const btnPrimary = { background: "#d97706", color: "#0c0a09", border: "none", padding: "7px 14px", borderRadius: 6, fontSize: 12, fontWeight: 700 };
 const btnGhost = { background: "transparent", color: "#78716c", border: "1px solid #44403c", padding: "4px 10px", borderRadius: 4, fontSize: 14, fontWeight: 600 };
+
+// The build this tab is actually running — read from the app.js?v=<hash> the
+// page loaded with (stamped by build.js). Shown as a tiny tag in the sidebar
+// footer so "which version are you on?" is answerable at a glance instead of
+// guessing (the recurring 2026-06 stale-bundle confusion). Pairs with
+// VersionWatcher, which prompts a reload when this no longer matches the deploy.
+const BUILD_VERSION = (() => {
+  try {
+    const s = document.querySelector('script[src*="app.js"]');
+    const m = s && s.getAttribute('src') && s.getAttribute('src').match(/v=([^&"']+)/);
+    return m ? m[1] : 'dev';
+  } catch (e) { return 'dev'; }
+})();
 const th = { textAlign: "left", padding: "10px 12px", fontSize: 10, fontWeight: 700, color: "#a8a29e", letterSpacing: "0.1em", textTransform: "uppercase" };
 const td = { padding: "10px 12px", verticalAlign: "top" };
 
@@ -1918,6 +1931,11 @@ function DealCommandCenter({ session, profile }) {
             style={{ display: 'flex', alignItems: 'center', gap: 10, padding: sidebarCollapsed ? '8px 0' : '8px 10px', justifyContent: sidebarCollapsed ? 'center' : 'flex-start', background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontFamily: 'inherit', width: '100%', fontSize: 12, whiteSpace: 'nowrap' }}>
             <span>↩</span>{!sidebarCollapsed && 'Sign out'}
           </button>
+          {!sidebarCollapsed && (
+            <div title="App build running in this tab. If something looks wrong right after an update, fully close this tab and reopen the app, then check this matches the latest." style={{ padding: '3px 10px 1px', fontSize: 9, color: '#3f3b37', fontFamily: "'DM Mono', monospace", letterSpacing: '0.03em', whiteSpace: 'nowrap' }}>
+              build {BUILD_VERSION}
+            </div>
+          )}
         </div>
       </nav>
 
