@@ -220,10 +220,25 @@ async function _doInitVoice(): Promise<boolean> {
   }
   if (lastErr) {
     const errMsg = lastErr instanceof Error ? lastErr.message : String(lastErr)
-    console.warn('[voice] init failed after retries', lastErr)
+    // DECISIVE DIAGNOSTIC: did iOS ever hand us a VoIP token? This is the one
+    // signal no prior build captured. It splits the failure cleanly:
+    //   deviceToken=EMPTY    -> iOS never issued a token. Static chain is all
+    //                           verified (entitlement, profile, cert, bg mode,
+    //                           SDK registry), so this points at a device/runtime
+    //                           or Apple-account-level token-issuance problem.
+    //   deviceToken=present  -> token exists; register() itself is failing
+    //                           (access-token grant / push_credential_sid) -> fixable in code.
+    let tokenState = 'unknown'
+    try {
+      const tok = voice ? await voice.getDeviceToken() : null
+      tokenState = tok ? `present:${tok.substring(0, 12)}` : 'EMPTY'
+    } catch (e) {
+      tokenState = `getDeviceToken_threw:${e instanceof Error ? e.message : String(e)}`
+    }
+    console.warn('[voice] init failed after retries', lastErr, 'deviceToken=', tokenState)
     // Write failure to Supabase so we can verify from the web app
     // whether the SDK actually registered. Visible at Settings > Voice Status.
-    void writeVoiceSdkStatus('failed', errMsg)
+    void writeVoiceSdkStatus('failed', `${errMsg} | deviceToken=${tokenState}`)
     voice = null
     return false
   }
