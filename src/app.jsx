@@ -230,11 +230,17 @@ const isDeceased = (deal) => {
   return !!(deal?.death_signal || deal?.meta?.deceased);
 };
 
-// A lead is "Ready for Outreach" once it's been vetted — phone, tier, county,
-// case #, URL, surplus est all in place. `prepped_at` is the canonical flag
-// (it also gates the bulk-outreach button); `meta.verified` is set alongside
-// it (the legacy ✓ CLEAN signal — merged 2026-05-21 so there's one status).
-const isReadyForOutreach = (deal) => !!(deal?.prepped_at || deal?.meta?.verified);
+// A lead is "Ready for Outreach" once it's been vetted (phone, tier, county,
+// case #, URL, surplus est in place) AND marked prepped. `prepped_at` is the
+// SOLE truth — it's exactly what the Prep Queue uses, so the Deals-page badge
+// and the queue can never disagree. The legacy `meta.verified` ✓ CLEAN flag was
+// previously OR'd in here, but that desynced the two surfaces: stale leads
+// carrying verified=true with prepped_at=null (no phone/URL, never actually
+// prepped) showed "✅ READY" on the Deals page while the Prep Queue correctly
+// showed them not-ready (Eric 2026-06-04: Eva Cooper; 7 such leads found, all
+// junk). Dropped the OR — prepped_at only. (toggleReady still sets prepped_at,
+// so anything legitimately marked ready is unaffected.)
+const isReadyForOutreach = (deal) => !!deal?.prepped_at;
 
 // ─── Surplus lifecycle stage (Nathan 2026-05-29) ─────────────────────
 // The at-a-glance "where's the money" state for a surplus lead. SINGLE
