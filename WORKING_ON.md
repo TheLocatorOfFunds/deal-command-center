@@ -215,7 +215,7 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 **Working on:** Outbound calling end-to-end from the DCC iPhone app (dial → two-way audio → in-call screen with deal/contact context → clean hangup).
 **Status:** Active — 2026-06-04. Mapped the outbound flow. Finding: all outbound plumbing is already proven (twilio-token grants outgoing app SID; TwiML App URL → twilio-voice-outbound is live; 10 real outbound call_logs in the last 3 days from web; voip+audio bg modes + mic perm present). Build 25 is the FIRST build where the mobile SDK actually `registered` (voice_sdk_status), so the mobile `voice.connect()` outbound path has never been exercised — untested, not known-broken. Gaps: (1) quick/call.tsx passes no dealId/contactId/displayName, so the in-call screen shows only the raw number; (2) stale "your cell rings" hint copy describes the retired bridge-callback flow.
 **Coordination:** Reading only the inbound session's shared files (lib/voice.ts, app/call/[sid].tsx, app/_layout.tsx) — inbound session works in /private/tmp/dcc-build23. Any voice.ts change will be additive (extra optional connect param).
-**Last updated (auto):** 2026-06-04 12:54 UTC
+**Last updated (auto):** 2026-06-04 13:00 UTC
 
 ## Nathan's session
 
