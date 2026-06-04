@@ -47,7 +47,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams } from 'expo-router'
-import { supabase } from '../../lib/supabase'
+import { supabase, chanName } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 import { extractJitsiUrls } from '../../lib/videoRooms'
 import { markThreadRead } from '../../lib/notifications'
@@ -248,7 +248,7 @@ export default function TeamThreadScreen() {
   useEffect(() => {
     if (!id) return
     const channel = supabase
-      .channel(`team-thread-${id}`)
+      .channel(chanName(`team-thread-${id}`))
       .on(
         'postgres_changes',
         {
@@ -295,7 +295,7 @@ export default function TeamThreadScreen() {
   useEffect(() => {
     if (!id) return
     const channel = supabase
-      .channel(`team-reactions-${id}`)
+      .channel(chanName(`team-reactions-${id}`))
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'team_reactions' },

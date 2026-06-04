@@ -34,7 +34,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useLocalSearchParams } from 'expo-router'
-import { supabase } from '../../lib/supabase'
+import { supabase, chanName } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
 type Msg = {
@@ -144,7 +144,7 @@ export default function LaurenScreen() {
   useEffect(() => {
     if (!threadId) return
     const channel = supabase
-      .channel(`lauren-thread-${threadId}`)
+      .channel(chanName(`lauren-thread-${threadId}`))
       .on(
         'postgres_changes',
         {

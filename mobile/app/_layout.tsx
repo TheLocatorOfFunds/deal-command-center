@@ -118,11 +118,12 @@ function ProtectedRouter() {
     }
   }, [loading, session])
 
-  // When the user accepts an inbound call via the native CallKit UI,
-  // the SDK fires the callInvite event. Navigate to the deal (if known)
-  // first, then open the in-call modal on top so the call controls float
-  // over the deal context. When the call ends the modal dismisses and the
-  // deal is already waiting underneath.
+  // When the user accepts an inbound call via the native CallKit UI, the SDK
+  // fires the callInvite 'accepted' event. CallKit owns the call UI (mute /
+  // speaker / end + the Dynamic Island), so DCC's job on accept is to surface
+  // the DEAL the call is about - not to duplicate the call screen. We open the
+  // deal when the caller resolves to one; an unknown caller has no deal, so we
+  // mark the call handled and leave the user where they are.
   useEffect(() => {
     if (loading || !session) return
     const unsub = subscribeToCallInvite((callInvite) => {
@@ -134,20 +135,20 @@ function ProtectedRouter() {
         if (!sid || navigatedCallSidRef.current === sid) return
         navigatedCallSidRef.current = sid
         // getCustomParameters() returns Record<string, string> - plain object, no .get().
-        const dealId = callInvite.getCustomParameters?.()?.['dealId'] ?? null
-        // Push deal first so it sits under the call modal; when the call
-        // ends and the modal closes, the user lands directly on the deal.
+        // dealId is set by the twilio-voice inbound TwiML only when the caller's
+        // number matches a contact linked to a deal; otherwise it's empty.
+        const dealId = callInvite.getCustomParameters?.()?.['dealId'] || null
         if (dealId) router.push(`/deal/${dealId}`)
-        router.push({ pathname: '/call/[sid]', params: { sid } })
       })
     })
     return unsub
   }, [loading, session, router])
 
-  // Dynamic Island / green pill tap: when iOS brings the app to the
-  // foreground while a call is active, navigate to the in-call screen.
-  // Without this, tapping the green pill opens the app but nothing
-  // happens because there's no code checking for an active call.
+  // Dynamic Island / green pill tap: when iOS brings the app to the foreground
+  // while a call is active, open the DEAL the call is about. This is the
+  // reliable path on iOS - a backgrounded/locked app can't force itself forward
+  // on CallKit accept, so the deal opens the moment the user enters the app.
+  // CallKit + the Dynamic Island remain the call UI; DCC shows the deal.
   useEffect(() => {
     if (loading || !session) return
     const subscription = AppState.addEventListener('change', async (nextState) => {
@@ -167,14 +168,13 @@ function ProtectedRouter() {
           // Dedup so re-foregrounding mid-call doesn't stack duplicate screens.
           if (sid && navigatedCallSidRef.current !== sid) {
             navigatedCallSidRef.current = sid
-            // Open the deal underneath (if the call carries one), then float the
-            // call screen on top — hanging up then leaves you on the deal.
+            // Surface the deal (CallKit owns the call UI). An unknown caller has
+            // no deal, so there's nothing to show - we just mark it handled.
             let dealId: string | null = null
             try {
               dealId = call?.getCustomParameters?.()?.['dealId'] || null
             } catch {}
             if (dealId) router.push(`/deal/${dealId}`)
-            router.push({ pathname: '/call/[sid]', params: { sid } })
           }
         } else {
           // No active call — reset the guard so the next call navigates.

@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import * as Notifications from 'expo-notifications'
-import { supabase } from './supabase'
+import { supabase, chanName } from './supabase'
 
 export type NotificationKind =
   | 'inbound_sms'
@@ -86,7 +86,7 @@ export function useUnreadCount(userId: string | undefined | null): number {
     if (!userId) return
     refresh()
     const ch = supabase
-      .channel(`notifications:${userId}`)
+      .channel(chanName(`notifications:${userId}`))
       .on(
         'postgres_changes',
         {
@@ -153,7 +153,7 @@ export function useNotificationFeed(
     if (!userId) return
     refresh()
     const ch = supabase
-      .channel(`notifications-feed:${userId}`)
+      .channel(chanName(`notifications-feed:${userId}`))
       .on(
         'postgres_changes',
         {
@@ -253,7 +253,7 @@ export function useDealUnreadCounts(
     if (!userId) return
     refresh()
     const ch = supabase
-      .channel(`deal-unread:${userId}`)
+      .channel(chanName(`deal-unread:${userId}`))
       .on(
         'postgres_changes',
         {
@@ -298,7 +298,7 @@ export function useTeamUnreadCount(userId: string | undefined | null): number {
     if (!userId) return
     refresh()
     const ch = supabase
-      .channel(`team-unread:${userId}`)
+      .channel(chanName(`team-unread:${userId}`))
       .on(
         'postgres_changes',
         {
