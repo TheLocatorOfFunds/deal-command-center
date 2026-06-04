@@ -218,7 +218,7 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 **⚠ DURABILITY — inbound session must read this:** the OTA holds only until the next NATIVE build ships from a branch WITHOUT my 4 outbound commits. The next mobile build (Build 27+) MUST come from `justin/outbound-calling` (it already contains all of `eas-preview-distribution-store` @ 25dfa322 + my fixes), OR fast-forward `justin/outbound-calling` into the build branch first. Building from plain 25dfa322 will orphan this OTA and regress the outbound fixes.
 **Gotcha logged:** `EXPO_TOKEN` in the shell env was wrapped in literal `<>` (42 chars, real token is 40) → "bearer token invalid". Strip with `EXPO_TOKEN="${EXPO_TOKEN//[<>]/}"`. Also use the homebrew `eas` (`/opt/homebrew/bin/eas`), not `npx eas-cli@latest`.
 **Coordination:** Only additive change to inbound-owned shared files — one guard line + one import in `_layout.tsx` (`isOutboundCallActive()`), plus the `_outboundCallActive` flag + export in `lib/voice.ts`. `app/call/[sid].tsx` untouched. Inbound's `25dfa322` (reliable deal-open + dedup guard) fully preserved.
-**Last updated (auto):** 2026-06-04 14:18 UTC
+**Last updated (auto):** 2026-06-04 14:36 UTC
 
 ## Nathan's session
 
