@@ -388,9 +388,17 @@ export type PlaceCallInResult =
  */
 export async function placeCallIn(
   toNumber: string,
-  params?: { dealId?: string; contactId?: string },
+  params?: { dealId?: string; contactId?: string; displayName?: string },
 ): Promise<PlaceCallInResult> {
   if (!voice || !cachedToken) {
+    // Outbound diagnostic (added by the outbound-calling session): record WHY
+    // the in-app VoIP path was unavailable so we can tell "SDK never
+    // initialized" apart from a connect() rejection without streaming device
+    // logs. Read from voice_sdk_status (status='error', prefixed 'outbound').
+    void writeVoiceSdkStatus(
+      'error',
+      `outbound not_initialized: voice=${voice ? 'set' : 'null'} token=${cachedToken ? 'set' : 'null'}`,
+    )
     return {
       ok: false,
       reason: 'not_initialized',
@@ -398,7 +406,12 @@ export async function placeCallIn(
     }
   }
   try {
+    // contactHandle drives the name shown on the native CallKit call UI; the
+    // custom in-call screen gets the same name via a route param (outbound
+    // calls don't echo connect() params back through getCustomParameters()).
+    const handle = (params?.displayName ?? '').trim()
     const call = await voice.connect(cachedToken, {
+      contactHandle: handle || 'Contact',
       params: {
         To: toNumber,
         dealId: params?.dealId ?? '',
@@ -407,10 +420,15 @@ export async function placeCallIn(
     })
     return { ok: true, call }
   } catch (e) {
+    const message = e instanceof Error ? e.message : 'Voice SDK connect failed'
+    // Outbound diagnostic: the exact native connect() rejection. This is the
+    // signal that explains why outbound silently falls back to the bridge
+    // (mic permission / CallKit / audio session). Surfaced in voice_sdk_status.
+    void writeVoiceSdkStatus('error', `outbound connect_failed: ${message}`)
     return {
       ok: false,
       reason: 'error',
-      message: e instanceof Error ? e.message : 'Voice SDK connect failed',
+      message,
     }
   }
 }

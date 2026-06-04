@@ -7,9 +7,10 @@
  *      a match to dial. Faster than digging through deals when you just
  *      need to ring a known partner attorney.
  *
- * Either path routes through the existing Twilio bridge (placeCall),
- * so the destination sees the FundLocators business number as caller
- * ID, not your personal cell.
+ * Either path dials through placeCall, which connects in-app over the
+ * Twilio Voice SDK (falling back to the legacy bridge only if the VoIP
+ * connect fails). The destination always sees the FundLocators business
+ * number as caller ID, not your personal cell.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -30,7 +31,6 @@ import { Stack, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
-import { placeCallIn } from '../../lib/voice'
 
 type ContactHit = {
   id: string
@@ -75,27 +75,38 @@ export default function QuickCallScreen() {
     }
   }, [name])
 
-  const callTarget = async (target: string, label?: string) => {
+  const callTarget = async (
+    target: string,
+    label?: string,
+    contactId?: string,
+  ) => {
     if (!target.trim() || busy) return
     setBusy(true)
     try {
-      // Try the SDK path first. If Voice SDK is initialized it returns a
-      // Call object — navigate to the in-call screen immediately.
-      const sdkResult = await placeCallIn(target)
-      if (sdkResult.ok && sdkResult.call) {
-        const sid = sdkResult.call.getSid?.() ?? ''
-        router.push({ pathname: '/call/[sid]', params: { sid } })
-        return
-      }
+      // placeCall tries the in-app Voice SDK first (mode 'sdk'), then falls
+      // back to the legacy bridge-callback (mode 'bridge'). The display name
+      // rides along so both the native CallKit UI and our in-call screen can
+      // show who we're calling.
+      const result = await placeCall(target, { contactId, displayName: label })
 
-      // SDK not initialized — fall back to the legacy bridge-callback flow.
-      const result = await placeCall(target)
       if (result.ok) {
-        Alert.alert(
-          'Calling…',
-          `${result.message}${label ? `\n\nReaching: ${label}` : ''}`,
-          [{ text: 'OK', onPress: () => router.back() }],
-        )
+        if (result.mode === 'sdk') {
+          // In-app VoIP path — the call is live over the SDK. Open the in-call
+          // screen with deal/contact context. No "your phone will ring" modal.
+          router.push({
+            pathname: '/call/[sid]',
+            params: { sid: result.callSid, name: label ?? '', to: target },
+          })
+        } else {
+          // Fallback path — the VoIP connect failed and we bridged via the
+          // user's cell, which genuinely rings their phone, so the modal is
+          // warranted here (and only here). placeCallIn recorded WHY it fell back.
+          Alert.alert(
+            'Calling…',
+            `${result.message}${label ? `\n\nReaching: ${label}` : ''}`,
+            [{ text: 'OK', onPress: () => router.back() }],
+          )
+        }
         return
       }
       if (result.error === 'cell_phone_required') {
@@ -190,6 +201,7 @@ export default function QuickCallScreen() {
                       callTarget(
                         item.phone!,
                         item.name ?? item.company ?? 'contact',
+                        item.id,
                       )
                     }
                   >
@@ -243,8 +255,8 @@ export default function QuickCallScreen() {
             </Text>
           </TouchableOpacity>
           <Text style={styles.hint}>
-            Your cell rings from the FundLocators Twilio number. Answer to
-            connect; the destination sees the business number as caller ID.
+            Calls connect in-app over the FundLocators line. The other party
+            sees the business number (513-998-5440) as caller ID.
           </Text>
         </View>
       </KeyboardAvoidingView>
