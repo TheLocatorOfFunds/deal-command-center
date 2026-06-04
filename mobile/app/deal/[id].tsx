@@ -373,15 +373,27 @@ export default function DealDetailScreen() {
   }
 
   const dial = useCallback(
-    async (phone: string | null | undefined) => {
+    async (phone: string | null | undefined, label?: string) => {
       if (!phone) return
-      const result = await placeCall(phone, { dealId: id })
+      const result = await placeCall(phone, { dealId: id, displayName: label })
 
       if (result.ok) {
-        Alert.alert(
-          'Calling…',
-          'Your phone will ring shortly. Answer to connect to the other party. Outgoing caller ID is the FundLocators business number.',
-        )
+        if (result.mode === 'sdk') {
+          // In-app VoIP path. Nothing rings the user's own phone; the call
+          // connects directly in the app. Open the in-call screen with the
+          // contact's name for context. No "your phone will ring" modal.
+          router.push({
+            pathname: '/call/[sid]',
+            params: { sid: result.callSid, name: label ?? '', to: phone },
+          })
+        } else {
+          // Legacy bridge fallback only - this path genuinely rings the
+          // user's cell first, so the modal is accurate here.
+          Alert.alert(
+            'Calling…',
+            'Your phone will ring shortly. Answer to connect to the other party. Outgoing caller ID is the FundLocators business number.',
+          )
+        }
         return
       }
 
@@ -426,7 +438,7 @@ export default function DealDetailScreen() {
 
       Alert.alert('Call failed', result.message)
     },
-    [id],
+    [id, router],
   )
 
   if (loading) {
@@ -1223,7 +1235,7 @@ function ContactRow(props: {
   phone: string | null | undefined
   email: string | null | undefined
   doNotCall?: boolean | null
-  onDial: (phone: string | null | undefined) => void
+  onDial: (phone: string | null | undefined, name?: string) => void
 }) {
   const callable = !!props.phone && !props.doNotCall
   const emailable = !!props.email
@@ -1231,7 +1243,7 @@ function ContactRow(props: {
     <View style={styles.contactRow}>
       <TouchableOpacity
         activeOpacity={callable ? 0.6 : 1}
-        onPress={() => callable && props.onDial(props.phone)}
+        onPress={() => callable && props.onDial(props.phone, props.name)}
         style={{ flex: 1 }}
         disabled={!callable}
       >
@@ -1262,7 +1274,7 @@ function ContactRow(props: {
         )}
         {callable && (
           <TouchableOpacity
-            onPress={() => props.onDial(props.phone)}
+            onPress={() => props.onDial(props.phone, props.name)}
             style={styles.contactIconBtn}
           >
             <Ionicons name="call" size={18} color="#d97706" />
