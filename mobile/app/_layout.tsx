@@ -12,7 +12,7 @@ import * as SplashScreen from 'expo-splash-screen'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
 import { registerForPushAsync, subscribeToNotificationTaps } from '../lib/push'
-import { initVoice, teardownVoice, subscribeToCallInvite, getVoice } from '../lib/voice'
+import { initVoice, teardownVoice, subscribeToCallInvite, getVoice, isOutboundCallActive } from '../lib/voice'
 import { useUnreadCount } from '../lib/notifications'
 
 // Hold the splash screen until we've had ~1s to settle. Without this,
@@ -161,6 +161,10 @@ function ProtectedRouter() {
         return
       }
       try {
+        // Outbound hook: skip the auto-open for calls the user dialed out.
+        // Justin wants outbound to stay in-app (native Dynamic Island pill),
+        // never the custom navy screen. Inbound calls still open the screen.
+        if (isOutboundCallActive()) return
         const calls = await v.getCalls()
         if (calls.size > 0) {
           const call = [...calls.values()][0] as any

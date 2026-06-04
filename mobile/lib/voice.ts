@@ -25,7 +25,7 @@
 
 import { Platform } from 'react-native'
 import * as Application from 'expo-application'
-import { Voice, type Call, type CallInvite } from '@twilio/voice-react-native-sdk'
+import { Voice, Call, type CallInvite } from '@twilio/voice-react-native-sdk'
 import { supabase } from './supabase'
 
 const TOKEN_URL =
@@ -35,6 +35,11 @@ let voice: Voice | null = null
 let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let cachedToken: string | null = null
 let _initInProgress = false
+// Outbound hook: true while a call WE dialed out is live. The root layout's
+// AppState listener uses this to suppress the custom in-call screen for
+// outbound calls (per Justin: outbound stays in-app / native pill, no navy
+// screen) while still showing it for inbound calls.
+let _outboundCallActive = false
 const _callInviteHandlers: Array<(callInvite: CallInvite) => void> = []
 
 /**
@@ -344,6 +349,7 @@ export async function teardownVoice(): Promise<void> {
   }
   voice = null
   cachedToken = null
+  _outboundCallActive = false
 }
 
 function scheduleTokenRefresh(ms: number) {
@@ -406,9 +412,7 @@ export async function placeCallIn(
     }
   }
   try {
-    // contactHandle drives the name shown on the native CallKit call UI; the
-    // custom in-call screen gets the same name via a route param (outbound
-    // calls don't echo connect() params back through getCustomParameters()).
+    // contactHandle drives the name shown on the native CallKit call UI.
     const handle = (params?.displayName ?? '').trim()
     const call = await voice.connect(cachedToken, {
       contactHandle: handle || 'Contact',
@@ -418,6 +422,17 @@ export async function placeCallIn(
         contactId: params?.contactId ?? '',
       },
     })
+    // Mark this as an outbound call so the AppState listener won't force the
+    // custom in-call screen open when DCC returns to the foreground. Clear it
+    // when the call ends so a later inbound call still shows its screen.
+    _outboundCallActive = true
+    const clearOutbound = () => {
+      _outboundCallActive = false
+    }
+    try {
+      call.on(Call.Event.Disconnected, clearOutbound)
+      call.on(Call.Event.ConnectFailure, clearOutbound)
+    } catch {}
     return { ok: true, call }
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Voice SDK connect failed'
@@ -435,4 +450,13 @@ export async function placeCallIn(
 
 export function getVoice(): Voice | null {
   return voice
+}
+
+/**
+ * Outbound hook: true while a call the user dialed out is still live. The
+ * root layout checks this before auto-opening the custom in-call screen so
+ * outbound calls stay in-app (native pill UX) instead of popping the screen.
+ */
+export function isOutboundCallActive(): boolean {
+  return _outboundCallActive
 }
