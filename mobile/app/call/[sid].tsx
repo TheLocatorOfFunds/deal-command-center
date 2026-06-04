@@ -26,14 +26,7 @@ import { getVoice } from '../../lib/voice'
 import { Call, Voice } from '@twilio/voice-react-native-sdk'
 
 export default function CallScreen() {
-  // `name`/`to` are optional outbound hooks: outbound calls don't echo
-  // connect() custom params back through getCustomParameters(), so the dialer
-  // passes the contact/deal name + dialed number as route params for context.
-  const { sid, name: routeName, to: routeTo } = useLocalSearchParams<{
-    sid: string
-    name?: string
-    to?: string
-  }>()
+  const { sid } = useLocalSearchParams<{ sid: string }>()
   const router = useRouter()
 
   const [call, setCall] = useState<Call | null>(null)
@@ -199,10 +192,10 @@ export default function CallScreen() {
       {/* Top: deal context header */}
       <View style={styles.header}>
         <Text style={styles.dealName} numberOfLines={1}>
-          {dealName ?? routeName ?? counterparty ?? 'Unknown caller'}
+          {dealName ?? counterparty ?? 'Unknown caller'}
         </Text>
         <Text style={styles.subline}>
-          {(dealName ?? routeName) ? (counterparty ?? routeTo ?? '') : ''}
+          {counterparty && dealName ? counterparty : ''}
         </Text>
         <Text style={styles.state}>{stateLabel[state] ?? state}</Text>
       </View>

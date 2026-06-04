@@ -379,21 +379,18 @@ export default function DealDetailScreen() {
 
       if (result.ok) {
         if (result.mode === 'sdk') {
-          // In-app VoIP path. Nothing rings the user's own phone; the call
-          // connects directly in the app. Open the in-call screen with the
-          // contact's name for context. No "your phone will ring" modal.
-          router.push({
-            pathname: '/call/[sid]',
-            params: { sid: result.callSid, name: label ?? '', to: phone },
-          })
-        } else {
-          // Legacy bridge fallback only - this path genuinely rings the
-          // user's cell first, so the modal is accurate here.
-          Alert.alert(
-            'Calling…',
-            'Your phone will ring shortly. Answer to connect to the other party. Outgoing caller ID is the FundLocators business number.',
-          )
+          // In-app VoIP call is live; iOS shows the native CallKit call UI
+          // (with the contact's name as the handle). Stay on the deal screen
+          // so the user can read deal info while talking. No modal, no custom
+          // call screen.
+          return
         }
+        // Legacy bridge fallback only - this path genuinely rings the user's
+        // cell first, so the modal is accurate here.
+        Alert.alert(
+          'Calling…',
+          'Your phone will ring shortly. Answer to connect to the other party. Outgoing caller ID is the FundLocators business number.',
+        )
         return
       }
 
@@ -438,7 +435,7 @@ export default function DealDetailScreen() {
 
       Alert.alert('Call failed', result.message)
     },
-    [id, router],
+    [id],
   )
 
   if (loading) {

@@ -91,12 +91,10 @@ export default function QuickCallScreen() {
 
       if (result.ok) {
         if (result.mode === 'sdk') {
-          // In-app VoIP path — the call is live over the SDK. Open the in-call
-          // screen with deal/contact context. No "your phone will ring" modal.
-          router.push({
-            pathname: '/call/[sid]',
-            params: { sid: result.callSid, name: label ?? '', to: target },
-          })
+          // In-app VoIP call is live; iOS shows the native CallKit call UI.
+          // Dismiss this dial screen so the user lands back in the app and can
+          // browse deal info while talking. No modal, no custom call screen.
+          router.back()
         } else {
           // Fallback path — the VoIP connect failed and we bridged via the
           // user's cell, which genuinely rings their phone, so the modal is
