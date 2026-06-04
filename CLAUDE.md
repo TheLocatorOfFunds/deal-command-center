@@ -203,6 +203,46 @@ The app subscribes to Postgres changes on `deals` (global) and on all 5 child ta
 
 No staging environment. Commits to `main` go live. Coordinate with the team before big changes.
 
+## Mobile build & branch flow (read before any EAS build / TestFlight submit)
+
+This one repo holds **two apps that ship differently**:
+- **Web** (`src/app.jsx` → `app.js`): GitHub Pages serves `main`. Push to main = live.
+- **Mobile** (`mobile/`): EAS builds the iPhone app **from whatever branch is checked
+  out when you run `eas build`.** That single fact is why branch discipline matters.
+
+**Canonical flow — single trunk = `main`:**
+1. Work on a short-lived branch / worktree.
+2. Merge to `main` when tested.
+3. Cut **every** mobile build (EAS ad-hoc internal AND TestFlight) from `main`.
+4. Publish **every** OTA (`eas update`) from `main`.
+
+Because all work merges to `main` *before* a build, a build can never miss another
+session's commits. The 2026-06-04 pain — two sessions' builds missing each other's
+commits, OTAs getting orphaned — was caused entirely by mobile building from a side
+branch (`justin/eas-preview-distribution-store`) that had drifted from `main`.
+
+**Interim, until issue #281 reconciliation lands:** mobile still builds from
+`justin/eas-preview-distribution-store` because the inbound-callkit lineage lives there
+and `main` hasn't been reconciled yet. Once inbound calling is fixed, that branch merges
+into `main` ONCE and is retired — then all builds come from `main`. Until then, whoever
+builds mobile uses that branch and **`git pull` it first**.
+
+**Before any `eas build` / `eas submit`:** `git pull` the build branch, then after the
+build confirm its commit via `eas build:list` matches your HEAD before submitting.
+"Committed" is not "in the build" — verify the gitCommit.
+
+**Two delivery paths:**
+- **OTA** (`eas update`): JS-only changes. Instant, no Apple, no build credit. An OTA
+  only reaches a build if it is published *after* that build was built (expo-updates
+  won't downgrade an installed build to an older update).
+- **Native build** (`eas build` → `eas submit` → TestFlight): needed when native config
+  changes (permissions, native modules, SDK). Internal TestFlight testers skip Beta App
+  Review. Per Justin: no TestFlight submit without explicit per-build permission.
+
+**EAS auth gotchas:** the shell `EXPO_TOKEN` can arrive wrapped in literal angle brackets
+(`<token>`, invalid). Strip with `EXPO_TOKEN="${EXPO_TOKEN//[<>]/}"`. Use the homebrew
+`eas` (`/opt/homebrew/bin/eas`), not `npx eas-cli@latest`.
+
 ## Top-level views (current sidebar, top → bottom)
 
 Several sidebar entries are **hubs** — one nav item whose second-level chip bar
