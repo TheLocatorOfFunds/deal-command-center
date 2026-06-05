@@ -19941,8 +19941,15 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
             </Field>
             <Field label="Deceased">
               <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: m.deceased ? '#1a0e1f' : '#0c0a09', border: '1px solid ' + (m.deceased ? '#5b21b6' : '#44403c'), borderRadius: 6, height: 22, cursor: 'pointer' }}>
-                <input type="checkbox" checked={!!m.deceased} onChange={e => updateMeta({ deceased: e.target.checked, deceased_at: e.target.checked ? (m.deceased_at || new Date().toISOString()) : null })} style={{ accentColor: '#a855f7' }} />
-                <span style={{ fontSize: 12, color: m.deceased ? '#c4b5fd' : undefined }}>{m.deceased ? '🕊 deceased' : 'owner alive'}</span>
+                {/* Reflect the SAME source as the DECEASED badge: isDeceased()
+                    = scraper death_signal OR the hand-flag. Reading only
+                    m.deceased let a scraper-flagged lead (death_signal=true,
+                    meta untouched) show "owner alive" here while the header
+                    said DECEASED — Charles Bianca / sf-f-3, Nathan 2026-06-06.
+                    Unchecking now writes meta.deceased=false, which overrides
+                    the scraper signal (see isDeceased). */}
+                <input type="checkbox" checked={isDeceased(deal)} onChange={e => updateMeta({ deceased: e.target.checked, deceased_at: e.target.checked ? (m.deceased_at || new Date().toISOString()) : null })} style={{ accentColor: '#a855f7' }} />
+                <span style={{ fontSize: 12, color: isDeceased(deal) ? '#c4b5fd' : undefined }}>{isDeceased(deal) ? '🕊 deceased' : 'owner alive'}</span>
               </label>
             </Field>
           </div>
