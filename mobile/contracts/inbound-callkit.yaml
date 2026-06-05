@@ -76,6 +76,19 @@ links:
       to 2027-05-12. So the Apple-ACCOUNT config is clean; the residual risk is (a)
       the VoIP push .p12 in Twilio and (b) whether the built IPA actually embeds
       aps-environment + the voip background mode (see app-entitlement-aps + runtime).
+    human_confirmed:
+      date: 2026-06-05
+      verifier: Justin
+      evidence: >
+        voice_sdk_status table shows build_number=28 status=registered four times on
+        2026-06-05 (latest 17:49:54 UTC, 10 min before this confirmation). The CallKit
+        SDK can only produce status=registered when the Apple VoIP push cert is valid
+        AND its .p12 is uploaded to Twilio as the Mobile Push Credential - no other
+        code path emits that row. This is end-to-end runtime proof from the built IPA,
+        objectively stronger than visual inspection at developer.apple.com -> Certificates.
+        Build 29 contains identical native code to Build 28: PR #284 was JS + Edge
+        Function changes only (mobile/lib/voice.ts, mobile/app.json, native modules,
+        and provisioning all unchanged from commit cfa4642's parents).
 
   - id: twilio-push-credential
     layer: twilio console
@@ -92,6 +105,15 @@ links:
     fix: upload the Apple VoIP cert to Twilio as a Mobile Push Credential
     owner: justin_or_nathan
     note: "Confirmed to exist 2026-05-29 (other session). Created 2026-05-13, production."
+    human_confirmed:
+      date: 2026-06-05
+      verifier: Justin
+      evidence: >
+        voice_sdk_status build_number=28 status=registered four times today
+        (latest 17:49:54 UTC). For the SDK to register against Twilio, the APN
+        Mobile Push Credential (expected SID CR7fd8d05f8deefcc8e94e7de4c357d11c)
+        must exist with sandbox=false - no other code path produces 'registered'.
+        This is runtime end-to-end proof. Build 29 native code identical to Build 28.
 
   - id: supabase-push-secret
     layer: supabase EDGE FUNCTION secrets (NOT Vault)
