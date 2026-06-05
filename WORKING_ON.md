@@ -291,6 +291,15 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 **Coordination:** Only additive change to inbound-owned shared files — one guard line + one import in `_layout.tsx` (`isOutboundCallActive()`), plus the `_outboundCallActive` flag + export in `lib/voice.ts`. `app/call/[sid].tsx` untouched. Inbound's `25dfa322` (reliable deal-open + dedup guard) fully preserved.
 **Last updated (auto):** 2026-06-04 14:36 UTC
 
+### Justin · reconcile-main-281 (eloquent-brahmagupta-248dfb)
+
+**Branch:** `justin/reconcile-main-281` (worktree `/private/tmp/dcc-reconcile`). Merges `origin/justin/eas-preview-distribution-store` @ `e0a68c4` into `origin/main` @ `f1d1a06`.
+**Working on:** (1) Inbound calling on the iPhone app, (2) reconciling the long-lived build branch back onto main and retiring it (#281). **DONE.**
+**Inbound — SHIPPED + verified on-device:** native CallKit, two-way audio, deal auto-opens on accept (CallKit owns the call UI — we navigate to the deal only, no custom call screen on top), repeatable across calls, no crash. The Build 26 notification-tap SIGABRT is fixed: `chanName()` unique-topic helper across all 10 Realtime channels (supabase-js reuses a channel by topic; a 2nd `.on('postgres_changes')` after `subscribe()` threw uncaught → RN escalated to fatal). Shipped combined with outbound via OTA group `ad2a048f`, commit `e0a68c4`. Verified: 2 live inbound calls, deal `surplus-mpof18hrx0pr` auto-opened from the inbox, `call_logs` rows confirmed completed + resolved.
+**Reconciliation — DONE (commit `d481cb5`):** single trunk on main now carries inbound + outbound. 8 conflicts resolved (twilio-voice kept main's correct `+15139982306`; deal/[id].tsx + quick/call.tsx hand-merged to thread BOTH main's contactId AND outbound's displayName; eas.json unioned both adhoc+preview profiles; docs unioned). Verified: zero conflict markers; `tsc` shows only the 2 pre-existing type-only SDK errors; backend comms surfaces byte-identical to main; mobile call governing files byte-identical to the on-device-verified bundle `e0a68c4` (only delta = additive contactId threading). Build branch `justin/eas-preview-distribution-store` retired.
+**⚠ Build flow going forward:** main IS now the build source for mobile. Next `eas build` comes from `main` (no more building off `justin/eas-preview-distribution-store`). `git pull` first; verify `gitCommit` via `eas build:list`. Run `/release-check inbound-callkit` before any build (hook-enforced).
+**Last updated (auto):** 2026-06-05 UTC
+
 ## Nathan's session
 
 **Status:** Active — 2026-06-01 — performance pass (deals-payload re-pull fixes) + Today-view docket coverage
