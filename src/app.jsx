@@ -19847,8 +19847,31 @@ function EngagementStrip({ deal }) {
 }
 
 function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
-  const m = deal.meta || {};
-  const updateMeta = (patch) => onUpdateDeal({ meta: { ...m, ...patch } });
+  // ── Case Details edit buffer (Nathan + Inaam, 2026-06-04) ──────────────
+  // The Case Details inputs are controlled, bound directly to deal.meta. Every
+  // global `deals` reload — the realtime echo of our own write, the 60s
+  // auto-refresh, or intel-main's 30-min sync — replaces the deal object, so a
+  // value being typed/pasted would snap back to the DB ("disappears on first
+  // input, takes 2-3 tries to stick", across the whole field set). Fix: buffer
+  // meta locally. Inputs read the buffer, so typing is never clobbered. We only
+  // re-adopt the server value when the user hasn't typed in the last ~2s (so a
+  // reload can't wipe an in-progress edit), and every save MERGES the touched
+  // key onto the LATEST server meta — never the stale buffer — so a field that
+  // intel-main synced concurrently can't be silently reverted.
+  const [localMeta, setLocalMeta] = React.useState(deal.meta || {});
+  const lastTypedRef = React.useRef(0);
+  React.useEffect(() => {                       // switching deals: always adopt the new one
+    setLocalMeta(deal.meta || {}); lastTypedRef.current = 0;
+  }, [deal.id]);
+  React.useEffect(() => {                        // same deal reloaded: don't clobber mid-edit
+    if (Date.now() - lastTypedRef.current > 2000) setLocalMeta(deal.meta || {});
+  }, [deal.meta]);
+  const m = localMeta;
+  const updateMeta = (patch) => {
+    lastTypedRef.current = Date.now();
+    setLocalMeta(prev => ({ ...prev, ...patch }));        // instant, local — no round-trip flicker
+    onUpdateDeal({ meta: { ...(deal.meta || {}), ...patch } }); // persist onto latest server meta
+  };
   return (
     <div>
       <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
