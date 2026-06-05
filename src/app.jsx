@@ -24009,7 +24009,7 @@ function Activity({ items, dealId, reload }) {
       icon: s.direction === 'inbound' ? '📲' : '📤',
       title: (s.direction === 'inbound' ? 'Inbound' : 'Outbound') + ' SMS' + (s.status && s.status !== 'sent' ? ` · ${s.status}` : ''),
       body: s.body,
-      sub: s.direction === 'inbound' ? `From ${s.to_number || '?'}` : `To ${s.to_number || '?'}`,
+      sub: s.direction === 'inbound' ? `From ${s.from_number || '?'}` : `To ${s.to_number || '?'}`,
     })),
     ...extra.walkthroughs.map(w => ({
       kind: 'walkthrough',

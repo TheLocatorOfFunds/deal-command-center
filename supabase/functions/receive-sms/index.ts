@@ -203,9 +203,19 @@ Deno.serve(async (req) => {
     }
 
     // ── Store inbound message ─────────────────────────────────────────────────
+    // Semantic correctness: an inbound message means the contact SENT to us.
+    //   from_number = the sender (contact)  = Twilio's `From`
+    //   to_number   = the recipient (us)    = Twilio's `To`
+    // Earlier versions of this file deliberately swapped these "so the UI
+    // thread filter works" — but thread grouping now uses thread_key, and
+    // the swap was breaking every consumer that reads
+    // `direction === 'inbound' ? from_number : to_number` to identify the
+    // other party (mobile thread destinationPhone, web Comms list, etc).
+    // Backfill migration 20260605213000_unswap_inbound_sms_columns.sql
+    // un-swapped the 44 historical rows polluted by the bug.
     await sb.from('messages_outbound').insert({
-      to_number:   from,      // contact's number (thread filter key)
-      from_number: to,        // our number
+      from_number: from,      // the contact's number (sender)
+      to_number:   to,        // our Twilio number (recipient)
       body,
       direction:   'inbound',
       status:      'received',

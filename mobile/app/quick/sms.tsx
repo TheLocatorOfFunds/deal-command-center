@@ -14,8 +14,11 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  InputAccessoryView,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -30,6 +33,11 @@ import { supabase } from '../../lib/supabase'
 const SEND_SMS_URL =
   'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/send-sms'
 
+// inputAccessoryViewID for the Done toolbar above the phone-pad keyboard.
+// iOS only — Android ignores InputAccessoryView. Static string is fine
+// since there's only one accessory view on this screen.
+const KEYBOARD_DONE_ID = 'quickSmsDone'
+
 type ContactHit = {
   id: string
   name: string | null
@@ -43,6 +51,8 @@ export default function QuickSmsScreen() {
   const [search, setSearch] = useState('')
   const [hits, setHits] = useState<ContactHit[]>([])
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
+  const [searchedTerm, setSearchedTerm] = useState<string>('')
   const [phone, setPhone] = useState('')
   const [contactId, setContactId] = useState<string | null>(null)
   const [body, setBody] = useState('')
@@ -54,19 +64,36 @@ export default function QuickSmsScreen() {
     const term = search.trim()
     if (term.length < 2) {
       setHits([])
+      setSearchError(null)
+      setSearchedTerm('')
       return
     }
     debounceRef.current = setTimeout(async () => {
       setSearching(true)
+      setSearchError(null)
       const safe = term.replace(/[,()]/g, ' ')
-      const { data } = await supabase
-        .from('contacts')
-        .select('id, name, company, phone, do_not_text')
-        .or(`name.ilike.%${safe}%,company.ilike.%${safe}%`)
-        .not('phone', 'is', null)
-        .limit(10)
-      setHits((data ?? []) as ContactHit[])
-      setSearching(false)
+      // Bug 3 instrumentation (2026-06-05): surface the real result so we
+      // can tell apart RLS-deny / 0-match / JS-throw on next build.
+      try {
+        const { data, error } = await supabase
+          .from('contacts')
+          .select('id, name, company, phone, do_not_text')
+          .or(`name.ilike.%${safe}%,company.ilike.%${safe}%`)
+          .not('phone', 'is', null)
+          .limit(10)
+        if (error) {
+          setSearchError(error.message)
+          setHits([])
+        } else {
+          setHits((data ?? []) as ContactHit[])
+        }
+        setSearchedTerm(term)
+      } catch (e) {
+        setSearchError(e instanceof Error ? e.message : 'unknown error')
+        setHits([])
+      } finally {
+        setSearching(false)
+      }
     }, 250)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -140,7 +167,17 @@ export default function QuickSmsScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.body}>
+        {/*
+          Pressable wrapper: tap any non-input area to dismiss the keyboard.
+          Critical because the phone-pad keyboard (iOS) has no Return key,
+          so without this the keyboard stays up forever and can cover Send.
+          accessible={false} keeps the wrapper transparent to assistive tech.
+        */}
+        <Pressable
+          onPress={Keyboard.dismiss}
+          style={styles.body}
+          accessible={false}
+        >
           <Text style={styles.label}>Search contacts</Text>
           <TextInput
             style={styles.input}
@@ -150,12 +187,24 @@ export default function QuickSmsScreen() {
             placeholderTextColor="#78716c"
             autoCapitalize="words"
             editable={!busy}
+            returnKeyType="search"
+            inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
           />
           {searching && (
             <View style={styles.searchingRow}>
               <ActivityIndicator color="#d97706" />
               <Text style={styles.searchingText}>Searching…</Text>
             </View>
+          )}
+          {!searching && searchError && (
+            <Text style={styles.searchErrorText}>
+              Search error: {searchError}
+            </Text>
+          )}
+          {!searching && !searchError && searchedTerm && hits.length === 0 && (
+            <Text style={styles.searchEmptyText}>
+              No contacts with phone numbers match &ldquo;{searchedTerm}&rdquo;.
+            </Text>
           )}
           {hits.length > 0 && (
             <FlatList
@@ -215,6 +264,7 @@ export default function QuickSmsScreen() {
             placeholderTextColor="#78716c"
             keyboardType="phone-pad"
             editable={!busy}
+            inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
           />
 
           <Text style={styles.label}>Message</Text>
@@ -227,6 +277,7 @@ export default function QuickSmsScreen() {
             multiline
             editable={!busy}
             textAlignVertical="top"
+            inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
           />
           <Text style={styles.charCount}>
             {charCount} chars
@@ -245,8 +296,27 @@ export default function QuickSmsScreen() {
               {busy ? 'Sending…' : 'Send'}
             </Text>
           </TouchableOpacity>
-        </View>
+        </Pressable>
       </KeyboardAvoidingView>
+
+      {/*
+        Done toolbar above the keyboard — the only way to dismiss the iOS
+        phone-pad keyboard (it has no Return key). Multiline text input
+        also routes through here so a single behavior dismisses any field.
+        iOS-only; Android keyboards have a hardware Back to dismiss.
+      */}
+      {Platform.OS === 'ios' && (
+        <InputAccessoryView nativeID={KEYBOARD_DONE_ID}>
+          <View style={styles.accessoryBar}>
+            <TouchableOpacity
+              onPress={Keyboard.dismiss}
+              hitSlop={{ top: 10, bottom: 10, left: 20, right: 20 }}
+            >
+              <Text style={styles.accessoryDone}>Done</Text>
+            </TouchableOpacity>
+          </View>
+        </InputAccessoryView>
+      )}
     </SafeAreaView>
   )
 }
@@ -280,6 +350,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   searchingText: { color: '#78716c', fontSize: 12 },
+  searchEmptyText: {
+    color: '#78716c',
+    fontSize: 12,
+    fontStyle: 'italic',
+    marginTop: 4,
+    paddingHorizontal: 4,
+  },
+  searchErrorText: {
+    color: '#fca5a5',
+    fontSize: 12,
+    marginTop: 4,
+    paddingHorizontal: 4,
+  },
+  accessoryBar: {
+    backgroundColor: '#1c1917',
+    borderTopColor: '#292524',
+    borderTopWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+  },
+  accessoryDone: {
+    color: '#d97706',
+    fontSize: 16,
+    fontWeight: '600',
+  },
   hit: {
     flexDirection: 'row',
     alignItems: 'center',
