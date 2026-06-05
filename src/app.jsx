@@ -3956,7 +3956,7 @@ function DealStatusBadges({ deal }) {
       {stageMeta && <Pill label={stageMeta.label} title={stageMeta.title} bg={stageMeta.bg} fg={stageMeta.fg} border={stageMeta.border} />}
       {isPostAuction && !stage && <Pill label="POST" title="Post-auction — property has already sold" bg="#3b0764" fg="#d8b4fe" border="#7e22ce" mono />}
       {isPreAuction && !stage && <Pill label="PRE" title="Pre-auction — auction date is upcoming" bg="#1e3a8a" fg="#93c5fd" border="#2563eb" mono />}
-      {ready && <Pill label="✅ READY" title="Ready for Outreach — vetted: phone, contacts, and personalized URL all in place" bg="#134e4a" fg="#5eead4" border="#0d9488" />}
+      {ready && <Pill label={deal.readied_by ? `✅ Ready · ${deal.readied_by}` : '✅ READY'} title={`Ready for Outreach — vetted: phone, contacts, and personalized URL all in place.${deal.readied_by ? `\nMarked ready by ${deal.readied_by}${deal.readied_by_at ? ' on ' + new Date(deal.readied_by_at).toLocaleDateString() : ''} — questions go to them.` : ''}`} bg="#134e4a" fg="#5eead4" border="#0d9488" />}
       {cosDate && <Pill label="💰 SOS" title={`Surplus On Sale — confirmation of sale ${cosDate}; surplus dollar amount is locked, not estimated`} bg="#78350f" fg="#fbbf24" border="#d97706" />}
       {/* Surplus confidence tier — intel-main-managed meta.confidenceTier (read-only;
           set on CONFIRMED surplus only, kept fresh by the 30-min sync). Supersedes
@@ -14240,18 +14240,23 @@ function TodayView({ deals, onSelect, isAdmin, setView, onRequestDisposition }) 
     }
     // Optimistic: pull it out of the visible queue immediately.
     setRecentlyPrepped(prev => { const n = new Set(prev); n.add(dealId); return n; });
-    const { error } = await sb.from('deals').update({ prepped_at: new Date().toISOString() }).eq('id', dealId);
+    // Attribution (Nathan 2026-06-05): stamp WHO readied it onto the deal
+    // (readied_by / readied_by_at → the "Ready · <name>" badge) so a lead can
+    // always be traced to the person who marked it ready.
+    const { data: { user } } = await sb.auth.getUser();
+    let byName = 'Team';
+    try { const { data: prof } = await sb.from('profiles').select('name').eq('id', user?.id).maybeSingle(); byName = prof?.name || byName; } catch (e) {}
+    const nowIso = new Date().toISOString();
+    const { error } = await sb.from('deals').update({ prepped_at: nowIso, readied_by: byName, readied_by_at: nowIso }).eq('id', dealId);
     if (error) {
       // Roll back the optimistic removal if the write failed.
       setRecentlyPrepped(prev => { const n = new Set(prev); n.delete(dealId); return n; });
       alert('Could not mark prepped: ' + error.message);
       return;
     }
-    // Attribution (Nathan 2026-05-29): prepped_at has no owner column, so log
-    // WHO marked it ready to the activity feed — powers the daily work
-    // scorecard. Best-effort; never blocks the prep.
+    // Also log to the activity feed (the full audit trail + the daily work
+    // scorecard, which matches on this exact action string). Best-effort.
     try {
-      const { data: { user } } = await sb.auth.getUser();
       await sb.from('activity').insert({ deal_id: dealId, user_id: user?.id || null, action: '✅ Marked ready for outreach', visibility: ['team'] });
     } catch (e) { /* non-blocking */ }
 
@@ -14915,16 +14920,23 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
       }
     }
     setReady(val); // optimistic
+    // Attribution (Nathan 2026-06-05): stamp WHO readied it (readied_by/_at) so
+    // the "Ready · <name>" badge traces the lead to its prepper; cleared on un-ready.
+    const nowIso = new Date().toISOString();
+    const { data: { user } } = await sb.auth.getUser();
+    let byName = 'Team';
+    if (val) { try { const { data: prof } = await sb.from('profiles').select('name').eq('id', user?.id).maybeSingle(); byName = prof?.name || byName; } catch (e) {} }
     const { error } = await sb.from('deals').update({
-      prepped_at: val ? new Date().toISOString() : null,
+      prepped_at: val ? nowIso : null,
+      readied_by: val ? byName : null,
+      readied_by_at: val ? nowIso : null,
       meta: { ...(deal.meta || {}), verified: val },
     }).eq('id', deal.id);
     if (error) { setReady(!val); alert('Could not update Ready status: ' + error.message); setSavingReady(false); return; }
-    // Attribution (Nathan 2026-05-29): log who marked ready → daily scorecard.
-    // Only on mark-ready (not un-marking). Best-effort.
+    // Also log to the activity feed (audit trail + daily scorecard, which matches
+    // this exact action string). Only on mark-ready. Best-effort.
     if (val) {
       try {
-        const { data: { user } } = await sb.auth.getUser();
         await sb.from('activity').insert({ deal_id: deal.id, user_id: user?.id || null, action: '✅ Marked ready for outreach', visibility: ['team'] });
       } catch (e) { /* non-blocking */ }
     }
@@ -14962,8 +14974,8 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
       {!isClosed && (
         <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {ready ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 10, fontWeight: 800, color: "#5eead4", background: "#134e4a", border: "1px solid #0d9488", borderRadius: 5, padding: "5px 10px", letterSpacing: "0.04em" }}>
-              ✅ READY FOR OUTREACH
+            <span title={deal.readied_by ? `Marked ready by ${deal.readied_by}${deal.readied_by_at ? ' on ' + new Date(deal.readied_by_at).toLocaleDateString() : ''} — questions go to them.` : undefined} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 10, fontWeight: 800, color: "#5eead4", background: "#134e4a", border: "1px solid #0d9488", borderRadius: 5, padding: "5px 10px", letterSpacing: "0.04em" }}>
+              ✅ READY FOR OUTREACH{deal.readied_by ? <span style={{ fontWeight: 600, opacity: 0.85, textTransform: 'none', letterSpacing: 0 }}> · {deal.readied_by}{deal.readied_by_at ? ' · ' + new Date(deal.readied_by_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''}</span> : null}
               <span onClick={e => { e.stopPropagation(); toggleReady(false); }} title="Move back to needs-cleaning" style={{ cursor: "pointer", opacity: 0.65, fontWeight: 700, fontSize: 12 }}>×</span>
             </span>
           ) : (
