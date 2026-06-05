@@ -36,16 +36,23 @@ grep -r "methodName" node_modules/@twilio/voice-react-native-sdk/lib/
   code signing error on every build.
 - `UIBackgroundModes: voip + audio` — already handled by the Twilio plugin.
 - VoIP Services certificate — must exist in the Apple Developer portal for
-  `com.fundlocators.dcc` AND be uploaded to the Twilio console. Without it,
-  Apple never issues PushKit VoIP tokens to the device and `didUpdatePushCredentials`
-  never fires, causing every `voice.register()` to fail with
-  "Failed to initialize PushKit device token" regardless of retry count.
+  `com.fundlocators.dcc` AND be uploaded to the Twilio console. The cert governs
+  push DELIVERY to an already-registered device. NOTE: it is NOT the cause of
+  "Failed to initialize PushKit device token" — that error is upstream (the device
+  never obtained a token because `voice.initializePushRegistry()` was missing; see
+  SDK gotchas below). Don't chase the cert for a device-token error.
   Check: developer.apple.com → Certificates → look for type "VoIP Services"
   for bundle ID `com.fundlocators.dcc`. Also check Twilio Console → Voice → Push Credentials.
 
 **Known SDK gotchas (voice-react-native-sdk):**
-- `initializePushRegistry()` - DOES NOT EXIST. Removed in newer versions.
-  `new Voice()` creates the internal PKPushRegistry automatically.
+- `voice.initializePushRegistry()` - EXISTS and is REQUIRED for inbound
+  (`Voice.d.ts:380` in SDK 1.7.0). It creates the PKPushRegistry that makes iOS
+  issue the VoIP device token; `new Voice()` does NOT create it. A 2026-05 session
+  wrongly DELETED this call believing it "does not exist" and wrote that into this
+  file - which kept inbound dead Builds 15-24. Re-adding it (Build 25) made inbound
+  register on the first try. THIS missing call - not the cert - is what produced
+  "Failed to initialize PushKit device token" (no PKPushRegistry → no token).
+  Lesson: never assert an SDK method exists/doesn't from memory; grep the `.d.ts`.
 - `callInvite.getCustomParameters()` - returns `Record<string, string>`,
   NOT a `ReadonlyMap`. Use bracket notation `params['key']`, not `.get('key')`.
 - `callInvite.getCallSid()` - exists, returns `string`.
