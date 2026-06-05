@@ -9,8 +9,10 @@
  *     SDK's pod when the Podfile picks it up — no manual link needed)
  *   - "voip" background mode in the UIBackgroundModes Info.plist key
  *
- * Doesn't touch entitlements directly — `aps-environment` is already
- * set to "production" in app.json, which covers PushKit too.
+ * Does NOT touch entitlements — aps-environment in app.json covers
+ * standard APNs. PushKit VoIP token delivery requires a VoIP Services
+ * certificate registered on the App ID in the Apple Developer portal
+ * and uploaded to Twilio's console (not an app.json entitlement).
  *
  * Reference:
  *   https://docs.expo.dev/config-plugins/development-and-debugging/

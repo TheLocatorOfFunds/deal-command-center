@@ -25,7 +25,7 @@ import {
   TextInput,
   View,
 } from 'react-native'
-import { supabase } from '../lib/supabase'
+import { supabase, chanName } from '../lib/supabase'
 
 const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co'
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv'
@@ -247,7 +247,7 @@ export function OutreachDraftPanel({
   useEffect(() => {
     load()
     const ch = supabase
-      .channel(`outreach_queue:${dealId}`)
+      .channel(chanName(`outreach_queue:${dealId}`))
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'outreach_queue', filter: `deal_id=eq.${dealId}` },

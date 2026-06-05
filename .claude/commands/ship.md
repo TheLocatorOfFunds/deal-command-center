@@ -22,9 +22,10 @@ which is backwards. He tracks goals; you track mechanics.
 
 1. `git fetch --all`.
 2. **Canonical mobile branch:** read the "Mobile build & branch flow" section of
-   `CLAUDE.md`. As of this writing it's `justin/eas-preview-distribution-store` (interim,
-   until issue #281 reconciliation), after which it becomes `main`. Re-check the doc —
-   it is the source of truth, not your memory.
+   `CLAUDE.md` (it's on `main`; if your branch lacks it, `git show origin/main:CLAUDE.md`).
+   As of this writing it's `justin/eas-preview-distribution-store` (interim, until issue
+   #281 reconciliation), after which it becomes `main`. The doc is the source of truth,
+   not your memory.
 3. `eas build:list --platform ios --limit 3` — latest build + its gitCommit + channel.
 4. EAS auth: the shell `EXPO_TOKEN` may be wrapped in literal angle brackets. Always run
    eas with `EXPO_TOKEN="${EXPO_TOKEN//[<>]/}"` and use the homebrew `eas`

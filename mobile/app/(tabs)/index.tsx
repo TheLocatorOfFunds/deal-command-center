@@ -31,7 +31,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
-import { supabase } from '../../lib/supabase'
+import { supabase, chanName } from '../../lib/supabase'
 import { useAuth } from '../../lib/auth'
 
 type Msg = {
@@ -237,7 +237,7 @@ export default function InboxScreen() {
       }, 800)
     }
     const channel = supabase
-      .channel('inbox-realtime')
+      .channel(chanName('inbox-realtime'))
       .on(
         'postgres_changes',
         {

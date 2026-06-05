@@ -13,7 +13,7 @@
  * output (matches iOS native call behavior).
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   View,
   Text,
@@ -23,7 +23,7 @@ import {
 } from 'react-native'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { getVoice } from '../../lib/voice'
-import { Call } from '@twilio/voice-react-native-sdk'
+import { Call, Voice } from '@twilio/voice-react-native-sdk'
 
 export default function CallScreen() {
   const { sid } = useLocalSearchParams<{ sid: string }>()
@@ -31,6 +31,9 @@ export default function CallScreen() {
 
   const [call, setCall] = useState<Call | null>(null)
   const [state, setState] = useState<string>('connecting')
+  // Prevents the onDisconnected auto-dismiss from firing a second router.back()
+  // when the user tapped End themselves (hangUp already calls router.back()).
+  const hangingUpRef = useRef(false)
   const [muted, setMuted] = useState(false)
   const [onSpeaker, setOnSpeaker] = useState(false)
   const [dealName, setDealName] = useState<string | null>(null)
@@ -46,9 +49,10 @@ export default function CallScreen() {
     ;(async () => {
       try {
         const calls = await voice.getCalls()
-        const found = Array.from(calls.values()).find(
-          (c) => (c as Call).getSid?.() === sid,
-        )
+        const found =
+          Array.from(calls.values()).find(
+            (c) => (c as Call).getSid?.() === sid,
+          ) ?? Array.from(calls.values())[0]
         if (!cancelled) setCall((found as Call) ?? null)
       } catch (e) {
         console.warn('[call screen] failed to resolve call', e)
@@ -65,35 +69,67 @@ export default function CallScreen() {
     const onConnected = () => setState('connected')
     const onDisconnected = () => {
       setState('ended')
-      // Dismiss after a beat so the user sees "Ended"
-      setTimeout(() => router.back(), 1200)
+      // Dismiss after a beat so the user sees "Ended" — but only if hangUp()
+      // hasn't already called router.back() itself (e.g. user tapped End).
+      // Without this guard, hangUp triggers Disconnected which schedules a
+      // second back(), causing the deal page to also pop 1.2s later.
+      if (!hangingUpRef.current) {
+        setTimeout(() => router.back(), 1200)
+      }
     }
     const onReconnecting = () => setState('reconnecting')
+    const onReconnected = () => setState('connected')
     const onRinging = () => setState('ringing')
+    const onConnectFailure = (error: unknown) => {
+      console.warn('[call] ConnectFailure', error)
+      setState('failed')
+      setTimeout(() => router.back(), 2000)
+    }
 
     call.on(Call.Event.Connected, onConnected)
     call.on(Call.Event.Disconnected, onDisconnected)
     call.on(Call.Event.Reconnecting, onReconnecting)
+    call.on(Call.Event.Reconnected, onReconnected)
     call.on(Call.Event.Ringing, onRinging)
+    call.on(Call.Event.ConnectFailure, onConnectFailure)
 
-    // Pull custom params for the header
-    ;(async () => {
-      try {
-        const params = await call.getCustomParameters()
-        setDealName(params?.dealName ?? null)
-        const from = await call.getFrom()
-        const to = await call.getTo()
-        setCounterparty(from || to || null)
-      } catch {}
-    })()
+    // Pull custom params for the header — all three methods are synchronous.
+    // getCustomParameters() returns Record<string, string> - plain object, no .get().
+    try {
+      const params = call.getCustomParameters()
+      setDealName(params?.['dealName'] ?? null)
+      const from = call.getFrom()
+      const to = call.getTo()
+      setCounterparty(from || to || null)
+    } catch {}
 
     return () => {
       call.off(Call.Event.Connected, onConnected)
       call.off(Call.Event.Disconnected, onDisconnected)
       call.off(Call.Event.Reconnecting, onReconnecting)
+      call.off(Call.Event.Reconnected, onReconnected)
       call.off(Call.Event.Ringing, onRinging)
+      call.off(Call.Event.ConnectFailure, onConnectFailure)
     }
   }, [call, router])
+
+  // Keep speaker state in sync with the SDK's audio device selection.
+  // The SDK fires AudioDevicesUpdated whenever the selected device changes
+  // (e.g. Bluetooth connected, user picks in CC UI, or toggleSpeaker above).
+  useEffect(() => {
+    const voice = getVoice()
+    if (!voice) return
+    const onAudioDevicesUpdated = (
+      _audioDevices: unknown[],
+      selectedDevice?: { type?: string },
+    ) => {
+      setOnSpeaker(selectedDevice?.type === 'Speaker')
+    }
+    voice.on(Voice.Event.AudioDevicesUpdated, onAudioDevicesUpdated)
+    return () => {
+      voice.off(Voice.Event.AudioDevicesUpdated, onAudioDevicesUpdated)
+    }
+  }, [])
 
   // Tick the duration counter once the call connects
   useEffect(() => {
@@ -118,13 +154,13 @@ export default function CallScreen() {
   const toggleSpeaker = async () => {
     const voice = getVoice()
     if (!voice) return
-    const next = !onSpeaker
+    const targetType = onSpeaker ? 'Earpiece' : 'Speaker'
     try {
-      // SDK exposes audio device selection; the simplest binary is to
-      // toggle the built-in speaker on/off.
-      // @ts-expect-error SDK method name varies across versions
-      await voice.setAudioDevice?.(next ? 'speaker' : 'earpiece')
-      setOnSpeaker(next)
+      const { audioDevices } = await voice.getAudioDevices()
+      const target = audioDevices.find((d) => d.type === targetType)
+      if (target) {
+        await target.select()
+      }
     } catch {}
   }
 
@@ -133,6 +169,9 @@ export default function CallScreen() {
       router.back()
       return
     }
+    // Set the flag BEFORE disconnect() — the Disconnected event can fire
+    // synchronously inside that await, and we need the guard in place.
+    hangingUpRef.current = true
     try {
       await call.disconnect()
     } catch {}
@@ -145,6 +184,7 @@ export default function CallScreen() {
     connected: formatDuration(durationSec),
     reconnecting: 'Reconnecting…',
     ended: 'Ended',
+    failed: 'Call failed',
   }
 
   return (
@@ -160,10 +200,12 @@ export default function CallScreen() {
         <Text style={styles.state}>{stateLabel[state] ?? state}</Text>
       </View>
 
-      {/* Middle: spinner while connecting */}
+      {/* Middle: spinner while connecting, error text on failure */}
       <View style={styles.middle}>
         {state === 'connecting' || state === 'ringing' ? (
           <ActivityIndicator color="#c9a24a" size="large" />
+        ) : state === 'failed' ? (
+          <Text style={styles.failedText}>Call failed</Text>
         ) : null}
       </View>
 
@@ -268,4 +310,5 @@ const styles = StyleSheet.create({
   btnLabelActive: { color: '#0b1f3a' },
   hangup: { backgroundColor: '#dc2626', borderColor: '#dc2626' },
   hangupLabel: { color: '#fafaf9', fontWeight: '700', fontSize: 16 },
+  failedText: { color: '#dc2626', fontSize: 18, fontWeight: '600' },
 })

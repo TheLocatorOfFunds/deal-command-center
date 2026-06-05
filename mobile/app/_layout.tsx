@@ -4,14 +4,15 @@
  * the actual nav stack.
  */
 
-import { useEffect } from 'react'
-import { Stack, useRouter, useSegments } from 'expo-router'
+import { useEffect, useRef, useCallback } from 'react'
+import { AppState } from 'react-native'
+import { Stack, useRouter, useSegments, useRootNavigationState } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as SplashScreen from 'expo-splash-screen'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { AuthProvider, useAuth } from '../lib/auth'
 import { registerForPushAsync, subscribeToNotificationTaps } from '../lib/push'
-import { initVoice, teardownVoice } from '../lib/voice'
+import { initVoice, teardownVoice, subscribeToCallInvite, getVoice, isOutboundCallActive } from '../lib/voice'
 import { useUnreadCount } from '../lib/notifications'
 
 // Hold the splash screen until we've had ~1s to settle. Without this,
@@ -25,6 +26,48 @@ function ProtectedRouter() {
   const { session, loading } = useAuth()
   const segments = useSegments()
   const router = useRouter()
+
+  // Navigation-readiness: useRootNavigationState().key is undefined until the
+  // root navigator mounts. We gate cold-start navigation on this so a tap that
+  // launches the app can't router.push before the tree exists (= crash).
+  const navState = useRootNavigationState()
+  const navReady = !!navState?.key
+  const navReadyRef = useRef(false)
+  useEffect(() => {
+    navReadyRef.current = navReady
+  }, [navReady])
+
+  // Dedup guard: a given call's accept should navigate exactly once, whether
+  // the trigger is the foreground callInvite 'accepted' event or the AppState
+  // re-entry path (green pill / Dynamic Island). Reset when no call is active.
+  const navigatedCallSidRef = useRef<string | null>(null)
+
+  // Holds a notification-tap payload that arrived before the navigator mounted
+  // (cold-start tap); flushed once nav is ready. Without it, a cold-start tap
+  // calls router.push before the root navigator exists and the app crashes.
+  const pendingTapRef = useRef<Record<string, unknown> | null>(null)
+
+  const routeFromTap = useCallback(
+    (data: Record<string, unknown>) => {
+      try {
+        const type = data.type as string | undefined
+        if (type === 'sms' && data.thread_key) {
+          router.push({ pathname: '/thread/[key]', params: { key: String(data.thread_key) } })
+        } else if (type === 'call' && data.deal_id) {
+          router.push(`/deal/${String(data.deal_id)}`)
+        } else if (type === 'team' && data.thread_id) {
+          router.push(`/team-thread/${String(data.thread_id)}`)
+        } else if (type === 'team') {
+          router.push('/(tabs)/team')
+        } else if (type === 'deal' && data.deal_id) {
+          router.push(`/deal/${String(data.deal_id)}`)
+        }
+      } catch (e) {
+        console.warn('[layout] notification tap routing failed', e)
+      }
+    },
+    [router],
+  )
 
   // Subscribe to unread notifications for the signed-in user. The hook
   // syncs the iOS app icon badge whenever the count changes. Returns the
@@ -75,28 +118,103 @@ function ProtectedRouter() {
     }
   }, [loading, session])
 
-  // Notification-tap routing. Different payloads land you in different
-  // places. Set on the server side when firing the push.
+  // When the user accepts an inbound call via the native CallKit UI, the SDK
+  // fires the callInvite 'accepted' event. CallKit owns the call UI (mute /
+  // speaker / end + the Dynamic Island), so DCC's job on accept is to surface
+  // the DEAL the call is about - not to duplicate the call screen. We open the
+  // deal when the caller resolves to one; an unknown caller has no deal, so we
+  // mark the call handled and leave the user where they are.
   useEffect(() => {
-    const unsub = subscribeToNotificationTaps((data) => {
-      const type = data.type as string | undefined
-      if (type === 'sms' && data.thread_key) {
-        router.push({
-          pathname: '/thread/[key]',
-          params: { key: String(data.thread_key) },
-        })
-      } else if (type === 'call' && data.deal_id) {
-        router.push(`/deal/${String(data.deal_id)}`)
-      } else if (type === 'team' && data.thread_id) {
-        router.push(`/team-thread/${String(data.thread_id)}`)
-      } else if (type === 'team') {
-        router.push('/(tabs)/team')
-      } else if (type === 'deal' && data.deal_id) {
-        router.push(`/deal/${String(data.deal_id)}`)
-      }
+    if (loading || !session) return
+    const unsub = subscribeToCallInvite((callInvite) => {
+      // Navigate only after the user accepts via CallKit — not on invite delivery.
+      callInvite.on('accepted', (call: any) => {
+        const sid = call?.getSid?.() ?? callInvite.getCallSid?.() ?? ''
+        // Dedup: the AppState re-entry path may also fire for this same call.
+        // Whichever runs first navigates; the other is a no-op.
+        if (!sid || navigatedCallSidRef.current === sid) return
+        navigatedCallSidRef.current = sid
+        // getCustomParameters() returns Record<string, string> - plain object, no .get().
+        // dealId is set by the twilio-voice inbound TwiML only when the caller's
+        // number matches a contact linked to a deal; otherwise it's empty.
+        const dealId = callInvite.getCustomParameters?.()?.['dealId'] || null
+        if (dealId) router.push(`/deal/${dealId}`)
+      })
     })
     return unsub
-  }, [router])
+  }, [loading, session, router])
+
+  // Dynamic Island / green pill tap: when iOS brings the app to the foreground
+  // while a call is active, open the DEAL the call is about. This is the
+  // reliable path on iOS - a backgrounded/locked app can't force itself forward
+  // on CallKit accept, so the deal opens the moment the user enters the app.
+  // CallKit + the Dynamic Island remain the call UI; DCC shows the deal.
+  useEffect(() => {
+    if (loading || !session) return
+    const subscription = AppState.addEventListener('change', async (nextState) => {
+      if (nextState !== 'active') return
+      const v = getVoice()
+      if (!v) {
+        // Voice init failed or is still pending (PushKit token slow on first launch).
+        // Retry on every foreground — idempotent because initVoice() has a mutex.
+        initVoice().catch(() => {})
+        return
+      }
+      try {
+        // Outbound hook: skip the auto-open for calls the user dialed out.
+        // Justin wants outbound to stay in-app (native Dynamic Island pill),
+        // never the custom navy screen. Inbound calls still open the screen.
+        if (isOutboundCallActive()) return
+        const calls = await v.getCalls()
+        if (calls.size > 0) {
+          const call = [...calls.values()][0] as any
+          const sid = call?.getSid?.() ?? [...calls.keys()][0] ?? ''
+          // Dedup so re-foregrounding mid-call doesn't stack duplicate screens.
+          if (sid && navigatedCallSidRef.current !== sid) {
+            navigatedCallSidRef.current = sid
+            // Surface the deal (CallKit owns the call UI). An unknown caller has
+            // no deal, so there's nothing to show - we just mark it handled.
+            let dealId: string | null = null
+            try {
+              dealId = call?.getCustomParameters?.()?.['dealId'] || null
+            } catch {}
+            if (dealId) router.push(`/deal/${dealId}`)
+          }
+        } else {
+          // No active call — reset the guard so the next call navigates.
+          navigatedCallSidRef.current = null
+        }
+      } catch {
+        // No active calls or SDK unavailable — nothing to do.
+      }
+    })
+    return () => subscription.remove()
+  }, [loading, session, router])
+
+  // Notification-tap routing. Different payloads land you in different places
+  // (type set server-side when firing the push). A cold-start tap (app launched
+  // FROM the notification) can fire before the navigation tree is mounted —
+  // routing then crashes. So if nav isn't ready, stash the payload and flush it
+  // once it is (the effect below). Warm taps route immediately.
+  useEffect(() => {
+    const unsub = subscribeToNotificationTaps((data) => {
+      if (!navReadyRef.current) {
+        pendingTapRef.current = data
+        return
+      }
+      routeFromTap(data)
+    })
+    return unsub
+  }, [routeFromTap])
+
+  // Flush a notification tap that arrived before the navigator was mounted.
+  useEffect(() => {
+    if (navReady && pendingTapRef.current) {
+      const data = pendingTapRef.current
+      pendingTapRef.current = null
+      routeFromTap(data)
+    }
+  }, [navReady, routeFromTap])
 
   // Stack at root lets deal/[id] push on top of (tabs) with a back button.
   // Each child route configures its own header (or hides it).

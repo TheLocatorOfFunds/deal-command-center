@@ -30,7 +30,7 @@ import {
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router'
-import { supabase } from '../../lib/supabase'
+import { supabase, chanName } from '../../lib/supabase'
 import { extractJitsiUrls } from '../../lib/videoRooms'
 import { markDealRead } from '../../lib/notifications'
 
@@ -169,7 +169,7 @@ export default function ThreadScreen() {
   useEffect(() => {
     if (!decoded) return
     const channel = supabase
-      .channel(`sms-thread-${decoded}`)
+      .channel(chanName(`sms-thread-${decoded}`))
       .on(
         'postgres_changes',
         {

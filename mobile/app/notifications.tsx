@@ -11,7 +11,7 @@
  * docs/MOBILE_NOTIFICATION_SYSTEM.md for the Build 8+ enhancements.
  */
 
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   ActivityIndicator,
   FlatList,
@@ -47,6 +47,12 @@ export default function NotificationsScreen() {
   const { session } = useAuth()
   const userId = session?.user?.id
   const { rows, loading, error, refresh } = useNotificationFeed(userId, 50)
+  const [refreshing, setRefreshing] = useState(false)
+  const handleRefresh = async () => {
+    setRefreshing(true)
+    await refresh()
+    setRefreshing(false)
+  }
 
   // Header "Mark all read" + back-friendly title
   useEffect(() => {
@@ -125,7 +131,7 @@ export default function NotificationsScreen() {
           keyExtractor={(r) => r.id}
           contentContainerStyle={{ padding: 12, paddingTop: 4 }}
           refreshControl={
-            <RefreshControl tintColor="#d97706" refreshing={loading} onRefresh={refresh} />
+            <RefreshControl tintColor="#d97706" refreshing={refreshing} onRefresh={handleRefresh} />
           }
           ListEmptyComponent={
             <View style={styles.empty}>

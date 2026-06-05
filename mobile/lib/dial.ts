@@ -33,7 +33,7 @@ export type PlaceCallResult =
 
 export async function placeCall(
   toNumber: string,
-  opts?: { dealId?: string; contactId?: string },
+  opts?: { dealId?: string; contactId?: string; displayName?: string },
 ): Promise<PlaceCallResult> {
   // Path 1: try the Voice SDK if it's initialized.
   if (getVoice()) {

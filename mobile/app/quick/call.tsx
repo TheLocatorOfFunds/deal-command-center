@@ -7,9 +7,10 @@
  *      a match to dial. Faster than digging through deals when you just
  *      need to ring a known partner attorney.
  *
- * Either path routes through the existing Twilio bridge (placeCall),
- * so the destination sees the FundLocators business number as caller
- * ID, not your personal cell.
+ * Either path dials through placeCall, which connects in-app over the
+ * Twilio Voice SDK (falling back to the legacy bridge only if the VoIP
+ * connect fails). The destination always sees the FundLocators business
+ * number as caller ID, not your personal cell.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -82,16 +83,27 @@ export default function QuickCallScreen() {
     if (!target.trim() || busy) return
     setBusy(true)
     try {
-      const result = await placeCall(
-        target,
-        contactId ? { contactId } : undefined,
-      )
+      // placeCall tries the in-app Voice SDK first (mode 'sdk'), then falls
+      // back to the legacy bridge-callback (mode 'bridge'). contactId links the
+      // call to a contact-level thread; the display name rides along so both
+      // the native CallKit UI and our in-call screen can show who we're calling.
+      const result = await placeCall(target, { contactId, displayName: label })
       if (result.ok) {
-        Alert.alert(
-          'Calling…',
-          `${result.message}${label ? `\n\nReaching: ${label}` : ''}`,
-          [{ text: 'OK', onPress: () => router.back() }],
-        )
+        if (result.mode === 'sdk') {
+          // In-app VoIP call is live; iOS shows the native CallKit call UI.
+          // Dismiss this dial screen so the user lands back in the app and can
+          // browse deal info while talking. No modal, no custom call screen.
+          router.back()
+        } else {
+          // Fallback path — the VoIP connect failed and we bridged via the
+          // user's cell, which genuinely rings their phone, so the modal is
+          // warranted here (and only here). placeCallIn recorded WHY it fell back.
+          Alert.alert(
+            'Calling…',
+            `${result.message}${label ? `\n\nReaching: ${label}` : ''}`,
+            [{ text: 'OK', onPress: () => router.back() }],
+          )
+        }
         return
       }
       if (result.error === 'cell_phone_required') {
@@ -243,8 +255,8 @@ export default function QuickCallScreen() {
             </Text>
           </TouchableOpacity>
           <Text style={styles.hint}>
-            Your cell rings from the FundLocators Twilio number. Answer to
-            connect; the destination sees the business number as caller ID.
+            Calls connect in-app over the FundLocators line. The other party
+            sees the business number (513-998-5440) as caller ID.
           </Text>
         </View>
       </KeyboardAvoidingView>

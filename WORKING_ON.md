@@ -280,6 +280,17 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 **Branch:** 
 **Last updated (auto):** 2026-05-28 20:13 UTC
 
+### Justin · outbound-calling
+
+**Branch:** `justin/outbound-calling` (worktree). REBASED 2026-06-04 onto `origin/justin/eas-preview-distribution-store` @ `25dfa322` — now = inbound Build 26 work + my 4 outbound commits, no conflicts.
+**Working on:** Outbound calling end-to-end from the DCC iPhone app. **DONE + verified.**
+**Status:** SHIPPED via OTA 2026-06-04. Outbound dials in-app over the Voice SDK (no modal on SDK path — modal only on genuine bridge fallback), navy in-call screen suppressed for outbound via `isOutboundCallActive()` guard in `_layout.tsx` AppState listener (Justin navigates DCC freely mid-call). Verified by Justin on-device + `call_logs` row `5c47f4f4` (outbound → +15135125735, from +15139985440, status `completed`, deal `surplus-mpof18hrx0pr`). In-call controls (mute/speaker/end): Justin chose to LEAVE AS-IS — green pill foregrounds DCC (no call UI by design), native controls via App Switcher. No slim call-bar built.
+**OTA live:** channel `preview`, branch `preview`, runtime `0.1.0`, group `8077e05f-ff87-4be0-acea-7547cb9404e1`, commit `3269023`. This was the FIRST OTA published AFTER Build 26 was built (13:20Z) — earlier OTAs predated the build and expo-updates refused to "downgrade" to them. Lesson: an OTA only reaches an installed build if it's published *after* that build.
+**⚠ DURABILITY — inbound session must read this:** the OTA holds only until the next NATIVE build ships from a branch WITHOUT my 4 outbound commits. The next mobile build (Build 27+) MUST come from `justin/outbound-calling` (it already contains all of `eas-preview-distribution-store` @ 25dfa322 + my fixes), OR fast-forward `justin/outbound-calling` into the build branch first. Building from plain 25dfa322 will orphan this OTA and regress the outbound fixes.
+**Gotcha logged:** `EXPO_TOKEN` in the shell env was wrapped in literal `<>` (42 chars, real token is 40) → "bearer token invalid". Strip with `EXPO_TOKEN="${EXPO_TOKEN//[<>]/}"`. Also use the homebrew `eas` (`/opt/homebrew/bin/eas`), not `npx eas-cli@latest`.
+**Coordination:** Only additive change to inbound-owned shared files — one guard line + one import in `_layout.tsx` (`isOutboundCallActive()`), plus the `_outboundCallActive` flag + export in `lib/voice.ts`. `app/call/[sid].tsx` untouched. Inbound's `25dfa322` (reliable deal-open + dedup guard) fully preserved.
+**Last updated (auto):** 2026-06-04 14:36 UTC
+
 ## Nathan's session
 
 **Status:** Active — 2026-06-01 — performance pass (deals-payload re-pull fixes) + Today-view docket coverage

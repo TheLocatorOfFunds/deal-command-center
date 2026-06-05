@@ -24,7 +24,8 @@
  */
 
 import { Platform } from 'react-native'
-import { Voice, type Call, type CallInvite } from '@twilio/voice-react-native-sdk'
+import * as Application from 'expo-application'
+import { Voice, Call, type CallInvite } from '@twilio/voice-react-native-sdk'
 import { supabase } from './supabase'
 
 const TOKEN_URL =
@@ -33,9 +34,71 @@ const TOKEN_URL =
 let voice: Voice | null = null
 let tokenRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let cachedToken: string | null = null
+let _initInProgress = false
+// Outbound hook: true while a call WE dialed out is live. The root layout's
+// AppState listener uses this to suppress the custom in-call screen for
+// outbound calls (per Justin: outbound stays in-app / native pill, no navy
+// screen) while still showing it for inbound calls.
+let _outboundCallActive = false
+const _callInviteHandlers: Array<(callInvite: CallInvite) => void> = []
+
+/**
+ * Subscribe to incoming call invites. Returns an unsubscribe function.
+ * Wire this up in `app/_layout.tsx` to navigate to the in-call screen
+ * after the user accepts via CallKit.
+ */
+export function subscribeToCallInvite(
+  handler: (callInvite: CallInvite) => void,
+): () => void {
+  _callInviteHandlers.push(handler)
+  return () => {
+    const idx = _callInviteHandlers.indexOf(handler)
+    if (idx !== -1) _callInviteHandlers.splice(idx, 1)
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Write SDK registration status to Supabase so we can verify from the
+ * web app that initVoice() actually succeeded before testing inbound calls.
+ *
+ * Check voice_sdk_status in Supabase after installing any new build.
+ * If the most recent row is 'failed' or missing, the device is NOT
+ * registered with Twilio and inbound calls will never arrive — don't
+ * waste time testing CallKit until this shows 'registered'.
+ */
+async function writeVoiceSdkStatus(
+  status: 'registered' | 'failed' | 'error',
+  errorMessage?: string,
+): Promise<void> {
+  try {
+    const { data: sessionData } = await supabase.auth.getSession()
+    const userId = sessionData.session?.user?.id
+    if (!userId) return
+
+    let tokenPrefix: string | undefined
+    if (status === 'registered' && voice) {
+      try {
+        const tok = await voice.getDeviceToken()
+        tokenPrefix = tok ? tok.substring(0, 12) : undefined
+      } catch {}
+    }
+
+    await supabase.from('voice_sdk_status').insert({
+      user_id: userId,
+      device_id: Application.applicationId ?? 'unknown',
+      build_number: Application.nativeBuildVersion ?? 'unknown',
+      status,
+      error_message: errorMessage ?? null,
+      token_prefix: tokenPrefix ?? null,
+    })
+  } catch (e) {
+    // Best-effort — never let this crash initVoice
+    console.warn('[voice] writeVoiceSdkStatus failed', e)
+  }
 }
 
 /**
@@ -89,30 +152,82 @@ async function fetchToken(): Promise<string | null> {
 export async function initVoice(): Promise<boolean> {
   if (Platform.OS !== 'ios') return false // iOS-only for V1
   if (voice) return true
+  // Prevent concurrent inits — the useEffect can fire multiple times during
+  // auth resolution (loading/session changes), causing parallel register()
+  // calls that collide with "Registration in progress" errors.
+  if (_initInProgress) return false
+  _initInProgress = true
 
+  try {
+    return await _doInitVoice()
+  } finally {
+    _initInProgress = false
+  }
+}
+
+async function _doInitVoice(): Promise<boolean> {
   const token = await fetchToken()
-  if (!token) return false
+  if (!token) {
+    // Captured so we can distinguish "never reached retry loop" from
+    // "retry loop ran but PushKit timed out" in voice_sdk_status.
+    void writeVoiceSdkStatus('error', 'fetchToken returned null (no session or network error)')
+    return false
+  }
   cachedToken = token
 
   try {
     voice = new Voice()
   } catch (e) {
+    // new Voice() failing means the native Twilio module couldn't initialize.
+    // Write the exact error so we can see it in Supabase without streaming device logs.
+    const errMsg = e instanceof Error ? e.message : String(e)
     console.warn('[voice] new Voice() failed', e)
+    void writeVoiceSdkStatus('error', `new Voice() threw: ${errMsg}`)
     voice = null
     return false
   }
 
-  // Wait a beat after constructing Voice so the SDK has time to create
-  // its PKPushRegistry instance and let iOS fire the credential callback.
-  // Without this, the first register() call almost always races and fails.
+  // CRITICAL (root cause of Builds 14-24 "Failed to initialize PushKit device
+  // token"): new Voice() does NOT create the PKPushRegistry. In SDK 1.7.0 the
+  // native module's init() (TwilioVoiceReactNative.m:79-104) only registers the
+  // NSNotification *observer*; it never instantiates the registry. The
+  // PKPushRegistry - which calls updatePushRegistry() / sets desiredPushTypes =
+  // [.voIP], the thing that makes iOS issue the VoIP token - is created ONLY by
+  // voice.initializePushRegistry() (native voice_initializePushRegistry,
+  // TwilioVoiceReactNative.m:106-109,457-462). Without this call deviceTokenData
+  // stays nil forever, getDeviceToken() returns "" (EMPTY), and register() rejects
+  // with "Failed to initialize PushKit device token" no matter how long we retry.
+  // The prior comment here wrongly claimed this method doesn't exist on 1.7.0 - it
+  // does (Voice.js:453). That wrong assumption is what broke inbound calls.
+  try {
+    await voice.initializePushRegistry()
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e)
+    console.warn('[voice] initializePushRegistry() failed', e)
+    void writeVoiceSdkStatus('error', `initializePushRegistry threw: ${errMsg}`)
+    voice = null
+    return false
+  }
+
+  // Now that the registry exists and desiredPushTypes is set, iOS fires
+  // didUpdatePushCredentials asynchronously (APNs handshake, ~1-30s). Give it a
+  // beat before the first register(); the retry loop below covers the rest.
   await sleep(1500)
 
   // Retry register() with backoff. The SDK throws synchronously if its
   // internal deviceToken is still nil — we retry until iOS catches up.
-  const delays = [0, 1000, 2000, 3000, 5000, 8000, 10000] // ~29s total budget
+  //
+  // Extended budget: on first launch after a provisioning profile change,
+  // Apple can take 60-120+ seconds to issue a new PushKit VoIP token via
+  // didUpdatePushCredentials. The first 7 steps cover ~29s (fast retries
+  // to catch the common case); the remaining steps extend coverage to ~3
+  // minutes to handle slow APNs handshakes on fresh installs.
+  const delays = [0, 1000, 2000, 3000, 5000, 8000, 10000, 15000, 20000, 30000, 45000, 60000] // ~3 min budget
   let lastErr: unknown = null
   for (const wait of delays) {
     if (wait > 0) await sleep(wait)
+    // teardownVoice() may have been called while we were sleeping (e.g. sign-out)
+    if (!voice) break
     try {
       await voice.register(token)
       lastErr = null
@@ -129,27 +244,92 @@ export async function initVoice(): Promise<boolean> {
     }
   }
   if (lastErr) {
-    console.warn('[voice] init failed after retries', lastErr)
+    const errMsg = lastErr instanceof Error ? lastErr.message : String(lastErr)
+    // DECISIVE DIAGNOSTIC: did iOS ever hand us a VoIP token? This is the one
+    // signal no prior build captured. It splits the failure cleanly:
+    //   deviceToken=EMPTY    -> iOS never issued a token. Static chain is all
+    //                           verified (entitlement, profile, cert, bg mode,
+    //                           SDK registry), so this points at a device/runtime
+    //                           or Apple-account-level token-issuance problem.
+    //   deviceToken=present  -> token exists; register() itself is failing
+    //                           (access-token grant / push_credential_sid) -> fixable in code.
+    let tokenState = 'unknown'
+    try {
+      const tok = voice ? await voice.getDeviceToken() : null
+      tokenState = tok ? `present:${tok.substring(0, 12)}` : 'EMPTY'
+    } catch (e) {
+      tokenState = `getDeviceToken_threw:${e instanceof Error ? e.message : String(e)}`
+    }
+    console.warn('[voice] init failed after retries', lastErr, 'deviceToken=', tokenState)
+    // Write failure to Supabase so we can verify from the web app
+    // whether the SDK actually registered. Visible at Settings > Voice Status.
+    void writeVoiceSdkStatus('failed', `${errMsg} | deviceToken=${tokenState}`)
     voice = null
     return false
   }
+  // Guard: teardownVoice() may have nulled voice while we were sleeping in the
+  // retry loop (e.g. user signed out during the 1.5s PushKit warm-up). In that
+  // case the loop breaks with lastErr=null (never set), so the check above
+  // doesn't fire. Bail here rather than crashing on voice.on() below.
+  if (!voice) return false
   console.log('[voice] registered with Twilio (PushKit ready)')
+
+  // Write success to Supabase — ground-truth confirmation the device is
+  // registered. Check this FIRST before testing inbound calls on any new build.
+  void writeVoiceSdkStatus('registered')
 
   // Refresh ~3 min before 12-hour token expires
   scheduleTokenRefresh(12 * 60 * 60 * 1000 - 3 * 60 * 1000)
 
   // Wire incoming-call handling: the SDK fires 'callInvite' when Twilio
-  // pushes a VoIP notification. Accepting via callInvite.accept() hands
-  // off to CallKit, which is already showing the native incoming-call UI.
+  // pushes a VoIP notification. CallKit shows the native incoming-call UI
+  // automatically (via TwilioVoiceReactNative+CallKit.m reportNewIncomingCall:).
+  // When the user taps Accept in CallKit, the SDK accepts internally and
+  // eventually fires Call.Event.Connected. We notify subscribers (e.g.
+  // the root layout) so the app can navigate to the in-call screen.
   voice.on(Voice.Event.CallInvite, async (callInvite: CallInvite) => {
-    // The CallKit prompt is shown automatically by the SDK using the
-    // PushKit payload. When the user taps Accept, the SDK fires
-    // `acceptCallInvite` on the callInvite object behind the scenes.
-    // Our job is just to log + populate the in-call screen with deal context.
-    console.log('[voice] callInvite from', await callInvite.getFrom())
-    // The in-call screen reads custom params (dealId, contactId) off the
-    // callInvite — populated by twilio-voice Edge Function TwiML.
+    const from = callInvite.getFrom() ?? 'unknown'
+    console.log('[voice] callInvite received from', from)
+
+    // Diagnostic write to Supabase — lets us confirm the callInvite event
+    // fired without needing to stream device console logs. Remove once
+    // inbound calling is verified stable.
+    try {
+      const { data: session } = await supabase.auth.getSession()
+      if (session.session) {
+        void supabase.from('call_logs')
+          .update({ status: 'ringing' })
+          .eq('twilio_call_sid', callInvite.getCallSid() ?? '')
+      }
+    } catch {}
+
+    // Notify any subscriber (e.g. root layout) so the app can open the
+    // in-call screen after the user accepts via CallKit.
+    for (const handler of _callInviteHandlers) {
+      try { handler(callInvite) } catch {}
+    }
   })
+
+  // Cold-launch catchup: if the app was killed and PushKit woke it, the
+  // SDK fires Voice.Event.CallInvite while our listener above was not yet
+  // registered (we were still in the sleep/register loop). The event
+  // fires into nothing and navigation never happens — the call connects
+  // natively but the app doesn't open the deal or call screen.
+  //
+  // Fix: after the listener is wired, drain any pending call invites the
+  // SDK already buffered. Handlers registered by subscribeToCallInvite()
+  // are guaranteed to be in _callInviteHandlers by this point because
+  // useEffect callbacks run synchronously and initVoice() took at least
+  // 1.5s — well after the subscribe effect already executed.
+  try {
+    const pending = await voice.getCallInvites()
+    for (const [, callInvite] of pending) {
+      console.log('[voice] cold-launch pending callInvite from', callInvite.getFrom())
+      for (const handler of _callInviteHandlers) {
+        try { handler(callInvite) } catch {}
+      }
+    }
+  } catch {}
 
   return true
 }
@@ -169,6 +349,7 @@ export async function teardownVoice(): Promise<void> {
   }
   voice = null
   cachedToken = null
+  _outboundCallActive = false
 }
 
 function scheduleTokenRefresh(ms: number) {
@@ -213,9 +394,17 @@ export type PlaceCallInResult =
  */
 export async function placeCallIn(
   toNumber: string,
-  params?: { dealId?: string; contactId?: string },
+  params?: { dealId?: string; contactId?: string; displayName?: string },
 ): Promise<PlaceCallInResult> {
   if (!voice || !cachedToken) {
+    // Outbound diagnostic (added by the outbound-calling session): record WHY
+    // the in-app VoIP path was unavailable so we can tell "SDK never
+    // initialized" apart from a connect() rejection without streaming device
+    // logs. Read from voice_sdk_status (status='error', prefixed 'outbound').
+    void writeVoiceSdkStatus(
+      'error',
+      `outbound not_initialized: voice=${voice ? 'set' : 'null'} token=${cachedToken ? 'set' : 'null'}`,
+    )
     return {
       ok: false,
       reason: 'not_initialized',
@@ -223,23 +412,51 @@ export async function placeCallIn(
     }
   }
   try {
+    // contactHandle drives the name shown on the native CallKit call UI.
+    const handle = (params?.displayName ?? '').trim()
     const call = await voice.connect(cachedToken, {
+      contactHandle: handle || 'Contact',
       params: {
         To: toNumber,
         dealId: params?.dealId ?? '',
         contactId: params?.contactId ?? '',
       },
     })
+    // Mark this as an outbound call so the AppState listener won't force the
+    // custom in-call screen open when DCC returns to the foreground. Clear it
+    // when the call ends so a later inbound call still shows its screen.
+    _outboundCallActive = true
+    const clearOutbound = () => {
+      _outboundCallActive = false
+    }
+    try {
+      call.on(Call.Event.Disconnected, clearOutbound)
+      call.on(Call.Event.ConnectFailure, clearOutbound)
+    } catch {}
     return { ok: true, call }
   } catch (e) {
+    const message = e instanceof Error ? e.message : 'Voice SDK connect failed'
+    // Outbound diagnostic: the exact native connect() rejection. This is the
+    // signal that explains why outbound silently falls back to the bridge
+    // (mic permission / CallKit / audio session). Surfaced in voice_sdk_status.
+    void writeVoiceSdkStatus('error', `outbound connect_failed: ${message}`)
     return {
       ok: false,
       reason: 'error',
-      message: e instanceof Error ? e.message : 'Voice SDK connect failed',
+      message,
     }
   }
 }
 
 export function getVoice(): Voice | null {
   return voice
+}
+
+/**
+ * Outbound hook: true while a call the user dialed out is still live. The
+ * root layout checks this before auto-opening the custom in-call screen so
+ * outbound calls stay in-app (native pill UX) instead of popping the screen.
+ */
+export function isOutboundCallActive(): boolean {
+  return _outboundCallActive
 }
