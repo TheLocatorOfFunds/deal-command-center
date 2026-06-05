@@ -113,6 +113,30 @@ Deno.serve(async (req) => {
              : toRaw
 
     // ────────────────────────────────────────────────────────────────────
+    // Self-send guard. If `to` matches any active sender in phone_numbers
+    // (5440 / 2306 / any future line), refuse outright. Twilio would
+    // reject anyway with "'To' and 'From' number cannot be the same", but:
+    //   - that came back AFTER the row was inserted as 'queued', so the
+    //     mobile UI saw a 200 OK and lied "Sent" while the row got
+    //     updated to 'failed' a moment later (bug 1, 2026-06-05).
+    //   - this gate also blocks the mac_bridge fallback case where the
+    //     recipient typo'd 2306 (Nathan's iPhone) into a thread.
+    // Block BEFORE row insert so there is no failed row to clean up.
+    // ────────────────────────────────────────────────────────────────────
+    const { data: selfHit } = await sb
+      .from('phone_numbers')
+      .select('number, label')
+      .eq('number', to)
+      .eq('active', true)
+      .maybeSingle()
+    if (selfHit) {
+      return new Response(JSON.stringify({
+        error: 'recipient_is_our_own_number',
+        details: `Cannot text our own sender line (${selfHit.label || to}). Check the thread's destination phone.`,
+      }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+
+    // ────────────────────────────────────────────────────────────────────
     // Refuse-list checks. Two gates, both keyed on the recipient phone:
     //   1. DND          — contacts.do_not_text=true (manual flag or STOP)
     //   2. Phone status — contacts.phone_status IN ('wrong_number','disconnected')
@@ -232,6 +256,8 @@ Deno.serve(async (req) => {
     // the X-Twilio-Signature so forged callbacks can't lie about delivery.
     const statusCallbackUrl = `${supabaseUrl}/functions/v1/twilio-sms-status`
     let lastStatus = 'sent'
+    let lastErrorCode: string | null = null
+    let lastErrorMessage: string | null = null
 
     for (let i = 0; i < segments.length; i++) {
       const twilioRes = await fetch(twilioUrl, {
@@ -260,12 +286,32 @@ Deno.serve(async (req) => {
           }
 
       await sb.from('messages_outbound').update(updateFields).eq('id', insertedIds[i])
-      if (!twilioRes.ok) lastStatus = 'failed'
+      if (!twilioRes.ok) {
+        lastStatus = 'failed'
+        lastErrorCode = String(twilioData.code ?? '')
+        lastErrorMessage = twilioData.message ?? 'Unknown Twilio error'
+      }
     }
 
+    // Bug 1 fix (2026-06-05): surface Twilio failure as HTTP 502 so the
+    // mobile/web UI's `if (!res.ok)` catch path fires and shows the real
+    // error instead of fake "Sent". Row is already marked status='failed'
+    // above so the Comms history reflects reality. Successful sends still
+    // return 200 with status='sent'.
+    const httpStatus = lastStatus === 'failed' ? 502 : 200
     return new Response(
-      JSON.stringify({ id: insertedIds[0], ids: insertedIds, parts: segments.length, status: lastStatus }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      JSON.stringify({
+        id: insertedIds[0],
+        ids: insertedIds,
+        parts: segments.length,
+        status: lastStatus,
+        ...(lastStatus === 'failed' ? {
+          error: 'twilio_rejected',
+          error_code: lastErrorCode,
+          details: lastErrorMessage,
+        } : {}),
+      }),
+      { status: httpStatus, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 
   } catch (err) {
