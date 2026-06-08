@@ -525,6 +525,8 @@ export default function TeamThreadScreen() {
             data={msgs}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             onContentSizeChange={() =>
               listRef.current?.scrollToEnd({ animated: false })
             }

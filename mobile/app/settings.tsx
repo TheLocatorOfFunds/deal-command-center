@@ -33,6 +33,7 @@ import * as Application from 'expo-application'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { registerForPushAsync } from '../lib/push'
+import { KEYBOARD_DONE_ID, KeyboardDoneBar } from '../components/KeyboardDoneBar'
 
 type NotificationPrefs = {
   sms: boolean
@@ -246,7 +247,11 @@ export default function SettingsScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           {loading ? (
             <View style={styles.loading}>
               <ActivityIndicator color="#d97706" />
@@ -301,6 +306,9 @@ export default function SettingsScreen() {
                   placeholderTextColor="#78716c"
                   keyboardType="phone-pad"
                   editable={!saving}
+                  inputAccessoryViewID={
+                    Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined
+                  }
                 />
                 <Text style={styles.hint}>
                   When you tap-to-call from a deal, Twilio rings this number.
@@ -452,6 +460,7 @@ export default function SettingsScreen() {
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+      <KeyboardDoneBar />
     </SafeAreaView>
   )
 }

@@ -18,8 +18,10 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -31,6 +33,7 @@ import { Stack, useRouter } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
+import { KEYBOARD_DONE_ID, KeyboardDoneBar } from '../../components/KeyboardDoneBar'
 
 type ContactHit = {
   id: string
@@ -165,7 +168,11 @@ export default function QuickCallScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.body}>
+        <Pressable
+          onPress={Keyboard.dismiss}
+          style={styles.body}
+          accessible={false}
+        >
           <Text style={styles.label}>Search contacts</Text>
           <TextInput
             style={styles.input}
@@ -176,6 +183,7 @@ export default function QuickCallScreen() {
             autoFocus
             autoCapitalize="words"
             editable={!busy}
+            returnKeyType="search"
           />
           {searching && (
             <View style={styles.searchingRow}>
@@ -241,6 +249,7 @@ export default function QuickCallScreen() {
             placeholderTextColor="#78716c"
             keyboardType="phone-pad"
             editable={!busy}
+            inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
           />
           <TouchableOpacity
             style={[
@@ -258,8 +267,9 @@ export default function QuickCallScreen() {
             Calls connect in-app over the FundLocators line. The other party
             sees the business number (513-998-5440) as caller ID.
           </Text>
-        </View>
+        </Pressable>
       </KeyboardAvoidingView>
+      <KeyboardDoneBar />
     </SafeAreaView>
   )
 }

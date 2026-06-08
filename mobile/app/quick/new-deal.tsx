@@ -105,7 +105,11 @@ export default function QuickNewDealScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView
+          contentContainerStyle={styles.body}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
           <Text style={styles.label}>Type</Text>
           <View style={styles.typeRow}>
             {TYPES.map((t) => (

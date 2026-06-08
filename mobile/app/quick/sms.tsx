@@ -13,12 +13,11 @@ import { useEffect, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
-  InputAccessoryView,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -26,17 +25,13 @@ import {
   View,
 } from 'react-native'
 import { SafeAreaView } from 'react-native-safe-area-context'
-import { Stack, useRouter } from 'expo-router'
+import { Stack, useRouter, useLocalSearchParams } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../../lib/supabase'
+import { KEYBOARD_DONE_ID, KeyboardDoneBar } from '../../components/KeyboardDoneBar'
 
 const SEND_SMS_URL =
   'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/send-sms'
-
-// inputAccessoryViewID for the Done toolbar above the phone-pad keyboard.
-// iOS only — Android ignores InputAccessoryView. Static string is fine
-// since there's only one accessory view on this screen.
-const KEYBOARD_DONE_ID = 'quickSmsDone'
 
 type ContactHit = {
   id: string
@@ -48,13 +43,21 @@ type ContactHit = {
 
 export default function QuickSmsScreen() {
   const router = useRouter()
+  // Allow deep-linking from deal contact rows (#287 Tap-to-text):
+  //   /quick/sms?to=+15551234567&contactId=...&dealId=...
+  const params = useLocalSearchParams<{ to?: string; contactId?: string; dealId?: string }>()
   const [search, setSearch] = useState('')
   const [hits, setHits] = useState<ContactHit[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searchedTerm, setSearchedTerm] = useState<string>('')
-  const [phone, setPhone] = useState('')
-  const [contactId, setContactId] = useState<string | null>(null)
+  const [phone, setPhone] = useState(typeof params.to === 'string' ? params.to : '')
+  const [contactId, setContactId] = useState<string | null>(
+    typeof params.contactId === 'string' ? params.contactId : null,
+  )
+  const [dealId] = useState<string | null>(
+    typeof params.dealId === 'string' ? params.dealId : null,
+  )
   const [body, setBody] = useState('')
   const [busy, setBusy] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -127,6 +130,7 @@ export default function QuickSmsScreen() {
           to: targetPhone,
           body: targetBody,
           contact_id: contactId,
+          deal_id: dealId,
         }),
       })
       const payload = await res.json().catch(() => ({}))
@@ -168,16 +172,28 @@ export default function QuickSmsScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         {/*
-          Pressable wrapper: tap any non-input area to dismiss the keyboard.
-          Critical because the phone-pad keyboard (iOS) has no Return key,
-          so without this the keyboard stays up forever and can cover Send.
-          accessible={false} keeps the wrapper transparent to assistive tech.
+          ScrollView wraps the whole form so the user can scroll if the
+          keyboard hides bottom content. Combined with the Pressable below,
+          tap-anywhere-outside dismisses; swipe-down on the scroll content
+          ALSO dismisses (keyboardDismissMode="on-drag").
+
+          The form below the search results is HIDDEN while the user has
+          active hits — so the search results aren't pushed off-screen by
+          the keyboard while the user is mid-pick (#289). Once they pick
+          a contact (or clear the search), the form reappears with the
+          phone pre-filled.
         */}
-        <Pressable
-          onPress={Keyboard.dismiss}
-          style={styles.body}
-          accessible={false}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={styles.body}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
         >
+          <Pressable
+            onPress={Keyboard.dismiss}
+            style={{ flex: 1, gap: 8 }}
+            accessible={false}
+          >
           <Text style={styles.label}>Search contacts</Text>
           <TextInput
             style={styles.input}
@@ -207,15 +223,12 @@ export default function QuickSmsScreen() {
             </Text>
           )}
           {hits.length > 0 && (
-            <FlatList
-              data={hits}
-              keyExtractor={(h) => h.id}
-              keyboardShouldPersistTaps="handled"
-              style={{ marginTop: 4, maxHeight: 180 }}
-              renderItem={({ item }) => {
+            <View style={{ marginTop: 4 }}>
+              {hits.map((item) => {
                 const ok = !!item.phone && !item.do_not_text
                 return (
                   <TouchableOpacity
+                    key={item.id}
                     style={styles.hit}
                     activeOpacity={ok ? 0.6 : 1}
                     disabled={!ok}
@@ -242,81 +255,80 @@ export default function QuickSmsScreen() {
                     )}
                   </TouchableOpacity>
                 )
-              }}
-            />
+              })}
+            </View>
           )}
 
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>or type a number</Text>
-            <View style={styles.dividerLine} />
-          </View>
+          {/*
+            The compose half of the screen — hidden while search has hits or
+            is loading, so the keyboard doesn't push results off-screen during
+            an active contact pick (#289). Reappears once user clears search
+            or picks a contact (which clears hits and fills phone).
+          */}
+          {hits.length === 0 && !searching && (
+            <>
+              <View style={styles.divider}>
+                <View style={styles.dividerLine} />
+                <Text style={styles.dividerText}>or type a number</Text>
+                <View style={styles.dividerLine} />
+              </View>
 
-          <Text style={styles.label}>To</Text>
-          <TextInput
-            style={styles.phoneInput}
-            value={phone}
-            onChangeText={(v) => {
-              setPhone(v)
-              setContactId(null)
-            }}
-            placeholder="(513) 555-0100"
-            placeholderTextColor="#78716c"
-            keyboardType="phone-pad"
-            editable={!busy}
-            inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
-          />
+              <Text style={styles.label}>To</Text>
+              <TextInput
+                style={styles.phoneInput}
+                value={phone}
+                onChangeText={(v) => {
+                  setPhone(v)
+                  setContactId(null)
+                }}
+                placeholder="(513) 555-0100"
+                placeholderTextColor="#78716c"
+                keyboardType="phone-pad"
+                editable={!busy}
+                inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
+              />
 
-          <Text style={styles.label}>Message</Text>
-          <TextInput
-            style={styles.bodyInput}
-            value={body}
-            onChangeText={setBody}
-            placeholder="Type your message…"
-            placeholderTextColor="#78716c"
-            multiline
-            editable={!busy}
-            textAlignVertical="top"
-            inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
-          />
-          <Text style={styles.charCount}>
-            {charCount} chars
-            {segments > 1 ? ` · sends as ${segments} texts` : ''}
-          </Text>
+              <Text style={styles.label}>Message</Text>
+              <TextInput
+                style={styles.bodyInput}
+                value={body}
+                onChangeText={setBody}
+                placeholder="Type your message…"
+                placeholderTextColor="#78716c"
+                multiline
+                editable={!busy}
+                textAlignVertical="top"
+                inputAccessoryViewID={Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined}
+              />
+              <Text style={styles.charCount}>
+                {charCount} chars
+                {segments > 1 ? ` · sends as ${segments} texts` : ''}
+              </Text>
 
-          <TouchableOpacity
-            style={[
-              styles.button,
-              (!phone.trim() || !body.trim() || busy) && styles.buttonDisabled,
-            ]}
-            onPress={send}
-            disabled={!phone.trim() || !body.trim() || busy}
-          >
-            <Text style={styles.buttonText}>
-              {busy ? 'Sending…' : 'Send'}
-            </Text>
-          </TouchableOpacity>
-        </Pressable>
+              <TouchableOpacity
+                style={[
+                  styles.button,
+                  (!phone.trim() || !body.trim() || busy) && styles.buttonDisabled,
+                ]}
+                onPress={send}
+                disabled={!phone.trim() || !body.trim() || busy}
+              >
+                <Text style={styles.buttonText}>
+                  {busy ? 'Sending…' : 'Send'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+          </Pressable>
+        </ScrollView>
       </KeyboardAvoidingView>
 
       {/*
-        Done toolbar above the keyboard — the only way to dismiss the iOS
-        phone-pad keyboard (it has no Return key). Multiline text input
-        also routes through here so a single behavior dismisses any field.
-        iOS-only; Android keyboards have a hardware Back to dismiss.
+        Done bar above the iOS keyboard. Shared component used app-wide
+        (#286). Rendered once per screen; the inputAccessoryViewID on each
+        TextInput hooks them to this bar.
       */}
-      {Platform.OS === 'ios' && (
-        <InputAccessoryView nativeID={KEYBOARD_DONE_ID}>
-          <View style={styles.accessoryBar}>
-            <TouchableOpacity
-              onPress={Keyboard.dismiss}
-              hitSlop={{ top: 10, bottom: 10, left: 20, right: 20 }}
-            >
-              <Text style={styles.accessoryDone}>Done</Text>
-            </TouchableOpacity>
-          </View>
-        </InputAccessoryView>
-      )}
+      <KeyboardDoneBar />
     </SafeAreaView>
   )
 }

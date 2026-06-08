@@ -304,6 +304,8 @@ export default function ThreadScreen() {
             data={msgs}
             keyExtractor={(m) => m.id}
             contentContainerStyle={styles.list}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             onContentSizeChange={() =>
               listRef.current?.scrollToEnd({ animated: false })
             }

@@ -3,7 +3,13 @@
  * across LeadConnector, HubSpot, Pipedrive, Salesforce, Close, and
  * Twilio Frontline (see memory/mobile_app_plan.md).
  *
- *   Inbox · Deals · Lauren · Team
+ *   Inbox · Leads · Lauren · Team
+ *
+ * "Leads" replaces the earlier "Deals" label per #290 (2026-06-08) — the
+ * tab holds both pre-contract leads AND under-contract deals AND closed
+ * deals AND deleted leads. "Deals" was misleading because it implied
+ * only the under-contract subset. See LABELS.md for the canonical UI
+ * label mapping that BOTH web and mobile follow.
  *
  * The center "⊕ Quick" FAB is intentionally NOT a tab yet — adding it
  * means a custom tabBarButton override, which we'll land as a follow-up
@@ -59,8 +65,11 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="deals"
         options={{
-          title: 'Deals',
-          tabBarLabel: 'Deals',
+          // Tab label is "Leads" per #290 (IA rename 2026-06-08). The file
+          // is still deals.tsx and the route is /deals — renaming the route
+          // would break deep-links from notifications. UI label only.
+          title: 'Leads',
+          tabBarLabel: 'Leads',
           tabBarIcon: icon('briefcase'),
         }}
       />

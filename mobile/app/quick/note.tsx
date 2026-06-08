@@ -18,8 +18,10 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   Text,
   TextInput,
@@ -137,7 +139,11 @@ export default function QuickNoteScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         {!selected ? (
-          <View style={styles.body}>
+          <Pressable
+            onPress={Keyboard.dismiss}
+            style={styles.body}
+            accessible={false}
+          >
             <Text style={styles.label}>Find the deal</Text>
             <TextInput
               style={styles.input}
@@ -181,9 +187,13 @@ export default function QuickNoteScreen() {
                 </TouchableOpacity>
               )}
             />
-          </View>
+          </Pressable>
         ) : (
-          <View style={styles.body}>
+          <Pressable
+            onPress={Keyboard.dismiss}
+            style={styles.body}
+            accessible={false}
+          >
             <Text style={styles.label}>Deal</Text>
             <TouchableOpacity
               style={styles.selectedPill}
@@ -228,7 +238,7 @@ export default function QuickNoteScreen() {
                 {busy ? 'Saving…' : 'Save note'}
               </Text>
             </TouchableOpacity>
-          </View>
+          </Pressable>
         )}
       </KeyboardAvoidingView>
     </SafeAreaView>

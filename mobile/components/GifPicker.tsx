@@ -238,6 +238,7 @@ export function GifPicker({
             numColumns={3}
             contentContainerStyle={styles.grid}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             onEndReachedThreshold={0.5}
             onEndReached={loadMore}
             ListFooterComponent={
