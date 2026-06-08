@@ -69,7 +69,7 @@ inform the chip / badge / status-bar labels on both surfaces.
 | 1 | 📌 | Today | (none) | Daily dashboard |
 | 2 | 🎯 | Automations | outreach / inbox / leads / forecast | Hub |
 | 3 | 💬 | Comms | communications / inbox | Hub |
-| 4 | 🏠 | Leads | new / deals / closed / deleted / pipeline | **Hub. Renamed from "Deals" 2026-06-08 (#290). See sub-tab table below.** |
+| 4 | 🏠 | Leads | new / deals / closed / awaiting / deleted / pipeline | **Hub. Renamed from "Deals" 2026-06-08 (#290). See sub-tab table below.** |
 | 5 | ✅ | Tasks | (none) | |
 | 6 | 📞 | Follow-ups | (none) | |
 | 7 | ⏱ | Time | (none) | Admin only |
@@ -78,15 +78,16 @@ inform the chip / badge / status-bar labels on both surfaces.
 
 ### Sidebar entry #4 sub-tabs (the `🏠 Leads` hub)
 
-Tab order MUST be: New → Deals → Closed → Deleted → Pipeline.
+Tab order: New → Deals → Closed → (⏳ Awaiting check) → Deleted → 🧭 Kanban.
 
 | Order | Chip id | Label | DB filter | Notes |
 |---|---|---|---|---|
 | 1 | `leads-phase` | New | `status` in {`lead`, `new-lead`} | Pre-contract leads |
-| 2 | `active` | Deals | Everything not in New, Closed, or Deleted | Active engaged work |
-| 3 | `archive` | Closed | Flip: `status='closed'`. Surplus Phase 1: `status='recovered'`. Surplus Phase 2 (#291 dependency): `status='recovered'` AND `meta.collectedAmount IS NOT NULL` | Real closed-and-paid only, NEVER dead |
-| 4 | `deleted` | Deleted | `status='dead'` | New tab. Was previously mislabeled into Closed for surplus (#292) |
-| 5 | `pipeline` | Kanban | (renders all non-closed/deleted) | Kanban view |
+| 2 | `active` | Deals | Everything not in New, Closed, Awaiting, or Deleted | Active engaged work |
+| 3 | `archive` | Closed | Flip: `status='closed'` or `'recovered'`. Surplus: `status='recovered'` AND `meta.collectedAmount > 0` | Real closed-and-paid only, NEVER dead, NEVER awaiting |
+| 4 | `awaiting` | ⏳ Awaiting check | Surplus + `status='recovered'` + no `meta.collectedAmount` | **Transient.** Only renders when count > 0. Each row migrates to Closed once the check amount is entered via SurplusOverview "Recovery (post-close)" input (#297) |
+| 5 | `deleted` | Deleted | `status='dead'` | Previously mislabeled into Closed for surplus (#292) |
+| 6 | `pipeline` | 🧭 Kanban | (renders all non-closed/deleted) | Kanban view |
 
 **Dropped tabs (do NOT re-add):**
 - `flagged` (⚑ Flagged) — dropped 2026-06-08 per #290
