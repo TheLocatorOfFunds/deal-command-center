@@ -245,6 +245,12 @@ build confirm its commit via `eas build:list` matches your HEAD before submittin
 
 ## Top-level views (current sidebar, top → bottom)
 
+**Source of truth for label strings:** [`LABELS.md`](./LABELS.md) at repo
+root. Web and mobile don't share JS code today (#294), so any time you
+rename a chip / tab / status label, update `LABELS.md` + `src/app.jsx` +
+the matching `mobile/` file in the same commit. The DB enum values do
+NOT change with renames.
+
 Several sidebar entries are **hubs** — one nav item whose second-level chip bar
 switches between sibling sub-views (see `groupBtn`/`chipBtn` in `src/app.jsx` ~line 3032).
 
