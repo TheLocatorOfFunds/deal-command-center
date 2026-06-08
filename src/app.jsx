@@ -19169,6 +19169,30 @@ function QuickNotes({ dealId, userId, userName, onJumpToTab }) {
   );
 }
 
+// Translate the generate-case-summary EF's error envelope into a plain-English
+// cause. The EF returns {error:'Claude API failed', detail:'<raw Anthropic
+// error JSON>'} on ANY non-OK Anthropic response — so the bare "Claude API
+// failed" hid that on 2026-06-05 the real cause was the Anthropic account
+// running out of prepaid credits (a billing issue, not a code bug). Surface the
+// real reason so the next outage is diagnosable at a glance instead of looking
+// like a broken feature.
+const interpretAiError = (errMsg, detail) => {
+  let inner = '';
+  try { inner = JSON.parse(detail || '')?.error?.message || ''; } catch {}
+  const hay = ((errMsg || '') + ' ' + (detail || '')).toLowerCase();
+  if (/credit balance|too low|purchase credits|plans & billing/.test(hay))
+    return 'Anthropic credits exhausted — AI features are paused. Add credits at console.anthropic.com → Billing and they resume automatically (no redeploy needed).';
+  if (/anthropic_api_key missing/.test(hay))
+    return 'Server is missing the Anthropic API key (Edge Function secret not set).';
+  if (/authentication|invalid x-api-key/.test(hay))
+    return 'Anthropic key rejected (auth error) — it may have been rotated or revoked.';
+  if (/rate.?limit|overloaded|\b429\b|\b529\b/.test(hay))
+    return 'Anthropic is rate-limited / overloaded right now — try again in a minute.';
+  if (/not_found_error/.test(hay) && /model/.test(hay))
+    return 'The AI model id is no longer valid — needs a code update.';
+  return inner ? ('AI error: ' + inner) : (errMsg || 'AI summary failed');
+};
+
 function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   const [docs, setDocs] = useState([]);
   const [events, setEvents] = useState([]);
@@ -19267,12 +19291,13 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
     try {
       const { data, error } = await sb.functions.invoke('generate-case-summary', { body: { deal_id: dealId } });
       if (error) {
-        let msg = error.message;
-        try { const b = await error.context?.json?.(); msg = b?.error || msg; } catch {}
-        throw new Error(msg);
+        let errName = error.message, detail = '';
+        try { const b = await error.context?.json?.(); errName = b?.error || errName; detail = b?.detail || ''; } catch {}
+        throw new Error(interpretAiError(errName, detail));
       }
       if (data?.text) setSummary({ text: data.text, generated_at: data.generated_at });
-      else throw new Error(data?.error || 'No summary returned');
+      else if (data?.error) throw new Error(interpretAiError(data.error, data.detail));
+      else throw new Error('No summary returned');
     } catch (e) { setSummaryErr(e.message); }
     setSummaryBusy(false);
   };
