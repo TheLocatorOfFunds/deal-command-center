@@ -190,6 +190,33 @@ const LEAD_STATUSES = {
 const ALL_LEAD_STATUSES = [...LEAD_STATUSES.flip, ...LEAD_STATUSES.surplus];
 const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes(deal.status);
 
+// Type-aware archival. Per LABELS.md + #292: Closed means a real
+// closed-and-paid deal; Deleted means a killed lead / dropped deal.
+// Surplus type drops 'closed' (the enum value isn't used for surplus
+// — verified prod 2026-06-08: 0 rows with type='surplus' status='closed')
+// and Phase 1 splits the 'dead' rows OUT of Closed into the future
+// Deleted tab (#290). Flip type stays as-is until evidence shows a
+// problem there too.
+// Phase 2 (#291 dependency): isClosed will further require
+// meta.collectedAmount IS NOT NULL for surplus type.
+const ARCHIVE_STATUSES_BY_TYPE = {
+  flip:    ["closed", "recovered", "dead"],
+  surplus: ["recovered", "dead"],
+};
+const DEFAULT_ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
+const isArchived = (d) => {
+  if (!d) return false;
+  const list = ARCHIVE_STATUSES_BY_TYPE[d.type] || DEFAULT_ARCHIVE_STATUSES;
+  return list.includes(d.status);
+};
+const isClosed = (d) => {
+  if (!d) return false;
+  if (d.type === "surplus") return d.status === "recovered";
+  // flip + wholesale/rental/other use both 'closed' and 'recovered' for the closed bucket
+  return d.status === "closed" || d.status === "recovered";
+};
+const isDeleted = (d) => d && d.status === "dead";
+
 // Read a homeowner phone out of deal.meta — accepts the four key variants
 // the codebase has accumulated. The personalized-URL minter (~line 10532)
 // is the most permissive reader; this helper matches it so every gate
@@ -3122,23 +3149,30 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const advancedFilterCount = countActiveAdvancedFilters(advancedFilters);
 
-  const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
-  // "Active" excludes both archived (closed/recovered/dead) AND lead-phase
-  // (pre-engagement). Lead-phase deals live under the 🌱 New Leads chip.
-  const activeDeals = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status) && !isLeadStatus(d));
-  const archivedDeals = deals.filter(d => ARCHIVE_STATUSES.includes(d.status));
-  const deadNoReason = archivedDeals.filter(d => d.status === "dead" && d.type === "surplus" && !d.meta?.dispositionReason);
+  // Archived = Closed + Deleted (the type-aware split). See module-scope
+  // helpers near LEAD_STATUSES + LABELS.md. The Closed chip renders
+  // closedDeals only; deletedDeals are reached via the 🗑 Deleted-leads
+  // modal until #290 lands the proper Deleted tab.
+  const activeDeals = deals.filter(d => !isArchived(d) && !isLeadStatus(d));
+  const archivedDeals = deals.filter(d => isArchived(d));
+  const closedDeals = deals.filter(d => isClosed(d));
+  const deletedDeals = deals.filter(d => isDeleted(d));
+  const deadNoReason = deletedDeals.filter(d => d.type === "surplus" && !d.meta?.dispositionReason);
   const leadDeals = deals.filter(d => isLeadStatus(d));
 
   // Kanban drag-and-drop: persist the new status (and stamp closed_at
-  // on close/recover, clear it on move-back-to-active).
+  // on close/recover, clear it on move-back-to-active). "Closed" here
+  // means "leaves the active board" — covers both real Closed AND
+  // Deleted, so we use isArchived for the membership check.
   const onMoveDeal = (id, prev, next) => {
     const patch = { status: next };
     const d = deals.find(x => x.id === id);
-    const wasClosed = ARCHIVE_STATUSES.includes(prev);
-    const isClosedNow = ARCHIVE_STATUSES.includes(next);
-    if (isClosedNow && !wasClosed && !(d && d.closed_at)) patch.closed_at = new Date().toISOString();
-    if (!isClosedNow && wasClosed) patch.closed_at = null;
+    const prevDeal = { ...(d || {}), status: prev };
+    const nextDeal = { ...(d || {}), status: next };
+    const wasArchived = isArchived(prevDeal);
+    const isArchivedNow = isArchived(nextDeal);
+    if (isArchivedNow && !wasArchived && !(d && d.closed_at)) patch.closed_at = new Date().toISOString();
+    if (!isArchivedNow && wasArchived) patch.closed_at = null;
     onUpdateDeal(id, patch);
   };
   const flaggedDeals = deals.filter(d => d.meta?.flagged);
@@ -3146,7 +3180,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const allStatuses = [...new Set([...DEAL_STATUSES.flip, ...DEAL_STATUSES.surplus])];
 
   const preFiltered =
-    view === "archive"      ? archivedDeals :
+    view === "archive"      ? closedDeals :
+    view === "deleted"      ? deletedDeals :
     view === "flagged"      ? flaggedDeals :
     view === "leads-phase"  ? leadDeals :
     activeDeals;
@@ -3357,14 +3392,14 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           <PortfolioStat label="Active Pipeline" value={pipeline.length} sub={`${activeDeals.filter(d => d.type === "flip").length} flips · ${activeDeals.filter(d => d.type === "surplus").length} surplus`} color="#3b82f6" />
           <PortfolioStat label="Flagged" value={flaggedDeals.length} sub={flaggedDeals.length ? "needs review" : "none flagged"} color={flaggedDeals.length ? "#f59e0b" : "#78716c"} />
           {isAdmin && <PortfolioStat label="Estimated Profit" value={fmt(estProfit)} sub={`${fmt(estFlipProfit)} flips · ${fmt(estSurplusProfit)} surplus`} color="#f59e0b" />}
-          <PortfolioStat label="Closed Deals" value={archivedDeals.length} sub={`${archivedDeals.filter(d=>d.status==="dead").length} dead · ${archivedDeals.filter(d=>d.status!=="dead").length} won`} color="#a8a29e" />
+          <PortfolioStat label="Closed Deals" value={closedDeals.length} sub={`${deletedDeals.length} deleted · ${closedDeals.length} won`} color="#a8a29e" />
         </div>
        </div>
       )}
 
       {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads +
           Recently Hidden. Only shown on deal-list views. */}
-      {["active","flagged","hygiene","archive","pipeline","leads-phase"].includes(view) && (
+      {["active","flagged","hygiene","archive","deleted","pipeline","leads-phase"].includes(view) && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
           {isAdmin && (
             <button
@@ -3423,17 +3458,18 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("forecast", "📅 Forecast")}
         </div>
       )}
-      {["active", "flagged", "hygiene", "archive", "pipeline", "leads-phase"].includes(view) && (
+      {["active", "flagged", "hygiene", "archive", "deleted", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
           {chipBtn("leads-phase", `🌱 New Leads${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
           {chipBtn("active", `Active${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
           {chipBtn("flagged", `⚑ Flagged${flaggedDeals.length ? ` (${flaggedDeals.length})` : ""}`)}
           {chipBtn("hygiene", "🩺 Hygiene")}
-          {chipBtn("archive", `Closed${archivedDeals.length ? ` (${archivedDeals.length})` : ""}`)}
+          {chipBtn("archive", `Closed${closedDeals.length ? ` (${closedDeals.length})` : ""}`)}
+          {chipBtn("deleted", `🗑 Deleted${deletedDeals.length ? ` (${deletedDeals.length})` : ""}`)}
           {chipBtn("pipeline", "🧭 Kanban")}
         </div>
       )}
-      {view === "archive" && deadNoReason.length > 0 && (
+      {view === "deleted" && deadNoReason.length > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "#fca5a5", fontWeight: 700 }}>🪦 {deadNoReason.length} dead surplus lead{deadNoReason.length !== 1 ? "s" : ""} have no reason recorded</span>
           <button onClick={() => setDeadReasonFilter(deadReasonFilter === "missing" ? "all" : "missing")} style={{
@@ -12832,9 +12868,12 @@ function WebTrafficView() {
 // ─── Analytics View ─────────────────────────────────────────────
 function AnalyticsView({ deals, onSelect }) {
   const now = new Date();
-  const ARCHIVE_STATUSES = ["closed", "recovered", "dead"];
-  const active = deals.filter(d => !ARCHIVE_STATUSES.includes(d.status));
-  const closed = deals.filter(d => d.status === "closed" || d.status === "recovered");
+  // Active excludes the type-aware archive (closed + deleted). Helpers
+  // live near LEAD_STATUSES. The Analytics "closed" set explicitly uses
+  // isClosed so surplus type drops 'closed' (not used) and stays tight
+  // on 'recovered' only.
+  const active = deals.filter(d => !isArchived(d));
+  const closed = deals.filter(d => isClosed(d));
 
   // ── Cash Flow Forecast: next 6 months ──
   const forecast = [];
