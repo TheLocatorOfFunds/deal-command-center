@@ -30,6 +30,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { Stack } from 'expo-router'
 import Constants from 'expo-constants'
 import * as Application from 'expo-application'
+import * as Updates from 'expo-updates'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { registerForPushAsync } from '../lib/push'
@@ -63,6 +64,45 @@ export default function SettingsScreen() {
   const [saving, setSaving] = useState(false)
   const [registering, setRegistering] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // OTA-update state. expo-updates publishes through the EAS channel
+  // configured in the build profile (preview / adhoc → "preview"). Tapping
+  // the button below runs the standard check → fetch → reload sequence.
+  // In a dev client the API throws; we surface that as a friendly message
+  // instead of an obscure stack trace.
+  const [updateCheck, setUpdateCheck] = useState<{
+    status: 'idle' | 'checking' | 'downloading' | 'reloading' | 'up_to_date' | 'error'
+    message?: string
+  }>({ status: 'idle' })
+  const checkForUpdates = async () => {
+    if (updateCheck.status === 'checking' || updateCheck.status === 'downloading') return
+    setUpdateCheck({ status: 'checking' })
+    try {
+      if (__DEV__ || !Updates.isEnabled) {
+        setUpdateCheck({
+          status: 'error',
+          message: 'OTA updates only run in release builds (preview / production).',
+        })
+        return
+      }
+      const result = await Updates.checkForUpdateAsync()
+      if (!result.isAvailable) {
+        setUpdateCheck({ status: 'up_to_date', message: 'You\'re on the latest.' })
+        return
+      }
+      setUpdateCheck({ status: 'downloading' })
+      await Updates.fetchUpdateAsync()
+      setUpdateCheck({ status: 'reloading' })
+      // Brief pause so the user sees the "Reloading…" copy before the app restarts.
+      setTimeout(() => {
+        Updates.reloadAsync().catch(() => {})
+      }, 500)
+    } catch (e) {
+      setUpdateCheck({
+        status: 'error',
+        message: e instanceof Error ? e.message : 'Update check failed',
+      })
+    }
+  }
 
   const refreshProfile = async () => {
     if (!userId) return
@@ -405,6 +445,55 @@ export default function SettingsScreen() {
                   onChange={(v) => togglePref('team', v)}
                   last
                 />
+              </View>
+
+              {/* OTA updates. OTA channel for preview/adhoc builds is "preview"
+                  (per eas.json). When a `eas update --channel preview` is
+                  published, this button picks it up without going through
+                  TestFlight/native rebuild. */}
+              <Text style={styles.sectionLabel}>App updates</Text>
+              <View style={styles.section}>
+                <Text style={styles.hint}>
+                  Check for the latest JS-only update (no TestFlight install
+                  needed). Native changes still require a new build.
+                </Text>
+                <TouchableOpacity
+                  style={[
+                    styles.saveBtn,
+                    (updateCheck.status === 'checking' ||
+                      updateCheck.status === 'downloading' ||
+                      updateCheck.status === 'reloading') &&
+                      styles.saveBtnDisabled,
+                  ]}
+                  onPress={checkForUpdates}
+                  disabled={
+                    updateCheck.status === 'checking' ||
+                    updateCheck.status === 'downloading' ||
+                    updateCheck.status === 'reloading'
+                  }
+                >
+                  <Text style={styles.saveBtnText}>
+                    {updateCheck.status === 'checking'
+                      ? 'Checking…'
+                      : updateCheck.status === 'downloading'
+                        ? 'Downloading…'
+                        : updateCheck.status === 'reloading'
+                          ? 'Reloading…'
+                          : 'Check for updates'}
+                  </Text>
+                </TouchableOpacity>
+                {updateCheck.message ? (
+                  <Text
+                    style={[
+                      styles.hint,
+                      { marginTop: 8 },
+                      updateCheck.status === 'error' && { color: '#fca5a5' },
+                      updateCheck.status === 'up_to_date' && { color: '#6ee7b7' },
+                    ]}
+                  >
+                    {updateCheck.message}
+                  </Text>
+                ) : null}
               </View>
 
               <TouchableOpacity

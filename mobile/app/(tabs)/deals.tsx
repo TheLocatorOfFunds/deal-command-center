@@ -20,7 +20,6 @@ import {
   ActivityIndicator,
   FlatList,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -261,14 +260,13 @@ export default function DealsScreen() {
 
         {/*
           Chip strip. Mirrors web sidebar #4 sub-tabs (LABELS.md §3).
-          Horizontally scrollable so a 5th chip (Awaiting) fits on smaller
-          phones without crowding.
+          Uses View + flexWrap instead of a horizontal ScrollView — the
+          ScrollView form rendered chips compressed-to-zero on Build 30/31
+          (root cause: a horizontal ScrollView in a flex column parent loses
+          intrinsic child width on iOS). This matches the proven-working
+          pattern from quick/new-deal.tsx's type chip row.
         */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipStrip}
-        >
+        <View style={styles.chipStrip}>
           {chips.map((chip) => {
             const active = phase === chip.id
             return (
@@ -292,7 +290,7 @@ export default function DealsScreen() {
               </TouchableOpacity>
             )
           })}
-        </ScrollView>
+        </View>
 
         <View style={styles.searchRow}>
           <TextInput
@@ -403,11 +401,11 @@ const styles = StyleSheet.create({
   },
   signOutText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
   chipStrip: {
-    // NB: do NOT set flexDirection: 'row' here. A horizontal ScrollView already
-    // arranges children in a row; the explicit flex-row on contentContainerStyle
-    // interacts with gap + horizontal scrolling such that chips lose their
-    // intrinsic width and compress to fit the visible viewport, making them
-    // unreadable on iPhone (the bug Justin reported on Build 30, 2026-06-08).
+    // Flex-wrap row, like quick/new-deal.tsx (where the same chip
+    // pattern works correctly on iPhone). Build 30/31 used a horizontal
+    // ScrollView which compressed chips to unreadability — discarded.
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     paddingHorizontal: 14,
     paddingTop: 10,
     paddingBottom: 4,
@@ -415,15 +413,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
     borderRadius: 999,
     backgroundColor: '#1c1917',
     borderColor: '#292524',
     borderWidth: 1,
   },
   chipActive: { backgroundColor: '#d97706', borderColor: '#d97706' },
-  chipText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  chipText: { color: '#a8a29e', fontSize: 13, fontWeight: '600' },
   chipTextActive: { color: '#0c0a09' },
   searchRow: {
     paddingHorizontal: 14,
