@@ -1732,7 +1732,15 @@ function DealCommandCenter({ session, profile }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const loadTeam = async () => {
-    const { data } = await sb.from('profiles').select('name').order('name');
+    // Team members ONLY (admin / user / va). The profiles table has rows
+    // for every client + attorney + lead-signup as well — those must never
+    // appear in assignee pickers, owner pickers, or the assignee filter.
+    // Justin 2026-06-08.
+    const { data } = await sb
+      .from('profiles')
+      .select('name, role')
+      .in('role', ['admin', 'user', 'va'])
+      .order('name');
     if (data) setTeamMembers(data.map(d => d.name));
   };
   const loadRecentActivity = async () => {
