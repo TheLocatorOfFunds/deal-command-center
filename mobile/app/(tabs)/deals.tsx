@@ -403,11 +403,16 @@ const styles = StyleSheet.create({
   },
   signOutText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
   chipStrip: {
+    // NB: do NOT set flexDirection: 'row' here. A horizontal ScrollView already
+    // arranges children in a row; the explicit flex-row on contentContainerStyle
+    // interacts with gap + horizontal scrolling such that chips lose their
+    // intrinsic width and compress to fit the visible viewport, making them
+    // unreadable on iPhone (the bug Justin reported on Build 30, 2026-06-08).
     paddingHorizontal: 14,
     paddingTop: 10,
     paddingBottom: 4,
     gap: 6,
-    flexDirection: 'row',
+    alignItems: 'center',
   },
   chip: {
     paddingHorizontal: 12,

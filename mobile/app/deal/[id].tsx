@@ -14,16 +14,20 @@
  * mid-call and the call auto-logs to `activity`.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
   Image,
+  Keyboard,
+  KeyboardAvoidingView,
   Linking,
+  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native'
@@ -35,6 +39,7 @@ import { useAuth } from '../../lib/auth'
 import { placeCall, saveUserCellPhone } from '../../lib/dial'
 import { markDealRead } from '../../lib/notifications'
 import { OutreachDraftPanel } from '../../components/OutreachDraftPanel'
+import { KEYBOARD_DONE_ID, KeyboardDoneBar } from '../../components/KeyboardDoneBar'
 
 type Deal = {
   id: string
@@ -126,7 +131,21 @@ type CommsItem = {
   media_url?: string | null
   recording_url?: string | null
   recording_duration?: number | null
+  contact_id?: string | null
+  to_number?: string | null
+  from_number?: string | null
   at: string
+}
+
+// Normalize a phone string to digits-only E.164-ish form so we can match
+// rows in messages_outbound (which may store "+15135551234") against the
+// contact phone we have on the deal (which may be "(513) 555-1234").
+function normalizePhone(p: string | null | undefined): string {
+  if (!p) return ''
+  const digits = p.replace(/\D/g, '')
+  if (digits.length === 10) return '+1' + digits
+  if (digits.length === 11 && digits.startsWith('1')) return '+' + digits
+  return digits ? '+' + digits : ''
 }
 
 export default function DealDetailScreen() {
@@ -184,22 +203,25 @@ export default function DealDetailScreen() {
         .eq('deal_id', id)
         .order('created_at', { ascending: false })
         .limit(25),
-      // Last 10 SMS for this deal
+      // SMS for this deal — bumped to 100 so per-contact threads have depth
+      // once the inline Comms section filters by selected contact.
       supabase
         .from('messages_outbound')
-        .select('id, direction, body, status, thread_key, media_url, created_at')
+        .select(
+          'id, direction, body, status, thread_key, media_url, contact_id, to_number, from_number, created_at',
+        )
         .eq('deal_id', id)
         .order('created_at', { ascending: false })
-        .limit(10),
-      // Last 10 calls for this deal
+        .limit(100),
+      // Calls for this deal — same bump + add phone columns for filtering.
       supabase
         .from('call_logs')
         .select(
-          'id, direction, status, duration_seconds, thread_key, started_at, ended_at, recording_url, recording_duration',
+          'id, direction, status, duration_seconds, thread_key, contact_id, to_number, from_number, started_at, ended_at, recording_url, recording_duration',
         )
         .eq('deal_id', id)
         .order('started_at', { ascending: false })
-        .limit(10),
+        .limit(50),
       // Notes on this deal
       supabase
         .from('deal_notes')
@@ -252,6 +274,9 @@ export default function DealDetailScreen() {
       setActivity((a.data ?? []) as ActivityRow[])
 
       // Merge messages + calls into one chronological comms timeline.
+      // No slice here — the inline Comms section filters by selected contact
+      // pill, so the underlying buffer needs the full set (per Justin
+      // 2026-06-08: comms section is the primary deal-page interaction).
       const merged: CommsItem[] = []
       for (const m of (msgs.data ?? []) as Array<{
         id: string
@@ -260,6 +285,9 @@ export default function DealDetailScreen() {
         status: string | null
         thread_key: string | null
         media_url: string | null
+        contact_id: string | null
+        to_number: string | null
+        from_number: string | null
         created_at: string | null
       }>) {
         merged.push({
@@ -270,6 +298,9 @@ export default function DealDetailScreen() {
           status: m.status,
           thread_key: m.thread_key,
           media_url: m.media_url,
+          contact_id: m.contact_id,
+          to_number: m.to_number,
+          from_number: m.from_number,
           at: m.created_at ?? '',
         })
       }
@@ -279,6 +310,9 @@ export default function DealDetailScreen() {
         status: string | null
         duration_seconds: number | null
         thread_key: string | null
+        contact_id: string | null
+        to_number: string | null
+        from_number: string | null
         started_at: string | null
         recording_url: string | null
         recording_duration: number | null
@@ -291,6 +325,9 @@ export default function DealDetailScreen() {
           status: cl.status,
           duration_seconds: cl.duration_seconds,
           thread_key: cl.thread_key,
+          contact_id: cl.contact_id,
+          to_number: cl.to_number,
+          from_number: cl.from_number,
           recording_url: cl.recording_url,
           recording_duration: cl.recording_duration,
           at: cl.started_at ?? '',
@@ -299,7 +336,7 @@ export default function DealDetailScreen() {
       merged.sort(
         (x, y) => new Date(y.at).getTime() - new Date(x.at).getTime(),
       )
-      setComms(merged.slice(0, 15))
+      setComms(merged)
 
       // Hydrate note authors
       const rawNotes = (n.data ?? []) as Note[]
@@ -446,26 +483,10 @@ export default function DealDetailScreen() {
     [id],
   )
 
-  // Tap-to-text companion to dial (#287). Deep-links to /quick/sms with
-  // the phone, contactId (for proper thread_key scoping at send-sms EF
-  // level), and dealId so the resulting message lands on the right deal
-  // thread. The composer screen handles the rest (DND check, search
-  // override, send). We don't open a native sms: link because that would
-  // dial from the SIM (Justin's 6859), not Twilio 5440.
-  const textTarget = useCallback(
-    (phone: string, contactId: string | null, _displayName?: string) => {
-      if (!phone) return
-      router.push({
-        pathname: '/quick/sms',
-        params: {
-          to: phone,
-          contactId: contactId ?? undefined,
-          dealId: id,
-        },
-      } as any)
-    },
-    [id, router],
-  )
+  // Tap-to-text route deleted 2026-06-08 per Justin: the deal Comms section
+  // below now owns the texting UX. Tap a contact pill → type in the inline
+  // composer → send. No screen change. The chatbubble icon next to each
+  // ContactRow is also gone — that interaction is now redundant.
 
   if (loading) {
     return (
@@ -551,8 +572,15 @@ export default function DealDetailScreen() {
           headerTintColor: '#fafaf9',
         }}
       />
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 88 : 0}
+      >
       <ScrollView
         contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         refreshControl={
           <RefreshControl
             tintColor="#d97706"
@@ -705,7 +733,7 @@ export default function DealDetailScreen() {
         )}
 
         {/* Contacts — vendors (per-deal) + contacts (company-wide) */}
-        <Text style={styles.sectionLabel}>People · tap to call or text</Text>
+        <Text style={styles.sectionLabel}>People · tap to call</Text>
         <View style={styles.section}>
           {!hasContacts && (
             <Text style={styles.emptyText}>
@@ -720,7 +748,6 @@ export default function DealDetailScreen() {
               phone={v.phone}
               email={v.email}
               onDial={dial}
-              onText={(phone) => textTarget(phone, null, v.name ?? undefined)}
             />
           ))}
           {contactLinks.map((cl, idx) =>
@@ -740,13 +767,28 @@ export default function DealDetailScreen() {
                 doNotText={cl.contacts.do_not_text}
                 contactId={cl.contacts.id}
                 onDial={dial}
-                onText={(phone, contactId) =>
-                  textTarget(phone, contactId ?? null, cl.contacts?.name ?? undefined)
-                }
               />
             ) : null,
           )}
         </View>
+
+        {/* Inline Comms — pills (one per contact), running list of texts +
+            calls filtered by the selected pill, composer at the bottom.
+            Replaces the old read-only "Comms · last 15" tile + the
+            /quick/sms deep-link route (#287 retracted 2026-06-08).
+
+            Composer posts to send-sms EF with deal_id + contact_id so the
+            outbound row lands on the right thread; the Twilio 5440 line
+            sends, and the new row appears optimistically below pending
+            the next refresh. */}
+        <InlineDealComms
+          dealId={id ?? ''}
+          deal={deal}
+          comms={comms}
+          vendors={vendors}
+          contactLinks={contactLinks}
+          onSent={() => onRefresh()}
+        />
 
         {/* Counsel — attorneys on this deal */}
         {attorneys.length > 0 && (
@@ -1080,101 +1122,8 @@ export default function DealDetailScreen() {
           )}
         </View>
 
-        {/* Comms timeline — calls + texts merged chronologically */}
-        <Text style={styles.sectionLabel}>Comms · last 15</Text>
-        <View style={styles.section}>
-          {comms.length === 0 ? (
-            <Text style={styles.emptyText}>
-              No calls or texts on this deal yet.
-            </Text>
-          ) : (
-            comms.map((item) => {
-              const outbound = item.direction === 'outbound'
-              const isVoicemail =
-                item.kind === 'call' &&
-                !!item.recording_url &&
-                item.status === 'missed' &&
-                item.direction === 'inbound'
-              // Voicemail icon overrides the generic call icon so a glance
-              // at the timeline tells you "there's audio to listen to."
-              const Icon =
-                item.kind === 'call'
-                  ? isVoicemail
-                    ? '🎙'
-                    : '📞'
-                  : '💬'
-              const tappable = item.kind === 'sms' && !!item.thread_key
-              return (
-                <TouchableOpacity
-                  key={`${item.kind}-${item.id}`}
-                  style={styles.commsRow}
-                  disabled={!tappable}
-                  activeOpacity={tappable ? 0.6 : 1}
-                  onPress={() => {
-                    if (tappable && item.thread_key) {
-                      router.push({
-                        pathname: '/thread/[key]',
-                        params: { key: item.thread_key },
-                      })
-                    }
-                  }}
-                >
-                  <Text style={styles.commsIcon}>{Icon}</Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.commsLine} numberOfLines={2}>
-                      <Text style={styles.commsDir}>
-                        {outbound ? '→ ' : '← '}
-                      </Text>
-                      {item.kind === 'call'
-                        ? isVoicemail
-                          ? 'voicemail'
-                          : formatCall(item)
-                        : item.body || (item.media_url ? '(image)' : '(empty)')}
-                    </Text>
-                    {item.kind === 'sms' && item.media_url ? (
-                      <Image
-                        source={{ uri: item.media_url }}
-                        style={styles.commsMedia}
-                        resizeMode="cover"
-                        accessibilityLabel="MMS attachment"
-                      />
-                    ) : null}
-                    {/* Recording playback. twilio-recording EF is
-                        deployed verify_jwt=false (the RE-prefixed
-                        Twilio SID is the access token), so a plain
-                        Linking.openURL hands the MP3 to iOS Safari /
-                        the native audio sheet — works without any
-                        new audio dependency. Phase 2: inline player
-                        with expo-audio. */}
-                    {item.kind === 'call' && !!item.recording_url ? (
-                      <TouchableOpacity
-                        style={styles.recordingBtn}
-                        onPress={() =>
-                          item.recording_url &&
-                          Linking.openURL(item.recording_url)
-                        }
-                      >
-                        <Text style={styles.recordingBtnText}>
-                          ▶ Play{isVoicemail ? ' voicemail' : ' recording'}
-                          {item.recording_duration
-                            ? ` · ${formatDuration(item.recording_duration)}`
-                            : ''}
-                        </Text>
-                      </TouchableOpacity>
-                    ) : null}
-                    <Text style={styles.commsMeta}>
-                      {formatRelative(item.at)}
-                      {item.status && item.kind === 'sms' && outbound
-                        ? ` · ${item.status}`
-                        : ''}
-                    </Text>
-                  </View>
-                  {tappable && <Text style={styles.commsChev}>›</Text>}
-                </TouchableOpacity>
-              )
-            })
-          )}
-        </View>
+        {/* (Old "Comms · last 15" tile retired — InlineDealComms above
+            owns the comms feed + composer.) */}
 
         {/* Recent activity */}
         <Text style={styles.sectionLabel}>Recent activity</Text>
@@ -1195,6 +1144,8 @@ export default function DealDetailScreen() {
           )}
         </View>
       </ScrollView>
+      </KeyboardAvoidingView>
+      <KeyboardDoneBar />
     </SafeAreaView>
   )
 }
@@ -1267,6 +1218,533 @@ function renderInline(line: string, keyPrefix: string) {
   return <Text style={styles.intelText}>{parts}</Text>
 }
 
+// ─── Inline Comms section on Deal Detail ─────────────────────────────────────
+//
+// The "open a deal → see the running thread of texts + calls with the people
+// on this deal, type a reply at the bottom, hit Send" UX Justin asked for on
+// 2026-06-08. Replaces the old read-only "Comms · last 15" tile AND the
+// /quick/sms deep-link route (#287 retracted same day).
+//
+// Wiring:
+//   • Pills along the top — one per phone-having contact on the deal (vendors +
+//     contact_deals). First pill is "Everyone" (the unfiltered feed).
+//   • Tap a pill → filter the comms list to messages/calls where contact_id
+//     matches OR where to_number/from_number matches the contact's phone
+//     (normalized). Calls show up labeled; SMS show in/out bubble style.
+//   • Composer at the bottom — TextInput + Send. Send hits the send-sms EF
+//     with { to, body, contact_id, deal_id }. Tells the EF this row belongs
+//     to this deal + contact thread.
+//   • After send: optimistic local row appended; parent's onSent refetches.
+//
+// Out of scope for v1 (deferred):
+//   • Realtime subscription (rely on pull-to-refresh + optimistic insert)
+//   • MMS attachments from the composer (read existing MMS as image, but
+//     can't compose one yet — Quick SMS doesn't do this either)
+//   • Group threads (web's :group: thread_key)
+type InlineDealCommsProps = {
+  dealId: string
+  deal: Deal | null
+  comms: CommsItem[]
+  vendors: Vendor[]
+  contactLinks: ContactLink[]
+  onSent: () => void
+}
+
+type DealContactPill = {
+  contactId: string | null
+  phone: string
+  phoneNorm: string
+  name: string
+  subtitle: string
+  doNotText: boolean
+}
+
+function InlineDealComms({
+  dealId,
+  deal,
+  comms,
+  vendors,
+  contactLinks,
+  onSent,
+}: InlineDealCommsProps) {
+  // Build the pill list once per (vendors, contactLinks) change. Each entry
+  // carries everything we need to filter + send (phone in normalized form,
+  // contact_id when known, name for the label + composer hint).
+  const pills = useMemo<DealContactPill[]>(() => {
+    const out: DealContactPill[] = []
+    const seen = new Set<string>()
+    for (const cl of contactLinks) {
+      const c = cl.contacts
+      if (!c?.phone) continue
+      const norm = normalizePhone(c.phone)
+      if (!norm || seen.has(norm)) continue
+      seen.add(norm)
+      out.push({
+        contactId: c.id,
+        phone: c.phone,
+        phoneNorm: norm,
+        name: c.name ?? c.company ?? c.phone,
+        subtitle: c.company || cl.relationship || c.kind || 'contact',
+        doNotText: !!c.do_not_text,
+      })
+    }
+    for (const v of vendors) {
+      if (!v.phone) continue
+      const norm = normalizePhone(v.phone)
+      if (!norm || seen.has(norm)) continue
+      seen.add(norm)
+      out.push({
+        contactId: null,
+        phone: v.phone,
+        phoneNorm: norm,
+        name: v.name ?? v.phone,
+        subtitle: v.role ?? 'vendor',
+        doNotText: false,
+      })
+    }
+    return out
+  }, [contactLinks, vendors])
+
+  // 'everyone' = unfiltered feed. Otherwise selectedKey === pill.phoneNorm.
+  const [selectedKey, setSelectedKey] = useState<string>('everyone')
+  const [body, setBody] = useState('')
+  const [sending, setSending] = useState(false)
+
+  // Local optimistic-append buffer — rows sent in this session that haven't
+  // round-tripped through onSent → refetch yet. Cleared on next refresh
+  // because the canonical `comms` prop will then contain them.
+  const [optimistic, setOptimistic] = useState<CommsItem[]>([])
+  useEffect(() => {
+    // When the parent reloads `comms`, drop any optimistic rows whose body+
+    // direction match what's now in the canonical feed (they've landed).
+    if (!optimistic.length) return
+    const recentBodies = new Set(
+      comms.slice(0, 20).map((c) => `${c.direction}|${c.body}`),
+    )
+    setOptimistic((prev) =>
+      prev.filter((o) => !recentBodies.has(`${o.direction}|${o.body}`)),
+    )
+  }, [comms]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const selectedPill = useMemo(
+    () => pills.find((p) => p.phoneNorm === selectedKey) ?? null,
+    [pills, selectedKey],
+  )
+
+  // Filtered feed — combine optimistic rows + the canonical comms array,
+  // then narrow to the selected contact (or show everything when 'everyone'
+  // is active). Reverse to chronological (oldest → newest) for chat layout.
+  const feed = useMemo(() => {
+    const all = [...optimistic, ...comms]
+    let filtered: CommsItem[]
+    if (selectedKey === 'everyone' || !selectedPill) {
+      filtered = all
+    } else {
+      const norm = selectedPill.phoneNorm
+      const cid = selectedPill.contactId
+      filtered = all.filter((it) => {
+        if (cid && it.contact_id === cid) return true
+        const to = normalizePhone(it.to_number ?? '')
+        const from = normalizePhone(it.from_number ?? '')
+        return to === norm || from === norm
+      })
+    }
+    // Reverse to ascending order (the comms prop is desc by created_at).
+    return [...filtered].reverse()
+  }, [comms, optimistic, selectedKey, selectedPill])
+
+  const canSend =
+    !sending &&
+    !!body.trim() &&
+    !!selectedPill &&
+    !selectedPill.doNotText
+
+  const send = async () => {
+    if (!canSend || !selectedPill) return
+    const targetBody = body.trim()
+    const targetPhone = selectedPill.phone
+    const targetContactId = selectedPill.contactId
+    setSending(true)
+    try {
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      if (!token) throw new Error('Not signed in')
+      const res = await fetch(
+        'https://rcfaashkfpurkvtmsmeb.supabase.co/functions/v1/send-sms',
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            to: targetPhone,
+            body: targetBody,
+            contact_id: targetContactId,
+            deal_id: dealId,
+          }),
+        },
+      )
+      const payload = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(
+          payload.error
+            ? `${payload.error}${payload.details ? ` — ${payload.details}` : ''}`
+            : `HTTP ${res.status}`,
+        )
+      }
+      // Optimistic local row so the user sees their message land immediately
+      // without waiting for the parent's load() to round-trip. Uses a fresh
+      // synthetic id; the real row will replace it on next refresh (matched
+      // by direction+body in the useEffect above).
+      setOptimistic((prev) => [
+        ...prev,
+        {
+          kind: 'sms',
+          id: `optimistic-${prev.length}-${dealId}`,
+          direction: 'outbound',
+          body: targetBody,
+          status: 'queued',
+          contact_id: targetContactId,
+          to_number: normalizePhone(targetPhone),
+          from_number: null,
+          at: new Date(Date.parse(deal?.updated_at ?? '') || Date.now()).toISOString(),
+        },
+      ])
+      setBody('')
+      Keyboard.dismiss()
+      onSent()
+    } catch (e) {
+      Alert.alert(
+        'Send failed',
+        e instanceof Error ? e.message : 'Unknown error',
+      )
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <>
+      <Text style={styles.sectionLabel}>Comms</Text>
+      <View style={styles.section}>
+        {/* Pill row */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={commsStyles.pillStrip}
+        >
+          {[
+            { key: 'everyone', label: 'Everyone' },
+            ...pills.map((p) => ({ key: p.phoneNorm, label: p.name })),
+          ].map((chip) => {
+            const active = selectedKey === chip.key
+            return (
+              <TouchableOpacity
+                key={chip.key}
+                onPress={() => setSelectedKey(chip.key)}
+                style={[commsStyles.pill, active && commsStyles.pillActive]}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    commsStyles.pillText,
+                    active && commsStyles.pillTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {chip.label}
+                </Text>
+              </TouchableOpacity>
+            )
+          })}
+        </ScrollView>
+
+        {/* Selected contact subtitle */}
+        {selectedPill && (
+          <Text style={commsStyles.selectedHint}>
+            {selectedPill.subtitle} · {selectedPill.phone}
+            {selectedPill.doNotText ? ' · DO NOT TEXT' : ''}
+          </Text>
+        )}
+
+        {/* Running thread */}
+        {feed.length === 0 ? (
+          <Text style={commsStyles.empty}>
+            {selectedKey === 'everyone'
+              ? 'No calls or texts on this deal yet.'
+              : 'No conversation with this contact yet. Send the first one below.'}
+          </Text>
+        ) : (
+          <View style={commsStyles.feed}>
+            {feed.map((item) => {
+              const outbound = item.direction === 'outbound'
+              const isCall = item.kind === 'call'
+              const isVoicemail =
+                isCall &&
+                !!item.recording_url &&
+                item.status === 'missed' &&
+                item.direction === 'inbound'
+              return (
+                <View
+                  key={`${item.kind}-${item.id}`}
+                  style={[
+                    commsStyles.bubbleWrap,
+                    outbound
+                      ? commsStyles.bubbleWrapOut
+                      : commsStyles.bubbleWrapIn,
+                  ]}
+                >
+                  <View
+                    style={[
+                      commsStyles.bubble,
+                      outbound
+                        ? commsStyles.bubbleOut
+                        : commsStyles.bubbleIn,
+                      isCall && commsStyles.bubbleCall,
+                    ]}
+                  >
+                    {isCall ? (
+                      <Text style={commsStyles.callLine}>
+                        {outbound ? '→ ' : '← '}
+                        {isVoicemail ? '🎙 voicemail' : `📞 ${formatCall(item)}`}
+                      </Text>
+                    ) : (
+                      <Text
+                        style={
+                          outbound
+                            ? commsStyles.bubbleTextOut
+                            : commsStyles.bubbleTextIn
+                        }
+                      >
+                        {item.body || (item.media_url ? '(image)' : '(empty)')}
+                      </Text>
+                    )}
+                    {!isCall && item.media_url ? (
+                      <Image
+                        source={{ uri: item.media_url }}
+                        style={commsStyles.media}
+                        resizeMode="cover"
+                        accessibilityLabel="MMS attachment"
+                      />
+                    ) : null}
+                    {isCall && item.recording_url ? (
+                      <TouchableOpacity
+                        onPress={() =>
+                          item.recording_url &&
+                          Linking.openURL(item.recording_url)
+                        }
+                        style={commsStyles.playBtn}
+                      >
+                        <Text style={commsStyles.playBtnText}>
+                          ▶ Play{isVoicemail ? ' voicemail' : ' recording'}
+                          {item.recording_duration
+                            ? ` · ${formatDuration(item.recording_duration)}`
+                            : ''}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                  <Text style={commsStyles.bubbleMeta}>
+                    {formatRelative(item.at)}
+                    {item.status && !isCall && outbound
+                      ? ` · ${item.status}`
+                      : ''}
+                  </Text>
+                </View>
+              )
+            })}
+          </View>
+        )}
+
+        {/* Composer */}
+        <View style={commsStyles.composerWrap}>
+          {!selectedPill && (
+            <Text style={commsStyles.composerHintMuted}>
+              Tap a contact pill above to reply.
+            </Text>
+          )}
+          <View style={commsStyles.composerRow}>
+            <TextInput
+              style={[
+                commsStyles.composerInput,
+                !selectedPill && { opacity: 0.5 },
+              ]}
+              value={body}
+              onChangeText={setBody}
+              placeholder={
+                selectedPill
+                  ? `Message ${selectedPill.name}`
+                  : 'Pick a contact to text'
+              }
+              placeholderTextColor="#78716c"
+              multiline
+              editable={!sending && !!selectedPill && !selectedPill.doNotText}
+              textAlignVertical="top"
+              inputAccessoryViewID={
+                Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined
+              }
+            />
+            <TouchableOpacity
+              style={[
+                commsStyles.sendBtn,
+                !canSend && commsStyles.sendBtnDisabled,
+              ]}
+              onPress={send}
+              disabled={!canSend}
+            >
+              <Text style={commsStyles.sendBtnText}>
+                {sending ? '…' : 'Send'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          {selectedPill?.doNotText && (
+            <Text style={commsStyles.composerWarn}>
+              ⚠ This contact is marked DO NOT TEXT.
+            </Text>
+          )}
+        </View>
+      </View>
+    </>
+  )
+}
+
+// Styles isolated to the inline-comms section so they don't collide with
+// the rest of the deal screen.
+const commsStyles = StyleSheet.create({
+  pillStrip: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    gap: 6,
+    alignItems: 'center',
+  },
+  pill: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#0c0a09',
+    borderColor: '#292524',
+    borderWidth: 1,
+    maxWidth: 180,
+  },
+  pillActive: { backgroundColor: '#d97706', borderColor: '#d97706' },
+  pillText: { color: '#a8a29e', fontSize: 12, fontWeight: '600' },
+  pillTextActive: { color: '#0c0a09' },
+  selectedHint: {
+    color: '#78716c',
+    fontSize: 11,
+    paddingHorizontal: 6,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  empty: {
+    color: '#78716c',
+    fontSize: 13,
+    padding: 18,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  feed: {
+    paddingHorizontal: 4,
+    paddingTop: 6,
+    paddingBottom: 10,
+    gap: 8,
+  },
+  bubbleWrap: { flexDirection: 'column', maxWidth: '90%' },
+  bubbleWrapOut: { alignSelf: 'flex-end' },
+  bubbleWrapIn: { alignSelf: 'flex-start' },
+  bubble: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 14,
+  },
+  bubbleOut: { backgroundColor: '#d97706' },
+  bubbleIn: {
+    backgroundColor: '#0c0a09',
+    borderColor: '#292524',
+    borderWidth: 1,
+  },
+  bubbleCall: {
+    backgroundColor: '#1c1917',
+    borderColor: '#292524',
+    borderWidth: 1,
+  },
+  bubbleTextOut: { color: '#0c0a09', fontSize: 14, lineHeight: 18 },
+  bubbleTextIn: { color: '#fafaf9', fontSize: 14, lineHeight: 18 },
+  callLine: { color: '#fafaf9', fontSize: 13, lineHeight: 17 },
+  bubbleMeta: {
+    color: '#57534e',
+    fontSize: 10,
+    marginTop: 2,
+    paddingHorizontal: 4,
+  },
+  media: {
+    width: 160,
+    height: 120,
+    borderRadius: 8,
+    marginTop: 6,
+  },
+  playBtn: {
+    marginTop: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: '#0c0a09',
+    borderColor: '#292524',
+    borderWidth: 1,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  playBtnText: { color: '#d97706', fontSize: 11, fontWeight: '600' },
+  composerWrap: {
+    borderTopColor: '#292524',
+    borderTopWidth: 1,
+    paddingTop: 8,
+    marginTop: 6,
+  },
+  composerHintMuted: {
+    color: '#78716c',
+    fontSize: 11,
+    fontStyle: 'italic',
+    paddingHorizontal: 6,
+    paddingBottom: 6,
+  },
+  composerRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  composerInput: {
+    flex: 1,
+    backgroundColor: '#0c0a09',
+    borderColor: '#292524',
+    borderWidth: 1,
+    borderRadius: 10,
+    color: '#fafaf9',
+    fontSize: 15,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minHeight: 44,
+    maxHeight: 140,
+  },
+  sendBtn: {
+    backgroundColor: '#d97706',
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 64,
+  },
+  sendBtnDisabled: { backgroundColor: '#292524' },
+  sendBtnText: { color: '#0c0a09', fontWeight: '700', fontSize: 14 },
+  composerWarn: {
+    color: '#fca5a5',
+    fontSize: 11,
+    marginTop: 6,
+    paddingHorizontal: 4,
+  },
+})
+
 function ContactRow(props: {
   name: string
   subtitle: string
@@ -1280,17 +1758,8 @@ function ContactRow(props: {
     contactId?: string,
     displayName?: string,
   ) => void
-  // Tap-to-text alongside Tap-to-call (#287). Opens Quick SMS with the
-  // phone, contactId (so the thread_key scopes to the deal+contact),
-  // and the dealId pre-filled. Vendors pass contactId=undefined; that's
-  // fine — the resulting message attaches to the deal without a contact_id.
-  onText?: (
-    phone: string,
-    contactId?: string,
-  ) => void
 }) {
   const callable = !!props.phone && !props.doNotCall
-  const textable = !!props.phone && !props.doNotText && !!props.onText
   const emailable = !!props.email
   return (
     <View style={styles.contactRow}>
@@ -1327,15 +1796,6 @@ function ContactRow(props: {
             accessibilityLabel="Email"
           >
             <Ionicons name="mail" size={18} color="#d97706" />
-          </TouchableOpacity>
-        )}
-        {textable && (
-          <TouchableOpacity
-            onPress={() => props.onText!(props.phone!, props.contactId)}
-            style={styles.contactIconBtn}
-            accessibilityLabel="Text"
-          >
-            <Ionicons name="chatbubble-ellipses" size={18} color="#d97706" />
           </TouchableOpacity>
         )}
         {callable && (
