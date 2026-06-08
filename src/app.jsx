@@ -194,11 +194,17 @@ const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes
 // closed-and-paid deal; Deleted means a killed lead / dropped deal.
 // Surplus type drops 'closed' (the enum value isn't used for surplus
 // — verified prod 2026-06-08: 0 rows with type='surplus' status='closed')
-// and Phase 1 splits the 'dead' rows OUT of Closed into the future
-// Deleted tab (#290). Flip type stays as-is until evidence shows a
-// problem there too.
-// Phase 2 (#291 dependency): isClosed will further require
-// meta.collectedAmount IS NOT NULL for surplus type.
+// and Phase 1 split the 'dead' rows OUT of Closed into the Deleted
+// bucket. Flip type stays as-is until evidence shows a problem.
+//
+// Phase 2 (#292, after #291's collectedAmount input shipped):
+// isClosed for surplus now REQUIRES meta.collectedAmount populated.
+// A recovered surplus deal without a recorded check is "awaiting check
+// amount" — surfaced via isAwaitingCheckAmount() so the Closed view
+// can render those deals in a dedicated warning section above the
+// main grid. Justin populates collectedAmount via the SurplusOverview
+// "Recovery (post-close)" input (PR #297) → the deal flows into the
+// formal Closed view automatically.
 const ARCHIVE_STATUSES_BY_TYPE = {
   flip:    ["closed", "recovered", "dead"],
   surplus: ["recovered", "dead"],
@@ -209,12 +215,23 @@ const isArchived = (d) => {
   const list = ARCHIVE_STATUSES_BY_TYPE[d.type] || DEFAULT_ARCHIVE_STATUSES;
   return list.includes(d.status);
 };
+// Has the recovery amount been recorded? Reads meta.collectedAmount and
+// treats 0 as not-yet-collected (a 0 check doesn't make sense — if a
+// case closes with no money, mark it dead/dispositionReason instead).
+const hasCollectedAmount = (d) => {
+  const v = d && d.meta && d.meta.collectedAmount;
+  return v != null && Number(v) > 0;
+};
 const isClosed = (d) => {
   if (!d) return false;
-  if (d.type === "surplus") return d.status === "recovered";
+  if (d.type === "surplus") return d.status === "recovered" && hasCollectedAmount(d);
   // flip + wholesale/rental/other use both 'closed' and 'recovered' for the closed bucket
   return d.status === "closed" || d.status === "recovered";
 };
+// Surplus deals that won (status=recovered) but still need their actual
+// check amount recorded before they count as formally Closed.
+const isAwaitingCheckAmount = (d) =>
+  d && d.type === "surplus" && d.status === "recovered" && !hasCollectedAmount(d);
 const isDeleted = (d) => d && d.status === "dead";
 
 // Read a homeowner phone out of deal.meta — accepts the four key variants
@@ -3157,6 +3174,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const archivedDeals = deals.filter(d => isArchived(d));
   const closedDeals = deals.filter(d => isClosed(d));
   const deletedDeals = deals.filter(d => isDeleted(d));
+  // Surplus recovered deals with no recorded check amount yet. They've
+  // won but the bookkeeping line is open. Surfaced inline at the top
+  // of the Closed view so they don't get lost between buckets (#292
+  // Phase 2). Justin fills meta.collectedAmount via the SurplusOverview
+  // "Recovery (post-close)" input (PR #297) → row flows into closedDeals.
+  const awaitingCheckAmountDeals = deals.filter(d => isAwaitingCheckAmount(d));
   const deadNoReason = deletedDeals.filter(d => d.type === "surplus" && !d.meta?.dispositionReason);
   const leadDeals = deals.filter(d => isLeadStatus(d));
 
@@ -3182,6 +3205,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   const preFiltered =
     view === "archive"      ? closedDeals :
     view === "deleted"      ? deletedDeals :
+    view === "awaiting"     ? awaitingCheckAmountDeals :
     view === "flagged"      ? flaggedDeals :
     view === "leads-phase"  ? leadDeals :
     activeDeals;
@@ -3207,7 +3231,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       if (contactFilter === "worked" && !lc) return false;
       if (contactFilter === "followup" && !(fu && fu <= t)) return false;
     }
-    if (view === "archive" && deadReasonFilter === "missing") {
+    // Carry-over from Phase 1: the dead-no-reason filter UI now lives
+    // on the Deleted tab (the bucket those rows moved to).
+    if (view === "deleted" && deadReasonFilter === "missing") {
       if (!(d.status === "dead" && d.type === "surplus" && !d.meta?.dispositionReason)) return false;
     }
     if (!applyAdvancedFilters(d, advancedFilters)) return false;
@@ -3399,7 +3425,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
       {/* Action bar — Export CSV + New Deal + (admin only) Deleted Leads +
           Recently Hidden. Only shown on deal-list views. */}
-      {["active","flagged","hygiene","archive","deleted","pipeline","leads-phase"].includes(view) && (
+      {["active","flagged","hygiene","archive","deleted","awaiting","pipeline","leads-phase"].includes(view) && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 16 }}>
           {isAdmin && (
             <button
@@ -3458,15 +3484,27 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("forecast", "📅 Forecast")}
         </div>
       )}
-      {["active", "flagged", "hygiene", "archive", "deleted", "pipeline", "leads-phase"].includes(view) && (
+      {["active", "flagged", "hygiene", "archive", "deleted", "awaiting", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
           {chipBtn("leads-phase", `🌱 New Leads${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
           {chipBtn("active", `Active${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
           {chipBtn("flagged", `⚑ Flagged${flaggedDeals.length ? ` (${flaggedDeals.length})` : ""}`)}
           {chipBtn("hygiene", "🩺 Hygiene")}
           {chipBtn("archive", `Closed${closedDeals.length ? ` (${closedDeals.length})` : ""}`)}
+          {awaitingCheckAmountDeals.length > 0 && chipBtn("awaiting", `⏳ Awaiting check (${awaitingCheckAmountDeals.length})`)}
           {chipBtn("deleted", `🗑 Deleted${deletedDeals.length ? ` (${deletedDeals.length})` : ""}`)}
           {chipBtn("pipeline", "🧭 Kanban")}
+        </div>
+      )}
+      {view === "archive" && awaitingCheckAmountDeals.length > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "10px 14px", background: "#1c1410", border: "1px solid #b45309", borderRadius: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: "#fbbf24", fontWeight: 700 }}>⏳ {awaitingCheckAmountDeals.length} recovered surplus deal{awaitingCheckAmountDeals.length !== 1 ? "s" : ""} need the check amount recorded</span>
+          <button onClick={() => setView("awaiting")} style={{
+            background: "transparent", color: "#fbbf24",
+            border: "1px solid #b45309",
+            padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+          }}>Review →</button>
+          <span style={{ fontSize: 11, color: "#78716c" }}>open each → enter under "Recovery (post-close)"</span>
         </div>
       )}
       {view === "deleted" && deadNoReason.length > 0 && (
