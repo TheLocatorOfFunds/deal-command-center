@@ -3133,6 +3133,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // 'all' = show everything, 'A'|'B'|'C' = only that tier, 'untiered' =
   // deals with no lead_tier set yet (the long tail of older imports).
   const [tierFilter, setTierFilter] = useState("all");
+  // Assignee filter — always-visible "who owns this" cut across every
+  // Leads sub-tab (New / Deals / Closed / Awaiting / Deleted). Reads
+  // deal.assigned_to first, falls back to legacy meta.assigned_to.
+  // 'all' = everything, 'unassigned' = nobody on it, name string = that
+  // person only. Justin 2026-06-08.
+  const [assigneeFilter, setAssigneeFilter] = useState("all");
   // New Leads → Outreach-readiness sub-filter (all / needs cleaning / ready).
   const [readyFilter, setReadyFilter] = useState("all");
   // #8 — Closed view filter: isolate dead surplus leads with no disposition
@@ -3227,6 +3233,14 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     if (tierFilter !== "all") {
       const t = (d.lead_tier || '').toUpperCase();
       if (tierFilter === "untiered" ? ['A','B','C'].includes(t) : t !== tierFilter) return false;
+    }
+    if (assigneeFilter !== "all") {
+      const a = d.assigned_to || d.meta?.assigned_to || "";
+      if (assigneeFilter === "unassigned") {
+        if (a) return false;
+      } else if (a !== assigneeFilter) {
+        return false;
+      }
     }
     if (view === "leads-phase" && readyFilter !== "all") {
       const r = isReadyForOutreach(d);
@@ -3592,6 +3606,15 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <option value="B">Tier B only</option>
             <option value="C">Tier C only</option>
             <option value="untiered">Untiered</option>
+          </select>
+          {/* Assignee filter — always-visible "show me one person's deals"
+              cut, lives on every Leads sub-tab. Justin 2026-06-08. */}
+          <select value={assigneeFilter} onChange={e => setAssigneeFilter(e.target.value)}
+            title="Filter by assigned team member"
+            style={{ ...selectStyle, minWidth: 140, ...(assigneeFilter !== 'all' ? { borderColor: '#d97706', color: '#fbbf24' } : {}) }}>
+            <option value="all">All assignees</option>
+            <option value="unassigned">Unassigned</option>
+            {(teamMembers || []).map(m => <option key={m} value={m}>{m}</option>)}
           </select>
           {/* #237 — surplus confidence tier (intel-main). Only shown when tiered
               surplus is present in the current view. */}
