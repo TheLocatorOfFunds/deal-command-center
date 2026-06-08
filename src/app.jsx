@@ -235,7 +235,7 @@ const isClosed = (d) => {
 // Surplus deals that won (status=recovered) but still need their actual
 // check amount recorded before they count as formally Closed.
 const isAwaitingCheckAmount = (d) =>
-  d && d.type === "surplus" && d.status === "recovered" && !hasCollectedAmount(d);
+  d && d.type === "surplus" && d.status === "recovered" && !hasActualFee(d);
 const isDeleted = (d) => d && d.status === "dead";
 
 // Read a homeowner phone out of deal.meta — accepts the four key variants
