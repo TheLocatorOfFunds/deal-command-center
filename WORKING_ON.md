@@ -302,8 +302,12 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-06-01 — performance pass (deals-payload re-pull fixes) + Today-view docket coverage
+**Status:** Active — 2026-06-08 — AI outage triage: out-of-credits root cause + honest AI errors + daily credit-exhaustion alarm
 **Branch:** main (all work pushed)
+
+**Today (2026-06-08) — what shipped**
+
+- **AI outage diagnosis + honest errors + credit-exhaustion alarm** (`0f98e06`, migration `20260608120000_anthropic_credit_canary`, live `0cacf6f30f69`). Nathan: "why is it saying claude api failed?" **Root cause: the Anthropic account behind the shared `ANTHROPIC_API_KEY` ran out of prepaid credits ~06-05** — invoked the EF directly and got `invalid_request_error: "Your credit balance is too low…"`. NOT a code bug. Blast radius = every AI EF (generate-case-summary, generate-outreach, all `lauren-*` incl. the **public website chat**, morning-sweep, monday-memo, castle-health-daily, summarize-call). **Fix is Nathan's lane:** console.anthropic.com → Billing → add credits + auto-reload; everything resumes automatically, no redeploy. Shipped two things so it's never silent again: (1) **`interpretAiError()`** in CaseIntelligence reads the EF's `detail` and translates billing/auth/rate-limit/model errors to plain English (covers both Refresh + auto-refresh-on-open); (2) **daily Anthropic canary** — pg_cron `anthropic-canary-fire` (13:00 UTC) + `-check` (13:15 UTC) via pg_net exercise the real generate-case-summary EF; on failure they raise an in-app `system_alert` (fingerprint `anthropic-api-down`) **and** a founder Resend email. **No new Edge Function** (EF deploys are IP-allowlist gated) — SQL-native, reuses `report_system_alert` + `get_resend_api_key`. Verified live end-to-end: canary caught the current outage (502, parsed "credit balance too low"), wrote the alert (now showing — accurate). **⚠ Justin:** 2 new cron jobs + a founder-alert email on AI outage; does NOT touch SMS/outreach. **Gotchas logged:** generate-case-summary has `verify_jwt` **ON** (needs a valid anon JWT, not just any 20-char Bearer); and when embedding the 200-char anon key into a `apply_migration`/`execute_sql` call I hit a 1-char unicode corruption (`F`→Cyrillic `Ф`) — fixed in place with `regexp_replace(def,'[^\x00-\x7F]','F')` sourced from the live function def (zero re-typing). Prefer reading the key from Vault/file over re-emitting it.
 
 **Today (2026-06-01) — what shipped**
 
@@ -331,6 +335,7 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 - Earlier today: Attention→**Deadlines** rename + flicker fix (`8a10e7c`/`f4ef764`/`84e6201`), warm-leads strip→Today (`0775c48`), revenue-year picker on Profit Booked (`d431d02`).
 
 **Open follow-ups (Nathan's lane):**
+- **⚠ Add Anthropic credits** — console.anthropic.com → Billing (+ enable auto-reload). EVERY AI feature (Case Intelligence, AI SMS drafts, Lauren public chat, morning sweep, call summaries) is paused until then; recovers automatically once credits land. The new daily canary will in-app-alert + email if it ever flatlines again.
 - **Justin deploys send-sms (#235)** — until then long manual texts still split. Match the live `verify_jwt` flag.
 - Mac-bridge key rotation still gates the legacy-key disable (carryover from 2026-05-20 below).
 - (optional) Phase A.3 send-time hard dedup (Justin's call) would let me retire the DoubleQueueGuard.
