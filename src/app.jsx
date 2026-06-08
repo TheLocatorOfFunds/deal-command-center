@@ -20039,6 +20039,54 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               <Field label="Lien Balance 1"><input type="number" value={m.lienBalance1 ?? ""} onChange={e => updateMeta({ lienBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
             </div>
 
+            {/* Collected amount: the actual dollar amount we received when
+                the case closed. Distinct from estimatedSurplus (projection)
+                + verifiedSurplus (court-confirmed pre-payment). Only
+                surfaces on a closed-ish deal so VAs/Eric don't accidentally
+                type into it on an open case. Phase 2 of #292 will use this
+                to tighten the Closed-tab filter. Web-only input per the
+                #291 scope split; mobile shows it read-only. */}
+            {isClosed(deal) && (
+              <>
+                <SubLabel>Recovery (post-close)</SubLabel>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+                  <Field label="Collected Amount (actual check received)">
+                    <input
+                      type="number"
+                      value={m.collectedAmount ?? ""}
+                      onChange={e => updateMeta({
+                        collectedAmount: e.target.value === "" ? null : parseFloat(e.target.value),
+                        collectedAt: e.target.value === "" ? null : (m.collectedAt || new Date().toISOString()),
+                      })}
+                      style={{
+                        ...inputStyle,
+                        // Visual nudge: a recovered surplus deal with no
+                        // collectedAmount is the "awaiting check" gap that
+                        // #292 Phase 2 keys off. Highlight it.
+                        ...(deal.type === "surplus" && deal.status === "recovered" && !m.collectedAmount
+                          ? { borderColor: "#b45309", background: "#1c1410" }
+                          : {})
+                      }}
+                      placeholder="$"
+                    />
+                  </Field>
+                  <Field label="Collected Date">
+                    <input
+                      type="date"
+                      value={m.collectedAt ? String(m.collectedAt).slice(0, 10) : ""}
+                      onChange={e => updateMeta({ collectedAt: e.target.value || null })}
+                      style={inputStyle}
+                    />
+                  </Field>
+                </div>
+                {deal.type === "surplus" && deal.status === "recovered" && !m.collectedAmount && (
+                  <div style={{ fontSize: 11, color: "#fbbf24", marginTop: -6, marginBottom: 12 }}>
+                    ⚠ This case is marked Recovered but no collected amount is recorded. Once #292 Phase 2 lands, the Closed tab will require this field to be filled in.
+                  </div>
+                )}
+              </>
+            )}
+
             <SubLabel>Sale & Timeline</SubLabel>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
               <Field label="Sale Date (auction)"><input type="date" value={m.saleDate || ""} onChange={e => updateMeta({ saleDate: e.target.value || null })} style={inputStyle} /></Field>
@@ -20111,6 +20159,12 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
           <WaterfallLine label="NET TO US" value={projectedFee - (m.attorneyFee || 0) - totalExpenses} bold huge />
+          {isClosed(deal) && m.collectedAmount != null && (
+            <>
+              <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
+              <WaterfallLine label={`Actual collected${m.collectedAt ? ` · ${new Date(m.collectedAt).toLocaleDateString()}` : ""}`} value={Number(m.collectedAmount) || 0} positive bold />
+            </>
+          )}
         </Card>}
         <Card title="Timing & Source" style={{ marginTop: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
