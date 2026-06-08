@@ -64,6 +64,7 @@ type ContactLink = {
     email: string | null
     kind: string | null
     do_not_call: boolean | null
+    do_not_text: boolean | null
   } | null
 }
 
@@ -174,7 +175,7 @@ export default function DealDetailScreen() {
       supabase
         .from('contact_deals')
         .select(
-          'relationship, contacts ( id, name, company, phone, email, kind, do_not_call )',
+          'relationship, contacts ( id, name, company, phone, email, kind, do_not_call, do_not_text )',
         )
         .eq('deal_id', id),
       supabase
@@ -445,6 +446,27 @@ export default function DealDetailScreen() {
     [id],
   )
 
+  // Tap-to-text companion to dial (#287). Deep-links to /quick/sms with
+  // the phone, contactId (for proper thread_key scoping at send-sms EF
+  // level), and dealId so the resulting message lands on the right deal
+  // thread. The composer screen handles the rest (DND check, search
+  // override, send). We don't open a native sms: link because that would
+  // dial from the SIM (Justin's 6859), not Twilio 5440.
+  const textTarget = useCallback(
+    (phone: string, contactId: string | null, _displayName?: string) => {
+      if (!phone) return
+      router.push({
+        pathname: '/quick/sms',
+        params: {
+          to: phone,
+          contactId: contactId ?? undefined,
+          dealId: id,
+        },
+      } as any)
+    },
+    [id, router],
+  )
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -510,6 +532,12 @@ export default function DealDetailScreen() {
     meta.verifiedSurplus ?? meta.estimatedSurplus,
     fmtMoney,
   )
+  // Collected amount (#291) — populated by web on the Financial Summary
+  // "Recovery (post-close)" input (#297). Mobile is display-only per Justin's
+  // 2026-06-08 scope call. Show only when populated (closed-and-paid deals).
+  // This is what distinguishes "Closed" (we got the check) from "Awaiting
+  // check" (closed status but no amount recorded yet) per LABELS.md.
+  pushFact('Collected', meta.collectedAmount, fmtMoney)
   pushFact('Court appraisal', meta.courtAppraisalValue, fmtMoney)
   pushFact('Min bid', meta.minimumBidAmount, fmtMoney)
   pushFact('Foreclosure filed', meta.foreclosureFileDate, fmtDate)
@@ -677,7 +705,7 @@ export default function DealDetailScreen() {
         )}
 
         {/* Contacts — vendors (per-deal) + contacts (company-wide) */}
-        <Text style={styles.sectionLabel}>People · tap to call</Text>
+        <Text style={styles.sectionLabel}>People · tap to call or text</Text>
         <View style={styles.section}>
           {!hasContacts && (
             <Text style={styles.emptyText}>
@@ -692,6 +720,7 @@ export default function DealDetailScreen() {
               phone={v.phone}
               email={v.email}
               onDial={dial}
+              onText={(phone) => textTarget(phone, null, v.name ?? undefined)}
             />
           ))}
           {contactLinks.map((cl, idx) =>
@@ -708,8 +737,12 @@ export default function DealDetailScreen() {
                 phone={cl.contacts.phone}
                 email={cl.contacts.email}
                 doNotCall={cl.contacts.do_not_call}
+                doNotText={cl.contacts.do_not_text}
                 contactId={cl.contacts.id}
                 onDial={dial}
+                onText={(phone, contactId) =>
+                  textTarget(phone, contactId ?? null, cl.contacts?.name ?? undefined)
+                }
               />
             ) : null,
           )}
@@ -1240,14 +1273,24 @@ function ContactRow(props: {
   phone: string | null | undefined
   email: string | null | undefined
   doNotCall?: boolean | null
+  doNotText?: boolean | null
   contactId?: string
   onDial: (
     phone: string | null | undefined,
     contactId?: string,
     displayName?: string,
   ) => void
+  // Tap-to-text alongside Tap-to-call (#287). Opens Quick SMS with the
+  // phone, contactId (so the thread_key scopes to the deal+contact),
+  // and the dealId pre-filled. Vendors pass contactId=undefined; that's
+  // fine — the resulting message attaches to the deal without a contact_id.
+  onText?: (
+    phone: string,
+    contactId?: string,
+  ) => void
 }) {
   const callable = !!props.phone && !props.doNotCall
+  const textable = !!props.phone && !props.doNotText && !!props.onText
   const emailable = !!props.email
   return (
     <View style={styles.contactRow}>
@@ -1267,6 +1310,7 @@ function ContactRow(props: {
           >
             {props.phone}
             {props.doNotCall ? ' · DO NOT CALL' : ''}
+            {props.doNotText ? ' · DO NOT TEXT' : ''}
           </Text>
         )}
         {props.email && (
@@ -1280,14 +1324,25 @@ function ContactRow(props: {
               Linking.openURL(`mailto:${props.email}`).catch(() => {})
             }
             style={styles.contactIconBtn}
+            accessibilityLabel="Email"
           >
             <Ionicons name="mail" size={18} color="#d97706" />
+          </TouchableOpacity>
+        )}
+        {textable && (
+          <TouchableOpacity
+            onPress={() => props.onText!(props.phone!, props.contactId)}
+            style={styles.contactIconBtn}
+            accessibilityLabel="Text"
+          >
+            <Ionicons name="chatbubble-ellipses" size={18} color="#d97706" />
           </TouchableOpacity>
         )}
         {callable && (
           <TouchableOpacity
             onPress={() => props.onDial(props.phone, props.contactId, props.name)}
             style={styles.contactIconBtn}
+            accessibilityLabel="Call"
           >
             <Ionicons name="call" size={18} color="#d97706" />
           </TouchableOpacity>

@@ -23,12 +23,15 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
 } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../../lib/supabase'
+import { KEYBOARD_DONE_ID, KeyboardDoneBar } from '../../components/KeyboardDoneBar'
 
 type Step = 'email' | 'code'
 
@@ -98,7 +101,11 @@ export default function SignInScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={styles.inner}>
+      <Pressable
+        style={styles.inner}
+        onPress={Keyboard.dismiss}
+        accessible={false}
+      >
         <Text style={styles.title}>Deal Command Center</Text>
         <Text style={styles.subtitle}>
           {step === 'email'
@@ -154,6 +161,9 @@ export default function SignInScreen() {
               editable={!busy}
               maxLength={10}
               autoFocus
+              inputAccessoryViewID={
+                Platform.OS === 'ios' ? KEYBOARD_DONE_ID : undefined
+              }
             />
             <TouchableOpacity
               style={[
@@ -181,7 +191,8 @@ export default function SignInScreen() {
             </TouchableOpacity>
           </>
         )}
-      </View>
+      </Pressable>
+      <KeyboardDoneBar />
     </KeyboardAvoidingView>
   )
 }

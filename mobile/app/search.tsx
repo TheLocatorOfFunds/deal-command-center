@@ -23,6 +23,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { useRouter, useNavigation } from 'expo-router'
 import { Ionicons } from '@expo/vector-icons'
 import { supabase } from '../lib/supabase'
+import { DismissKeyboardView } from '../components/DismissKeyboardView'
 
 type SearchKind = 'deal' | 'note' | 'contact' | 'vendor' | 'message' | 'team_msg'
 
@@ -170,6 +171,7 @@ export default function SearchScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
+      <DismissKeyboardView>
       <View style={styles.searchRow}>
         <Ionicons name="search" size={18} color="#a8a29e" style={{ marginRight: 8 }} />
         <TextInput
@@ -210,6 +212,8 @@ export default function SearchScreen() {
             it.type === 'header' ? `h-${it.kind}` : `r-${it.hit.kind}-${it.hit.id}-${i}`
           }
           contentContainerStyle={{ padding: 12 }}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           renderItem={({ item }) => {
             if (item.type === 'header') {
               return (
@@ -244,6 +248,7 @@ export default function SearchScreen() {
           }}
         />
       )}
+      </DismissKeyboardView>
     </SafeAreaView>
   )
 }
