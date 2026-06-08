@@ -197,14 +197,17 @@ const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes
 // and Phase 1 split the 'dead' rows OUT of Closed into the Deleted
 // bucket. Flip type stays as-is until evidence shows a problem.
 //
-// Phase 2 (#292, after #291's collectedAmount input shipped):
-// isClosed for surplus now REQUIRES meta.collectedAmount populated.
-// A recovered surplus deal without a recorded check is "awaiting check
-// amount" — surfaced via isAwaitingCheckAmount() so the Closed view
-// can render those deals in a dedicated warning section above the
-// main grid. Justin populates collectedAmount via the SurplusOverview
-// "Recovery (post-close)" input (PR #297) → the deal flows into the
-// formal Closed view automatically.
+// Phase 2 (#292) gates surplus Closed on having the actual check
+// recorded. The field is `deal.actual_net` — the top-level column
+// that's been the canonical "what we actually got" number since long
+// before this session (existing "Actual Fee Received" input at line
+// ~20241 writes to it + auto-stamps closed_at). Justin enters that
+// number → row flows out of Awaiting check → into Closed.
+//
+// Earlier in this session I built a duplicate meta.collectedAmount
+// input (PR #297) thinking the field was new. It wasn't. The duplicate
+// was removed in PR #300; the gate now reads actual_net so Justin's
+// "in my head, we close once we input the check" works literally.
 const ARCHIVE_STATUSES_BY_TYPE = {
   flip:    ["closed", "recovered", "dead"],
   surplus: ["recovered", "dead"],
@@ -215,16 +218,17 @@ const isArchived = (d) => {
   const list = ARCHIVE_STATUSES_BY_TYPE[d.type] || DEFAULT_ARCHIVE_STATUSES;
   return list.includes(d.status);
 };
-// Has the recovery amount been recorded? Reads meta.collectedAmount and
-// treats 0 as not-yet-collected (a 0 check doesn't make sense — if a
-// case closes with no money, mark it dead/dispositionReason instead).
-const hasCollectedAmount = (d) => {
-  const v = d && d.meta && d.meta.collectedAmount;
-  return v != null && Number(v) > 0;
+// Has the recovery check been recorded? Reads deal.actual_net (the
+// existing source of truth) and treats 0 as not-yet-collected (a $0
+// check doesn't make sense — if a case closes with no money, mark
+// it dead with a dispositionReason instead).
+const hasActualFee = (d) => {
+  const v = d && d.actual_net;
+  return v != null && v !== "" && Number(v) > 0;
 };
 const isClosed = (d) => {
   if (!d) return false;
-  if (d.type === "surplus") return d.status === "recovered" && hasCollectedAmount(d);
+  if (d.type === "surplus") return d.status === "recovered" && hasActualFee(d);
   // flip + wholesale/rental/other use both 'closed' and 'recovered' for the closed bucket
   return d.status === "closed" || d.status === "recovered";
 };
@@ -3183,8 +3187,9 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // Surplus recovered deals with no recorded check amount yet. They've
   // won but the bookkeeping line is open. Surfaced inline at the top
   // of the Closed view so they don't get lost between buckets (#292
-  // Phase 2). Justin fills meta.collectedAmount via the SurplusOverview
-  // "Recovery (post-close)" input (PR #297) → row flows into closedDeals.
+  // Phase 2). Justin fills the "Actual Fee Received" input in the
+  // SurplusOverview "Timing & Source" card → deal.actual_net stamps,
+  // closed_at stamps, row flows into closedDeals on next render.
   const awaitingCheckAmountDeals = deals.filter(d => isAwaitingCheckAmount(d));
   const deadNoReason = deletedDeals.filter(d => d.type === "surplus" && !d.meta?.dispositionReason);
   const leadDeals = deals.filter(d => isLeadStatus(d));
@@ -3515,7 +3520,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             border: "1px solid #b45309",
             padding: "5px 12px", borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
           }}>Review →</button>
-          <span style={{ fontSize: 11, color: "#78716c" }}>open each → enter under "Recovery (post-close)"</span>
+          <span style={{ fontSize: 11, color: "#78716c" }}>open each → enter "Actual Fee Received" under Timing &amp; Source</span>
         </div>
       )}
       {view === "deleted" && deadNoReason.length > 0 && (
@@ -20125,53 +20130,12 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               <Field label="Lien Balance 1"><input type="number" value={m.lienBalance1 ?? ""} onChange={e => updateMeta({ lienBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
             </div>
 
-            {/* Collected amount: the actual dollar amount we received when
-                the case closed. Distinct from estimatedSurplus (projection)
-                + verifiedSurplus (court-confirmed pre-payment). Only
-                surfaces on a closed-ish deal so VAs/Eric don't accidentally
-                type into it on an open case. Phase 2 of #292 will use this
-                to tighten the Closed-tab filter. Web-only input per the
-                #291 scope split; mobile shows it read-only. */}
-            {isClosed(deal) && (
-              <>
-                <SubLabel>Recovery (post-close)</SubLabel>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-                  <Field label="Collected Amount (actual check received)">
-                    <input
-                      type="number"
-                      value={m.collectedAmount ?? ""}
-                      onChange={e => updateMeta({
-                        collectedAmount: e.target.value === "" ? null : parseFloat(e.target.value),
-                        collectedAt: e.target.value === "" ? null : (m.collectedAt || new Date().toISOString()),
-                      })}
-                      style={{
-                        ...inputStyle,
-                        // Visual nudge: a recovered surplus deal with no
-                        // collectedAmount is the "awaiting check" gap that
-                        // #292 Phase 2 keys off. Highlight it.
-                        ...(deal.type === "surplus" && deal.status === "recovered" && !m.collectedAmount
-                          ? { borderColor: "#b45309", background: "#1c1410" }
-                          : {})
-                      }}
-                      placeholder="$"
-                    />
-                  </Field>
-                  <Field label="Collected Date">
-                    <input
-                      type="date"
-                      value={m.collectedAt ? String(m.collectedAt).slice(0, 10) : ""}
-                      onChange={e => updateMeta({ collectedAt: e.target.value || null })}
-                      style={inputStyle}
-                    />
-                  </Field>
-                </div>
-                {deal.type === "surplus" && deal.status === "recovered" && !m.collectedAmount && (
-                  <div style={{ fontSize: 11, color: "#fbbf24", marginTop: -6, marginBottom: 12 }}>
-                    ⚠ This case is marked Recovered but no collected amount is recorded. Once #292 Phase 2 lands, the Closed tab will require this field to be filled in.
-                  </div>
-                )}
-              </>
-            )}
+            {/* (PR #297 added a "Recovery (post-close)" duplicate input here
+                that wrote to meta.collectedAmount. Removed in PR #300 — the
+                actual recovery amount lives in deal.actual_net via the
+                existing "Actual Fee Received" input ~120 lines below, which
+                also auto-stamps closed_at. That input is the gate isClosed
+                now keys off for surplus.) */}
 
             <SubLabel>Sale & Timeline</SubLabel>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
@@ -20245,10 +20209,10 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           {totalExpenses > 0 && <WaterfallLine label="Expenses to date" value={-totalExpenses} />}
           <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
           <WaterfallLine label="NET TO US" value={projectedFee - (m.attorneyFee || 0) - totalExpenses} bold huge />
-          {isClosed(deal) && m.collectedAmount != null && (
+          {hasActualFee(deal) && (
             <>
               <div style={{ height: 1, background: "#292524", margin: "10px 0" }} />
-              <WaterfallLine label={`Actual collected${m.collectedAt ? ` · ${new Date(m.collectedAt).toLocaleDateString()}` : ""}`} value={Number(m.collectedAmount) || 0} positive bold />
+              <WaterfallLine label={`Actual fee received${deal.closed_at ? ` · ${new Date(deal.closed_at).toLocaleDateString()}` : ""}`} value={Number(deal.actual_net) || 0} positive bold />
             </>
           )}
         </Card>}
@@ -20263,9 +20227,30 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               </select>
             </Field>
             {deal.status === "recovered" && (
-              <Field label="Actual Fee Received"><input type="number" value={deal.actual_net || ""} onChange={e => onUpdateDeal({ actual_net: e.target.value ? parseFloat(e.target.value) : null, closed_at: deal.closed_at || new Date().toISOString() })} style={inputStyle} placeholder="Final fee $" /></Field>
+              <Field label="Actual Fee Received">
+                <input
+                  type="number"
+                  value={deal.actual_net || ""}
+                  onChange={e => onUpdateDeal({ actual_net: e.target.value ? parseFloat(e.target.value) : null, closed_at: deal.closed_at || new Date().toISOString() })}
+                  style={{
+                    ...inputStyle,
+                    // Surplus + recovered + no actual_net = "awaiting check".
+                    // Highlight so the input is obvious — this is the field
+                    // that flips the deal from Awaiting check → Closed.
+                    ...(deal.type === "surplus" && !hasActualFee(deal)
+                      ? { borderColor: "#b45309", background: "#1c1410" }
+                      : {})
+                  }}
+                  placeholder="Final fee $"
+                />
+              </Field>
             )}
           </div>
+          {deal.type === "surplus" && deal.status === "recovered" && !hasActualFee(deal) && (
+            <div style={{ fontSize: 11, color: "#fbbf24", marginTop: 10, padding: "8px 10px", background: "#1c1410", border: "1px solid #b45309", borderRadius: 6 }}>
+              ⏳ This case is recovered but no check amount is recorded. Enter the actual fee received above to move this deal from Awaiting check → Closed.
+            </div>
+          )}
           {(m.filed_at || deal.filed_at) && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(m.filed_at || deal.filed_at)} days ago{(m.deadline || deal.deadline) && ` · ${deadlineInfo(m.deadline || deal.deadline).label || 'on track'}`}</div>}
         </Card>
         <ClientPortalCard deal={deal} logAct={logAct} />
