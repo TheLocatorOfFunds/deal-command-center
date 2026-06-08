@@ -1955,7 +1955,13 @@ function DealCommandCenter({ session, profile }) {
               {navItem('attention','⏰', 'Deadlines')}
               {navItem('outreach', '🎯', 'Automations', { groupIds: ['outreach','automations','relay','leads','forecast'] })}
               {navItem('communications', '💬', 'Comms', { groupIds: ['communications','inbox'] })}
-              {navItem('active',   '🏠', 'Deals',    { groupIds: ['active','flagged','hygiene','archive','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {/* Renamed Deals → Leads per #290 (2026-06-08). Hub contains the
+                  full lifecycle: New (pre-contract) → Deals (engaged) → Closed
+                  → Awaiting (transient, surplus recovered without check) →
+                  Deleted (dead). Flagged + Hygiene removed from chip bar; their
+                  view ids stay in groupIds so URL-based hash navigation still
+                  works for anyone who has a bookmark. */}
+              {navItem('active',   '🏠', 'Leads',    { groupIds: ['active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
               {navItem('followups','📞', 'Follow-ups', { badge: followupDueCount })}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
@@ -3474,7 +3480,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                      per Justin. AutomationsView owns Automations now; the old
                      four-chip strip is dead weight. Code preserved so we can
                      turn pieces back on selectively.
-          Deals:     New Leads · Active · Flagged · Hygiene · Closed · Kanban
+          Leads:     New · Deals · Closed · Awaiting (transient) · Deleted · Kanban
           Insights:  Reports · Analytics · Traffic */}
       {false && ["outreach", "inbox", "leads", "forecast"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
@@ -3486,13 +3492,18 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       )}
       {["active", "flagged", "hygiene", "archive", "deleted", "awaiting", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
-          {chipBtn("leads-phase", `🌱 New Leads${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
-          {chipBtn("active", `Active${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
-          {chipBtn("flagged", `⚑ Flagged${flaggedDeals.length ? ` (${flaggedDeals.length})` : ""}`)}
-          {chipBtn("hygiene", "🩺 Hygiene")}
+          {/* Sub-tab order per LABELS.md (canonical): New → Deals → Closed
+              → Awaiting (transient) → Deleted → Kanban. Per #290 (2026-06-08),
+              Flagged + Hygiene chips dropped from the bar. View ids
+              ("flagged", "hygiene") still wired via groupIds at the sidebar
+              level so URL-based hash navigation works if anyone has a saved
+              bookmark. Justin/Nathan verbatim distinction: "A deal is not
+              a lead. A lead is not a deal." */}
+          {chipBtn("leads-phase", `New${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
+          {chipBtn("active", `Deals${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
           {chipBtn("archive", `Closed${closedDeals.length ? ` (${closedDeals.length})` : ""}`)}
           {awaitingCheckAmountDeals.length > 0 && chipBtn("awaiting", `⏳ Awaiting check (${awaitingCheckAmountDeals.length})`)}
-          {chipBtn("deleted", `🗑 Deleted${deletedDeals.length ? ` (${deletedDeals.length})` : ""}`)}
+          {chipBtn("deleted", `Deleted${deletedDeals.length ? ` (${deletedDeals.length})` : ""}`)}
           {chipBtn("pipeline", "🧭 Kanban")}
         </div>
       )}
@@ -3734,13 +3745,25 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                 </div>
               )}
               {flips.length > 0 && (<>
-                <SectionLabel icon="🏠" label={view === "archive" ? "Closed Flips" : view === "flagged" ? "Flagged Flips" : "Real Estate Flips"} />
+                <SectionLabel icon="🏠" label={
+                  view === "archive"  ? "Closed Flips"
+                  : view === "deleted" ? "Deleted Flips"
+                  : view === "awaiting" ? "Awaiting check · Flips"
+                  : view === "flagged" ? "Flagged Flips"
+                  : "Real Estate Flips"
+                } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
                   {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {surplus.length > 0 && (<>
-                <SectionLabel icon="💰" label={view === "archive" ? "Closed Surplus" : view === "flagged" ? "Flagged Surplus" : "Surplus Fund Cases"} />
+                <SectionLabel icon="💰" label={
+                  view === "archive"  ? "Closed Surplus"
+                  : view === "deleted" ? "Deleted Surplus"
+                  : view === "awaiting" ? "Awaiting check · Surplus"
+                  : view === "flagged" ? "Flagged Surplus"
+                  : "Surplus Fund Cases"
+                } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
                   {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} />)}
                 </div>

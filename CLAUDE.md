@@ -258,7 +258,7 @@ switches between sibling sub-views (see `groupBtn`/`chipBtn` in `src/app.jsx` ~l
 2. **⚡ Attention** — reactive: cross-deal deadline strip + 🔥 Lead Engagement strip (link opens + Lauren chats) + per-deal unread/unacked work
 3. **🎯 Outreach** (hub) — `outreach` (Drafts & Replies: 4 stat tiles + AutomationsQueue + ReplyInbox) · `inbox` · `leads` (LeadsOutreachView) · `forecast` (7–14 day plan)
 4. **📡 Relay** — cadence/sequence auto-enrollment engine (relay_enrollments, "Ohio Surplus Funds v1" sequences, approve/skip/regenerate per scheduled step)
-5. **🏠 Deals** (hub) — `active` · `flagged` · `hygiene` · `archive` (Closed) · `pipeline` (kanban) · `leads-phase` (New Leads / prep-readiness)
+5. **🏠 Leads** (hub) — `leads-phase` (New) · `active` (Deals) · `archive` (Closed) · `awaiting` (⏳ Awaiting check, transient surplus state) · `deleted` (Deleted) · `pipeline` (🧭 Kanban). Renamed from "Deals" 2026-06-08 (#290); Flagged + Hygiene chips dropped — their view ids stay wired in groupIds so deep-link URLs still resolve.
 6. **✅ Tasks** — global task list across deals
 7. **⏱ Time** — team time tracking (admin only)
 8. **📊 Insights** (hub, admin) — `reports` (+ ScraperHealthPanel) · `analytics` (financial) · `traffic` (web) · `comms` (CommsAnalyticsView)
