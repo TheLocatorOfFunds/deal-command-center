@@ -1589,7 +1589,7 @@ function DealCommandCenter({ session, profile }) {
           try { localStorage.setItem(LS_CHAT_KEY, fresh[fresh.length - 1].created_at); } catch (e) {}
           let chirped = false;
           for (const msg of fresh.slice(0, 5)) {
-            try { handleNewMessageToast(msg); } catch (e) { console.warn('[catchup-chat] toast fail', e); }
+            try { handleNewMessageToast(msg, { allowStale: true }); } catch (e) { console.warn('[catchup-chat] toast fail', e); }
             if (!chirped) { try { playNotifyChirp('chat'); } catch (e) {} chirped = true; }
           }
           loadUnreadChatCount();
@@ -1751,12 +1751,17 @@ function DealCommandCenter({ session, profile }) {
   // messages, skip if user is already in the team chat tab, skip stale
   // messages (sub reconnect could replay older rows). Looks up the
   // sender + thread for friendly labels.
-  const handleNewMessageToast = async (msg) => {
+  //
+  // opts.allowStale (default false): when true, bypass the 30-second
+  // staleness guard. Used by the visibility-change catchup path —
+  // catchup messages are by definition "old" (they accumulated while
+  // the realtime channel was dead), so the guard must not apply.
+  const handleNewMessageToast = async (msg, opts) => {
     const uid = session?.user?.id;
     if (!uid) return;
     if (msg.sender_id === uid) return;
     if (view === 'team') return;
-    if (Date.now() - new Date(msg.created_at).getTime() > 30_000) return;
+    if (!(opts && opts.allowStale) && Date.now() - new Date(msg.created_at).getTime() > 30_000) return;
     if (msg.deleted_at) return;
     const [{ data: sender }, { data: thread }] = await Promise.all([
       sb.from('profiles').select('name, display_name').eq('id', msg.sender_id).maybeSingle(),
