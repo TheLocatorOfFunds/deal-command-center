@@ -278,7 +278,7 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 ### Justin · fervent-napier-9c4b2a
 
 **Branch:** `justin/contract-human-confirmed-build29` (worktree)
-**Last updated (auto):** 2026-06-09 19:37 UTC
+**Last updated (auto):** 2026-06-09 20:02 UTC
 
 **2026-06-09 (Lauren + Case Details session):**
 - Fixed Lauren `get_deal_url` tool hallucination — `lauren_get_deal_url`'s
@@ -304,6 +304,26 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
   to local; `setTimeout(f,350)` + `pendingPatch` present. Live keystroke
   QA on prod blocked by data-safety classifier (would mutate a real
   deal). Justin to spot-check in his own session.
+
+**2026-06-09 (Comms actions session — #323 + #324):**
+- **#323 reaction-threading** (`87d2035`): global Comms (`CommunicationsView`)
+  was splitting iMessage tapback reactions into a separate thread from the
+  parent SMS. Cause: send-sms/receive-sms key `${deal}:contact:${uuid}`,
+  bridge keys `${deal}:phone:${num}`. Fix: group on `(deal_id, counterpart
+  phone)` not raw thread_key; `:group:` keys preserved. Live-verified: Sha
+  Johnson SMS + Disliked + Liked now one thread.
+- **#324 inline Comms actions** — discovered the parallel `vigorous-williamson`
+  session already shipped the FULL composer + Call back to global Comms
+  (`76a450d` + follow-ups). Justin reviewed: KEEP the full composer (verified
+  live working on a linked thread), but the no-deal branch was BLOCKING
+  ("go link in Contacts"). Per Justin, unlinked numbers should reply/call
+  deal-less instead. Shipped `DealLessThreadComposer` (`6f6fa61`): lean
+  reply + Call back rendered when `resolvedDeal === false`. send-sms already
+  accepts null deal_id (line 222) so no EF change; deal-less rows re-group
+  under `none:<phone>` (the #323 grouping). Goes out as Twilio SMS from the
+  main line (any carrier). Linked threads untouched.
+  QA: local build boots clean; full composer live-verified; orphan baseline
+  confirmed; deal-less render verified post-deploy on +15136661089.
 
 ### Justin · outbound-calling
 
