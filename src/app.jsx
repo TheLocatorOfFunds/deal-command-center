@@ -1584,11 +1584,14 @@ function DealCommandCenter({ session, profile }) {
           m && m.sender_id !== uid && !m.deleted_at && m.body
         );
         if (fresh.length > 0) {
-          // Advance last-seen BEFORE iterating so we don't replay on
-          // any sync error mid-loop.
+          // Advance last-seen to NEWEST so we don't replay on any sync
+          // error mid-loop. Toast the 5 NEWEST (so users see what just
+          // arrived, not the oldest 5 from hours ago); anything beyond
+          // those 5 is left in the chat thread + unread badge.
           try { localStorage.setItem(LS_CHAT_KEY, fresh[fresh.length - 1].created_at); } catch (e) {}
+          const newest5 = fresh.slice(-5);   // 5 newest, still in ascending order
           let chirped = false;
-          for (const msg of fresh.slice(0, 5)) {
+          for (const msg of newest5) {
             try { handleNewMessageToast(msg, { allowStale: true }); } catch (e) { console.warn('[catchup-chat] toast fail', e); }
             if (!chirped) { try { playNotifyChirp('chat'); } catch (e) {} chirped = true; }
           }
