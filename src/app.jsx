@@ -3951,8 +3951,16 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           ) : view === "inbox" || view === "communications" ? (
             /* Phase 3 (5/27): the new cross-deal Communications hub (Calls +
                Texting) supersedes the old InboxView/ReplyInbox. The "inbox"
-               route is kept as an alias so existing bookmarks/nav still work. */
-            <CommunicationsView onSelect={onSelect} />
+               route is kept as an alias so existing bookmarks/nav still work.
+               2026-06-09 (#324): startCall + callStatus + onOpenCallDisposition
+               threaded down so the right pane can render the per-deal
+               OutboundMessages composer (full parity with deal Comms). */
+            <CommunicationsView
+              onSelect={onSelect}
+              startCall={startCall}
+              callStatus={callStatus}
+              onOpenCallDisposition={setPendingDisposition}
+            />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
           ) : view === "leads" ? (
@@ -11521,7 +11529,7 @@ function ReplyInbox({ onSelect, limit = 100 }) {
 // shows only inbound messages not yet marked read_by_team_at, and selecting a
 // thread marks its inbound messages seen. The standalone ReplyInbox/InboxView
 // is superseded by this (the "inbox" route now renders CommunicationsView).
-function CommunicationsView({ onSelect }) {
+function CommunicationsView({ onSelect, startCall, callStatus, onOpenCallDisposition }) {
   // Unified conversation hub (Justin 2026-05-27): one combined, newest-at-top
   // list of EVERY text thread and call across all deals — no more separate
   // Texting/Calls tabs. Selecting a row opens it on the right (conversation
@@ -11709,6 +11717,59 @@ function CommunicationsView({ onSelect }) {
     if (item.kind === 'thread') markThreadSeen(item.thread);
   };
 
+  // ── Resolved deal for the selected thread (#324) ─────────────────────
+  // We render the per-deal <OutboundMessages> composer in the right pane to
+  // get full parity with the in-deal Comms tab (channel picker, Lauren AI
+  // draft, click-to-call, RVM drop, dead-phone gate, etc — every action
+  // Justin uses there is available here, by construction, no drift). To do
+  // that we need a live deal_id + deal row for the selected thread.
+  //
+  // Resolution mirrors `routeTo` (used by 'Open in deal →'):
+  //   1. If thread.deal_id exists and the deal isn't soft-deleted → use it.
+  //   2. Else if the contact has any non-deleted deal → use that.
+  //   3. Else → null (right pane shows "link to a deal" empty state).
+  //
+  // Pre-select the right contact tab inside OutboundMessages by writing the
+  // localStorage key its init effect reads (line ~25364). No prop drilling
+  // needed and existing per-deal behaviour is unchanged.
+  const [resolvedDeal, setResolvedDeal] = useState(null); // null = unresolved, false = resolution failed, {} = deal
+  useEffect(() => {
+    if (!activeItem || activeItem.kind !== 'thread') {
+      setResolvedDeal(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const t = activeItem.thread;
+      let dealId = null;
+      if (t.deal_id) {
+        const { data: d } = await sb.from('deals').select('id, name, type, status, meta, deleted_at').eq('id', t.deal_id).maybeSingle();
+        if (d && !d.deleted_at) dealId = d.id;
+      }
+      if (!dealId && t.contact_id) {
+        const { data: links } = await sb.from('contact_deals')
+          .select('deal_id, deals!inner(id, name, type, status, meta, deleted_at)')
+          .eq('contact_id', t.contact_id);
+        const active = (links || []).find(l => l.deals && !l.deals.deleted_at);
+        if (active?.deals) dealId = active.deals.id;
+      }
+      if (cancelled) return;
+      if (!dealId) { setResolvedDeal(false); return; }
+      // Fetch the full deal row OutboundMessages expects.
+      const { data: deal } = await sb.from('deals').select('*').eq('id', dealId).maybeSingle();
+      if (cancelled) return;
+      if (!deal) { setResolvedDeal(false); return; }
+      // Pre-select the contact tab inside OutboundMessages so the user lands
+      // on the thread they clicked (not the "Everyone" default).
+      try {
+        const phone = t.counterpart && normalizePhone(t.counterpart);
+        if (phone) localStorage.setItem(`comms_contact_${deal.id}`, phone);
+      } catch { /* localStorage blocked — non-fatal */ }
+      setResolvedDeal(deal);
+    })();
+    return () => { cancelled = true; };
+  }, [activeItem?.id, activeItem?.kind]);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 160px)', minHeight: 480 }}>
       <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>💬 Communications</div>
@@ -11802,19 +11863,28 @@ function CommunicationsView({ onSelect }) {
                   <button onClick={() => routeTo(activeItem.thread.deal_id, activeItem.thread.contact_id)} style={{ ...btnGhost, fontSize: 11, padding: '5px 10px' }}>Open in deal →</button>
                 )}
               </div>
-              <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
-                {activeItem.thread.ordered.map(m => (
-                  <div key={m.id} style={{ alignSelf: m.direction === 'inbound' ? 'flex-start' : 'flex-end', maxWidth: '75%' }}>
-                    <div style={{ background: m.direction === 'inbound' ? '#1c1917' : '#1e3a5f', color: '#fafaf9', borderRadius: 12, padding: '8px 12px', fontSize: 13, lineHeight: 1.4 }}>
-                      {m.body}
-                      {m.media_url && <div style={{ marginTop: 6 }}><img src={m.media_url} alt="media" style={{ maxWidth: 180, borderRadius: 8 }} /></div>}
-                    </div>
-                    <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>
-                      {fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}
-                      {m.direction !== 'inbound' && (m.read_at ? ' · ✓✓ Read' : m.delivered_at ? ' · ✓ Delivered' : '')}
-                    </div>
+              <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+                {/* Full per-deal Comms composer (#324). Same OutboundMessages
+                    used inside the deal tab — channel picker, char count,
+                    click-to-call, Lauren AI draft, RVM, dead-phone gate.
+                    Universal-UI-parity by construction. */}
+                {resolvedDeal === null ? (
+                  <div style={{ padding: 24, color: '#78716c', fontSize: 12 }}>Loading composer…</div>
+                ) : resolvedDeal === false ? (
+                  <div style={{ padding: 24, color: '#a8a29e', fontSize: 13, lineHeight: 1.55 }}>
+                    <div style={{ color: '#fafaf9', fontWeight: 700, marginBottom: 6 }}>No active deal linked</div>
+                    This thread isn't connected to a live deal, so the composer can't send under a deal context. Use 👥 Contacts to link {activeItem.thread.counterpart || 'this number'} to a deal, then come back here to reply.
                   </div>
-                ))}
+                ) : (
+                  <OutboundMessages
+                    dealId={resolvedDeal.id}
+                    deal={resolvedDeal}
+                    vendors={[]}
+                    startCall={startCall}
+                    callStatus={callStatus}
+                    onOpenDisposition={onOpenCallDisposition}
+                  />
+                )}
               </div>
             </>
           ) : (
@@ -11832,6 +11902,21 @@ function CommunicationsView({ onSelect }) {
                       </button>
                       <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.direction === 'inbound' ? c.from_number : c.to_number}{c.deals?.name ? ` · ${c.deals.name}` : ''}</div>
                     </div>
+                    {/* Quick "Call back" on the call detail header (#324). */}
+                    {startCall && (() => {
+                      const num = c.direction === 'inbound' ? c.from_number : c.to_number;
+                      if (!num) return null;
+                      const busy = callStatus && callStatus !== 'ended';
+                      return (
+                        <button
+                          onClick={() => startCall({ phone: num, name: activeItem.name, deal_id: c.deal_id, contact_id: c.contact_id })}
+                          disabled={!!busy}
+                          style={{ ...btnGhost, fontSize: 11, padding: '5px 10px', color: busy ? '#57534e' : '#22c55e', borderColor: busy ? '#292524' : '#16653433' }}
+                          title={busy ? 'A call is already in progress' : `Call ${num}`}>
+                          📞 Call back
+                        </button>
+                      );
+                    })()}
                     {(c.deal_id || c.contact_id) && (
                       <button onClick={() => routeTo(c.deal_id, c.contact_id)} style={{ ...btnGhost, fontSize: 11, padding: '5px 10px' }}>Open in deal →</button>
                     )}
