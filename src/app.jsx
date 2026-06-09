@@ -20643,6 +20643,13 @@ function PriorityBadge({ p }) {
 function Vendors({ items, dealId, logAct, reload }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState({ name: "", role: "", phone: "", status: "Active", notes: "" });
+  // Edit-in-place state. editingId is null when no row is being edited;
+  // when set, the matching card swaps from read-only to the same form
+  // shape used by the add flow. Justin 2026-06-09: vendors used to be
+  // delete-only after creation, so a typo in the phone meant deleting +
+  // re-adding the row.
+  const [editingId, setEditingId] = useState(null);
+  const [editDraft, setEditDraft] = useState({ name: "", role: "", phone: "", status: "Active", notes: "" });
   const sc = (s) => ({ "Complete": "#10b981", "Active": "#f59e0b", "Pending": "#3b82f6", "Quoted": "#a78bfa" })[s] || "#a8a29e";
 
   const add = async () => {
@@ -20660,6 +20667,44 @@ function Vendors({ items, dealId, logAct, reload }) {
     await logAct(`Removed vendor: ${it?.name}`);
     reload();
   };
+  const startEdit = (v) => {
+    setEditingId(v.id);
+    setEditDraft({
+      name:   v.name   || "",
+      role:   v.role   || "",
+      phone:  v.phone  || "",
+      status: v.status || "Active",
+      notes:  v.notes  || "",
+    });
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditDraft({ name: "", role: "", phone: "", status: "Active", notes: "" });
+  };
+  const saveEdit = async () => {
+    if (!editingId || !editDraft.name) return;
+    const before = items.find(i => i.id === editingId);
+    await sb.from('vendors').update({
+      name:   editDraft.name,
+      role:   editDraft.role,
+      phone:  editDraft.phone,
+      status: editDraft.status,
+      notes:  editDraft.notes,
+    }).eq('id', editingId);
+    // Compose a terse activity entry that names every field that changed.
+    const diffs = [];
+    if ((before?.name   || "") !== editDraft.name)   diffs.push(`name`);
+    if ((before?.role   || "") !== editDraft.role)   diffs.push(`role`);
+    if ((before?.phone  || "") !== editDraft.phone)  diffs.push(`phone`);
+    if ((before?.status || "") !== editDraft.status) diffs.push(`status`);
+    if ((before?.notes  || "") !== editDraft.notes)  diffs.push(`notes`);
+    await logAct(diffs.length
+      ? `Edited vendor ${editDraft.name}: ${diffs.join(', ')}`
+      : `Touched vendor ${editDraft.name} (no changes)`
+    );
+    cancelEdit();
+    reload();
+  };
 
   return (
     <Card title={`Vendors (${items.length})`} action={<button onClick={() => setAdding(!adding)} style={btnPrimary}>{adding ? "Cancel" : "+ Add"}</button>}>
@@ -20674,20 +20719,39 @@ function Vendors({ items, dealId, logAct, reload }) {
         </div>
       )}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-        {items.map(v => (
-          <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14 }}>
-            <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</div>
-                <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{v.role}</div>
+        {items.map(v => {
+          const isEditing = editingId === v.id;
+          if (isEditing) {
+            return (
+              <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #d97706", borderRadius: 8, padding: 14, gridColumn: "1 / -1" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1.5fr 1fr 1fr 2fr auto auto", gap: 8, alignItems: "end" }}>
+                  <Field label="Name"><input value={editDraft.name} onChange={e => setEditDraft({ ...editDraft, name: e.target.value })} style={inputStyle} placeholder="Vendor" /></Field>
+                  <Field label="Role"><input value={editDraft.role} onChange={e => setEditDraft({ ...editDraft, role: e.target.value })} style={inputStyle} placeholder="What they do" /></Field>
+                  <Field label="Phone"><input value={editDraft.phone} onChange={e => setEditDraft({ ...editDraft, phone: e.target.value })} style={inputStyle} placeholder="555-1234" /></Field>
+                  <Field label="Status"><select value={editDraft.status} onChange={e => setEditDraft({ ...editDraft, status: e.target.value })} style={inputStyle}><option>Active</option><option>Complete</option><option>Pending</option><option>Quoted</option></select></Field>
+                  <Field label="Notes"><input value={editDraft.notes} onChange={e => setEditDraft({ ...editDraft, notes: e.target.value })} style={inputStyle} /></Field>
+                  <button onClick={saveEdit} style={{ ...btnPrimary, padding: "8px 14px" }}>Save</button>
+                  <button onClick={cancelEdit} style={{ ...btnGhost, padding: "8px 14px" }}>Cancel</button>
+                </div>
               </div>
-              <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em", flexShrink: 0, alignSelf: "center" }}>{(v.status || "").toUpperCase()}</span>
-              <button onClick={() => del(v.id)} style={{ ...btnGhost, flexShrink: 0, padding: "2px 6px", lineHeight: 1, fontSize: 16 }}>×</button>
+            );
+          }
+          return (
+            <div key={v.id} style={{ background: "#0c0a09", border: "1px solid #292524", borderRadius: 8, padding: 14 }}>
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{v.name}</div>
+                  <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{v.role}</div>
+                </div>
+                <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 9, fontWeight: 700, background: `${sc(v.status)}22`, color: sc(v.status), letterSpacing: "0.05em", flexShrink: 0, alignSelf: "center" }}>{(v.status || "").toUpperCase()}</span>
+                <button onClick={() => startEdit(v)} title="Edit vendor" style={{ ...btnGhost, flexShrink: 0, padding: "2px 8px", lineHeight: 1, fontSize: 13 }}>✏️</button>
+                <button onClick={() => del(v.id)} title="Remove vendor" style={{ ...btnGhost, flexShrink: 0, padding: "2px 6px", lineHeight: 1, fontSize: 16 }}>×</button>
+              </div>
+              {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}><a href={`tel:${v.phone}`} style={{ color: "inherit", textDecoration: "none" }}>{v.phone}</a></div>}
+              {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
             </div>
-            {v.phone && <div style={{ fontSize: 12, color: "#d97706", fontFamily: "'DM Mono', monospace", marginTop: 6 }}><a href={`tel:${v.phone}`} style={{ color: "inherit", textDecoration: "none" }}>{v.phone}</a></div>}
-            {v.notes && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 8, lineHeight: 1.5 }}>{v.notes}</div>}
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Card>
   );
