@@ -25680,12 +25680,78 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
     if (c.phone && startCall) startCall(c);
   };
 
-  // ── Hide thread ───────────────────────────────────────────────────────────
+  // ── Hide thread (legacy - kept so any older callers don't crash) ─────
+  // Was wired to the ✕ in the thread header until 2026-06-09, but the hide
+  // never survived refresh (hiddenThreads state never re-loaded from
+  // thread_hidden), AND Justin always read the ✕ as a delete. The ✕ now
+  // calls unlinkContactFromDeal instead. Leaving this function in place
+  // because removing it would have to coordinate with the thread_hidden
+  // table cleanup, which is out of scope here.
   const hideThread = async (c) => {
     const key = c.contact_id ? `${dealId}:contact:${c.contact_id}` : `${dealId}:phone:${normalizePhone(c.phone)}`;
     await sb.from('thread_hidden').upsert({ deal_id: dealId, thread_key: key });
     setHiddenThreads(prev => new Set([...prev, normalizePhone(c.phone)]));
     if (activeContact?.phone === c.phone) setActiveContact(contacts.find(x => x.phone !== c.phone) || null);
+  };
+
+  // ── Unlink contact from this deal ────────────────────────────────────────
+  // What the ✕ in the thread header actually does now (Justin 2026-06-09:
+  // 'you hit the X button to delete that contact, then you refresh. The
+  // contact comes back, so the delete is not sticking.'). Mirrors the
+  // Contacts-tab Unlink at line ~28023: deletes the contact_deals row for
+  // (deal_id, contact_id). The contact row itself stays - it might be on
+  // other deals.
+  const unlinkContactFromDeal = async (c) => {
+    if (!c || !c.contact_id) return;
+    if (!window.confirm(`Remove ${c.name || 'this contact'} from this deal? They'll stay in your contacts but won't appear on this deal anymore.`)) return;
+    const { error } = await sb.from('contact_deals')
+      .delete()
+      .eq('deal_id', dealId)
+      .eq('contact_id', c.contact_id);
+    if (error) { alert('Could not remove contact: ' + error.message); return; }
+    // Local state - drop them from the visible contact list AND the active
+    // tab if they were the active one. The realtime channel on this page
+    // doesn't sub to contact_deals, so manual reload is what makes it stick.
+    await loadDealContacts();
+    if (activeContact?.contact_id === c.contact_id) {
+      setActiveContact(null);
+    }
+  };
+
+  // ── Inline edit contact (first / last / phone) ───────────────────────────
+  // Justin 2026-06-09: 'we need to be able to edit their information: first
+  // and last name and phone number.' Mirrors the inline edit pattern from
+  // ContactsTab (~line 28052). Saves to public.contacts; the contact's name
+  // shows up everywhere via FK joins so the rest of the UI updates next load.
+  const [editingContact, setEditingContact] = useState(null); // contact obj
+  const [editDraftContact, setEditDraftContact] = useState({ first: '', last: '', phone: '' });
+  const [editBusy, setEditBusy] = useState(false);
+  const startEditContact = (c) => {
+    if (!c || !c.contact_id) return;
+    const parts = (c.name || '').trim().split(/\s+/);
+    setEditDraftContact({
+      first: parts[0] || '',
+      last: parts.slice(1).join(' '),
+      phone: c.phone || '',
+    });
+    setEditingContact(c);
+  };
+  const cancelEditContact = () => { setEditingContact(null); setEditDraftContact({ first: '', last: '', phone: '' }); };
+  const saveEditContact = async () => {
+    if (!editingContact?.contact_id || editBusy) return;
+    const first = editDraftContact.first.trim();
+    const last = editDraftContact.last.trim();
+    const fullName = [first, last].filter(Boolean).join(' ');
+    if (!fullName) { alert('Name is required'); return; }
+    setEditBusy(true);
+    const { error } = await sb.from('contacts').update({
+      name: fullName,
+      phone: editDraftContact.phone.trim() || null,
+    }).eq('id', editingContact.contact_id);
+    setEditBusy(false);
+    if (error) { alert('Could not save: ' + error.message); return; }
+    cancelEditContact();
+    await loadDealContacts();
   };
 
   // ── Resolve unmatched ─────────────────────────────────────────────────────
@@ -26217,9 +26283,68 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                   </select>
               }
             </div>
-            <button title="Hide thread" onClick={() => hideThread(activeContact)}
-              style={{ background: 'transparent', border: '1px solid #292524', color: '#44403c', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
-              ✕
+            {/* Edit contact (pencil) - Justin 2026-06-09: 'we need to be
+                able to edit their information: first and last name and
+                phone number.' Only on a real linked contact (not Everyone,
+                not raw-phone threads with no contact_id). */}
+            {activeContact && !activeContact._everyone && activeContact.contact_id && (
+              <button title="Edit contact" onClick={() => startEditContact(activeContact)}
+                style={{ background: 'transparent', border: '1px solid #292524', color: '#a8a29e', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
+                ✏
+              </button>
+            )}
+            {/* Remove contact from this deal - Justin 2026-06-09: 'you hit
+                the X button to delete that contact, then you refresh. The
+                contact comes back.' Used to call hideThread (which never
+                survived refresh); now actually unlinks contact_deals. */}
+            {activeContact && !activeContact._everyone && activeContact.contact_id ? (
+              <button title="Remove from this deal" onClick={() => unlinkContactFromDeal(activeContact)}
+                style={{ background: 'transparent', border: '1px solid #292524', color: '#fca5a5', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
+                ✕
+              </button>
+            ) : (
+              <button title="Hide thread" onClick={() => hideThread(activeContact)}
+                style={{ background: 'transparent', border: '1px solid #292524', color: '#44403c', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
+                ✕
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Inline edit-contact form - appears below the thread header when
+          the user clicks the ✏ pencil. Pencil + form are in the OutboundMessages
+          (Comms tab) thread header, NOT the separate Contacts tab.
+          Justin 2026-06-09: 'we need to be able to edit their information:
+          first and last name and phone number.' */}
+      {editingContact && (
+        <div style={{ padding: '10px 14px', borderBottom: '1px solid #1c1917', background: '#141210', flexShrink: 0 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: '#d97706', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 8 }}>
+            ✏ Edit {editingContact.name}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+            <input value={editDraftContact.first}
+              onChange={e => setEditDraftContact(d => ({ ...d, first: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') saveEditContact(); if (e.key === 'Escape') cancelEditContact(); }}
+              placeholder="First name" autoFocus
+              style={{ flex: 1, minWidth: 120, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, outline: 'none' }} />
+            <input value={editDraftContact.last}
+              onChange={e => setEditDraftContact(d => ({ ...d, last: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') saveEditContact(); if (e.key === 'Escape') cancelEditContact(); }}
+              placeholder="Last name"
+              style={{ flex: 1, minWidth: 120, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, outline: 'none' }} />
+            <input value={editDraftContact.phone}
+              onChange={e => setEditDraftContact(d => ({ ...d, phone: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') saveEditContact(); if (e.key === 'Escape') cancelEditContact(); }}
+              placeholder="+1 (555) 000-0000"
+              style={{ flex: 1, minWidth: 160, background: '#1c1917', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', padding: '6px 10px', fontSize: 13, fontFamily: "'DM Mono', monospace", outline: 'none' }} />
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+            <button onClick={cancelEditContact} disabled={editBusy}
+              style={{ background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 6, padding: '6px 12px', fontSize: 12, cursor: 'pointer' }}>Cancel</button>
+            <button onClick={saveEditContact} disabled={editBusy || (!editDraftContact.first.trim() && !editDraftContact.last.trim())}
+              style={{ background: editBusy ? '#292524' : '#d97706', border: 'none', color: '#0c0a09', borderRadius: 6, padding: '6px 14px', fontSize: 12, fontWeight: 700, cursor: editBusy ? 'default' : 'pointer' }}>
+              {editBusy ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
