@@ -39,6 +39,10 @@ Deno.serve(async (req: Request) => {
   // column holds several numbers in one string (number-matching misses those).
   const paramDealId    = (form.get('dealId')?.toString() || '').trim();
   const paramContactId = (form.get('contactId')?.toString() || '').trim();
+  // userId: the DCC user who placed the call (the team identity is shared on
+  // the Twilio side under 'dcc-fundlocators', so we have to receive this from
+  // the client). Optional: older clients won't send it; we just store null.
+  const paramUserId    = (form.get('userId')?.toString() || '').trim();
 
   if (!to) {
     return new Response(
@@ -118,6 +122,11 @@ Deno.serve(async (req: Request) => {
       status:          'ringing',
       twilio_call_sid: callSid,
       started_at:      new Date().toISOString(),
+      // Per-agent attribution. The DCC Voice SDK passes the placing user's
+      // session.user.id as a connect() param so we can answer "who called
+      // this homeowner?" without forcing per-agent Twilio identities or
+      // per-agent phone numbers.
+      user_id:         paramUserId || null,
     });
   } catch (_) {
     // Non-fatal — logging failure shouldn't block the call
