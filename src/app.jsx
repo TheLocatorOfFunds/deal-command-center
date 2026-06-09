@@ -3959,7 +3959,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               onSelect={onSelect}
               startCall={startCall}
               callStatus={callStatus}
-              onOpenCallDisposition={setPendingDisposition}
+              onOpenCallDisposition={onOpenCallDisposition}
             />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
