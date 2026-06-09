@@ -277,8 +277,33 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ### Justin · fervent-napier-9c4b2a
 
-**Branch:** 
+**Branch:** `justin/contract-human-confirmed-build29` (worktree)
 **Last updated (auto):** 2026-06-09 14:07 UTC
+
+**2026-06-09 (Lauren + Case Details session):**
+- Fixed Lauren `get_deal_url` tool hallucination — `lauren_get_deal_url`'s
+  `is_admin()/is_va()` gate was short-circuiting to NULL under service_role.
+  Same bug found in `lauren_get_deal_detail`, `lauren_lookup_deal_notes`,
+  `lauren_lookup_docket_events`. Two migrations shipped + applied:
+  - `20260528200534_lauren_get_deal_url_service_role_bypass.sql`
+  - `20260528201110_lauren_rpcs_service_role_bypass.sql`
+- Re-deployed `lauren-team-respond` EF (v61) with `verify_jwt: false` so the
+  pg-trigger path works. QA confirmed: Lauren returns real Castle URLs.
+- **Case Details field-disappear bug** — diagnosed two stacked races:
+  1. dirty-key buffer (Nathan/Inaam, b368881) protects the KEY NAME
+     from realtime echo, but not the VALUE.
+  2. HTTP/2 multiplexed PATCHes per keystroke return out of order; an
+     earlier-write's echo lands AFTER a later keystroke and overwrites
+     localMeta — same field, wrong value. Live repro: 31-char Zillow
+     URL → 16 chars in DB.
+  Shipped 350ms debounce (`useDealMetaBuffer` hook) at `167d10e`. PR #314
+  came from a stale branch and silently reverted the bundle 2 min later.
+  Re-applied at `a1dd5cd` (the commit log + the source comment both name
+  PR #314 explicitly so future grep-back is easy).
+  Deploy verified: deployed bundle (hash `7dbd663d9089`) byte-identical
+  to local; `setTimeout(f,350)` + `pendingPatch` present. Live keystroke
+  QA on prod blocked by data-safety classifier (would mutate a real
+  deal). Justin to spot-check in his own session.
 
 ### Justin · outbound-calling
 
