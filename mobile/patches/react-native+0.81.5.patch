@@ -1,0 +1,17 @@
+diff --git a/node_modules/react-native/ReactCommon/hermes/executor/HermesExecutorFactory.cpp b/node_modules/react-native/ReactCommon/hermes/executor/HermesExecutorFactory.cpp
+index 0b72b72..fee1f59 100644
+--- a/node_modules/react-native/ReactCommon/hermes/executor/HermesExecutorFactory.cpp
++++ b/node_modules/react-native/ReactCommon/hermes/executor/HermesExecutorFactory.cpp
+@@ -7,6 +7,12 @@
+ 
+ #include "HermesExecutorFactory.h"
+ 
++// XCODE26_PATCH: Xcode 26.5's libc++ no longer transitively includes <thread>
++// or <atomic> via the headers below. Add explicit includes so std::thread,
++// std::this_thread, and std::atomic resolve.
++#include <atomic>
++#include <thread>
++
+ #include <cxxreact/MessageQueueThread.h>
+ #include <cxxreact/TraceSection.h>
+ #include <hermes/hermes.h>
