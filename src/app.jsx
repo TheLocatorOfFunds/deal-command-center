@@ -25547,11 +25547,17 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
 
   // Restore persisted contact tab, or default to Everyone.
   // Stored as the contact's phone number (or '_everyone') in localStorage.
+  // Compares via normalizePhone so any caller (incl. the global Comms view at
+  // #324 which writes the canonical thread counterpart) can pre-select a tab
+  // regardless of phone formatting (E.164 vs '(NNN) NNN-NNNN' vs digits-only).
   useEffect(() => {
     if (activeContact) return; // already set (e.g. deep-link)
     const stored = localStorage.getItem(`comms_contact_${dealId}`);
     if (stored && stored !== '_everyone' && contacts.length > 0) {
-      const match = contacts.find(c => c.phone === stored);
+      const want = normalizePhone(stored);
+      const match = want
+        ? contacts.find(c => normalizePhone(c.phone) === want)
+        : contacts.find(c => c.phone === stored);
       if (match) { setActiveContact(match); return; }
     }
     setActiveContact(EVERYONE_CONTACT);
