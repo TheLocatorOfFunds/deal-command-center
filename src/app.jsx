@@ -1043,11 +1043,12 @@ function DealCommandCenter({ session, profile }) {
             try { return decodeURIComponent(s); } catch { return s; }
           } catch { return null; }
         };
-        const from     = getP('from')     || call.parameters?.From || 'Unknown';
-        const dealId   = getP('dealId')   || null;
-        const dealName = getP('dealName') || null;
-        console.log('[incoming] from:', from, 'dealId:', dealId, 'dealName:', dealName);
-        setIncomingCall({ call, from, callerName: getP('callerName') || null, dealId, dealName });
+        const from       = getP('from')       || call.parameters?.From || 'Unknown';
+        const dealId     = getP('dealId')     || null;
+        const dealName   = getP('dealName')   || null;
+        const assignedTo = getP('assignedTo') || null;
+        console.log('[incoming] from:', from, 'dealId:', dealId, 'dealName:', dealName, 'assignedTo:', assignedTo);
+        setIncomingCall({ call, from, callerName: getP('callerName') || null, dealId, dealName, assignedTo });
         // Flash tab title so call is visible even in background tabs
         startTitleFlash();
         // SDK plays its own ringtone automatically — no custom audio needed
@@ -2552,6 +2553,18 @@ function DealCommandCenter({ session, profile }) {
                       {incomingCall.dealId}
                     </a>
                   </>
+              }
+            </div>
+          )}
+          {/* Assignee line. Only shown when we have a matched deal (no
+              deal context = no assignee context). Unassigned is shown
+              explicitly so a glance tells whether anyone owns the deal. */}
+          {incomingCall.dealId && (
+            <div style={{ fontSize: 12, color: '#a8a29e', marginTop: -6 }}>
+              <span style={{ color: '#78716c' }}>Assigned to: </span>
+              {incomingCall.assignedTo
+                ? <span style={{ color: '#fafaf9', fontWeight: 600 }}>{incomingCall.assignedTo}</span>
+                : <span style={{ color: '#a8a29e', fontStyle: 'italic' }}>Unassigned</span>
               }
             </div>
           )}
