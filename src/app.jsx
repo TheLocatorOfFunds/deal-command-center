@@ -71,6 +71,38 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 // Mirror of the same helper in portal.html.
 const cleanCountyName = (s) => (s || '').replace(/\s*county\s*$/i, '').trim();
 
+// ─── Phone display + "via NNNN" chip (universal across the DCC) ────
+// Justin 2026-06-09: phone-call visibility must match SMS visibility
+// EVERYWHERE a call shows up (Comms tab, per-deal Comms, Call History,
+// phone popover Recents, AI brief receipts, per-deal Call Recordings).
+// One helper, one truth.
+//
+// OUR_TEAM_NUMBERS: the team-side numbers we dial/receive on. 5440 =
+// Twilio voice line (also outbound SMS); 2306 = Nathan's iPhone bridge
+// (inbound forwarding + iMessage out). Any other from/to means the
+// counterparty.
+const OUR_TEAM_NUMBERS = ['+15139985440', '+15135162306'];
+const fmtPhoneUS = (num) => {
+  const d = (num || '').replace(/\D/g, '');
+  if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+  if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+  return num || '—';
+};
+// Accepts any row with from_number/to_number (call_logs OR messages_outbound).
+// Returns { ourNum, last4, color } when one of our numbers is on the row, else null.
+const commsViaChip = (row) => {
+  if (!row) return null;
+  const ourNum = OUR_TEAM_NUMBERS.includes(row.from_number) ? row.from_number
+               : OUR_TEAM_NUMBERS.includes(row.to_number)   ? row.to_number
+               : null;
+  if (!ourNum) return null;
+  const last4 = ourNum.replace(/\D/g, '').slice(-4);
+  const color = ourNum === '+15139985440' ? '#10b981'   // Twilio voice / SMS → green
+              : ourNum === '+15135162306' ? '#60a5fa'   // iPhone bridge / iMessage → blue
+              : '#78716c';
+  return { ourNum, last4, color };
+};
+
 // Convert plain text containing http(s) URLs into a mixed array of
 // strings + <a> elements so chat / note / message bodies render
 // clickable links instead of inert text. Per Nathan 2026-05-05 — Eric
@@ -2248,6 +2280,7 @@ function DealCommandCenter({ session, profile }) {
                           const dealName = c.deals?.name || null;
                           const statusColor = c.status === 'completed' ? '#10b981' : c.status === 'missed' ? '#ef4444' : '#78716c';
                           const dur = c.duration_seconds ? `${Math.floor(c.duration_seconds/60)}:${String(c.duration_seconds%60).padStart(2,'0')}` : null;
+                          const via = commsViaChip(c);
                           return (
                             <div key={c.id} style={{ padding: '10px 14px', borderBottom: '1px solid #292524', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}
                               onClick={() => {
@@ -2259,6 +2292,18 @@ function DealCommandCenter({ session, profile }) {
                               <div style={{ flex: 1, minWidth: 0 }}>
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{contactName || displayNum}</div>
                                 {contactName && <div style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{displayNum}</div>}
+                                {/* From → To + via chip (SMS-parity, Justin 2026-06-09) */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
+                                  <span style={{ fontSize: 9, color: '#57534e', fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                    {fmtPhoneUS(c.from_number)} → {fmtPhoneUS(c.to_number)}
+                                  </span>
+                                  {via && (
+                                    <span title={`${isInbound ? 'Received on' : 'Placed from'} ${via.ourNum}`}
+                                          style={{ fontSize: 9, color: via.color, fontFamily: "'DM Mono', monospace", border: `1px solid ${via.color}44`, borderRadius: 3, padding: '0 3px', flexShrink: 0 }}>
+                                      {via.last4}
+                                    </span>
+                                  )}
+                                </div>
                                 {dealName && <div style={{ fontSize: 10, color: '#d97706' }}>{dealName}</div>}
                               </div>
                               <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -3132,6 +3177,7 @@ function CallHistoryView({ onSelect }) {
             const displayNum = fmtNum(isInbound ? c.from_number : c.to_number);
             const contactName = c.contacts?.name || null;
             const dealName = c.deals?.name || null;
+            const via = commsViaChip(c);
             return (
               <div key={c.id} style={{ padding: '12px 16px', borderBottom: i < filtered.length-1 ? '1px solid #1c1917' : 'none' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
@@ -3145,8 +3191,22 @@ function CallHistoryView({ onSelect }) {
                     {contactName || displayNum}
                   </div>
                   {contactName && <div style={{ fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{displayNum}</div>}
+                  {/* From → To with the "via NNNN" chip (SMS-parity per Justin
+                      2026-06-09: every call surface shows what number it came
+                      from and what number it went to). */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+                    <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>
+                      {fmtPhoneUS(c.from_number)} → {fmtPhoneUS(c.to_number)}
+                    </span>
+                    {via && (
+                      <span title={`${isInbound ? 'Received on' : 'Placed from'} ${via.ourNum}`}
+                            style={{ fontSize: 9, color: via.color, fontFamily: "'DM Mono', monospace", border: `1px solid ${via.color}44`, borderRadius: 4, padding: '0 4px' }}>
+                        via {via.last4}
+                      </span>
+                    )}
+                  </div>
                   {dealName && (
-                    <button onClick={() => onSelect(c.deal_id)} style={{ background: 'none', border: 'none', color: '#d97706', fontSize: 10, cursor: 'pointer', padding: 0, fontFamily: 'inherit', textDecoration: 'underline' }}>
+                    <button onClick={() => onSelect(c.deal_id)} style={{ background: 'none', border: 'none', color: '#d97706', fontSize: 10, cursor: 'pointer', padding: 0, fontFamily: 'inherit', textDecoration: 'underline', marginTop: 2 }}>
                       {dealName}
                     </button>
                   )}
@@ -11369,32 +11429,13 @@ function CommunicationsView({ onSelect }) {
   };
   const fmtDur = (s) => s ? `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}` : '—';
 
-  // Format a phone for display. (513) 555-1234 style. Returns input as-is
-  // when it isn't a normal 10/11-digit US number.
-  const fmtPhone = (num) => {
-    const d = (num || '').replace(/\D/g, '');
-    if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
-    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
-    return num || '—';
-  };
-
-  // "via NNNN" chip helpers, mirrored from the per-deal Comms tab SMS row
-  // (Justin 2026-06-09: 'the same way that texting shows what number it
-  // came from and what number it went to'). 5440 = Twilio voice, green.
-  // 2306 = the iPhone bridge / inbound forwarding leg, blue. Any other
-  // number we observe on call_logs gets the neutral grey treatment.
-  const CALL_OUR_NUMS = ['+15139985440', '+15135162306'];
-  const callVia = (c) => {
-    const ourNum = CALL_OUR_NUMS.includes(c.from_number) ? c.from_number
-                 : CALL_OUR_NUMS.includes(c.to_number)   ? c.to_number
-                 : null;
-    if (!ourNum) return null;
-    const last4 = ourNum.replace(/\D/g, '').slice(-4);
-    const color = ourNum === '+15139985440' ? '#10b981'
-                : ourNum === '+15135162306' ? '#60a5fa'
-                : '#78716c';
-    return { ourNum, last4, color };
-  };
+  // Phone formatter + "via NNNN" chip - module-scoped (fmtPhoneUS,
+  // commsViaChip near the top of this file). Same helpers used by
+  // CallHistoryView, the phone popover Recents tab, the deal AI brief
+  // receipts panel, the per-deal CallRecordings card, and the per-deal
+  // Comms thread, so the SMS-parity render is identical everywhere.
+  const fmtPhone = fmtPhoneUS;
+  const callVia = commsViaChip;
 
   // ── Load + group text threads across all deals ──────────────────────
   const loadThreads = React.useCallback(async () => {
@@ -19475,8 +19516,11 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
         .order('event_date', { ascending: false })
         .limit(10),
       // #240 — last 3 calls + 3 texts on this deal for the receipts panel.
+      // from_number/to_number added 2026-06-09 so the panel can render the
+      // same SMS-parity "from → to · via NNNN" row used everywhere else
+      // calls surface (Justin's universal-changes rule).
       sb.from('call_logs')
-        .select('id, direction, status, started_at, duration_seconds, summary, contacts(name)')
+        .select('id, direction, status, started_at, duration_seconds, summary, from_number, to_number, contacts(name)')
         .eq('deal_id', dealId)
         .order('started_at', { ascending: false })
         .limit(3),
@@ -19722,14 +19766,27 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
             )}
             {recentCalls.length > 0 && (
               <div style={{ marginBottom: recentMsgs.length > 0 ? 8 : 0 }}>
-                {recentCalls.map(c => (
+                {recentCalls.map(c => {
+                  const via = commsViaChip(c);
+                  return (
                   <div key={c.id} onClick={() => onJumpToTab && onJumpToTab('comms')} style={rowStyle('comms')} title={onJumpToTab ? 'Open in Comms tab' : undefined}>
                     <span style={dateCell}>{fmtDay(c.started_at)}</span>
                     <span style={{ color: '#10b981' }}>📞</span>{' '}
                     <span style={labelCell}>{c.direction === 'inbound' ? '⬅' : '➡'} {(c.contacts && c.contacts.name) || (c.direction === 'inbound' ? 'inbound' : 'outbound')}</span>
+                    {/* From → To + via chip (SMS-parity per Justin 2026-06-09). */}
+                    {(c.from_number || c.to_number) && (
+                      <span style={{ ...tailCell, fontFamily: "'DM Mono', monospace", fontSize: 10, marginLeft: 6 }}>
+                        {' · '}{fmtPhoneUS(c.from_number)} → {fmtPhoneUS(c.to_number)}
+                        {via && <span title={`${c.direction === 'inbound' ? 'Received on' : 'Placed from'} ${via.ourNum}`}
+                                      style={{ marginLeft: 5, color: via.color, border: `1px solid ${via.color}44`, borderRadius: 3, padding: '0 3px' }}>
+                          {via.last4}
+                        </span>}
+                      </span>
+                    )}
                     {c.summary && <span style={tailCell}> · {String(c.summary).slice(0, 140)}</span>}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
             {recentMsgs.length > 0 && (
@@ -24410,6 +24467,7 @@ function CallRecordings({ dealId }) {
         {calls.map(c => {
           const isOpen = expanded[c.id];
           const isIn   = c.direction === 'inbound';
+          const via    = commsViaChip(c);
           return (
             <div key={c.id} style={{ background: '#0f0d0c', border: '1px solid #1c1917', borderRadius: 10, overflow: 'hidden' }}>
               {/* Header row */}
@@ -24419,10 +24477,22 @@ function CallRecordings({ dealId }) {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9' }}>
-                    {isIn ? c.from_number : c.to_number}
+                    {fmtPhoneUS(isIn ? c.from_number : c.to_number)}
                     <span style={{ fontSize: 11, fontWeight: 400, color: '#57534e', marginLeft: 8 }}>
                       {isIn ? 'inbound' : 'outbound'} · {fmt(c.duration_seconds)}
                     </span>
+                  </div>
+                  {/* From → To + via chip (SMS-parity per Justin 2026-06-09). */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
+                    <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>
+                      {fmtPhoneUS(c.from_number)} → {fmtPhoneUS(c.to_number)}
+                    </span>
+                    {via && (
+                      <span title={`${isIn ? 'Received on' : 'Placed from'} ${via.ourNum}`}
+                            style={{ fontSize: 9, color: via.color, fontFamily: "'DM Mono', monospace", border: `1px solid ${via.color}44`, borderRadius: 3, padding: '0 4px' }}>
+                        via {via.last4}
+                      </span>
+                    )}
                   </div>
                   <div style={{ fontSize: 11, color: '#44403c', marginTop: 1 }}>{fmtDate(c.called_at)}</div>
                 </div>
@@ -26269,16 +26339,29 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                   )
                 ) : null;
 
+                const callVia = commsViaChip(m);
                 return (
                   <div key={'c-' + m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: 12 }}>
                     <div style={{ maxWidth: '85%', background: '#1c1917', border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, borderRadius: 8, padding: '10px 14px', width: '100%' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: m.recording_url ? 8 : 0 }}>
-                        <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                           <span style={{ fontSize: 12, fontWeight: 700, color, letterSpacing: '0.04em' }}>{label}</span>
-                          <span style={{ fontSize: 11, color: '#78716c', marginLeft: 8 }}>· {durText}</span>
-                          {m.auto_sms_sent && <span style={{ fontSize: 10, color: '#6ee7b7', marginLeft: 8 }}>· auto-SMS sent</span>}
+                          <span style={{ fontSize: 11, color: '#78716c' }}>· {durText}</span>
+                          {m.auto_sms_sent && <span style={{ fontSize: 10, color: '#6ee7b7' }}>· auto-SMS sent</span>}
+                          {callVia && (
+                            <span title={`${isInbound ? 'Received on' : 'Placed from'} ${callVia.ourNum}`}
+                                  style={{ fontSize: 10, color: callVia.color, fontFamily: "'DM Mono', monospace", border: `1px solid ${callVia.color}44`, borderRadius: 4, padding: '1px 5px' }}>
+                              via {callVia.last4}
+                            </span>
+                          )}
                         </div>
                         <span style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>{time}</span>
+                      </div>
+                      {/* From → To row (SMS-parity per Justin 2026-06-09: every
+                          call surface shows what number it came from and what
+                          number it went to). */}
+                      <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", marginTop: 4, marginBottom: m.recording_url ? 8 : 0 }}>
+                        {fmtPhoneUS(m.from_number)} → {fmtPhoneUS(m.to_number)}
                       </div>
                       {m.recording_url && (
                         <audio controls src={m.recording_url} style={{ width: '100%', height: 32 }}>
