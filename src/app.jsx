@@ -11369,6 +11369,33 @@ function CommunicationsView({ onSelect }) {
   };
   const fmtDur = (s) => s ? `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}` : '—';
 
+  // Format a phone for display. (513) 555-1234 style. Returns input as-is
+  // when it isn't a normal 10/11-digit US number.
+  const fmtPhone = (num) => {
+    const d = (num || '').replace(/\D/g, '');
+    if (d.length === 11 && d.startsWith('1')) return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
+    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
+    return num || '—';
+  };
+
+  // "via NNNN" chip helpers, mirrored from the per-deal Comms tab SMS row
+  // (Justin 2026-06-09: 'the same way that texting shows what number it
+  // came from and what number it went to'). 5440 = Twilio voice, green.
+  // 2306 = the iPhone bridge / inbound forwarding leg, blue. Any other
+  // number we observe on call_logs gets the neutral grey treatment.
+  const CALL_OUR_NUMS = ['+15139985440', '+15135162306'];
+  const callVia = (c) => {
+    const ourNum = CALL_OUR_NUMS.includes(c.from_number) ? c.from_number
+                 : CALL_OUR_NUMS.includes(c.to_number)   ? c.to_number
+                 : null;
+    if (!ourNum) return null;
+    const last4 = ourNum.replace(/\D/g, '').slice(-4);
+    const color = ourNum === '+15139985440' ? '#10b981'
+                : ourNum === '+15135162306' ? '#60a5fa'
+                : '#78716c';
+    return { ourNum, last4, color };
+  };
+
   // ── Load + group text threads across all deals ──────────────────────
   const loadThreads = React.useCallback(async () => {
     const { data: msgs } = await sb.from('messages_outbound')
@@ -11509,6 +11536,7 @@ function CommunicationsView({ onSelect }) {
                 }
                 // call row
                 const c = item.call;
+                const via = callVia(c);
                 return (
                   <button key={item.id} onClick={() => selectItem(item)}
                     style={{ display: 'block', width: '100%', textAlign: 'left', padding: '10px 12px', background: activeKey === item.id ? '#1c1917' : 'transparent',
@@ -11519,8 +11547,22 @@ function CommunicationsView({ onSelect }) {
                       </span>
                       <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(c.started_at)}</span>
                     </div>
-                    <div style={{ fontSize: 11, color: '#a8a29e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
-                      📞 {c.direction === 'inbound' ? 'Inbound' : 'Outbound'} call · {c.status || '—'} · {fmtDur(c.duration_seconds)}{c.recording_url ? ' · 🎙' : ''}{c.agent?.name ? ` · ${c.direction === 'inbound' ? 'ans by' : 'by'} ${c.agent.name}` : ''}
+                    <div style={{ fontSize: 11, color: '#a8a29e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>📞 {c.direction === 'inbound' ? 'Inbound' : 'Outbound'} call · {c.status || '—'} · {fmtDur(c.duration_seconds)}{c.recording_url ? ' · 🎙' : ''}{c.agent?.name ? ` · ${c.direction === 'inbound' ? 'ans by' : 'by'} ${c.agent.name}` : ''}</span>
+                      {via && (
+                        <span title={`${c.direction === 'inbound' ? 'Received on' : 'Placed from'} ${via.ourNum}`}
+                              style={{ fontSize: 10, color: via.color, fontFamily: "'DM Mono', monospace", border: `1px solid ${via.color}44`, borderRadius: 4, padding: '0 4px' }}>
+                          via {via.last4}
+                        </span>
+                      )}
+                    </div>
+                    {/* From/To counterpart numbers (the homeowner's side). The
+                        contact name is already in the title row, so the
+                        explicit phone digits below double as a phone-format
+                        reference and match the SMS "via" pattern Justin
+                        wanted parity with. */}
+                    <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", marginTop: 3 }}>
+                      {fmtPhone(c.from_number)} → {fmtPhone(c.to_number)}
                     </div>
                   </button>
                 );
@@ -11583,10 +11625,23 @@ function CommunicationsView({ onSelect }) {
                   </div>
                   <div style={{ flex: 1, overflowY: 'auto', padding: '14px', minHeight: 0 }}>
                     <div style={{ background: '#1c1917', border: '1px solid #292524', borderRadius: 10, padding: '14px 16px', marginBottom: 12 }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>
-                        {c.direction === 'inbound' ? '📥 Inbound call' : '📤 Outbound call'}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>
+                          {c.direction === 'inbound' ? '📥 Inbound call' : '📤 Outbound call'}
+                        </div>
+                        {(() => {
+                          const via = callVia(c);
+                          return via ? (
+                            <span title={`${c.direction === 'inbound' ? 'Received on' : 'Placed from'} ${via.ourNum}`}
+                                  style={{ fontSize: 10, color: via.color, fontFamily: "'DM Mono', monospace", border: `1px solid ${via.color}44`, borderRadius: 4, padding: '1px 6px' }}>
+                              via {via.last4}
+                            </span>
+                          ) : null;
+                        })()}
                       </div>
                       <div style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.7 }}>
+                        From: <span style={{ color: '#e7e5e4', fontFamily: "'DM Mono', monospace" }}>{fmtPhone(c.from_number)}</span><br/>
+                        To: <span style={{ color: '#e7e5e4', fontFamily: "'DM Mono', monospace" }}>{fmtPhone(c.to_number)}</span><br/>
                         Status: <span style={{ color: '#e7e5e4' }}>{c.status || '—'}</span><br/>
                         Duration: <span style={{ color: '#e7e5e4', fontFamily: "'DM Mono', monospace" }}>{fmtDur(c.duration_seconds)}</span><br/>
                         When: <span style={{ color: '#e7e5e4' }}>{c.started_at ? new Date(c.started_at).toLocaleString() : '—'}</span>
