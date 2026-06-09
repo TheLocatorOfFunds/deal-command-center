@@ -11517,6 +11517,103 @@ function ReplyInbox({ onSelect, limit = 100 }) {
   );
 }
 
+// ─── DealLessThreadComposer — reply to an UNLINKED Comms thread (#324) ──
+// The full OutboundMessages composer requires a real dealId (it loads the
+// thread + contacts scoped to a deal), so it can't render for a number that
+// isn't tied to any deal. Per Justin 2026-06-09: instead of blocking those
+// threads ("go link in Contacts"), let the user reply + call back directly.
+// send-sms already accepts a null deal_id — it inserts the row with
+// deal_id/thread_key NULL, and the global Comms grouping keys deal-less
+// messages on `none:<phone>`, so the reply re-threads under this same
+// conversation. No Edge Function change needed. Sends as Twilio SMS from the
+// main line (works for any carrier, unlike the iMessage-only bridge).
+function DealLessThreadComposer({ thread, startCall, callStatus, onSent }) {
+  const [body, setBody] = React.useState('');
+  const [sending, setSending] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const to = thread.counterpart || '';
+  const busy = callStatus && callStatus !== 'ended';
+
+  const fmtAge = (iso) => {
+    if (!iso) return '';
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + 'm';
+    if (mins < 1440) return Math.round(mins / 60) + 'h';
+    return Math.floor(mins / 1440) + 'd';
+  };
+
+  const send = async () => {
+    const text = body.trim();
+    if (!text || !to || sending) return;
+    setSending(true); setErr(null);
+    try {
+      const { data, error } = await sb.functions.invoke('send-sms', {
+        body: {
+          to,
+          body: text,
+          // deal_id intentionally omitted — this thread has no deal.
+          contact_id: thread.contact_id || undefined,
+        },
+      });
+      if (error) {
+        let msg = error.message;
+        try { const b = await error.context?.json?.(); msg = b?.error || b?.message || msg; } catch { /* non-JSON error body */ }
+        throw new Error(msg);
+      }
+      if (data?.status === 'failed') throw new Error(data.error_message || 'Send failed');
+      setBody('');
+      onSent && onSent();
+    } catch (e) { setErr(e.message); }
+    setSending(false);
+  };
+  const onKey = (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') send(); };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+      <div style={{ padding: '8px 14px', fontSize: 11, color: '#a8a29e', background: '#1c1917', borderBottom: '1px solid #292524', lineHeight: 1.5 }}>
+        Not linked to a deal — replying texts {to || 'this number'} directly. Link it in 👥 Contacts to file the thread under a deal.
+      </div>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0 }}>
+        {(thread.ordered || []).map(m => (
+          <div key={m.id} style={{ alignSelf: m.direction === 'inbound' ? 'flex-start' : 'flex-end', maxWidth: '75%' }}>
+            <div style={{ background: m.direction === 'inbound' ? '#1c1917' : '#1e3a5f', color: '#fafaf9', borderRadius: 12, padding: '8px 12px', fontSize: 13, lineHeight: 1.4 }}>
+              {m.body}
+              {m.media_url && <div style={{ marginTop: 6 }}><img src={m.media_url} alt="media" style={{ maxWidth: 180, borderRadius: 8 }} /></div>}
+            </div>
+            <div style={{ fontSize: 9, color: '#57534e', marginTop: 2, textAlign: m.direction === 'inbound' ? 'left' : 'right' }}>
+              {fmtAge(m.created_at)} ago{m.channel ? ` · ${m.channel}` : ''}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ borderTop: '1px solid #1c1917', padding: '10px 12px', flexShrink: 0 }}>
+        {err && <div style={{ color: '#f87171', fontSize: 11, marginBottom: 6 }}>{err}</div>}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          <textarea value={body} onChange={e => setBody(e.target.value)} onKeyDown={onKey}
+            placeholder={`Reply to ${to || 'this number'}…`} rows={2}
+            style={{ ...inputStyle, resize: 'none', flex: 1 }} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <button onClick={send} disabled={!body.trim() || sending}
+              style={{ ...btnGhost, color: (!body.trim() || sending) ? '#57534e' : '#22c55e', borderColor: '#16653433', padding: '6px 14px' }}>
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+            {startCall && to && (
+              <button onClick={() => startCall({ phone: to, name: thread.name, contact_id: thread.contact_id })}
+                disabled={!!busy}
+                style={{ ...btnGhost, fontSize: 11, color: busy ? '#57534e' : '#a8a29e', padding: '5px 10px' }}
+                title={busy ? 'A call is already in progress' : `Call ${to}`}>
+                📞 Call
+              </button>
+            )}
+          </div>
+        </div>
+        <div style={{ fontSize: 10, color: '#57534e', marginTop: 4 }}>⌘↵ to send · SMS from the main line</div>
+      </div>
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════════════════════
 // CommunicationsView — top-level cross-deal comms hub (Phase 3, 5/27)
 // ════════════════════════════════════════════════════════════════════
@@ -11871,10 +11968,12 @@ function CommunicationsView({ onSelect, startCall, callStatus, onOpenCallDisposi
                 {resolvedDeal === null ? (
                   <div style={{ padding: 24, color: '#78716c', fontSize: 12 }}>Loading composer…</div>
                 ) : resolvedDeal === false ? (
-                  <div style={{ padding: 24, color: '#a8a29e', fontSize: 13, lineHeight: 1.55 }}>
-                    <div style={{ color: '#fafaf9', fontWeight: 700, marginBottom: 6 }}>No active deal linked</div>
-                    This thread isn't connected to a live deal, so the composer can't send under a deal context. Use 👥 Contacts to link {activeItem.thread.counterpart || 'this number'} to a deal, then come back here to reply.
-                  </div>
+                  <DealLessThreadComposer
+                    thread={activeItem.thread}
+                    startCall={startCall}
+                    callStatus={callStatus}
+                    onSent={loadThreads}
+                  />
                 ) : (
                   <OutboundMessages
                     dealId={resolvedDeal.id}
