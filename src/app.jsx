@@ -6704,7 +6704,7 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
   };
 
   const sendSms = async () => {
-    if (!phone) { setMsg({ type: 'error', text: 'No phone number on this deal. Add meta.homeownerPhone first.' }); return; }
+    if (!phone) { setMsg({ type: 'error', text: 'No phone number on the homeowner contact. Open the homeowner in Comms or Contacts and add a phone first.' }); return; }
     setBusy('sms'); setMsg(null);
     try {
       const { data, error } = await sb.functions.invoke('send-sms', {
@@ -6720,7 +6720,7 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
   };
 
   const sendEmail = async () => {
-    if (!email) { setMsg({ type: 'error', text: 'No email on this deal. Add meta.homeownerEmail first.' }); return; }
+    if (!email) { setMsg({ type: 'error', text: 'No email on the homeowner contact. Open the homeowner in Comms or Contacts and add an email first.' }); return; }
     setBusy('email'); setMsg(null);
     try {
       const { data, error } = await sb.functions.invoke('send-email', {
@@ -6761,7 +6761,7 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
         <div style={{ padding: 12, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>📱 SMS</div>
           <div style={{ fontSize: 11, color: phone ? '#a8a29e' : '#fca5a5', marginBottom: 8 }}>
-            {phone ? `To: ${phone}` : 'No phone on file (add meta.homeownerPhone)'}
+            {phone ? `To: ${phone}` : 'No phone on the homeowner contact (add via Comms or Contacts)'}
           </div>
           <textarea
             value={smsBody}
@@ -6785,7 +6785,7 @@ function SendPersonalizedLinkModal({ deal, onClose }) {
         <div style={{ padding: 12, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6 }}>📧 Email</div>
           <div style={{ fontSize: 11, color: email ? '#a8a29e' : '#fca5a5', marginBottom: 8 }}>
-            {email ? `To: ${email}` : 'No email on file (add meta.homeownerEmail)'}
+            {email ? `To: ${email}` : 'No email on the homeowner contact (add via Comms or Contacts)'}
           </div>
           <input
             value={emailSubject}
@@ -6931,7 +6931,7 @@ function SendIntroTextModal({ deal, onClose, onSent }) {
 
       {missingPhone && (
         <div style={{ padding: 12, background: '#7f1d1d22', border: '1px solid #7f1d1d', borderRadius: 6, fontSize: 12, color: '#fca5a5', marginBottom: 12 }}>
-          ⚠ No phone number on file. Add homeowner phone to deal.meta.homeownerPhone first.
+          ⚠ No phone number on file. Add a phone to the homeowner contact (Comms tab pencil or Contacts tab) first.
         </div>
       )}
       {missingToken && (
@@ -25797,14 +25797,18 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
   const [editBusy, setEditBusy] = useState(false);
   const startEditContact = (c) => {
     if (!c) return;
-    // Editable contacts on the Comms tab come in TWO shapes:
-    //   1. Linked contact (contact_deals row + public.contacts row) - has contact_id
-    //   2. Homeowner synthesized from deal.meta.homeownerPhone (line ~24677) -
-    //      has _homeowner: true and no contact_id (Justin 2026-06-09 reported
-    //      the pencil missing on Sha Johnson's deal, where the homeowner is
-    //      shown as a contact in the Comms tab).
+    // Editable contacts on the Comms tab come in TWO shapes (Phase 3 of the
+    // homeowner-as-contact migration, 2026-06-09):
+    //   1. Linked contact - contact_deals row + public.contacts row. Has
+    //      contact_id. Most homeowners now fall here courtesy of Phase 1's
+    //      backfill + trigger; they also carry _homeowner=true via the
+    //      isHomeownerContact branch in the contacts useMemo.
+    //   2. Pure meta synthesis - has _homeowner=true and NO contact_id.
+    //      Narrow fallback case: a fresh deal insert before the
+    //      tg_sync_homeowner_contact trigger has materialized the contact.
     // Both can be opened in the inline editor; saveEditContact routes the
-    // write to the right table.
+    // write to public.contacts when contact_id is present (the dominant
+    // path) and falls back to deal.meta only for shape #2.
     if (!c.contact_id && !c._homeowner) return;
     const parts = (c.name || '').trim().split(/\s+/);
     setEditDraftContact({
