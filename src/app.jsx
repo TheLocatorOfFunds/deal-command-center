@@ -1899,38 +1899,66 @@ function DealCommandCenter({ session, profile }) {
     setLoaded(true);
   };
 
-  // Coalesce realtime deals-change bursts into ONE reload. intel-main's 30-min
-  // sync updates many deals at once → one postgres_changes event per row →
-  // without this the full ~MB deals payload was re-pulled dozens of times in a
-  // burst, hammering the app. Debounce to a single reload after the burst
-  // settles. Perf pass, Nathan 2026-05-29.
-  const dealsReloadTimer = React.useRef(null);
-
-  // ── Auto-refresh: keep `deals` fresh without a hard reload ────────
-  // Per Nathan 2026-05-05: "I want the DCC to have auto-refresh where
-  // the screen is continuously always refreshing." We refetch every
-  // 60s + whenever the tab becomes visible after being hidden (e.g.
-  // user comes back from another tab). Other views (Outreach, Inbox,
-  // Attention, Today) already have their own realtime subs, so this
-  // mainly keeps the deals array — which feeds every list/card view —
-  // fresh in case a realtime channel dropped a message.
+  // ── Auto-refresh: diff-merge from realtime + visibility-change reconcile ──
+  // Phase 3 of issue #326 (2026-06-09). The previous setup polled the full
+  // ~1.3MB deals payload every 60s on top of realtime, and reacted to every
+  // realtime event by re-pulling the same ~1.3MB. With Phase 2 column
+  // writes, postgres_changes events on `deals` carry the full new row in
+  // payload.new (replica identity 'd' — PK on OLD, full on NEW), so we can
+  // apply each change locally as a single-row replace instead of refetching.
+  //
+  // Trade-off vs. the old "loadDeals on every event" pattern:
+  //   * Network: ~99% fewer bytes per change (one row vs whole table).
+  //   * Latency: state updates within ~50ms of the WAL commit, not 1.2s.
+  //   * Drift safety: visibility-change still triggers a full loadDeals,
+  //     so a tab that was suspended (laptop closed, OS throttled, etc.)
+  //     re-syncs the moment the user returns. That is the ONLY periodic
+  //     reconcile path remaining — Nathan's "auto-refresh" ask is now
+  //     served by realtime + focus reconcile, not a 60s timer.
+  //
+  // Out-of-order safety: each row carries updated_at (bumped by the
+  // deals_updated_at trigger). The diff-merge skips an UPDATE if the
+  // payload's updated_at is older than what we already have locally,
+  // which prevents a delayed realtime event from undoing a fresher state.
   useEffect(() => {
-    const REFRESH_MS = 60_000;
-    // Skip the periodic full-deals reload (~1.3MB) when the tab is hidden —
-    // operators keep DCC open in background tabs all day, and realtime + the
-    // on-visible refresh below already catch them up the moment they return.
-    // Perf pass, Nathan 2026-05-29.
-    const tick = () => { if (document.visibilityState === 'visible') loadDeals(); };
-    const id = setInterval(tick, REFRESH_MS);
-    const onVis = () => {
-      if (document.visibilityState === 'visible') tick();
-    };
+    const onVis = () => { if (document.visibilityState === 'visible') loadDeals(); };
     document.addEventListener('visibilitychange', onVis);
-    return () => {
-      clearInterval(id);
-      document.removeEventListener('visibilitychange', onVis);
-    };
+    return () => { document.removeEventListener('visibilitychange', onVis); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Apply a single realtime change to local `deals` state without refetching.
+  // Used by the deals-ch subscription below.
+  const applyDealChange = React.useCallback((payload) => {
+    const ev = payload.eventType;
+    const row = payload.new || null;
+    const oldRow = payload.old || null;
+    if (ev === 'DELETE') {
+      if (!oldRow || !oldRow.id) return;
+      setDeals(prev => prev.filter(d => d.id !== oldRow.id));
+      return;
+    }
+    if (!row || !row.id) return;
+    // Soft-delete: an UPDATE that flips deleted_at non-null. Treat as removal
+    // from local state, matching the loadDeals filter.
+    if (row.deleted_at) {
+      setDeals(prev => prev.filter(d => d.id !== row.id));
+      return;
+    }
+    setDeals(prev => {
+      const idx = prev.findIndex(d => d.id === row.id);
+      if (idx < 0) {
+        // INSERT or row we've never seen — newest first, matching loadDeals order.
+        return [row, ...prev];
+      }
+      // Out-of-order guard: skip stale events.
+      const localTs = prev[idx].updated_at;
+      const incomingTs = row.updated_at;
+      if (localTs && incomingTs && localTs > incomingTs) return prev;
+      const next = prev.slice();
+      next[idx] = row;
+      return next;
+    });
   }, []);
   const loadTeam = async () => {
     // Team members ONLY (admin / user / va). The profiles table has rows
@@ -1973,11 +2001,11 @@ function DealCommandCenter({ session, profile }) {
   // realtime: any change to deals triggers refresh
   useEffect(() => {
     const ch = sb.channel('deals-ch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, () => {
-        // Debounced: coalesce burst updates (intel-main sync re-writes many
-        // deals at once) into a single reload of the full deals payload.
-        if (dealsReloadTimer.current) clearTimeout(dealsReloadTimer.current);
-        dealsReloadTimer.current = setTimeout(loadDeals, 1200);
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, (payload) => {
+        // Phase 3 (#326): apply the change locally instead of refetching the
+        // entire deals table. intel-main bursts arrive as many events but each
+        // is now an O(1) array swap rather than a 1.3MB pull. See applyDealChange.
+        applyDealChange(payload);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
