@@ -159,6 +159,7 @@ the Director already created the deal). The RA never writes `intel_case`.
 **Cross-session messaging**:
 - Director → Justin: post to DCC `team_messages` thread `910f6a07` (justin <-> nathan) as Nathan
 - Justin → Director: via Nathan, OR drop a file in `~/Documents/Claude/FundLocators-Vault/05-Operations/Director-Queue/` named `dcc-<short-title>.md`
+  - **In a DCC→Director ferry, identify each case by `courtCase` (case number) + county — NOT just the DCC `deal_id` or `meta.intel_case_id`.** Lesson from the 2026-06-09 mis-flagged-surplus ferry: the deal-side `intel_case_id` links can be stale/wrong — only 8 of 14 resolved on the Director's side, he re-mapped the other 6 by owner name. Case# + county resolves fast + unambiguously (and catches case#-format duplicates like the sf-unknown-5 $200k double-count).
 - Both sides: this file (`DIRECTOR_DCC_INTERFACE.md`) is the canonical contract
 
 ## Open coordination items
