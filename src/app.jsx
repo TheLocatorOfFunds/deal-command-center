@@ -17204,15 +17204,46 @@ function PostUpdateModal({ dealName, onClose, onPost }) {
 }
 
 // ─── Flip Overview ───────────────────────────────────────────────────
-function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin, userId, onJumpToTab }) {
-  // Same deterministic dirty-key edit buffer as SurplusOverview (2026-06-08) —
-  // flip Case Details inputs were bound straight to deal.meta, so a global
-  // `deals` reload mid-edit blanked the field too. See SurplusOverview for the
-  // full rationale; a touched key shows the user's value until they switch deals.
+// ── Case Details edit buffer + debounced save ─────────────────────────
+// Shared by FlipOverview + SurplusOverview. Two layered fixes for the
+// Overview / Case Details form, where ~35 fields are controlled inputs
+// bound to deal.meta.
+//
+// (1) Dirty-key UI buffer (Nathan + Inaam 2026-06-08). Every global
+//     `deals` reload — realtime echo, 60s auto-refresh, intel-main's
+//     30-min sync — replaces the deal object, snapping mid-edit fields
+//     back to the DB. The earlier 2s-timer heuristic raced and lost.
+//     This version is deterministic: once the user TOUCHES a key, that
+//     key shows their value until deal.id changes. Untouched keys
+//     follow the server live.
+//
+// (2) Debounced DB write (Claude 2026-06-09). Each onChange used to
+//     fire its own sb.from('deals').update(). HTTP/2 multiplexes 31
+//     keystrokes into 31 in-flight PATCHes that resolve out of order;
+//     whichever happened to win the race wrote a partial prefix into
+//     the DB. UI looked fine (dirty-key buffer keeps the typed value
+//     visible) but on next deal switch the truncated DB value
+//     surfaced — same "field disappeared" symptom, deeper mechanism.
+//     Reproduced 2026-06-09 on sf-a-9: typed
+//     "https://zillow.com/test-paste-1" (31 chars), DB held
+//     "https://zillow.c" (16 chars). We accumulate keystrokes in
+//     pendingPatchRef and fire ONE update ~350ms after the user stops
+//     typing. We flush on deal switch and unmount via a cleanup whose
+//     closure captures the previous deal's onUpdateDeal so a queued
+//     patch lands on the right deal.
+function useDealMetaBuffer(deal, onUpdateDeal) {
   const [localMeta, setLocalMeta] = React.useState(deal.meta || {});
   const dirtyKeys = React.useRef(new Set());
-  React.useEffect(() => { setLocalMeta(deal.meta || {}); dirtyKeys.current = new Set(); }, [deal.id]);
-  React.useEffect(() => {
+  const debounceRef = React.useRef(null);
+  const pendingPatchRef = React.useRef({});
+  const dealMetaRef = React.useRef(deal.meta || {});
+  const onUpdateDealRef = React.useRef(onUpdateDeal);
+  React.useEffect(() => { dealMetaRef.current = deal.meta || {}; }, [deal.meta]);
+  React.useEffect(() => { onUpdateDealRef.current = onUpdateDeal; }, [onUpdateDeal]);
+  React.useEffect(() => {                        // switching deals: adopt fully, clear dirt
+    setLocalMeta(deal.meta || {}); dirtyKeys.current = new Set();
+  }, [deal.id]);
+  React.useEffect(() => {                         // same deal reloaded: touched keys stay
     const server = deal.meta || {};
     setLocalMeta(prev => {
       const next = { ...server };
@@ -17220,12 +17251,31 @@ function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, sale
       return next;
     });
   }, [deal.meta]);
-  const m = localMeta;
-  const updateMeta = (patch) => {
+  const flushPending = React.useCallback(() => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
+    if (!Object.keys(pendingPatchRef.current).length) return;
+    const patch = pendingPatchRef.current;
+    pendingPatchRef.current = {};
+    onUpdateDealRef.current({ meta: { ...(dealMetaRef.current || {}), ...patch } });
+  }, []);
+  // Flush queued edit on deal switch + unmount. Cleanup fires BEFORE
+  // refs update to the new deal, so the OLD onUpdateDeal/deal.meta are
+  // used — a queued patch lands on the deal the user was actually
+  // editing.
+  React.useEffect(() => flushPending, [deal.id, flushPending]);
+  const updateMeta = React.useCallback((patch) => {
     Object.keys(patch).forEach(k => dirtyKeys.current.add(k));
     setLocalMeta(prev => ({ ...prev, ...patch }));
-    onUpdateDeal({ meta: { ...(deal.meta || {}), ...patch } });
-  };
+    pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(flushPending, 350);
+  }, [flushPending]);
+  return [localMeta, updateMeta];
+}
+
+function FlipOverview({ deal, expenses, totalExpenses, netProfit, strategy, salePrice, closingDollars, tasksDone, tasksTotal, onUpdateDeal, isAdmin, userId, onJumpToTab }) {
+  // Case Details edit buffer + debounced save — see useDealMetaBuffer above.
+  const [m, updateMeta] = useDealMetaBuffer(deal, onUpdateDeal);
   const setStrategy = (s) => updateMeta({ strategy: s });
   const byCat = {};
   expenses.forEach(e => { const cat = e.category || "Other"; byCat[cat] = (byCat[cat] || 0) + (parseFloat(e.amount) || 0); });
@@ -20092,44 +20142,10 @@ function EngagementStrip({ deal }) {
 }
 
 function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
-  // ── Case Details edit buffer (Nathan + Inaam; rebuilt 2026-06-08) ──────────
-  // The Case Details inputs are controlled, bound to deal.meta. Every global
-  // `deals` reload — the realtime echo of our own write, the 60s auto-refresh,
-  // or intel-main's 30-min sync — replaces the deal object, so a value being
-  // typed/pasted would snap back to the DB ("disappears on first input, takes
-  // 2-3 tries to stick", across the whole field set).
-  //
-  // The 2026-06-04 fix used a 2-second "did the user type recently?" timer to
-  // decide when to re-adopt server state. A timing heuristic is racy — a reload
-  // landing outside the window still wiped the keystroke — and Nathan + Inaam
-  // confirmed it was STILL happening 2026-06-08. We can't release a touched key
-  // by "did the server catch up?" either: `updateDealMeta` updates the local
-  // deals array OPTIMISTICALLY, so deal.meta shows the typed value before the
-  // real DB write lands — a stale in-flight loadDeals() can then still revert
-  // it. So the rule is dead simple and race-proof: once the user TOUCHES a
-  // field, that field shows their value until they navigate to a DIFFERENT deal
-  // (deal.id changes). A reload can never blank an in-progress field — there's
-  // no timer and no value-matching to lose. Untouched keys (incl. ones
-  // intel-main syncs concurrently) always follow the server live.
-  const [localMeta, setLocalMeta] = React.useState(deal.meta || {});
-  const dirtyKeys = React.useRef(new Set());
-  React.useEffect(() => {                        // switching deals: adopt fully, clear dirt
-    setLocalMeta(deal.meta || {}); dirtyKeys.current = new Set();
-  }, [deal.id]);
-  React.useEffect(() => {                         // same deal reloaded: keep every touched key
-    const server = deal.meta || {};
-    setLocalMeta(prev => {
-      const next = { ...server };
-      dirtyKeys.current.forEach(k => { next[k] = prev[k]; }); // touched keys stay as the user left them
-      return next;
-    });
-  }, [deal.meta]);
-  const m = localMeta;
-  const updateMeta = (patch) => {
-    Object.keys(patch).forEach(k => dirtyKeys.current.add(k));
-    setLocalMeta(prev => ({ ...prev, ...patch }));        // instant, local — no round-trip flicker
-    onUpdateDeal({ meta: { ...(deal.meta || {}), ...patch } }); // persist onto latest server meta
-  };
+  // Case Details edit buffer (Nathan + Inaam dirty-key buffer 2026-06-08)
+  // + debounced save (Claude race-write fix 2026-06-09). See
+  // useDealMetaBuffer at top of file for the full history.
+  const [m, updateMeta] = useDealMetaBuffer(deal, onUpdateDeal);
   return (
     <div>
       <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
