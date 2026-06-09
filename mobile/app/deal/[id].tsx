@@ -14,10 +14,11 @@
  * mid-call and the call auto-logs to `activity`.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Alert,
+  findNodeHandle,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -162,6 +163,10 @@ export default function DealDetailScreen() {
     if (!id || !session?.user?.id) return
     markDealRead(id).catch(() => {})
   }, [id, session?.user?.id])
+
+  // Ref to the page ScrollView so the inline composer can scroll itself
+  // to the top of the visible-above-keyboard area on focus (#317).
+  const scrollViewRef = useRef<ScrollView>(null)
 
   const [deal, setDeal] = useState<Deal | null>(null)
   const [vendors, setVendors] = useState<Vendor[]>([])
@@ -577,6 +582,7 @@ export default function DealDetailScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
       <ScrollView
+        ref={scrollViewRef}
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
@@ -787,6 +793,7 @@ export default function DealDetailScreen() {
           comms={comms}
           vendors={vendors}
           contactLinks={contactLinks}
+          scrollViewRef={scrollViewRef}
           onSent={() => onRefresh()}
         />
 
@@ -1247,6 +1254,11 @@ type InlineDealCommsProps = {
   comms: CommsItem[]
   vendors: Vendor[]
   contactLinks: ContactLink[]
+  // Ref to the parent page's ScrollView. On composer focus the child
+  // scrolls the composer to the top of the visible-above-keyboard area
+  // so the multiline input has its full maxHeight of room to grow with
+  // the keyboard sitting beneath it (#317, fix for Build 32 regression).
+  scrollViewRef: React.RefObject<ScrollView | null>
   onSent: () => void
 }
 
@@ -1265,8 +1277,39 @@ function InlineDealComms({
   comms,
   vendors,
   contactLinks,
+  scrollViewRef,
   onSent,
 }: InlineDealCommsProps) {
+  // Ref to the composer wrap so we can measure its y-offset relative to
+  // the parent ScrollView and scroll it to the top of the visible area
+  // on focus (#317). measureLayout gives content-space y, which is
+  // exactly what ScrollView.scrollTo({y}) wants.
+  const composerWrapRef = useRef<View>(null)
+  const scrollComposerToTop = useCallback(() => {
+    const scrollNode = scrollViewRef.current
+      ? findNodeHandle(scrollViewRef.current)
+      : null
+    if (!scrollNode) return
+    // Delay one frame so the keyboard's auto-inset adjustment doesn't
+    // race with our scroll target. The ScrollView animates to the right
+    // spot regardless of whether the keyboard has finished animating up;
+    // iOS handles the relative inset adjustment for us.
+    requestAnimationFrame(() => {
+      composerWrapRef.current?.measureLayout(
+        scrollNode,
+        (_x, y) => {
+          // Leave 12pt of breathing room above the composer so it doesn't
+          // butt against the navigation header.
+          scrollViewRef.current?.scrollTo({
+            y: Math.max(0, y - 12),
+            animated: true,
+          })
+        },
+        () => {},
+      )
+    })
+  }, [scrollViewRef])
+
   // Build the pill list once per (vendors, contactLinks) change. Each entry
   // carries everything we need to filter + send (phone in normalized form,
   // contact_id when known, name for the label + composer hint).
@@ -1558,7 +1601,7 @@ function InlineDealComms({
         )}
 
         {/* Composer */}
-        <View style={commsStyles.composerWrap}>
+        <View ref={composerWrapRef} style={commsStyles.composerWrap}>
           {!selectedPill && (
             <Text style={commsStyles.composerHintMuted}>
               Tap a contact pill above to reply.
@@ -1572,6 +1615,7 @@ function InlineDealComms({
               ]}
               value={body}
               onChangeText={setBody}
+              onFocus={scrollComposerToTop}
               placeholder={
                 selectedPill
                   ? `Message ${selectedPill.name}`
