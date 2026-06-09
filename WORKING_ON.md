@@ -327,8 +327,14 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-06-08 — AI outage triage: out-of-credits root cause + honest AI errors + daily credit-exhaustion alarm
+**Status:** Active — 2026-06-09 — docket-refresh triage (53 leads) + Director hand-off; Case Details fix merged 2-layer (my dirty-key + Justin's debounce); AI out-of-credits triage/alarm
 **Branch:** main (all work pushed)
+
+**Today (2026-06-09) — what shipped**
+
+- **Case Details field-disappear — race-proof fix, now merged 2-layer (LIVE `98732abb5012`).** Nathan + Inaam (and Justin + Inaam) still hit it after the 06-04 buffer. Root cause: the old 2s "typed-recently" timer was racy + `updateDealMeta`'s optimistic write fooled any value-match release. My fix = **dirty-key guard** (a touched key shows the user's value until they switch deals — can't be reverted by a reload, by construction) in SurplusOverview AND FlipOverview. Justin then DRY'd both into a shared `useDealMetaBuffer` hook (Layer 1 = my dirty-key) + added **Layer 2: a 350ms debounce** coalescing per-keystroke saves (`a1dd5cd`, after PR #314 had silently reverted his earlier debounce 167d10e). Hard-refresh to `98732abb5012` to confirm.
+- **Docket-refresh triage + Director hand-off.** Docket Center showed 4008 unacked events = full histories of **53 surplus leads**. Refreshed Case Intelligence on all 53 (throttled pg_net loop reusing the canary's anon key) + **acked all 4008 (queue→0)**. Digest for Nathan: ~28 workable (19 claimable-now ≈$640k sitting w/ clerk + 9 sold-pending-distribution), 9 dead, 6 investor-LLC (exclude), 4 needs-review, 6 pre-sale. **Filed Director-Queue `oh-2026-06-09-1524-dcc-misflagged-surplus-claimstatus.md`** (+ pointer in DIRECTOR_DCC_INTERFACE.md) for ~16 cases whose intel_case `surplusClaimStatus`/`auctionStatus` contradicts the docket — Director verifies + reconciles; DCC didn't touch managed keys.
+- **SOP — HOA disbursement ≠ full surplus** (Nathan 2026-06-09): an HOA payout is only a partial slice; pull the Sheriff's Report of Sale for the original surplus. Logged to `memory/feedback_surplus_lead_validation.md` + the `surplus-math` skill.
 
 **Today (2026-06-08) — what shipped**
 
