@@ -289,6 +289,52 @@ const dealMetaPhone = (meta) => {
   return (v && String(v).trim()) ? String(v).trim() : null;
 };
 
+// Phase 2 of the homeowner-as-contact migration (2026-06-09). Read-side
+// primitive that prefers the linked homeowner CONTACT over deal.meta - the
+// canonical "who is the homeowner of this deal" helper that Phase 3 will
+// route the rest of the 74 meta-readers through.
+//
+// Args:
+//   deal     - the deal row (we read deal.meta as the fallback)
+//   contacts - the per-deal contact list, OR an array of {contact, relationship}
+//              records as returned by sb.from('contact_deals').select(
+//              'relationship, contacts(...)') - the helper sniffs the shape.
+//
+// Returns: { name, phone, email, source } where source is 'contact' or
+// 'meta'. Returns null when neither side has anything.
+const getHomeowner = (deal, contacts) => {
+  // 1. Prefer the linked homeowner contact when one exists.
+  if (Array.isArray(contacts) && contacts.length > 0) {
+    // Accept both shapes: a flat contacts array, or contact_deals join rows
+    // {relationship, contacts: {...}} (the shape ContactsTab loads with).
+    const linked = contacts
+      .map(c => c && c.contacts ? { ...c.contacts, _relationship: c.relationship } : c)
+      .filter(Boolean);
+    const homeowner = linked.find(c =>
+      c && (c.kind === 'homeowner' || (c._relationship && String(c._relationship).toLowerCase().startsWith('homeowner')))
+    );
+    if (homeowner) {
+      return {
+        name: homeowner.name || null,
+        phone: homeowner.phone || null,
+        email: homeowner.email || null,
+        source: 'contact',
+        contact_id: homeowner.id || null,
+      };
+    }
+  }
+  // 2. Fall back to deal.meta. Same precedence as dealMetaPhone for the
+  //    phone field; name is homeownerName or homeowner_name.
+  const m = (deal && deal.meta) || {};
+  const name  = (m.homeownerName && String(m.homeownerName).trim())
+             || (m.homeowner_name && String(m.homeowner_name).trim())
+             || null;
+  const phone = dealMetaPhone(m);
+  const email = (m.homeownerEmail && String(m.homeownerEmail).trim()) || null;
+  if (!name && !phone && !email) return null;
+  return { name, phone, email, source: 'meta', contact_id: null };
+};
+
 // Is the homeowner on this deal deceased? Tier-INDEPENDENT — Eric flagged
 // 2026-05-07 that C-tier deceased deals were visually indistinguishable
 // from living ones. Two truth sources we OR together:
@@ -25093,15 +25139,38 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
         return { ...entry, phone: p, _phoneShort: idx === 0 ? null : last4 || p };
       });
     };
-    {
+    // Phase 2 of the homeowner-as-contact migration (2026-06-09): when a real
+    // kind='homeowner' contact exists in dcContacts (every existing deal now
+    // has one, courtesy of the Phase 1 backfill), it's the source of truth.
+    // We surface that contact as the homeowner tab (with _homeowner=true so
+    // the UI hides the ✕ Unlink and shows the ✏ pencil), and the pencil
+    // writes public.contacts (the reverse trigger keeps deal.meta in sync).
+    // The meta synthesis below remains as a fallback for the rare case of a
+    // freshly-created deal where the trigger hasn't yet materialized the
+    // contact - it'll appear on the next render anyway.
+    const linkedHomeowner = (dcContacts || []).find(c => c.kind === 'homeowner' && c.phone);
+    if (!linkedHomeowner) {
       const homeownerPh = dealMetaPhone(deal?.meta);
       if (homeownerPh)
         expandPhones({ name: deal.meta.homeownerName || 'Homeowner', role: 'Homeowner', phone: homeownerPh, _homeowner: true }).forEach(add);
     }
     (vendors || []).filter(v => v.phone).forEach(v =>
       expandPhones({ name: v.name, role: v.role || 'Vendor', phone: v.phone }).forEach(add));
-    dcContacts.filter(c => c.phone).forEach(c =>
-      expandPhones({ name: c.name, role: c.kind || 'Contact', phone: c.phone, contact_id: c.id, deceased: !!c.deceased }).forEach(add));
+    dcContacts.filter(c => c.phone).forEach(c => {
+      const isHomeownerContact = c.kind === 'homeowner';
+      const entry = {
+        name: c.name,
+        role: isHomeownerContact ? 'Homeowner' : (c.kind || 'Contact'),
+        phone: c.phone,
+        contact_id: c.id,
+        deceased: !!c.deceased,
+        // Stamp _homeowner=true on the real linked-homeowner entries so
+        // the Comms-tab UI gates (✕ hidden, ✏ shown, edit form open)
+        // match the previous meta-synth experience.
+        ...(isHomeownerContact ? { _homeowner: true } : {}),
+      };
+      expandPhones(entry).forEach(add);
+    });
     extraContacts.forEach(add);
     return list;
   }, [deal, vendors, dcContacts, extraContacts]);
@@ -25756,24 +25825,32 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
     const newPhone = editDraftContact.phone.trim();
     setEditBusy(true);
     let error = null;
-    if (editingContact._homeowner) {
-      // Homeowner edit -> write to deals.meta. The top-level App sub on the
-      // deals table (line ~1775) fires loadDeals() after a ~1.2s debounce,
-      // which refreshes the parent's deals prop, which re-renders this
-      // component with the new deal.meta. No manual reload needed here.
-      const newMeta = { ...(deal?.meta || {}), homeownerName: fullName, homeownerPhone: newPhone || null };
-      const res = await sb.from('deals').update({ meta: newMeta }).eq('id', dealId);
-      error = res.error;
-    } else {
-      // Linked contact edit -> write to public.contacts.
+    // Phase 2 of the homeowner-as-contact migration (2026-06-09): contacts
+    // is the source of truth whenever contact_id is present, even for the
+    // homeowner. The reverse trigger tg_sync_meta_from_homeowner_contact
+    // mirrors the change into deal.meta.homeowner{Name,Phone,Email} so the
+    // 74 legacy meta-readers in this file (and the 7 edge functions) keep
+    // seeing the right values until Phase 3 migrates them off meta.
+    if (editingContact.contact_id) {
       const res = await sb.from('contacts').update({
         name: fullName,
         phone: newPhone || null,
       }).eq('id', editingContact.contact_id);
       error = res.error;
-      // Linked-contact path needs an explicit reload because there's no
-      // realtime sub on contact_deals in this component.
+      // No realtime sub on contact_deals in this component - reload manually.
+      // The reverse trigger updates deals.meta inside the same transaction,
+      // which the top-level deals realtime sub at line ~1775 picks up.
       if (!error) await loadDealContacts();
+    } else if (editingContact._homeowner) {
+      // Legacy fallback for a deal that exists but doesn't yet have a
+      // homeowner contact (instant after a fresh insert, before the
+      // tg_sync_homeowner_contact trigger fires). Write meta; the trigger
+      // will create the contact on the next render. Very narrow case
+      // post-Phase-1 (only relevant if you somehow hit the pencil before
+      // the deal's first refresh).
+      const newMeta = { ...(deal?.meta || {}), homeownerName: fullName, homeownerPhone: newPhone || null };
+      const res = await sb.from('deals').update({ meta: newMeta }).eq('id', dealId);
+      error = res.error;
     }
     setEditBusy(false);
     if (error) { alert('Could not save: ' + error.message); return; }
@@ -26324,18 +26401,24 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
             {/* Remove contact from this deal - Justin 2026-06-09: 'you hit
                 the X button to delete that contact, then you refresh. The
                 contact comes back.' Used to call hideThread (which never
-                survived refresh); now actually unlinks contact_deals. */}
-            {activeContact && !activeContact._everyone && activeContact.contact_id ? (
+                survived refresh); now actually unlinks contact_deals.
+                Phase 2 (2026-06-09) refined the gate: even after homeowners
+                got contact_id via the Phase 1 migration, the ✕ stays hidden
+                for them because you can't unlink the homeowner from their
+                own deal. Non-homeowner linked contacts get the red ✕; any
+                other tab (no contact_id) falls back to the legacy Hide
+                Thread affordance. */}
+            {activeContact && !activeContact._everyone && activeContact.contact_id && !activeContact._homeowner ? (
               <button title="Remove from this deal" onClick={() => unlinkContactFromDeal(activeContact)}
                 style={{ background: 'transparent', border: '1px solid #292524', color: '#fca5a5', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
                 ✕
               </button>
-            ) : (
+            ) : (activeContact && !activeContact._everyone && !activeContact._homeowner) ? (
               <button title="Hide thread" onClick={() => hideThread(activeContact)}
                 style={{ background: 'transparent', border: '1px solid #292524', color: '#44403c', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
                 ✕
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       )}
