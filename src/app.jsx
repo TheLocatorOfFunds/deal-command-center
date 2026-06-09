@@ -1167,7 +1167,15 @@ function DealCommandCenter({ session, profile }) {
       const device = twilioDeviceRef.current || await initTwilioDevice();
       if (!device) throw new Error('Phone not enabled — click "Enable phone" in the header first');
       const call = await device.connect({
-        params: { To: contact.phone, CallerId: '+15139985440' },
+        // userId is the placing agent's auth id. Twilio's Voice identity is
+        // shared across the team ('dcc-fundlocators'), so per-agent
+        // attribution has to ride along here. twilio-voice-outbound stamps
+        // it onto call_logs.user_id at insert time.
+        params: {
+          To: contact.phone,
+          CallerId: '+15139985440',
+          userId: session.user.id,
+        },
       });
       activeCallRef.current = call;
       call.on('ringing',    () => setCallStatus('ringing'));
@@ -1250,6 +1258,17 @@ function DealCommandCenter({ session, profile }) {
       startCallTimer();
       const sid = incomingCall.call.parameters?.CallSid || incomingCall.call.parameters?.callSid || null;
       if (sid) setCallSid(sid);
+      // Stamp this user as the answerer on the inbound call_log row that
+      // twilio-voice already created in 'ringing' state. Race-safe across
+      // multiple Devices: claim_inbound_call only UPDATEs where user_id IS
+      // NULL, so whoever's RPC lands first wins and the rest silently
+      // no-op. Fire-and-forget; non-fatal if the network burps.
+      if (sid) {
+        sb.rpc('claim_inbound_call', { p_call_sid: sid, p_user_id: session.user.id })
+          .then(({ error }) => {
+            if (error) console.warn('[claim_inbound_call] non-fatal:', error.message);
+          });
+      }
       incomingCall.call.on('disconnect', () => {
         setCallStatus('ended');
         stopCallTimer();
@@ -3024,7 +3043,7 @@ function CallHistoryView({ onSelect }) {
   const loadCalls = async () => {
     setLoaded(false);
     const { data } = await sb.from('call_logs')
-      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, ended_at, deal_id, contact_id, recording_url, recording_sid, recording_duration, contacts(name), deals(name)')
+      .select('id, direction, from_number, to_number, status, duration_seconds, started_at, ended_at, deal_id, contact_id, recording_url, recording_sid, recording_duration, contacts(name), deals(name), user_id, agent:profiles!call_logs_user_id_fkey(name)')
       .order('started_at', { ascending: false })
       .limit(100);
     setCalls(data || []);
@@ -3112,10 +3131,19 @@ function CallHistoryView({ onSelect }) {
                   <div style={{ fontSize: 10, fontWeight: 700, color: statusColor(c.status), textTransform: 'uppercase', letterSpacing: '0.06em' }}>{c.status || '—'}</div>
                   <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", marginTop: 2 }}>{fmtDur(c.duration_seconds)}</div>
                 </div>
-                {/* Time */}
+                {/* Time + agent attribution. "by X" shows which team member
+                    placed (outbound) or answered (inbound) the call. Null
+                    means we don't know: older calls, or an inbound call
+                    that no DCC client picked up (it went to Nathan's iPhone
+                    fallback leg). */}
                 <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 60 }}>
                   <div style={{ fontSize: 11, color: '#57534e' }}>{fmtTime(c.started_at)}</div>
                   <div style={{ fontSize: 10, color: '#44403c', textTransform: 'capitalize' }}>{c.direction}</div>
+                  {c.agent?.name && (
+                    <div style={{ fontSize: 10, color: '#a8a29e', marginTop: 2 }}>
+                      {isInbound ? 'ans' : 'by'} {c.agent.name}
+                    </div>
+                  )}
                 </div>
                 </div>
                 {/* Recording player — renders on any call (linked or orphan) that has one */}
@@ -11333,7 +11361,7 @@ function CommunicationsView({ onSelect }) {
   // ── Load calls across all deals ─────────────────────────────────────
   const loadCalls = React.useCallback(async () => {
     const { data } = await sb.from('call_logs')
-      .select('id, deal_id, contact_id, direction, from_number, to_number, status, duration_seconds, started_at, recording_url, summary, contacts(name), deals(name, lead_tier)')
+      .select('id, deal_id, contact_id, direction, from_number, to_number, status, duration_seconds, started_at, recording_url, summary, contacts(name), deals(name, lead_tier), user_id, agent:profiles!call_logs_user_id_fkey(name)')
       .order('started_at', { ascending: false })
       .limit(200);
     if (!alive.current) return;
@@ -11433,7 +11461,7 @@ function CommunicationsView({ onSelect }) {
                       <span style={{ fontSize: 10, color: '#a8a29e', flexShrink: 0 }}>{fmtAge(c.started_at)}</span>
                     </div>
                     <div style={{ fontSize: 11, color: '#a8a29e', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
-                      📞 {c.direction === 'inbound' ? 'Inbound' : 'Outbound'} call · {c.status || '—'} · {fmtDur(c.duration_seconds)}{c.recording_url ? ' · 🎙' : ''}
+                      📞 {c.direction === 'inbound' ? 'Inbound' : 'Outbound'} call · {c.status || '—'} · {fmtDur(c.duration_seconds)}{c.recording_url ? ' · 🎙' : ''}{c.agent?.name ? ` · ${c.direction === 'inbound' ? 'ans by' : 'by'} ${c.agent.name}` : ''}
                     </div>
                   </button>
                 );
