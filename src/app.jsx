@@ -2536,7 +2536,7 @@ function DealCommandCenter({ session, profile }) {
           onRestored={async () => { await loadDeals(); /* triggers activeDeal lookup again */ }}
         />
       ) : !activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} startCall={startCall} callStatus={callStatus} onOpenCallDisposition={setPendingDisposition} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -3396,7 +3396,7 @@ function CallHistoryView({ onSelect }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed, startCall, callStatus, onOpenCallDisposition }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
