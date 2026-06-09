@@ -2329,7 +2329,19 @@ function DealCommandCenter({ session, profile }) {
       {dispositionDeal && <DispositionModal deal={dispositionDeal.deal} initialReason={dispositionDeal.deal?.meta?.dispositionReason || ''} presetReason={dispositionDeal.presetReason} onConfirm={confirmDisposition} onClose={() => setDispositionDeal(null)} />}
       <VersionWatcher />
 
-      {!activeDeal ? (
+      {/* Render fallback when the URL points to a deal that isn't in the
+          loaded `deals` array. Most common cause: the deal is soft-deleted
+          (deleted_at IS NOT NULL), so loadDeals() filters it out. Before
+          this fallback, the UI silently rendered DealList while the URL
+          said /deal/<id>; clicking from Comms looked like "click does
+          nothing." Justin 2026-06-09. */}
+      {activeDealId && !activeDeal ? (
+        <MissingDealNotice
+          dealId={activeDealId}
+          onClose={() => setActiveDealId(null)}
+          onRestored={async () => { await loadDeals(); /* triggers activeDeal lookup again */ }}
+        />
+      ) : !activeDeal ? (
         <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
@@ -20669,6 +20681,108 @@ function PriorityBadge({ p }) {
   const bg = p === "high" ? "#7f1d1d" : p === "med" ? "#78350f" : "#1c1917";
   const fg = p === "high" ? "#fca5a5" : p === "med" ? "#fbbf24" : "#a8a29e";
   return <span style={{ padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 700, background: bg, color: fg }}>{(p || "med").toUpperCase()}</span>;
+}
+
+// ─── Missing/Deleted Deal Notice ─────────────────────────────────────
+// Rendered when the URL hash points to a deal that isn't in the loaded
+// `deals` array (most common cause: soft-deleted, deleted_at IS NOT NULL).
+// Before this existed, clicks from Comms / Calls into a deleted deal updated
+// the URL but rendered nothing, which looked exactly like a broken link.
+// Justin 2026-06-09.
+function MissingDealNotice({ dealId, onClose, onRestored }) {
+  const [loading, setLoading] = useState(true);
+  const [row, setRow]         = useState(null);
+  const [working, setWorking] = useState(false);
+  const [err, setErr]         = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      const { data, error } = await sb
+        .from('deals')
+        .select('id, name, status, type, address, deleted_at')
+        .eq('id', dealId)
+        .maybeSingle();
+      if (!alive) return;
+      if (error) setErr(error.message);
+      setRow(data || null);
+      setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [dealId]);
+
+  const restore = async () => {
+    if (!row) return;
+    setWorking(true);
+    const { error } = await sb.from('deals').update({ deleted_at: null }).eq('id', row.id);
+    setWorking(false);
+    if (error) { setErr(error.message); return; }
+    await onRestored?.();
+    // Don't close: now that the deal is back in `deals`, the parent's
+    // activeDeal lookup succeeds and DealDetail takes over this slot.
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: 40, color: '#78716c', textAlign: 'center' }}>Loading deal…</div>
+    );
+  }
+
+  if (!row) {
+    return (
+      <div style={{ maxWidth: 520, margin: '60px auto', padding: 32, background: '#1c1917', border: '1px solid #292524', borderRadius: 12, textAlign: 'center' }}>
+        <div style={{ fontSize: 38, marginBottom: 8 }}>🗑</div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: '#fafaf9', marginBottom: 8 }}>Deal not found</div>
+        <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 4 }}>
+          The deal <code style={{ color: '#fbbf24', fontFamily: "'DM Mono', monospace" }}>{dealId}</code> no longer exists in the database.
+        </div>
+        <div style={{ fontSize: 12, color: '#78716c', marginBottom: 20 }}>
+          A linked comms record (call or text) may still reference it, but the deal itself was hard-deleted.
+        </div>
+        <button onClick={onClose} style={btnPrimary}>← Back</button>
+      </div>
+    );
+  }
+
+  if (row.deleted_at) {
+    const when = new Date(row.deleted_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    return (
+      <div style={{ maxWidth: 560, margin: '60px auto', padding: 32, background: '#1c1917', border: '1px solid #d97706', borderRadius: 12 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#d97706', letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: 6 }}>This deal is deleted</div>
+        <div style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', marginBottom: 4 }}>{row.name || row.id}</div>
+        <div style={{ fontSize: 12, color: '#a8a29e', fontFamily: "'DM Mono', monospace", marginBottom: 18 }}>
+          {row.id} {row.address ? `· ${row.address}` : ''}
+        </div>
+        <div style={{ fontSize: 13, color: '#a8a29e', lineHeight: 1.5, marginBottom: 20 }}>
+          Deleted on <b style={{ color: '#fafaf9' }}>{when}</b>. Comms records still link here, which is why the call showed up in your feed.
+          The deal isn't shown in the Deals tabs because soft-deleted rows are filtered out.
+        </div>
+        {err && <div style={{ fontSize: 12, color: '#f87171', marginBottom: 12 }}>Error: {err}</div>}
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={restore} disabled={working} style={{ ...btnPrimary, opacity: working ? 0.6 : 1 }}>
+            {working ? 'Restoring…' : '↺ Restore this deal'}
+          </button>
+          <button onClick={onClose} style={btnGhost}>← Back</button>
+        </div>
+      </div>
+    );
+  }
+
+  // Edge case: deal exists, not deleted, but somehow not in the loaded
+  // `deals` array. Probably a stale loadDeals snapshot. Tell the user to
+  // refresh and offer a one-click reload.
+  return (
+    <div style={{ maxWidth: 520, margin: '60px auto', padding: 32, background: '#1c1917', border: '1px solid #292524', borderRadius: 12, textAlign: 'center' }}>
+      <div style={{ fontSize: 18, fontWeight: 700, color: '#fafaf9', marginBottom: 8 }}>{row.name || row.id}</div>
+      <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 20 }}>This deal exists but isn't in the current list. Refresh the page to reload.</div>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+        <button onClick={() => window.location.reload()} style={btnPrimary}>↻ Reload page</button>
+        <button onClick={onClose} style={btnGhost}>← Back</button>
+      </div>
+    </div>
+  );
 }
 
 // ─── Vendors Tab ─────────────────────────────────────────────────────
