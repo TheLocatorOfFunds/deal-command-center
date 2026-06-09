@@ -74,12 +74,22 @@ Deno.serve(async (req: Request) => {
     // safety-net will retry the resolve once the call completes.
   }
 
-  // Resolve deal name for the browser overlay
+  // Resolve deal name + assignee for the browser overlay. assigned_to is a
+  // top-level text column (canonical); meta.assigned_to is the legacy fallback
+  // some older deals still use. Same precedence the Leads filter applies.
   let dealName: string | null = null;
+  let assignedTo: string | null = null;
   if (dealId) {
     try {
-      const { data: dealRow } = await db.from('deals').select('name').eq('id', dealId).single();
+      const { data: dealRow } = await db
+        .from('deals')
+        .select('name, assigned_to, meta')
+        .eq('id', dealId)
+        .single();
       dealName = dealRow?.name || null;
+      const fromCol  = (dealRow?.assigned_to || '').toString().trim();
+      const fromMeta = (dealRow?.meta?.assigned_to || '').toString().trim();
+      assignedTo = fromCol || fromMeta || null;
     } catch (_) {}
   }
 
@@ -108,6 +118,7 @@ Deno.serve(async (req: Request) => {
   const safeDealId  = (dealId || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const safeDealName = (dealName || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const safeContactId = (contactId || '').replace(/&/g, '&amp;');
+  const safeAssignedTo = (assignedTo || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
   const clientElements = DCC_CLIENT_IDENTITIES.map(identity => `    <Client>
       <Identity>${identity}</Identity>
@@ -116,6 +127,7 @@ Deno.serve(async (req: Request) => {
       <Parameter name="dealId" value="${safeDealId}"/>
       <Parameter name="dealName" value="${safeDealName}"/>
       <Parameter name="contactId" value="${safeContactId}"/>
+      <Parameter name="assignedTo" value="${safeAssignedTo}"/>
     </Client>`).join('\n');
 
   // TwiML: ring ALL DCC clients (web + mobile) AND Nathan's 2306 in
