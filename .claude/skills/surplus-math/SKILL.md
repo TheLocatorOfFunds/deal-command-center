@@ -175,6 +175,14 @@ Do not generate Template C on assumption.
   motion or don't claim it.)
 - "Our estimate was $40k, actual is $20k → no surplus." (False. $20k
   IS a surplus.)
+- "The HOA disbursement order shows $X to the association → that's the
+  surplus / nothing's left." (False — Nathan 2026-06-09. An HOA /
+  condo-association foreclosure or lien usually takes only a PARTIAL slice
+  of the sale proceeds. Pull the **Sheriff's Report of Sale** (or the
+  Confirmation Entry / Order of Distribution) to get the ORIGINAL sale
+  price + full distribution — the balance beyond the HOA's slice may still
+  be a large claimable surplus, especially when the senior mortgage was
+  small or already paid off. The HOA order alone understates it.)
 - Sending Template C without verifying the math sums to the sale price.
 
 ## Reference
