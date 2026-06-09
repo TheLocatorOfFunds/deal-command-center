@@ -11502,11 +11502,29 @@ function CommunicationsView({ onSelect }) {
     const dealById = Object.fromEntries((deals || []).map(d => [d.id, d]));
     const contactById = Object.fromEntries((contacts || []).map(c => [c.id, c]));
 
-    // Group by thread_key when present, else deal_id + counterpart number.
+    // Group by (deal_id, counterpart phone) — NOT raw thread_key (#323).
+    //
+    // The two ingress paths assign different thread_key formats to the same
+    // conversation: send-sms / receive-sms use `${dealId}:contact:${uuid}`
+    // when a contact is known, while mac-bridge/bridge.js always uses
+    // `${dealId}:phone:${counterpart}` (no contact lookup). So a DCC
+    // outbound SMS + a homeowner's iMessage tapback reaction land with
+    // different thread_keys, and the global Comms view rendered them as
+    // two threads even though the per-deal Comms view threaded them
+    // correctly (the per-deal filter at line ~25344 accepts BOTH formats).
+    //
+    // The grouping key here is the conversation identity — (deal, phone) —
+    // not the thread_key string, so both formats collapse into one thread.
+    // Group chats (`:group:`-prefixed thread_keys from the bridge) preserve
+    // their thread_key as the group identity since several participants
+    // share the same counterpart.
     const groups = new Map();
     for (const m of msgs) {
       const counterpart = m.direction === 'inbound' ? m.from_number : m.to_number;
-      const key = m.thread_key || `${m.deal_id || 'none'}:${normalizePhone(counterpart || '')}`;
+      const isGroup = typeof m.thread_key === 'string' && m.thread_key.includes(':group:');
+      const key = isGroup
+        ? m.thread_key
+        : `${m.deal_id || 'none'}:${normalizePhone(counterpart || '')}`;
       if (!groups.has(key)) {
         groups.set(key, {
           key, deal_id: m.deal_id, contact_id: m.contact_id,
@@ -11518,6 +11536,11 @@ function CommunicationsView({ onSelect }) {
       if (m.direction === 'inbound' && !m.read_by_team_at) g.unread++;
       if (!g.contact_id && m.contact_id) g.contact_id = m.contact_id;
       if (!g.deal_id && m.deal_id) g.deal_id = m.deal_id;
+      // Track the most recent message's timestamp — `msgs` is ordered DESC
+      // so the first message seen for a group is the latest one.
+      if (!g.latest || new Date(m.created_at) > new Date(g.latest)) {
+        g.latest = m.created_at;
+      }
     }
     const list = [...groups.values()].map(g => {
       const deal = dealById[g.deal_id];
