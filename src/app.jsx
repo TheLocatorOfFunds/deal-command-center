@@ -1536,6 +1536,101 @@ function DealCommandCenter({ session, profile }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.user?.id]);
 
+  // ── Visibility catchup for chat + SMS notifications ───────────────
+  // Root-cause diagnosis 2026-06-09 (verified via Claude-in-Chrome on
+  // Justin's live tab): the realtime channels on `team_messages` /
+  // `messages_outbound` silently stop delivering events when the DCC
+  // tab is in the background. Chrome's per-tab WebSocket throttling +
+  // Supabase realtime reconnect gaps add up: 5 sentinel INSERTs over
+  // 6 minutes never reached the browser. No console activity, no toast,
+  // no badge change. The user finds out next time they switch to DCC
+  // and notices Slack-style "I missed 3 messages."
+  //
+  // The fix here doesn't depend on realtime working. When the tab
+  // becomes visible (or window regains focus), query directly for any
+  // team_messages / inbound SMS newer than the last timestamp we saw,
+  // and surface them as toasts + a single chirp. Persisting last-seen
+  // in localStorage means cross-tab + reload safety. This is what
+  // Slack / Discord do; realtime is the fast path, polling-on-focus is
+  // the never-miss safety net.
+  useEffect(() => {
+    const uid = session?.user?.id;
+    if (!uid) return;
+    const LS_CHAT_KEY = `dcc_chat_lastseen_${uid}`;
+    const LS_SMS_KEY  = `dcc_sms_lastseen_${uid}`;
+    // Init last-seen to mount time so a fresh page load doesn't replay
+    // hours of backlog as toasts.
+    const initIso = new Date().toISOString();
+    try {
+      if (!localStorage.getItem(LS_CHAT_KEY)) localStorage.setItem(LS_CHAT_KEY, initIso);
+      if (!localStorage.getItem(LS_SMS_KEY))  localStorage.setItem(LS_SMS_KEY,  initIso);
+    } catch (e) {}
+
+    let running = false;
+    const catchUp = async () => {
+      if (document.hidden) return;     // only run when the user is looking
+      if (running) return;              // serialize concurrent catchups
+      running = true;
+      try {
+        // ── Team chat catchup ──
+        let chatSince = initIso;
+        try { chatSince = localStorage.getItem(LS_CHAT_KEY) || initIso; } catch (e) {}
+        const { data: chatRows } = await sb.from('team_messages')
+          .select('id, thread_id, sender_id, sender_kind, body, created_at, deleted_at')
+          .gt('created_at', chatSince)
+          .order('created_at', { ascending: true })
+          .limit(20);
+        const fresh = (chatRows || []).filter(m =>
+          m && m.sender_id !== uid && !m.deleted_at && m.body
+        );
+        if (fresh.length > 0) {
+          // Advance last-seen BEFORE iterating so we don't replay on
+          // any sync error mid-loop.
+          try { localStorage.setItem(LS_CHAT_KEY, fresh[fresh.length - 1].created_at); } catch (e) {}
+          let chirped = false;
+          for (const msg of fresh.slice(0, 5)) {
+            try { handleNewMessageToast(msg); } catch (e) { console.warn('[catchup-chat] toast fail', e); }
+            if (!chirped) { try { playNotifyChirp('chat'); } catch (e) {} chirped = true; }
+          }
+          loadUnreadChatCount();
+        }
+
+        // ── Inbound-SMS catchup ──
+        let smsSince = initIso;
+        try { smsSince = localStorage.getItem(LS_SMS_KEY) || initIso; } catch (e) {}
+        const { data: smsRows } = await sb.from('messages_outbound')
+          .select('id, deal_id, from_number, body, created_at')
+          .eq('direction', 'inbound')
+          .is('read_by_team_at', null)
+          .gt('created_at', smsSince)
+          .order('created_at', { ascending: true })
+          .limit(10);
+        const freshSms = smsRows || [];
+        if (freshSms.length > 0) {
+          try { localStorage.setItem(LS_SMS_KEY, freshSms[freshSms.length - 1].created_at); } catch (e) {}
+          try { playNotifyChirp('sms'); } catch (e) {}
+          loadUnreadSmsCount();
+        }
+      } finally {
+        running = false;
+      }
+    };
+
+    // Fire when tab becomes visible, on window focus, AND immediately
+    // on mount in case the page was loaded into a background tab
+    // (the realtime sub never got going there either).
+    const onVis = () => { if (!document.hidden) catchUp(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', catchUp);
+    // First-run: catch up anything since last close.
+    catchUp();
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', catchUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.user?.id]);
+
   const loadLeadCount = async () => {
     const { count } = await sb.from('leads').select('*', { count: 'exact', head: true }).eq('status', 'new');
     setNewLeadCount(count || 0);
