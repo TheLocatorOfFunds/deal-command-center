@@ -25727,7 +25727,16 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
   const [editDraftContact, setEditDraftContact] = useState({ first: '', last: '', phone: '' });
   const [editBusy, setEditBusy] = useState(false);
   const startEditContact = (c) => {
-    if (!c || !c.contact_id) return;
+    if (!c) return;
+    // Editable contacts on the Comms tab come in TWO shapes:
+    //   1. Linked contact (contact_deals row + public.contacts row) - has contact_id
+    //   2. Homeowner synthesized from deal.meta.homeownerPhone (line ~24677) -
+    //      has _homeowner: true and no contact_id (Justin 2026-06-09 reported
+    //      the pencil missing on Sha Johnson's deal, where the homeowner is
+    //      shown as a contact in the Comms tab).
+    // Both can be opened in the inline editor; saveEditContact routes the
+    // write to the right table.
+    if (!c.contact_id && !c._homeowner) return;
     const parts = (c.name || '').trim().split(/\s+/);
     setEditDraftContact({
       first: parts[0] || '',
@@ -25738,20 +25747,37 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
   };
   const cancelEditContact = () => { setEditingContact(null); setEditDraftContact({ first: '', last: '', phone: '' }); };
   const saveEditContact = async () => {
-    if (!editingContact?.contact_id || editBusy) return;
+    if (!editingContact || editBusy) return;
+    if (!editingContact.contact_id && !editingContact._homeowner) return;
     const first = editDraftContact.first.trim();
     const last = editDraftContact.last.trim();
     const fullName = [first, last].filter(Boolean).join(' ');
     if (!fullName) { alert('Name is required'); return; }
+    const newPhone = editDraftContact.phone.trim();
     setEditBusy(true);
-    const { error } = await sb.from('contacts').update({
-      name: fullName,
-      phone: editDraftContact.phone.trim() || null,
-    }).eq('id', editingContact.contact_id);
+    let error = null;
+    if (editingContact._homeowner) {
+      // Homeowner edit -> write to deals.meta. The top-level App sub on the
+      // deals table (line ~1775) fires loadDeals() after a ~1.2s debounce,
+      // which refreshes the parent's deals prop, which re-renders this
+      // component with the new deal.meta. No manual reload needed here.
+      const newMeta = { ...(deal?.meta || {}), homeownerName: fullName, homeownerPhone: newPhone || null };
+      const res = await sb.from('deals').update({ meta: newMeta }).eq('id', dealId);
+      error = res.error;
+    } else {
+      // Linked contact edit -> write to public.contacts.
+      const res = await sb.from('contacts').update({
+        name: fullName,
+        phone: newPhone || null,
+      }).eq('id', editingContact.contact_id);
+      error = res.error;
+      // Linked-contact path needs an explicit reload because there's no
+      // realtime sub on contact_deals in this component.
+      if (!error) await loadDealContacts();
+    }
     setEditBusy(false);
     if (error) { alert('Could not save: ' + error.message); return; }
     cancelEditContact();
-    await loadDealContacts();
   };
 
   // ── Resolve unmatched ─────────────────────────────────────────────────────
@@ -26285,10 +26311,12 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
             </div>
             {/* Edit contact (pencil) - Justin 2026-06-09: 'we need to be
                 able to edit their information: first and last name and
-                phone number.' Only on a real linked contact (not Everyone,
-                not raw-phone threads with no contact_id). */}
-            {activeContact && !activeContact._everyone && activeContact.contact_id && (
-              <button title="Edit contact" onClick={() => startEditContact(activeContact)}
+                phone number.' Shows on any non-Everyone tab that has either
+                a contact_id (linked contact) OR _homeowner=true (synthesized
+                from deal.meta - Sha Johnson case Justin reported on 6/9).
+                saveEditContact branches the write to the right table. */}
+            {activeContact && !activeContact._everyone && (activeContact.contact_id || activeContact._homeowner) && (
+              <button title={activeContact._homeowner ? 'Edit homeowner info' : 'Edit contact'} onClick={() => startEditContact(activeContact)}
                 style={{ background: 'transparent', border: '1px solid #292524', color: '#a8a29e', borderRadius: 5, padding: '4px 7px', fontSize: 12, cursor: 'pointer' }}>
                 ✏
               </button>
