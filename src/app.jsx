@@ -17616,6 +17616,96 @@ function PostUpdateModal({ dealName, onClose, onPost }) {
 // `app.js` from before this commit landed). If you're seeing field-disappear
 // reports again, first check whether this hook + its 350ms setTimeout are
 // still in the deployed bundle before assuming a new bug.
+// Phase 2 (issue #326, 2026-06-09): map meta-camelKey → real column name.
+// Keys in this map are written as top-level column UPDATEs, not as a
+// `meta = {...meta, key: value}` jsonb replacement. The BEFORE UPDATE
+// trigger `tg_sync_deals_meta_from_columns` mirrors the new column value
+// back into `meta` in the same statement, so legacy meta-readers
+// (mobile, edge functions, intel-main) still see the latest value.
+//
+// Why this fixes the field-blanking bug class: when two team members
+// edit different inputs on the same deal at the same time, the OLD path
+// (meta = {...stale_meta, ...patch}) carries each user's stale snapshot
+// of the OTHER user's keys, and the second write wins → first user's
+// edits silently vanish. With column UPDATEs, Postgres atomically merges
+// the two writes at the column level — no cross-key clobber possible.
+//
+// Phase 1a (28 keys) shipped 2026-06-09 morning. Phase 2 added 5 more
+// date/state fields the same evening (foreclosureFileDate,
+// confirmationOfSaleDate, redemptionDeadline, courtAppraisalOrderDate,
+// state) — these were Eric's specific bug repros.
+//
+// DO NOT add intel-main-controlled keys here (estimatedSurplus, salePrice,
+// judgmentAmount, totalDebt, courtAppraisalValue, minimumBidAmount,
+// saleDate, courtCase, county, ...) — those flow intel-main → DCC via the
+// 30-min cron, not from the DCC UI. See DIRECTOR_DCC_INTERFACE.md.
+const META_TO_COLUMN = {
+  verified:                  'verified',
+  verifiedAt:                'verified_at',
+  deceased:                  'deceased',
+  deceased_at:               'deceased_at',
+  obituary:                  'obituary',
+  obituary_added_at:         'obituary_added_at',
+  attorney:                  'attorney_name',
+  feePct:                    'fee_pct',
+  attorneyFee:               'attorney_fee',
+  zillowLink:                'zillow_link',
+  sheriffDocketLink:         'sheriff_docket_link',
+  documentLinks:             'document_links',
+  mortgageHistory:           'mortgage_history',
+  involuntaryLiensDetails:   'involuntary_liens_details',
+  openLiens:                 'open_liens',
+  openLiensCount:            'open_liens_count',
+  mortgageBalance1:          'mortgage_balance_1',
+  lienBalance1:              'lien_balance_1',
+  estimatedAvailableEquity:  'est_available_equity',
+  verifiedSurplus:           'verified_surplus',
+  contractPrice:             'contract_price',
+  listPrice:                 'list_price',
+  wholesalePrice:            'wholesale_price',
+  lienPayoff:                'lien_payoff',
+  flatFee:                   'flat_fee',
+  buyerAgentPct:             'buyer_agent_pct',
+  closingMiscPct:            'closing_misc_pct',
+  strategy:                  'flip_strategy',
+  state:                     'state',
+  foreclosureFileDate:       'foreclosure_file_date',
+  confirmationOfSaleDate:    'confirmation_of_sale_date',
+  redemptionDeadline:        'redemption_deadline',
+  courtAppraisalOrderDate:   'court_appraisal_order_date',
+};
+
+// Coerce blank strings to null and numeric strings to numbers for columns
+// typed as numeric/integer/date/timestamp/boolean. Date columns accept
+// 'YYYY-MM-DD' strings directly; PostgREST casts them. For boolean column
+// keys, normalize 'true'/'false' / true/false / null. Everything else
+// passes through as-is.
+const NUMERIC_COLUMNS = new Set([
+  'fee_pct','attorney_fee','open_liens_count','mortgage_balance_1','lien_balance_1',
+  'est_available_equity','verified_surplus','contract_price','list_price',
+  'wholesale_price','lien_payoff','flat_fee','buyer_agent_pct','closing_misc_pct',
+]);
+const BOOLEAN_COLUMNS = new Set(['verified','deceased']);
+function coerceColumnValue(col, v) {
+  if (v === '' || v === undefined) return null;
+  if (v === null) return null;
+  if (NUMERIC_COLUMNS.has(col)) {
+    if (typeof v === 'number') return v;
+    const s = String(v).trim();
+    if (s === '') return null;
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (BOOLEAN_COLUMNS.has(col)) {
+    if (typeof v === 'boolean') return v;
+    const s = String(v).trim().toLowerCase();
+    if (s === 'true')  return true;
+    if (s === 'false') return false;
+    return null;
+  }
+  return v;
+}
+
 function useDealMetaBuffer(deal, onUpdateDeal) {
   const [localMeta, setLocalMeta] = React.useState(deal.meta || {});
   const dirtyKeys = React.useRef(new Set());
@@ -17639,10 +17729,27 @@ function useDealMetaBuffer(deal, onUpdateDeal) {
   }, [deal.meta]);
   const flushPending = React.useCallback(() => {
     if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null; }
-    if (!Object.keys(pendingPatchRef.current).length) return;
     const patch = pendingPatchRef.current;
     pendingPatchRef.current = {};
-    onUpdateDealRef.current({ meta: { ...(dealMetaRef.current || {}), ...patch } });
+    if (!Object.keys(patch).length) return;
+    // Phase 2: split into column UPDATEs and meta-only fallback.
+    const colPatch = {};
+    const metaOnly = {};
+    for (const k of Object.keys(patch)) {
+      const col = META_TO_COLUMN[k];
+      if (col) {
+        colPatch[col] = coerceColumnValue(col, patch[k]);
+      } else {
+        metaOnly[k] = patch[k];
+      }
+    }
+    // Build the row patch. If any meta-only keys remain, include a
+    // meta-merge alongside the column updates (single UPDATE, atomic).
+    const rowPatch = { ...colPatch };
+    if (Object.keys(metaOnly).length) {
+      rowPatch.meta = { ...(dealMetaRef.current || {}), ...metaOnly };
+    }
+    onUpdateDealRef.current(rowPatch);
   }, []);
   React.useEffect(() => flushPending, [deal.id, flushPending]); // flush on switch / unmount
   const updateMeta = React.useCallback((patch) => {
