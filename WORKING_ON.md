@@ -268,7 +268,7 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 ### Justin · vigorous-williamson-f7809f
 
 **Branch:** 
-**Last updated (auto):** 2026-06-09 13:16 UTC
+**Last updated (auto):** 2026-06-09 13:52 UTC
 
 ### Justin · quirky-lamarr-8ec4ff
 
@@ -302,13 +302,8 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-06-09 — Case Details field-disappear bug REBUILT race-proof + AI out-of-credits triage/alarm + HOA-surplus SOP
+**Status:** Active — 2026-06-08 — AI outage triage: out-of-credits root cause + honest AI errors + daily credit-exhaustion alarm
 **Branch:** main (all work pushed)
-
-**Today (2026-06-09) — what shipped**
-
-- **Case Details field-disappear bug — REBUILT the fix, race-proof** (`b368881`, live `f2c54795363c`). Nathan + Inaam: fields (Zillow, file dates, obituary, surplus estimate, judgment, …) STILL blank on first input (2-3 retries to stick) despite the 2026-06-04 buffer. Two things the prior fix missed: (a) it gated re-adopting server state on a 2-second "typed recently?" **timer** — racy; a reload landing outside the window still wiped the keystroke; (b) `updateDealMeta` updates the deals array **optimistically**, so `deal.meta` shows the typed value before the real DB write lands — any "did the server catch up?" value-match is fooled, then a stale in-flight `loadDeals()` reverts the field. Replaced with a **deterministic dirty-key guard**: once a field is touched it shows the user's value until they navigate to a different deal (`deal.id` change); a reload merges server values for **untouched keys only**, so it can NEVER blank an in-progress field — no timer, no value-match, no race (provable by construction). Applied to **SurplusOverview AND FlipOverview** (the latter had no buffer at all). ⚠ Not browser-verified (CDP still times out on the heavy SPA) — guarantee is structural; Nathan/Inaam to confirm after a hard-reload to `f2c54795363c`.
-- **SOP captured — HOA disbursement order ≠ full surplus** (Nathan 2026-06-09). An HOA/condo-association payout is only a PARTIAL slice of sale proceeds; pull the **Sheriff's Report of Sale** for the ORIGINAL surplus — a meaningful balance may still be claimable. Logged to `memory/feedback_surplus_lead_validation.md` + the `surplus-math` skill anti-patterns.
 
 **Today (2026-06-08) — what shipped**
 
