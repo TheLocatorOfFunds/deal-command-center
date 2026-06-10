@@ -352,6 +352,16 @@ const getHomeowner = (deal, contacts) => {
 // Only the Deceased toggle ever writes a literal false, so false = a deliberate
 // human override. (undefined/absent = untouched → scraper signal still governs.)
 const isDeceased = (deal) => {
+  // Phase 2 (#326, 2026-06-09) moved the hand-flag write to the deals.deceased
+  // COLUMN (META_TO_COLUMN); a DB trigger mirrors it back into meta.deceased.
+  // The column is therefore the freshest truth and must be read FIRST — the
+  // optimistic client update after a toggle only patches the column, so a
+  // meta-only read here held the stale value until a full reload (Eric
+  // 2026-06-09: DECEASED toggle "sticks purple, needs a page refresh").
+  // Backfill copied legacy meta overrides into the column, so precedence is
+  // column (explicit human value) → legacy meta override → scraper signal.
+  if (deal?.deceased === false) return false;
+  if (deal?.deceased === true) return true;
   if (deal?.meta?.deceased === false) return false;
   return !!(deal?.death_signal || deal?.meta?.deceased);
 };
@@ -20779,6 +20789,11 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
   // + debounced save (Claude race-write fix 2026-06-09). See
   // useDealMetaBuffer at top of file for the full history.
   const [m, updateMeta] = useDealMetaBuffer(deal, onUpdateDeal);
+  // Deceased shown buffer-first: m.deceased is set synchronously on click and
+  // the dirty-key guard protects it from reload clobber, so the toggle flips
+  // the instant Eric clicks (no 350ms debounce gap, no controlled-input
+  // snap-back). Untouched → fall through to canonical isDeceased(deal).
+  const deceasedShown = m.deceased === false ? false : (m.deceased === true ? true : isDeceased(deal));
   return (
     <div>
       <CaseIntelligence dealId={deal.id} deal={deal} onJumpToTab={onJumpToTab} onUpdateDeal={onUpdateDeal} />
@@ -20835,16 +20850,18 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               </label>
             </Field>
             <Field label="Deceased">
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: m.deceased ? '#1a0e1f' : '#0c0a09', border: '1px solid ' + (m.deceased ? '#5b21b6' : '#44403c'), borderRadius: 6, height: 22, cursor: 'pointer' }}>
-                {/* Reflect the SAME source as the DECEASED badge: isDeceased()
-                    = scraper death_signal OR the hand-flag. Reading only
-                    m.deceased let a scraper-flagged lead (death_signal=true,
-                    meta untouched) show "owner alive" here while the header
-                    said DECEASED — Charles Bianca / sf-f-3, Nathan 2026-06-06.
-                    Unchecking now writes meta.deceased=false, which overrides
-                    the scraper signal (see isDeceased). */}
-                <input type="checkbox" checked={isDeceased(deal)} onChange={e => updateMeta({ deceased: e.target.checked, deceased_at: e.target.checked ? (m.deceased_at || new Date().toISOString()) : null })} style={{ accentColor: '#a855f7' }} />
-                <span style={{ fontSize: 12, color: isDeceased(deal) ? '#c4b5fd' : undefined }}>{isDeceased(deal) ? '🕊 deceased' : 'owner alive'}</span>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: deceasedShown ? '#1a0e1f' : '#0c0a09', border: '1px solid ' + (deceasedShown ? '#5b21b6' : '#44403c'), borderRadius: 6, height: 22, cursor: 'pointer' }}>
+                {/* deceasedShown = buffer-first + canonical isDeceased fallback
+                    (defined by the meta-buffer hook above). Keeps the toggle
+                    consistent with the DECEASED badge (scraper death_signal OR
+                    hand-flag — Charles Bianca / sf-f-3, Nathan 2026-06-06)
+                    while flipping INSTANTLY on click. Reading isDeceased(deal)
+                    directly went stale after Phase 2 moved the write to the
+                    deals.deceased column (Eric 2026-06-09: toggle "sticks
+                    purple", needed a page refresh). Unchecking writes an
+                    explicit false = human "owner alive" override. */}
+                <input type="checkbox" checked={deceasedShown} onChange={e => updateMeta({ deceased: e.target.checked, deceased_at: e.target.checked ? (m.deceased_at || new Date().toISOString()) : null })} style={{ accentColor: '#a855f7' }} />
+                <span style={{ fontSize: 12, color: deceasedShown ? '#c4b5fd' : undefined }}>{deceasedShown ? '🕊 deceased' : 'owner alive'}</span>
               </label>
             </Field>
           </div>
