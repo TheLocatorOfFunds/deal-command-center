@@ -935,6 +935,7 @@ function DealCommandCenter({ session, profile }) {
     // the whitelist, so refresh on these views bounced you back to today.
     'relay', 'calls', 'comms', 'va-queue', 'communications', 'automations',
     'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
+    'review',     // Review Queue — ready leads needing a human look (Nathan 2026-06-21)
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
@@ -968,6 +969,7 @@ function DealCommandCenter({ session, profile }) {
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [followupDueCount, setFollowupDueCount] = useState(0);
+  const [reviewCount, setReviewCount] = useState(0);
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [unreadSmsCount, setUnreadSmsCount] = useState(0);
@@ -1667,6 +1669,14 @@ function DealCommandCenter({ session, profile }) {
     setFollowupDueCount(count || 0);
   };
 
+  // Review-queue badge — # of "ready for outreach" leads flagged for a human look
+  // (a gap, or a "funds may already be gone" signal). Drives the 🔎 Review nav
+  // badge. Reads the v_lead_review_queue view. Nathan 2026-06-21.
+  const loadReviewCount = async () => {
+    const { count } = await sb.from('v_lead_review_queue').select('*', { count: 'exact', head: true });
+    setReviewCount(count || 0);
+  };
+
   // Unacked system alerts — the in-DCC monitoring queue. Drives the ⚠
   // header badge so silent EF/cron failures surface immediately.
   const loadSystemAlertCount = async () => {
@@ -1987,7 +1997,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadReviewCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -2215,6 +2225,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('active',   '🏠', 'Leads',    { groupIds: ['active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('tasks',    '✅', 'Tasks')}
               {navItem('followups','📞', 'Follow-ups', { badge: followupDueCount })}
+              {navItem('review','🔎', 'Review', { badge: reviewCount })}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
               {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
               {div()}
@@ -3971,7 +3982,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} />
@@ -4015,6 +4026,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "followups" ? (
             <FollowupsView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "review" ? (
+            <ReviewQueueView onJumpToDeal={onSelect} />
           ) : view === "tasks" ? (
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "time" ? (
@@ -6728,6 +6741,97 @@ function FollowupsView({ deals, onJumpToDeal }) {
               </div>
             </div>
             <button onClick={() => onJumpToDeal(d.id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Review Queue (Nathan 2026-06-21) ───────────────────────────────────────
+// The "before you call" gate for Eric + Inaam. Surfaces every lead marked READY
+// FOR OUTREACH that has a gap (no phone, deceased w/ no heir, no surplus $, marked
+// dead) OR a "funds may already be gone" signal from its AI docket brief. Pure
+// SURFACING — the system makes no calls. A human opens each, verifies, then fixes
+// the gap (which removes it) or hits ✓ Reviewed (stamps meta.review_cleared_at via
+// the clear_lead_review RPC). Backed by the v_lead_review_queue view.
+function ReviewQueueView({ onJumpToDeal }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('all'); // all | verify | gaps
+  const [busy, setBusy] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('v_lead_review_queue').select('*')
+      .order('priority', { ascending: true }).order('surplus', { ascending: false });
+    setRows(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const ch = sb.channel('review-queue-global')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, load)
+      .subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const markReviewed = async (deal_id) => {
+    setBusy(deal_id);
+    try { await sb.rpc('clear_lead_review', { p_deal_id: deal_id }); } catch (e) {}
+    setRows(prev => prev.filter(r => r.deal_id !== deal_id)); // optimistic drop
+    setBusy(null);
+  };
+
+  const fmt$ = (n) => !n || n <= 0 ? '—' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + Math.round(n);
+  const verify = rows.filter(r => r.category === 'verify_available');
+  const gaps = rows.filter(r => r.category === 'not_callable');
+  const shown = filter === 'verify' ? verify : filter === 'gaps' ? gaps : rows;
+
+  const FLAG = {
+    verify_maybe_gone:  { icon: '💸', color: '#fca5a5', bg: '#3a1d1d', label: 'Verify still available' },
+    dead_but_ready:     { icon: '🪦', color: '#fca5a5', bg: '#3a1d1d', label: 'Marked dead' },
+    deceased_no_heir:   { icon: '🕊', color: '#c4b5fd', bg: '#241a33', label: 'Deceased · no heir to call' },
+    no_phone:           { icon: '📵', color: '#fcd34d', bg: '#332a12', label: 'No phone' },
+    no_surplus_amount:  { icon: '❓', color: '#fcd34d', bg: '#332a12', label: 'No surplus $' },
+    possible_duplicate: { icon: '👥', color: '#93c5fd', bg: '#12243a', label: 'Possible duplicate' },
+  };
+  const chip = (id, label, n) => (
+    <button key={id} onClick={() => setFilter(id)} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: filter === id ? '#292524' : 'transparent', color: filter === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'), fontWeight: filter === id ? 700 : 500, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label} · {n}</button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, padding: 16, background: "#1c1917", border: "1px solid #292524", borderRadius: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.1em', textTransform: 'uppercase' }}>🔎 Review Queue</div>
+        <div style={{ fontSize: 13, color: '#a8a29e', marginTop: 4, lineHeight: 1.5 }}>
+          "Ready for outreach" leads that need a human look <b>before</b> calling — a missing piece, or a sign the money may already be gone. Open each, verify against the docket, then fix it or hit <b style={{ color: '#bbf7d0' }}>✓ Reviewed</b>. Nothing here is changed automatically.
+        </div>
+        <div style={{ display: 'flex', gap: 4, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap', marginTop: 12 }}>
+          {chip('all', 'Everything', rows.length)}
+          {chip('verify', '💸 Verify available', verify.length)}
+          {chip('gaps', '📵 Fix to call', gaps.length)}
+        </div>
+      </div>
+
+      {loading && <div style={{ padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 }}>Loading…</div>}
+      {!loading && shown.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>🎉 Nothing to review — every ready lead is clean.</div>
+      )}
+
+      {shown.map(r => {
+        const fm = FLAG[r.flag] || { icon: '•', color: '#a8a29e', bg: '#292524', label: r.flag };
+        return (
+          <div key={r.deal_id} style={{ marginBottom: 8, padding: "11px 14px", background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid ' + fm.color, borderRadius: 6 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', cursor: 'pointer' }} onClick={() => onJumpToDeal(r.deal_id)}>{r.name || r.deal_id}</span>
+              <span style={{ fontSize: 11, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{fmt$(r.surplus)}</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: fm.color, background: fm.bg, padding: '2px 8px', borderRadius: 10 }}>{fm.icon} {fm.label}</span>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => onJumpToDeal(r.deal_id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>
+              <button onClick={() => markReviewed(r.deal_id)} disabled={busy === r.deal_id} title="I looked at this — clear it from the queue" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: busy === r.deal_id ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>{busy === r.deal_id ? '…' : '✓ Reviewed'}</button>
+            </div>
+            <div style={{ fontSize: 12, color: '#d6d3d1', marginTop: 6 }}>{r.reason}</div>
+            {r.evidence && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 5, fontStyle: 'italic', lineHeight: 1.45, background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: '6px 9px' }}>📄 {r.evidence}…{r.ai_at && <span style={{ color: '#78716c' }}> — AI brief {String(r.ai_at).slice(0, 10)}</span>}</div>}
           </div>
         );
       })}
