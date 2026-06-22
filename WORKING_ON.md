@@ -347,8 +347,12 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Active — 2026-06-09 — docket-refresh triage (53 leads) + Director hand-off; Case Details fix merged 2-layer (my dirty-key + Justin's debounce); AI out-of-credits triage/alarm
+**Status:** Idle — 2026-06-22 — DCC simplification (1–7): nav→Outreach hub, 🩺 Health page, Daily Worklist, meta→column verified-complete, Relay KEPT (paused); + nav-badge-mismatch sweep + dead-deal cleanup trigger. All pushed; archived.
 **Branch:** main (all work pushed)
+
+**Today (2026-06-22) — what shipped**
+
+- **DCC simplification 1–7 + nav-badge fixes.** Full arc shipped — see `session_archives/2026-06-22-dcc-simplification-1-7-badges.md`. (1) Nav collapsed: `OutreachHub` folds Automations+Comms+Comms-Analytics into one **Outreach** button w/ tabs; `forecast`→Insights; dup 💬 gone; all old routes resolve via groupIds (`969db76`). (3) **meta→column verified COMPLETE** — `tg_sync_deals_meta_from_columns` mirrors all 33 cols, 0 drift/417 deals; locked the invariant in a comment, no churn (`50c3d44`). (5) **System Health** admin page (`get_operator_health()` — AI canary, crons, alerts, scrapers; `293e10a`). (6) **Daily Worklist** atop Today (`get_daily_worklist()` — ranked Deadlines/Review/Call/Followup; `bf9fa7c`). **(2) Relay: KEPT, not killed** — Nathan reviewed the live Automations screen + likes the manual Review Mode/Scan Now flow; only dropped 2 *disabled* crons; UI+`relay_*` tables+EFs stay (local doc `~/Documents/Claude/DCC_RELAY_DECOMMISSION_2026-06-22.md`). **(4) Prune: deferred** — `pg_class` can't ID dead tables safely; Health page covers monitoring. **Badge-mismatch sweep:** Review badge was stale-at-mount (56 vs body 30) → refreshes on `deals` realtime; Follow-ups badge counted an orphan task on deleted deal `sf-daggs` (1 vs body 0) → `get_followup_due_count()` (`36fd412`); `verify_maybe_gone` over-fired on live surplus → tightened 18→7. **Dead-deal cleanup trigger** `tg_cleanup_on_deal_dead` (closes tasks + acks docket on dead/delete; backfill cleared 120 tasks + 436 docket, unacked 1792→1356; `5079b0f`). **Build guard** vs leaked conflict markers (`b03950c`). CLAUDE.md view-list + Gotchas refreshed. EF deploys stayed IP-gated → all work was front-end + migrations + SQL.
 
 **Today (2026-06-09) — what shipped**
 

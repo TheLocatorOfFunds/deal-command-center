@@ -254,20 +254,21 @@ NOT change with renames.
 Several sidebar entries are **hubs** — one nav item whose second-level chip bar
 switches between sibling sub-views (see `groupBtn`/`chipBtn` in `src/app.jsx` ~line 3032).
 
-1. **📌 Today** — daily dashboard: KPI tiles + pipeline funnel + AutomationsQueue (pending outreach drafts) + Prep Queue + Urgent + Team Activity (right rail)
-2. **⚡ Attention** — reactive: cross-deal deadline strip + 🔥 Lead Engagement strip (link opens + Lauren chats) + per-deal unread/unacked work
-3. **🎯 Outreach** (hub) — `outreach` (Drafts & Replies: 4 stat tiles + AutomationsQueue + ReplyInbox) · `inbox` · `leads` (LeadsOutreachView) · `forecast` (7–14 day plan)
-4. **📡 Relay** — cadence/sequence auto-enrollment engine (relay_enrollments, "Ohio Surplus Funds v1" sequences, approve/skip/regenerate per scheduled step)
-5. **🏠 Leads** (hub) — `leads-phase` (New) · `active` (Deals) · `archive` (Closed) · `awaiting` (⏳ Awaiting check, transient surplus state) · `deleted` (Deleted) · `pipeline` (🧭 Kanban). Renamed from "Deals" 2026-06-08 (#290); Flagged + Hygiene chips dropped — their view ids stay wired in groupIds so deep-link URLs still resolve.
-6. **✅ Tasks** — global task list across deals
-7. **⏱ Time** — team time tracking (admin only)
-8. **📊 Insights** (hub, admin) — `reports` (+ ScraperHealthPanel) · `analytics` (financial) · `traffic` (web) · `comms` (CommsAnalyticsView)
-9. **📞 Calls** — call history (CallHistoryView)
-10. **💬 Chat** — team chat + Lauren (TeamView)
+1. **📌 Today** — daily dashboard, now led by the **Daily Worklist** (2026-06-22): one ranked action list — Deadlines → Needs review → Ready to call → Follow up, from `get_daily_worklist()` — above the KPI tiles + funnel + Prep Queue + Urgent + Team Activity (right rail).
+2. **⏰ Deadlines** (`attention`) — cross-deal deadline strip + 🔥 Lead Engagement strip (link opens + Lauren chats) + per-deal unread/unacked work.
+3. **🎯 Outreach** (hub → `OutreachHub`, 2026-06-22) — three tabs: **Automations** (the Relay cadence review UI — Review Mode + Ready-to-Approve/Enrolled + Scan Now, backed by `relay_*` tables + `outreach_queue`) · **Messages** (`CommunicationsView`, cross-deal Calls/Texts inbox) · **Comms Analytics** (admin). Folds in the old separate Automations + Comms + Relay nav items; every old route id (outreach/automations/relay/inbox/communications/comms/leads) still resolves here via `groupIds`.
+4. **🏠 Leads** (hub) — `leads-phase` (New) · `active` (Deals) · `archive` (Closed) · `awaiting` (⏳ Awaiting check) · `deleted` · `pipeline` (🧭 Kanban). Renamed from "Deals" 2026-06-08 (#290).
+5. **✅ Tasks** — global task list across deals.
+6. **📞 Follow-ups** — dedicated follow-ups queue. Badge counts due-now follow-ups on LIVE deals via `get_followup_due_count()` (matches the body's deal filter — see Gotchas).
+7. **🔎 Review** — **Review Queue** (2026-06-21): "ready for outreach" leads flagged for a human look BEFORE calling (`v_lead_review_queue` — deceased-no-heir / no-phone / no-surplus / verify-maybe-gone / dup / dead-but-ready). Open → verify → `clear_lead_review`. Surfaces + ranks only; nothing auto-changes. Badge refreshes on deals realtime.
+8. **⏱ Time** — team time tracking (admin only).
+9. **📊 Insights** (hub, admin) — `reports` (+ ScraperHealthPanel) · `analytics` (financial) · `traffic` (web) · `forecast` (moved here from Automations 2026-06-22).
+10. **🩺 Health** (admin, 2026-06-22) — **System Health** page: AI-credit canary, every active cron's last run + staleness, open `system_alerts`, scraper health — all from `get_operator_health()`. The system reports breakage instead of waiting for a person to notice.
+11. **💬 Chat** (`team`) — team chat + Lauren (TeamView).
 
-Sidebar entries that open **modals** (not views): **👥 Contacts**, **⚖ Docket**, **📋 Leads** (intake/dup), **📥 Import** (admin), **📚 Library**. Header also has 🔍 Search (⌘K), the 🔔 notification bell, and the Phone dialpad popover. A mobile "More" sheet mirrors the secondary items.
+Sidebar entries that open **modals** (not views): **👥 Contacts**, **⚖ Docket**, **📋 Intake**, **📥 Import** (admin), **📚 Library**. Header also has 🔍 Search (⌘K), the 🔔 notification bell, and the Phone dialpad popover. (`calls`/CallHistoryView still exists as a route but is no longer a sidebar item.)
 
-> **Known IA overlaps** (from the 2026-05-26 redesign audit; redesign shelved, see git `176549c`/`720a669`): two outreach engines run in parallel (Outreach `outreach_queue` "Automations" vs **Relay** sequences) and can queue the same lead; the AutomationsQueue + Team Activity render on both Today and Outreach; the Outreach "Drafts ready" tile counts ALL pending while the queue below shows only the active phase (A-tier verified surplus). Incremental cleanups tracked separately — don't assume these are intentional when navigating.
+> **IA note — 2026-06-22 nav collapse:** the old separate **Automations** + **Comms** + **Relay** nav items are now ONE **Outreach** hub (3 tabs); `forecast` moved Automations→Insights; the duplicate 💬 icon is gone; a new **🩺 Health** admin view landed. All old hash URLs still resolve via `groupIds`. The **Relay** cadence engine is intentionally **PAUSED but KEPT** (Nathan likes the manual review flow) — its 2 auto-enroll/dispatch crons were dropped 2026-06-22, but the UI, `relay_*` tables, and EFs (`relay-auto-enroll`/`relay-dispatcher`/`drop-rvm`) stay; Scan Now + approve-to-send run on demand. Recreate SQL for the crons is in `~/Documents/Claude/DCC_RELAY_DECOMMISSION_2026-06-22.md` (local). Backend caveat that remains: the cadence (`outreach_queue`) and Relay enrollment (`relay_*`) systems can still both target a lead — the UI is unified, the two backend queues are not merged.
 
 ## Common change recipes
 
@@ -302,6 +303,9 @@ Nothing to do in the dashboard — just share the URL. First sign-in auto-create
 - **`vendors` is per-deal, `contacts` is company-wide.** Don't conflate them. A contractor who does one flip goes in `vendors`. A partner attorney who touches multiple cases goes in `contacts` and gets linked via `contact_deals`.
 - **`contacts.financial_notes` is a column, not jsonb.** UI hides it for VAs, but RLS allows VA reads (same trust-based pattern as `deals.meta` financial fields). If you ever need tighter enforcement, use a column-level privilege or a VIEW.
 - **Attorney portal access flows contacts → attorney_assignments via trigger.** `tg_sync_attorney_assignments_from_contact_deal` fires on `contact_deals` insert/update/delete and keeps `attorney_assignments` aligned whenever an attorney-kind contact is linked to (or unlinked from) a deal. Matching `tg_sync_*_on_contact_update` and `_on_contact_delete` triggers handle edits to the contact row itself. Do NOT manually insert into `attorney_assignments` alongside `contact_deals` — let the trigger do the work, or you'll end up with double rows.
+- **Nav badge counts must match their tab body's filter** (2026-06-22 — fixed 3 instances). A badge drifts when it counts more broadly than the view it represents: the Review badge loaded once at mount and never refreshed (stale-high), and the Follow-ups badge counted raw `tasks` including ones on deleted/dead deals that the body hides. Rule: when a nav badge represents a filtered list, count through the SAME filter — for deal-tied counts that means excluding soft-deleted / dead / closed / recovered deals. Review badge now refreshes on `deals` realtime; Follow-ups badge counts via `get_followup_due_count()`.
+- **Dead/deleted deals auto-clean their tasks + docket.** Trigger `tg_cleanup_on_deal_dead` (AFTER UPDATE on `deals`) fires on the transition into `deleted_at`-set or `status='dead'` and closes the deal's open `tasks` + acknowledges its unacked `docket_events` — so dead deals stop generating orphan work. Scoped to dead+deleted only; `closed`/`recovered` keep their tasks for post-recovery follow-up. Don't be surprised when deleting a deal also clears its follow-ups + docket items — that's intended.
+- **`deals` column ⇆ meta dual-write (33 Case Details fields).** Each lives as BOTH a real column AND `deals.meta.<key>`. The client writes the COLUMN (via `useDealMetaBuffer`); a BEFORE-UPDATE trigger (`tg_sync_deals_meta_from_columns`) mirrors it back into meta; components read meta. Invariant: in an EDIT control, bind `checked`/`value` to the buffer `m.<key>` or the real column — NEVER to a helper that re-reads `deal.meta.<key>` (stale until the round-trip). That gap caused the DECEASED-toggle + field-disappear bugs. Full note sits at the `META_TO_COLUMN` definition in `src/app.jsx`.
 
 ## Team
 
