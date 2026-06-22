@@ -2021,12 +2021,20 @@ function DealCommandCenter({ session, profile }) {
 
   // realtime: any change to deals triggers refresh
   useEffect(() => {
+    let reviewCountTimer = null;
     const ch = sb.channel('deals-ch')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deals' }, (payload) => {
         // Phase 3 (#326): apply the change locally instead of refetching the
         // entire deals table. intel-main bursts arrive as many events but each
         // is now an O(1) array swap rather than a 1.3MB pull. See applyDealChange.
         applyDealChange(payload);
+        // Keep the Review badge in sync with the queue. It used to load only at
+        // mount, so as leads were cleared / AI briefs regenerated through the
+        // day the badge drifted high — showed 56 while the queue body showed 30
+        // (Nathan 2026-06-22). Debounced so intel-main bursts don't fire dozens
+        // of count queries.
+        if (reviewCountTimer) clearTimeout(reviewCountTimer);
+        reviewCountTimer = setTimeout(loadReviewCount, 1500);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'activity' }, loadRecentActivity)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'leads' }, loadLeadCount)
@@ -2045,7 +2053,7 @@ function DealCommandCenter({ session, profile }) {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'personalized_link_views' }, loadEngagementCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, loadEngagementCount)
       .subscribe();
-    return () => { sb.removeChannel(ch); };
+    return () => { if (reviewCountTimer) clearTimeout(reviewCountTimer); sb.removeChannel(ch); };
   }, []);
 
   // Self-heal the unread chat count against stale state. Realtime
