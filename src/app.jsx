@@ -3986,7 +3986,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
-            <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} />
+            <><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} /></>
           ) : view === "calls" ? (
             <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
@@ -10090,6 +10090,86 @@ function HealthView() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Daily Worklist (#6, 2026-06-22) ─────────────────────────────────────
+// One ranked list of today's highest-value actions, grouped into 4 priority
+// cards: Deadlines → Needs review → Ready to call → Follow up. Fed by
+// get_daily_worklist() (urgency×value ranking, dedups each deal to its single
+// most-urgent action, respects the review gate). Surfaces + ranks only — the
+// human opens the deal and decides. Rendered atop the Today landing view.
+function DailyWorklist({ onSelect }) {
+  const [items, setItems] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+  const [expanded, setExpanded] = React.useState({});
+  React.useEffect(() => {
+    let alive = true;
+    sb.rpc('get_daily_worklist', { p_limit: 300 }).then(({ data, error }) => {
+      if (!alive) return;
+      if (error) setErr(error.message); else setItems(data || []);
+    });
+    return () => { alive = false; };
+  }, []);
+  if (err) return null;                 // fail quiet — never block the Today page
+  if (!items) return <div style={{ padding: '12px 0', color: '#78716c', fontSize: 13 }}>Building today's worklist…</div>;
+  if (!items.length) return null;
+
+  const KINDS = [
+    { key: 'deadline', icon: '⏰', label: 'Deadlines',     accent: '#ef4444' },
+    { key: 'review',   icon: '🔎', label: 'Needs review',  accent: '#f59e0b' },
+    { key: 'call',     icon: '📞', label: 'Ready to call', accent: '#22c55e' },
+    { key: 'followup', icon: '📲', label: 'Follow up',     accent: '#3b82f6' },
+  ];
+  const groups = {};
+  items.forEach(it => { (groups[it.kind] = groups[it.kind] || []).push(it); });
+  const money = (n) => Number(n) > 0 ? '$' + Math.round(Number(n)).toLocaleString() : '';
+  const fmtDays = (d) => { d = Number(d); return d < 0 ? `${-d}d overdue` : d === 0 ? 'today' : `in ${d}d`; };
+  const actionLine = (it) => {
+    if (it.kind === 'deadline') return `${it.when_date || 'deadline'} · ${fmtDays(it.days_until)}`;
+    if (it.kind === 'review')   return it.reason || it.flag || 'Look before calling';
+    if (it.kind === 'call')     return 'First contact — never called';
+    if (it.kind === 'followup') return 'Gone quiet — follow up';
+    return '';
+  };
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 18, fontWeight: 800, color: '#fafaf9' }}>🗂 Today's Worklist</span>
+        <span style={{ fontSize: 12, color: '#78716c' }}>{items.length} actions, ranked by urgency × value</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+        {KINDS.filter(k => groups[k.key]?.length).map(k => {
+          const list = groups[k.key];
+          const total = list.reduce((s, it) => s + (Number(it.value) || 0), 0);
+          const show = expanded[k.key] ? list : list.slice(0, 6);
+          return (
+            <div key={k.key} style={{ background: '#121110', border: '1px solid #292524', borderRadius: 10, padding: 14 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, borderLeft: `3px solid ${k.accent}`, paddingLeft: 8 }}>
+                <span style={{ fontSize: 14, fontWeight: 800, color: '#fafaf9' }}>{k.icon} {k.label}</span>
+                <span style={{ fontSize: 11, color: '#78716c', marginLeft: 'auto' }}>{list.length}{total > 0 ? ` · ${money(total)}` : ''}</span>
+              </div>
+              {show.map((it, i) => (
+                <button key={it.deal_id + '_' + i} onClick={() => onSelect(it.deal_id)} style={{
+                  display: 'flex', alignItems: 'baseline', gap: 8, width: '100%', textAlign: 'left',
+                  background: 'transparent', border: 'none', borderTop: i ? '1px solid #1c1917' : 'none',
+                  padding: '7px 0', cursor: 'pointer', fontFamily: 'inherit' }}>
+                  <span style={{ fontSize: 13, color: '#e7e5e4', fontWeight: 600, flexShrink: 0, maxWidth: '46%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{it.name || 'Unknown'}</span>
+                  {money(it.value) && <span style={{ fontSize: 12, color: '#d97706', fontWeight: 700 }}>{money(it.value)}</span>}
+                  <span style={{ fontSize: 11, color: '#78716c', marginLeft: 'auto', textAlign: 'right', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '54%' }}>{actionLine(it)}</span>
+                </button>
+              ))}
+              {list.length > 6 && (
+                <button onClick={() => setExpanded(e => ({ ...e, [k.key]: !e[k.key] }))} style={{ marginTop: 8, background: 'transparent', border: 'none', color: '#78716c', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit', padding: 0 }}>
+                  {expanded[k.key] ? '▲ show less' : `▼ ${list.length - 6} more`}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
