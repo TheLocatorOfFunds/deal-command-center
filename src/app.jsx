@@ -2214,8 +2214,7 @@ function DealCommandCenter({ session, profile }) {
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
               {navItem('today',    '📌', 'Today')}
               {navItem('attention','⏰', 'Deadlines')}
-              {navItem('outreach', '🎯', 'Automations', { groupIds: ['outreach','automations','relay','leads','forecast'] })}
-              {navItem('communications', '💬', 'Comms', { groupIds: ['communications','inbox'] })}
+              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
               {/* Renamed Deals → Leads per #290 (2026-06-08). Hub contains the
                   full lifecycle: New (pre-contract) → Deals (engaged) → Closed
                   → Awaiting (transient, surplus recovered without check) →
@@ -2227,7 +2226,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('followups','📞', 'Follow-ups', { badge: followupDueCount })}
               {navItem('review','🔎', 'Review', { badge: reviewCount })}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
-              {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
+              {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic','forecast'], adminOnly: true })}
               {div()}
               {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
               {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
@@ -3990,25 +3989,18 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <CallHistoryView onSelect={onSelect} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
-          ) : view === "relay" || view === "outreach" || view === "automations" ? (
-            // Phase 1 of the 5/27 Automations unification: one wrapper, two
-            // sub-tabs. `view='relay'` opens Enrolled; the others open Ready.
-            <AutomationsView
-              deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin}
-              initialSubtab={view === 'relay' ? 'enrolled' : (view === 'outreach' ? 'ready' : null)}
-            />
-          ) : view === "inbox" || view === "communications" ? (
-            /* Phase 3 (5/27): the new cross-deal Communications hub (Calls +
-               Texting) supersedes the old InboxView/ReplyInbox. The "inbox"
-               route is kept as an alias so existing bookmarks/nav still work.
-               2026-06-09 (#324): startCall + callStatus + onOpenCallDisposition
-               threaded down so the right pane can render the per-deal
-               OutboundMessages composer (full parity with deal Comms). */
-            <CommunicationsView
-              onSelect={onSelect}
-              startCall={startCall}
-              callStatus={callStatus}
-              onOpenCallDisposition={onOpenCallDisposition}
+          ) : view === "relay" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "comms" ? (
+            // Outreach hub (2026-06-22 nav collapse): one sidebar button,
+            // tabbed inside — Automations (the cadence engine) + Messages (the
+            // cross-deal Calls/Texts hub) + Comms Analytics (admin). Every old
+            // route id (relay/outreach/automations/inbox/communications/comms)
+            // still resolves here, so bookmarks and deep links keep working;
+            // the sidebar just shows a single "Outreach" instead of two
+            // overlapping buttons with duplicate chat-bubble icons. The heavy
+            // child views are rendered unchanged — the hub only adds the tab bar.
+            <OutreachHub
+              view={view} deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin}
+              startCall={startCall} callStatus={callStatus} onOpenCallDisposition={onOpenCallDisposition}
             />
           ) : view === "forecast" ? (
             <ForecastView deals={deals} onSelect={onSelect} />
@@ -4036,8 +4028,6 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
           ) : view === "va-queue" ? (
             isAdmin ? <VaQueueView userId={userId} /> : null
-          ) : view === "comms" ? (
-            isAdmin ? <CommsAnalyticsView /> : null
           ) : layoutMode === "kanban" ? (
             <div>
               <SurplusStageTabs value={surplusStageFilter} onChange={setSurplusStageFilter} counts={stageCounts} sums={stageSums} />
@@ -9983,6 +9973,52 @@ function ReviewModeBanner({ isAdmin }) {
 // view='relay' opens with the Enrolled tab. The active sub-tab is
 // persisted to localStorage so refreshes don't bounce you back
 // (closes #188, generalized from Relay-only).
+// ── Outreach hub ────────────────────────────────────────────────────────
+// 2026-06-22 nav collapse: the sidebar carried two overlapping buttons —
+// "Automations" (the cadence engine) and "Comms" (the cross-deal Calls/Texts
+// inbox) — plus a hidden admin "Comms Analytics" route, both using the same
+// 💬 icon. This wrapper folds them into ONE "Outreach" button with tabs. It
+// renders the existing heavy views UNCHANGED; the route is the single source
+// of truth for the active tab, so deep links + the sidebar highlight stay
+// correct and clicking a tab just navigates (keeps old bookmarks alive).
+function OutreachHub({ view, deals, onSelect, setView, isAdmin, startCall, callStatus, onOpenCallDisposition }) {
+  const tab = (view === 'communications' || view === 'inbox') ? 'messages'
+            : (view === 'comms') ? 'analytics'
+            : 'automations';
+  const tabBtn = (id, label, route) => (
+    <button onClick={() => setView(route)}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '8px 16px', fontSize: 13, fontWeight: 700,
+        background: tab === id ? '#1c1917' : 'transparent', color: tab === id ? '#d97706' : '#78716c',
+        border: 'none', borderBottom: tab === id ? '2px solid #d97706' : '2px solid transparent', cursor: 'pointer' }}>
+      {label}
+    </button>
+  );
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #292524', marginBottom: 16 }}>
+        {tabBtn('automations', '🎯 Automations', 'outreach')}
+        {tabBtn('messages', '💬 Messages', 'communications')}
+        {isAdmin && tabBtn('analytics', '📊 Comms Analytics', 'comms')}
+      </div>
+      {tab === 'messages' ? (
+        <CommunicationsView
+          onSelect={onSelect}
+          startCall={startCall}
+          callStatus={callStatus}
+          onOpenCallDisposition={onOpenCallDisposition}
+        />
+      ) : tab === 'analytics' ? (
+        (isAdmin ? <CommsAnalyticsView /> : null)
+      ) : (
+        <AutomationsView
+          deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin}
+          initialSubtab={view === 'relay' ? 'enrolled' : (view === 'outreach' ? 'ready' : null)}
+        />
+      )}
+    </div>
+  );
+}
+
 function AutomationsView({ deals, onSelect, setView, isAdmin, initialSubtab }) {
   const STORAGE_KEY = 'dcc_automations_subtab';
   const [subtab, setSubtabRaw] = useState(() => {
