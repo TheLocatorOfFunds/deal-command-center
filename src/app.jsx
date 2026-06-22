@@ -936,6 +936,7 @@ function DealCommandCenter({ session, profile }) {
     'relay', 'calls', 'comms', 'va-queue', 'communications', 'automations',
     'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
     'review',     // Review Queue — ready leads needing a human look (Nathan 2026-06-21)
+    'health',     // System Health — operator-health page (Nathan 2026-06-22)
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
@@ -2227,6 +2228,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('review','🔎', 'Review', { badge: reviewCount })}
               {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
               {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic','forecast'], adminOnly: true })}
+              {navItem('health',   '🩺', 'Health',   { adminOnly: true })}
               {div()}
               {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
               {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
@@ -3981,7 +3983,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           {view === "today" ? (
             <TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} />
@@ -4024,6 +4026,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <GlobalTasksView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "time" ? (
             <TimeTrackingView userId={userId} isAdmin={isAdmin} />
+          ) : view === "health" ? (
+            isAdmin ? <HealthView /> : null
           ) : view === "team" ? (
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
           ) : view === "va-queue" ? (
@@ -9973,6 +9977,123 @@ function ReviewModeBanner({ isAdmin }) {
 // view='relay' opens with the Enrolled tab. The active sub-tab is
 // persisted to localStorage so refreshes don't bounce you back
 // (closes #188, generalized from Relay-only).
+// ── System Health (operator-health page, 2026-06-22) ────────────────────
+// One admin glance so the SYSTEM reports breakage instead of Eric: AI-credit
+// canary, every active cron's last run, open system_alerts, scraper health.
+// Backed by get_operator_health() (SECURITY DEFINER — reads the cron.* schema
+// the UI role otherwise can't). Read-only; safe to open anytime.
+function HealthView() {
+  const [h, setH] = React.useState(null);
+  const [loading, setLoading] = React.useState(true);
+  const [err, setErr] = React.useState(null);
+  const [at, setAt] = React.useState(null);
+  const load = React.useCallback(async () => {
+    setLoading(true); setErr(null);
+    const { data, error } = await sb.rpc('get_operator_health');
+    if (error) setErr(error.message); else { setH(data); setAt(new Date()); }
+    setLoading(false);
+  }, []);
+  React.useEffect(() => { load(); }, [load]);
+
+  const C = { green: '#22c55e', amber: '#f59e0b', red: '#ef4444', muted: '#78716c' };
+  const Dot = ({ c }) => <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: C[c] || C.muted, flexShrink: 0 }} />;
+  const fmtAge = (m) => m == null ? '—' : m < 60 ? `${m}m ago` : m < 1440 ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+
+  if (loading && !h) return <div style={{ padding: 40, color: '#78716c' }}>Loading system health…</div>;
+  if (err) return <div style={{ padding: 24, color: C.red }}>Couldn't load health: {err} <button onClick={load} style={{ marginLeft: 8 }}>Retry</button></div>;
+  if (!h) return null;
+
+  const aiBad = h.ai_credit && h.ai_credit.ok === false;
+  const aiReason = h.ai_credit?.failure_reason || '';
+  const aiCredit = /credit|billing|quota|insufficient|payment|\b401\b|\b403\b/i.test(aiReason);
+  const reds = (h.cron_summary?.red || 0) + (h.scrapers?.red || 0);
+  const ambers = (h.cron_summary?.amber || 0) + (h.scrapers?.amber || 0);
+  const alertN = h.alerts?.open_count || 0;
+  const overall = (reds > 0 || (aiBad && aiCredit)) ? 'red' : (aiBad || ambers > 0 || alertN > 0) ? 'amber' : 'green';
+  const overallLabel = overall === 'green' ? 'All systems healthy' : overall === 'amber' ? 'Needs a glance' : 'Action needed';
+
+  const card = { background: '#121110', border: '1px solid #292524', borderRadius: 10, padding: 16, marginBottom: 16 };
+  const cronTotal = (h.cron_summary?.green || 0) + (h.cron_summary?.amber || 0) + (h.cron_summary?.red || 0);
+  const scrTotal = (h.scrapers?.green || 0) + (h.scrapers?.amber || 0) + (h.scrapers?.red || 0);
+  const tile = (label, value, color, sub) => (
+    <div style={{ background: '#121110', border: '1px solid #292524', borderRadius: 10, padding: '14px 16px', flex: 1, minWidth: 140 }}>
+      <div style={{ fontSize: 11, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><Dot c={color} /><span style={{ fontSize: 18, fontWeight: 800, color: '#fafaf9' }}>{value}</span></div>
+      {sub && <div style={{ fontSize: 11, color: '#78716c', marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9' }}>🩺 System Health</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 11, color: '#78716c' }}>{at ? `updated ${at.toLocaleTimeString()}` : ''}</span>
+          <button onClick={load} disabled={loading} style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>↻ Refresh</button>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 10, marginBottom: 18, background: overall === 'green' ? '#0f1a0f' : overall === 'amber' ? '#1c1407' : '#1c0f0f', border: `1px solid ${overall === 'green' ? '#14532d' : overall === 'amber' ? '#854d0e' : '#7f1d1d'}` }}>
+        <Dot c={overall} /><span style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9' }}>{overallLabel}</span>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+        {tile('AI credit', aiBad ? (aiCredit ? 'Credit issue' : 'Last check failed') : 'OK', aiBad ? (aiCredit ? 'red' : 'amber') : 'green', aiBad ? fmtAge(h.ai_credit?.age_min) : 'canary passing')}
+        {tile('Cron jobs', `${h.cron_summary?.green || 0}/${cronTotal} green`, reds > 0 ? 'red' : ambers > 0 ? 'amber' : 'green', `${h.cron_summary?.red || 0} failed · ${h.cron_summary?.amber || 0} stale`)}
+        {tile('Scrapers', `${h.scrapers?.green || 0}/${scrTotal} green`, (h.scrapers?.red || 0) > 0 ? 'red' : (h.scrapers?.amber || 0) > 0 ? 'amber' : 'green', `${h.scrapers?.red || 0} down`)}
+        {tile('Open alerts', alertN, alertN > 0 ? 'amber' : 'green', '7-day window')}
+      </div>
+
+      {aiBad && (
+        <div style={card}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>AI credit — last canary failed</div>
+          <div style={{ fontSize: 12, color: '#a8a29e', lineHeight: 1.5 }}>{aiReason || 'Unknown reason'}</div>
+          <div style={{ fontSize: 11, color: '#78716c', marginTop: 6 }}>{aiCredit ? 'Reads like a billing/credit problem — check console.anthropic.com → Billing.' : 'Reads like a transient timeout, not billing. If case summaries are generating, the AI is fine.'}</div>
+        </div>
+      )}
+
+      <div style={card}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 10 }}>Cron jobs</div>
+        {(h.crons || []).map((c, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', borderTop: i ? '1px solid #1c1917' : 'none' }}>
+            <Dot c={c.color} />
+            <span style={{ fontSize: 12, color: '#e7e5e4', flex: 1, fontFamily: "'DM Mono', monospace" }}>{c.jobname}</span>
+            <span style={{ fontSize: 11, color: c.last_status === 'succeeded' ? '#78716c' : '#ef4444' }}>{c.last_status || 'never run'}</span>
+            <span style={{ fontSize: 11, color: '#78716c', minWidth: 64, textAlign: 'right' }}>{fmtAge(c.age_min)}</span>
+          </div>
+        ))}
+      </div>
+
+      <div style={card}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 10 }}>Open alerts{alertN > 0 ? <span style={{ color: '#f59e0b' }}> · {alertN}</span> : null}</div>
+        {(h.alerts?.items || []).length === 0
+          ? <div style={{ fontSize: 12, color: '#78716c' }}>No open alerts.</div>
+          : h.alerts.items.map((a, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 0', borderTop: i ? '1px solid #1c1917' : 'none' }}>
+              <Dot c={a.severity === 'critical' || a.severity === 'error' ? 'red' : a.severity === 'warning' ? 'amber' : 'muted'} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, color: '#e7e5e4' }}>{a.message}</div>
+                <div style={{ fontSize: 11, color: '#78716c' }}>{a.source} · ×{a.occurrences} · {fmtAge(Math.round((Date.now() - new Date(a.last_seen_at)) / 60000))}</div>
+              </div>
+            </div>
+          ))}
+      </div>
+
+      {(h.scrapers?.alerting || []).length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', marginBottom: 10 }}>Scrapers needing attention</div>
+          {h.scrapers.alerting.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '5px 0', borderTop: i ? '1px solid #1c1917' : 'none' }}>
+              <Dot c={s.color} />
+              <span style={{ fontSize: 12, color: '#e7e5e4', flex: 1 }}>{s.agent}</span>
+              <span style={{ fontSize: 11, color: '#78716c' }}>{s.last_status} · {s.fails_3h} fails/3h · {fmtAge(s.age_min)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Outreach hub ────────────────────────────────────────────────────────
 // 2026-06-22 nav collapse: the sidebar carried two overlapping buttons —
 // "Automations" (the cadence engine) and "Comms" (the cross-deal Calls/Texts
