@@ -6748,6 +6748,45 @@ function FollowupsView({ deals, onJumpToDeal }) {
   );
 }
 
+// Shared flag styling for the Review Queue list + the in-deal review banner.
+const REVIEW_FLAG_META = {
+  verify_maybe_gone:  { icon: '💸', color: '#fca5a5', bg: '#3a1d1d', label: 'Verify still available' },
+  dead_but_ready:     { icon: '🪦', color: '#fca5a5', bg: '#3a1d1d', label: 'Marked dead' },
+  deceased_no_heir:   { icon: '🕊', color: '#c4b5fd', bg: '#241a33', label: 'Deceased · no heir to call' },
+  no_phone:           { icon: '📵', color: '#fcd34d', bg: '#332a12', label: 'No phone' },
+  no_surplus_amount:  { icon: '❓', color: '#fcd34d', bg: '#332a12', label: 'No surplus $' },
+  possible_duplicate: { icon: '👥', color: '#93c5fd', bg: '#12243a', label: 'Possible duplicate' },
+};
+
+// In-deal Review banner — when the open lead is currently in the 🔎 Review Queue,
+// show WHY (flag + reason + AI evidence) right in the deal header so Eric/Inaam can
+// verify + clear it without bouncing back to the queue. Renders nothing otherwise.
+function ReviewBanner({ dealId }) {
+  const [item, setItem] = useState(undefined);   // undefined=loading · null=not flagged · obj=flagged
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    sb.from('v_lead_review_queue').select('*').eq('deal_id', dealId).maybeSingle()
+      .then(({ data }) => { if (alive) setItem(data || null); })
+      .catch(() => { if (alive) setItem(null); });
+    return () => { alive = false; };
+  }, [dealId]);
+  if (!item) return null;
+  const fm = REVIEW_FLAG_META[item.flag] || { icon: '🔎', color: '#fbbf24', bg: '#2a2412', label: item.flag };
+  const markReviewed = async () => {
+    setBusy(true);
+    try { await sb.rpc('clear_lead_review', { p_deal_id: dealId }); } catch (e) {}
+    setItem(null);
+  };
+  return (
+    <div style={{ flexBasis: '100%', width: '100%', marginTop: 8, padding: '9px 12px', background: fm.bg, border: '1px solid ' + fm.color, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: 11, fontWeight: 700, color: fm.color, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>🔎 IN REVIEW · {fm.icon} {fm.label}</span>
+      <span style={{ fontSize: 12, color: '#e7e5e4', flex: 1, minWidth: 200 }}>{item.reason}{item.evidence ? <span style={{ color: '#a8a29e', fontStyle: 'italic' }}> — {item.evidence}…</span> : null}</span>
+      <button onClick={markReviewed} disabled={busy} title="I looked at this — clear it from the Review Queue" style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}>{busy ? '…' : '✓ Mark reviewed'}</button>
+    </div>
+  );
+}
+
 // ─── Review Queue (Nathan 2026-06-21) ───────────────────────────────────────
 // The "before you call" gate for Eric + Inaam. Surfaces every lead marked READY
 // FOR OUTREACH that has a gap (no phone, deceased w/ no heir, no surplus $, marked
@@ -6787,14 +6826,7 @@ function ReviewQueueView({ onJumpToDeal }) {
   const gaps = rows.filter(r => r.category === 'not_callable');
   const shown = filter === 'verify' ? verify : filter === 'gaps' ? gaps : rows;
 
-  const FLAG = {
-    verify_maybe_gone:  { icon: '💸', color: '#fca5a5', bg: '#3a1d1d', label: 'Verify still available' },
-    dead_but_ready:     { icon: '🪦', color: '#fca5a5', bg: '#3a1d1d', label: 'Marked dead' },
-    deceased_no_heir:   { icon: '🕊', color: '#c4b5fd', bg: '#241a33', label: 'Deceased · no heir to call' },
-    no_phone:           { icon: '📵', color: '#fcd34d', bg: '#332a12', label: 'No phone' },
-    no_surplus_amount:  { icon: '❓', color: '#fcd34d', bg: '#332a12', label: 'No surplus $' },
-    possible_duplicate: { icon: '👥', color: '#93c5fd', bg: '#12243a', label: 'Possible duplicate' },
-  };
+  const FLAG = REVIEW_FLAG_META;
   const chip = (id, label, n) => (
     <button key={id} onClick={() => setFilter(id)} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: filter === id ? '#292524' : 'transparent', color: filter === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'), fontWeight: filter === id ? 700 : 500, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label} · {n}</button>
   );
@@ -17528,6 +17560,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         )}
         <PersonalizedUrlControl deal={deal} reload={loadAll} logAct={logAct} />
         <FollowupButton deal={deal} reload={loadAll} />
+        <ReviewBanner dealId={deal.id} />
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
           const val = e.target.value || null;
