@@ -36,6 +36,20 @@ esbuild.build({
   // VersionWatcher in src/app.jsx) reads this token to detect a new deploy.
   const hash = crypto.createHash('sha256').update(fs.readFileSync('app.js')).digest('hex').slice(0, 12);
   const html = fs.readFileSync('index.html', 'utf8');
+
+  // Guard: index.html is regex-stamped below, never parsed — so git conflict
+  // markers in it sail straight through the build and render as literal text on
+  // the live page (this shipped 2026-06-22 from a rebase against #326 where both
+  // conflict sides were the same <script> line). Fail loudly instead.
+  const conflictLines = html.split('\n')
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => /^<{7} |^={7}$|^>{7} /.test(line));
+  if (conflictLines.length) {
+    console.error('Build failed: git conflict markers found in index.html — resolve before building:');
+    conflictLines.forEach(({ line, n }) => console.error(`  index.html:${n}: ${line}`));
+    process.exit(1);
+  }
+
   const stamped = html.replace(/app\.js\?v=[^"']*/g, `app.js?v=${hash}`);
   if (stamped !== html) {
     fs.writeFileSync('index.html', stamped);
