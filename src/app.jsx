@@ -17949,6 +17949,25 @@ function PostUpdateModal({ dealName, onClose, onPost }) {
 // judgmentAmount, totalDebt, courtAppraisalValue, minimumBidAmount,
 // saleDate, courtCase, county, ...) — those flow intel-main → DCC via the
 // 30-min cron, not from the DCC UI. See DIRECTOR_DCC_INTERFACE.md.
+// ─── deals: column ⇆ meta dual-write (root of the 2026-06 Case Details bugs) ──
+// Each of these 33 "Case Details" fields lives as BOTH a real deals.<column>
+// AND a deals.meta.<key>. The contract, so the next person doesn't reopen the
+// same two bugs:
+//   • Columns are the SOURCE OF TRUTH. The client writes columns (useDealMeta-
+//     Buffer splits a patch via coerceColumnValue); unmapped keys fall to meta.
+//   • A BEFORE-UPDATE trigger (tg_sync_deals_meta_from_columns) mirrors every
+//     changed column back into meta, so meta always agrees with the columns.
+//     Verified 2026-06-22: 0 drift across 417 live deals.
+//   • Components READ from meta — or from the useDealMetaBuffer `m`, which is
+//     meta-shaped and updated optimistically on each edit.
+// THE INVARIANT (and the bug when it breaks): in an EDIT control, bind
+// checked/value to the buffer `m.<key>` (or the real column) — NEVER to a
+// helper that re-reads `deal.meta.<key>`. The buffer routes a mapped write to
+// the COLUMN, so deal.meta.<key> stays stale until the server round-trip +
+// trigger fire. That exact gap is why the DECEASED toggle stuck purple and why
+// Case Details fields "disappeared" on first input. isDeceased() (~line 354)
+// and the deceased toggle now read column/buffer-first. Adding a 34th field?
+// Add it here AND to the trigger, and read it through the buffer.
 const META_TO_COLUMN = {
   verified:                  'verified',
   verifiedAt:                'verified_at',
