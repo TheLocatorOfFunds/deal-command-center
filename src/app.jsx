@@ -1661,13 +1661,13 @@ function DealCommandCenter({ session, profile }) {
   // log_deal_activity's "Follow up on" field) whose due date is today or past.
   // Drives the 📞 Follow-ups nav badge. Nathan 2026-06-01.
   const loadFollowupCount = async () => {
-    const today = new Date().toISOString().slice(0, 10);
-    const { count } = await sb.from('tasks')
-      .select('*', { count: 'exact', head: true })
-      .ilike('title', 'follow up%')
-      .eq('done', false)
-      .lte('due_date', today);
-    setFollowupDueCount(count || 0);
+    // Count via RPC so the badge matches FollowupsView's body filter — only
+    // "due now" follow-ups on LIVE deals. The old raw-tasks count included
+    // follow-ups left on soft-deleted / dead / closed deals, which the body
+    // hides, so the badge drifted high (showed 1 while the tab showed 0 — an
+    // orphan follow-up on deleted deal sf-daggs, Nathan 2026-06-22).
+    const { data } = await sb.rpc('get_followup_due_count');
+    setFollowupDueCount(data || 0);
   };
 
   // Review-queue badge — # of "ready for outreach" leads flagged for a human look
