@@ -25792,6 +25792,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
   };
   const [contactUrlCopied, setContactUrlCopied] = useState(null);
   const threadRef = useRef(null);
+  const pinnedRef = useRef(true);  // is the thread scrolled to (near) the bottom?
 
   const startEditNote = (note) => {
     setEditingNoteId(note.id);
@@ -26215,9 +26216,24 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
     setActiveContact(EVERYONE_CONTACT);
   }, [contacts.length]); // re-run once contacts load so we can match by phone
 
+  // Track whether the user is at (near) the bottom of the thread. Updated on
+  // every manual scroll so the auto-scroll below can leave them alone when they
+  // scroll UP to read history.
+  const onThreadScroll = () => {
+    const el = threadRef.current;
+    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  };
+  // Switching contact tab → jump to the newest message (fresh thread).
   useEffect(() => {
-    if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
-  }, [msgs, activeContact]);
+    if (threadRef.current) { threadRef.current.scrollTop = threadRef.current.scrollHeight; pinnedRef.current = true; }
+  }, [activeContact]);
+  // New messages → stick to the bottom ONLY if the user is already there. The
+  // old effect re-pinned on every `msgs` reference change (realtime echo / poll,
+  // ~1s), which yanked you back down the instant you scrolled up to read history
+  // (Nathan 2026-06-22). Now a scrolled-up reader stays put.
+  useEffect(() => {
+    if (pinnedRef.current && threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight;
+  }, [msgs]);
 
   // Keyboard-safe composer on iOS. Track the visualViewport — when the
   // keyboard opens, iOS shrinks vv.height; we translate the comms container
@@ -27365,7 +27381,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
       )}
 
       {/* Thread */}
-      <div ref={threadRef} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 0 }}>
+      <div ref={threadRef} onScroll={onThreadScroll} style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 0 }}>
         {!activeContact && !newMode && (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#44403c', fontSize: 13, gap: 6, paddingTop: 60 }}>
             <div style={{ fontSize: 32 }}>💬</div>
