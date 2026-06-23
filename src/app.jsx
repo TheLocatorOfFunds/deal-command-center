@@ -971,6 +971,7 @@ function DealCommandCenter({ session, profile }) {
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [followupDueCount, setFollowupDueCount] = useState(0);
   const [reviewCount, setReviewCount] = useState(0);
+  const [reviewDealIds, setReviewDealIds] = useState([]);  // ordered deal_ids in the Review queue — scopes prev/next nav
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [unreadSmsCount, setUnreadSmsCount] = useState(0);
@@ -1674,8 +1675,14 @@ function DealCommandCenter({ session, profile }) {
   // (a gap, or a "funds may already be gone" signal). Drives the 🔎 Review nav
   // badge. Reads the v_lead_review_queue view. Nathan 2026-06-21.
   const loadReviewCount = async () => {
-    const { count } = await sb.from('v_lead_review_queue').select('*', { count: 'exact', head: true });
-    setReviewCount(count || 0);
+    // Fetch the ordered deal_ids (not just a count) so prev/next arrows opened
+    // from the Review tab walk the review subset, not all prepped leads
+    // (Eric 2026-06-23). Order matches ReviewQueueView (priority, then surplus).
+    const { data } = await sb.from('v_lead_review_queue')
+      .select('deal_id')
+      .order('priority', { ascending: true }).order('surplus', { ascending: false });
+    setReviewCount(data ? data.length : 0);
+    setReviewDealIds(data ? data.map(r => r.deal_id) : []);
   };
 
   // Unacked system alerts — the in-DCC monitoring queue. Drives the ⚠
@@ -2615,14 +2622,25 @@ function DealCommandCenter({ session, profile }) {
           // prepped lead peers with other prepped leads (Ready).
           // Non-lead deals continue to peer by status only.
           const isLeadDeal = isLeadStatus(activeDeal);
-          const peers = deals.filter(d => {
-            if (d.status !== activeDeal.status) return false;
-            if (isLeadDeal) {
-              // Same prepped-state as the active deal:
-              return !!d.prepped_at === !!activeDeal.prepped_at;
-            }
-            return true;
-          });
+          // When a deal was opened from the Review tab, prev/next must walk the
+          // Review subset (and its count), not all prepped leads (Eric 2026-06-23).
+          // `view` stays 'review' while a deal is open — the hashchange handler
+          // only setView()s when there's no dealId — so it's a reliable signal.
+          const inReview = view === 'review' && reviewDealIds.includes(activeDeal.id);
+          let peers;
+          if (inReview) {
+            const byId = new Map(deals.map(d => [d.id, d]));
+            peers = reviewDealIds.map(id => byId.get(id)).filter(Boolean);
+          } else {
+            peers = deals.filter(d => {
+              if (d.status !== activeDeal.status) return false;
+              if (isLeadDeal) {
+                // Same prepped-state as the active deal:
+                return !!d.prepped_at === !!activeDeal.prepped_at;
+              }
+              return true;
+            });
+          }
           const peerIndex = peers.findIndex(d => d.id === activeDeal.id);
           const peerNav = {
             peerIndex,
@@ -21185,6 +21203,29 @@ function EngagementStrip({ deal }) {
   );
 }
 
+// Self-contained obituary field. Owns its draft while focused so external
+// re-renders / realtime echoes can't clobber an in-progress paste, and the
+// isDeceased-gated section can't blank it mid-edit. Commits every change up to
+// the meta buffer via onChange. (Obituary kept reverting on first paste despite
+// the buffer — Eric 2026-06-23.)
+function ObituaryField({ value, onChange, placeholder, style }) {
+  const [draft, setDraft] = React.useState(value || '');
+  const editingRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!editingRef.current) setDraft(value || '');   // adopt the saved value only when not actively editing
+  }, [value]);
+  return (
+    <textarea
+      value={draft}
+      onFocus={() => { editingRef.current = true; }}
+      onBlur={() => { editingRef.current = false; }}
+      onChange={(e) => { editingRef.current = true; setDraft(e.target.value); onChange(e.target.value); }}
+      placeholder={placeholder}
+      style={style}
+    />
+  );
+}
+
 function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTotal, onUpdateDeal, logAct, isAdmin, userId, onJumpToTab }) {
   // Case Details edit buffer (Nathan + Inaam dirty-key buffer 2026-06-08)
   // + debounced save (Claude race-write fix 2026-06-09). See
@@ -21272,16 +21313,16 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
               Ready" will unblock. Per Justin 2026-05-28: Eric/Inaam were
               marking estates ready with no heir + no obituary, sending us
               into outreach loops with no one to call. */}
-          {isDeceased(deal) && (
+          {(isDeceased(deal) || String(m.obituary || '').trim()) && (
             <div style={{ marginBottom: 14, padding: 12, background: m.obituary ? '#0c0a09' : '#1a0e1f', border: '1px solid ' + (m.obituary ? '#44403c' : '#5b21b6'), borderRadius: 8 }}>
               <SubLabel>
                 {m.obituary
                   ? '📰 Obituary on file'
                   : '⚠️ Obituary required before Mark Ready'}
               </SubLabel>
-              <textarea
+              <ObituaryField
                 value={m.obituary || ''}
-                onChange={e => updateMeta({ obituary: e.target.value, obituary_added_at: e.target.value ? (m.obituary_added_at || new Date().toISOString()) : null })}
+                onChange={(val) => updateMeta({ obituary: val, obituary_added_at: val ? (m.obituary_added_at || new Date().toISOString()) : null })}
                 placeholder={'Paste the obituary text here. Should mention heirs / family members so you can add them as contacts (with relationship "child" / "spouse" / "sibling" / "family"). If you cannot find an obituary, paste your research notes (what you searched: IDI Core, FB, web, neighbors and what came up) so the next person knows where to pick up.'}
                 style={{ width: '100%', minHeight: 90, padding: 10, background: '#0c0a09', border: '1px solid #44403c', borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical', boxSizing: 'border-box' }}
               />
