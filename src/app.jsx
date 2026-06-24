@@ -6777,6 +6777,9 @@ const REVIEW_FLAG_META = {
   no_surplus_amount:  { icon: '❓', color: '#fcd34d', bg: '#332a12', label: 'No surplus $' },
   possible_duplicate: { icon: '👥', color: '#93c5fd', bg: '#12243a', label: 'Possible duplicate' },
   manual_review:      { icon: '🔎', color: '#fbbf24', bg: '#2a2412', label: 'Sent to review' },
+  dnc:                { icon: '🚫', color: '#fca5a5', bg: '#3a1d1d', label: 'Do-not-contact' },
+  self_claim_risk:    { icon: '⚖️', color: '#fcd34d', bg: '#332a12', label: 'May be self-claiming' },
+  other_liens:        { icon: '🏦', color: '#fcd34d', bg: '#332a12', label: 'Liens may eat surplus' },
 };
 
 // In-deal Review banner — when the open lead is currently in the 🔎 Review Queue,
