@@ -967,6 +967,7 @@ function DealCommandCenter({ session, profile }) {
   const [laurenFlaggedCount, setLaurenFlaggedCount] = useState(0);
   const [showLeads, setShowLeads] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
+  const [showMore, setShowMore] = useState(false);   // sidebar "More" expander (back-office + utilities)
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [followupDueCount, setFollowupDueCount] = useState(0);
@@ -2228,30 +2229,33 @@ function DealCommandCenter({ session, profile }) {
           const div = () => <div key={Math.random()} style={{ height: 1, background: '#1c1917', margin: '4px 0' }} />;
           return (
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', paddingTop: 6, paddingBottom: 6 }}>
-              {navItem('today',    '📌', 'Today')}
-              {navItem('attention','⏰', 'Deadlines')}
-              {navItem('outreach', '🎯', 'Outreach', { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
-              {/* Renamed Deals → Leads per #290 (2026-06-08). Hub contains the
-                  full lifecycle: New (pre-contract) → Deals (engaged) → Closed
-                  → Awaiting (transient, surplus recovered without check) →
-                  Deleted (dead). Flagged + Hygiene removed from chip bar; their
-                  view ids stay in groupIds so URL-based hash navigation still
-                  works for anyone who has a bookmark. */}
-              {navItem('active',   '🏠', 'Leads',    { groupIds: ['active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {/* Sidebar slimmed 16→10 (Nathan 2026-06-23): top = daily drivers,
+                  ordered by frequency. Deadlines folded into Today (the worklist
+                  already shows them + the 🔥 bell routes to Today); `attention`
+                  stays in Today's groupIds so old links resolve. Back-office +
+                  rare utilities (Time, Health, Contacts, Intake, Import, Library)
+                  live in the "More" expander below. */}
+              {navItem('today',    '📌', 'Today',      { groupIds: ['today','attention'] })}
+              {navItem('outreach', '🎯', 'Outreach',  { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
+              {navItem('active',   '🏠', 'Leads',     { groupIds: ['active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
+              {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
               {navItem('tasks',    '✅', 'Tasks')}
-              {navItem('followups','📞', 'Follow-ups', { badge: followupDueCount })}
-              {navItem('review','🔎', 'Review', { badge: reviewCount })}
-              {navItem('time',     '⏱', 'Time',     { adminOnly: true })}
-              {navItem('reports',  '📊', 'Insights', { groupIds: ['reports','analytics','traffic','forecast'], adminOnly: true })}
-              {navItem('health',   '🩺', 'Health',   { adminOnly: true })}
+              {isTeam && navItem('_docket', '⚖', 'Docket', { onClick: () => setShowDocket(true), badge: unackDocketCount })}
+              {navItem('team',     '💬', 'Chat',      { badge: unreadChatCount })}
+              {navItem('reports',  '📊', 'Insights',  { groupIds: ['reports','analytics','traffic','forecast'], adminOnly: true })}
               {div()}
-              {navItem('team',     '💬', 'Chat',     { badge: unreadChatCount })}
-              {isTeam && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); } })}
-              {isTeam && navItem('_docket',   '⚖',  'Docket',   { onClick: () => setShowDocket(true),  badge: unackDocketCount })}
-              {isTeam && navItem('_leads',    '📋', 'Intake',   { onClick: () => setShowLeads(true),   badge: newLeadCount })}
-              {div()}
-              {isAdmin && navItem('_import',  '📥', 'Import',   { onClick: () => setShowImport(true) })}
-              {isTeam && navItem('_library',  '📚', 'Library',  { onClick: () => setShowLibrary(true) })}
+              {navItem('_more', showMore ? '▾' : '▸', 'More', { onClick: () => setShowMore(v => !v), groupIds: ['time','health'] })}
+              {showMore && (
+                <div style={{ paddingLeft: 12 }}>
+                  {isTeam  && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); setShowMore(false); } })}
+                  {isTeam  && navItem('_leads',    '📋', 'Intake',   { onClick: () => { setShowLeads(true);   setShowMore(false); }, badge: newLeadCount })}
+                  {isTeam  && navItem('_library',  '📚', 'Library',  { onClick: () => { setShowLibrary(true); setShowMore(false); } })}
+                  {isAdmin && navItem('_import',   '📥', 'Import',   { onClick: () => { setShowImport(true);  setShowMore(false); } })}
+                  {isAdmin && navItem('time',      '⏱', 'Time',     { onClick: () => { setActiveDealId(null); setView('time');   setShowMore(false); } })}
+                  {isAdmin && navItem('health',    '🩺', 'Health',   { onClick: () => { setActiveDealId(null); setView('health'); setShowMore(false); } })}
+                </div>
+              )}
             </div>
           );
         })()}
