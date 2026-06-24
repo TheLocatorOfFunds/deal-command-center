@@ -937,6 +937,7 @@ function DealCommandCenter({ session, profile }) {
     'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
     'review',     // Review Queue — ready leads needing a human look (Nathan 2026-06-21)
     'health',     // System Health — operator-health page (Nathan 2026-06-22)
+    'call-queue', // Call Queue — VA call-down board, default in Leads hub (Nathan 2026-06-23)
   ];
   const parseHash = () => {
     const parts = window.location.hash.replace('#', '').split('/').filter(Boolean);
@@ -2237,7 +2238,7 @@ function DealCommandCenter({ session, profile }) {
                   live in the "More" expander below. */}
               {navItem('today',    '📌', 'Today',      { groupIds: ['today','attention'] })}
               {navItem('outreach', '🎯', 'Outreach',  { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
-              {navItem('active',   '🏠', 'Leads',     { groupIds: ['active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
               {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
               {navItem('tasks',    '✅', 'Tasks')}
@@ -3859,7 +3860,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("forecast", "📅 Forecast")}
         </div>
       )}
-      {["active", "flagged", "hygiene", "archive", "deleted", "awaiting", "pipeline", "leads-phase"].includes(view) && (
+      {["call-queue", "active", "flagged", "hygiene", "archive", "deleted", "awaiting", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
           {/* Sub-tab order per LABELS.md (canonical): New → Deals → Closed
               → Awaiting (transient) → Deleted → Kanban. Per #290 (2026-06-08),
@@ -3868,6 +3869,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               level so URL-based hash navigation works if anyone has a saved
               bookmark. Justin/Nathan verbatim distinction: "A deal is not
               a lead. A lead is not a deal." */}
+          {chipBtn("call-queue", "📞 Call Queue")}
           {chipBtn("leads-phase", `New${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
           {chipBtn("active", `Deals${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
           {chipBtn("archive", `Closed${closedDeals.length ? ` (${closedDeals.length})` : ""}`)}
@@ -4013,7 +4015,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
@@ -4051,6 +4053,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "followups" ? (
             <FollowupsView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "call-queue" ? (
+            <CallQueueView deals={deals} onSelect={onSelect} setView={setView} />
           ) : view === "review" ? (
             <ReviewQueueView onJumpToDeal={onSelect} />
           ) : view === "tasks" ? (
@@ -6860,6 +6864,85 @@ function ReviewBanner({ dealId }) {
       <span style={{ fontSize: 11, fontWeight: 700, color: fm.color, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>🔎 IN REVIEW · {fm.icon} {fm.label}</span>
       <span style={{ fontSize: 12, color: '#e7e5e4', flex: 1, minWidth: 200 }}>{item.reason}{item.evidence ? <span style={{ color: '#a8a29e', fontStyle: 'italic' }}> — {item.evidence}…</span> : null}</span>
       <button onClick={markReviewed} disabled={busy} title="I looked at this — clear it from the Review Queue" style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}>{busy ? '…' : '✓ Mark reviewed'}</button>
+    </div>
+  );
+}
+
+// ─── Call Queue (Nathan 2026-06-23) — the VA call-down board ────────────────
+// Default screen in the Leads hub for Eric + Inaam. One workable list of the
+// ready-to-call pile, biggest surplus first; each row shows health (clean vs
+// flagged) + how long since it was last worked. New/unprepped leads get a strip
+// on top. Click a row → opens the deal to call + log. Surfacing + launchpad only.
+function CallQueueView({ deals, onSelect, setView }) {
+  const [reviewMap, setReviewMap] = useState({});
+  const [filter, setFilter] = useState('all');   // all | never | review | quiet
+  useEffect(() => {
+    let alive = true;
+    sb.from('v_lead_review_queue').select('deal_id, flag, reason').then(({ data }) => {
+      if (!alive) return;
+      const m = {}; (data || []).forEach(r => { m[r.deal_id] = r; }); setReviewMap(m);
+    });
+    return () => { alive = false; };
+  }, [deals.length]);
+
+  const DEAD = ['dead', 'closed', 'recovered'];
+  const surplusOf = (d) => Number(d.verified_surplus) || Number(d?.meta?.verifiedSurplus) || Number(d?.meta?.estimatedSurplus) || Number(d.surplus_estimate) || 0;
+  const phoneOf = (d) => (d?.meta?.homeownerPhone || d?.meta?.phone || d?.meta?.contactPhone || d?.meta?.ownerPhone || '').toString().trim();
+  const fmt$ = (n) => !n || n <= 0 ? '—' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + Math.round(n);
+
+  const ready = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && !DEAD.includes(d.status));
+  const toPrep = deals.filter(d => d.type === 'surplus' && !d.prepped_at && !d.deleted_at && !DEAD.includes(d.status) && isLeadStatus(d));
+  const neverCalled = ready.filter(d => !d.last_contacted_at);
+  const flagged = ready.filter(d => reviewMap[d.id]);
+  const quiet = ready.filter(d => d.last_contacted_at && daysSince(d.last_contacted_at) >= 7);
+
+  const lastWorked = (d) => {
+    if (d.last_contacted_at) { const n = daysSince(d.last_contacted_at); return `called ${n === 0 ? 'today' : n + 'd ago'}`; }
+    const r = d.prepped_at ? daysSince(d.prepped_at) : null;
+    return `never called${r != null ? ` · ready ${r}d` : ''}`;
+  };
+
+  let list = filter === 'never' ? neverCalled : filter === 'review' ? flagged : filter === 'quiet' ? quiet : ready;
+  list = [...list].sort((a, b) => surplusOf(b) - surplusOf(a));
+
+  const chip = (id, label, n, accent) => (
+    <button key={id} onClick={() => setFilter(id)} style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: filter === id ? '#292524' : 'transparent', color: filter === id ? '#fafaf9' : (accent || '#78716c'), border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'), fontWeight: filter === id ? 700 : 500, cursor: 'pointer' }}>{label} · {n}</button>
+  );
+
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9' }}>📞 Call Queue</span>
+        <span style={{ fontSize: 12, color: '#78716c' }}>{ready.length} ready · {neverCalled.length} never called · biggest surplus first</span>
+      </div>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap' }}>
+        {chip('all', 'All ready', ready.length)}
+        {chip('never', 'Never called', neverCalled.length)}
+        {chip('review', '🔎 Needs review', flagged.length, '#fbbf24')}
+        {chip('quiet', 'Gone quiet', quiet.length)}
+      </div>
+      {toPrep.length > 0 && (
+        <button onClick={() => setView('leads-phase')} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '9px 12px', borderRadius: 8, background: '#11233a', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 14 }}>
+          📥 {toPrep.length} new lead{toPrep.length === 1 ? '' : 's'} waiting to be prepped — prep them first →
+        </button>
+      )}
+      {list.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>Nothing here.</div>
+      ) : list.map(d => {
+        const rv = reviewMap[d.id];
+        const fm = rv ? (REVIEW_FLAG_META[rv.flag] || { icon: '🔎', color: '#fbbf24', label: rv.flag }) : null;
+        const ph = phoneOf(d);
+        return (
+          <div key={d.id} onClick={() => onSelect(d.id)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', marginBottom: 6, background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid ' + (rv ? (fm.color || '#fbbf24') : '#22c55e'), borderRadius: 6, cursor: 'pointer' }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9' }}>{d.name || d.id}{rv && <span style={{ fontSize: 11, color: fm.color, fontWeight: 500 }}> · {fm.icon} {fm.label}</span>}</div>
+              <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>{ph || 'no phone'} · {lastWorked(d)}</div>
+            </div>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{fmt$(surplusOf(d))}</span>
+            <span style={{ fontSize: 11, padding: '4px 12px', borderRadius: 6, background: rv ? '#332a12' : '#14532d', color: rv ? '#fbbf24' : '#bbf7d0', border: '1px solid ' + (rv ? '#854d0e' : '#166534'), fontWeight: 700, whiteSpace: 'nowrap' }}>{rv ? 'Open →' : 'Call →'}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
