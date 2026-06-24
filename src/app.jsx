@@ -4015,6 +4015,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
 
       <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
+          <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
             <><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} /></>
           ) : view === "calls" ? (
@@ -4156,6 +4157,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               )}
             </div>
           )}
+          </ViewErrorBoundary>
         </div>
         {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
@@ -6773,6 +6775,32 @@ function FollowupsView({ deals, onJumpToDeal }) {
 }
 
 // Shared flag styling for the Review Queue list + the in-deal review banner.
+// Error boundary so a single view crashing can't white-screen the whole app
+// (a Call Queue bug took the DCC down 2026-06-23). Shows the actual error +
+// recovery buttons; auto-resets when the user navigates to a different view.
+class ViewErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { try { console.error('[ViewErrorBoundary]', error, info); } catch (e) {} }
+  componentDidUpdate(prev) { if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null }); }
+  render() {
+    if (this.state.error) {
+      return (
+        <div style={{ padding: 24, margin: 8, background: '#1c0f0f', border: '1px solid #7f1d1d', borderRadius: 10, color: '#fecaca' }}>
+          <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>⚠️ This screen hit an error</div>
+          <div style={{ fontSize: 12, color: '#fca5a5', marginBottom: 8 }}>The rest of the app is fine — switch screens, or try again.</div>
+          <div style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", color: '#a8a29e', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: '8px 10px', margin: '8px 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{String(this.state.error?.message || this.state.error)}</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => this.setState({ error: null })} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>Try again</button>
+            <button onClick={() => window.location.reload()} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>Reload app</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const REVIEW_FLAG_META = {
   verify_maybe_gone:  { icon: '💸', color: '#fca5a5', bg: '#3a1d1d', label: 'Verify still available' },
   dead_but_ready:     { icon: '🪦', color: '#fca5a5', bg: '#3a1d1d', label: 'Marked dead' },
