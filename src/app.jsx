@@ -6776,6 +6776,7 @@ const REVIEW_FLAG_META = {
   no_phone:           { icon: '📵', color: '#fcd34d', bg: '#332a12', label: 'No phone' },
   no_surplus_amount:  { icon: '❓', color: '#fcd34d', bg: '#332a12', label: 'No surplus $' },
   possible_duplicate: { icon: '👥', color: '#93c5fd', bg: '#12243a', label: 'Possible duplicate' },
+  manual_review:      { icon: '🔎', color: '#fbbf24', bg: '#2a2412', label: 'Sent to review' },
 };
 
 // In-deal Review banner — when the open lead is currently in the 🔎 Review Queue,
@@ -6791,13 +6792,34 @@ function ReviewBanner({ dealId }) {
       .catch(() => { if (alive) setItem(null); });
     return () => { alive = false; };
   }, [dealId]);
-  if (!item) return null;
-  const fm = REVIEW_FLAG_META[item.flag] || { icon: '🔎', color: '#fbbf24', bg: '#2a2412', label: item.flag };
   const markReviewed = async () => {
     setBusy(true);
     try { await sb.rpc('clear_lead_review', { p_deal_id: dealId }); } catch (e) {}
-    setItem(null);
+    setItem(null); setBusy(false);
   };
+  const sendToReview = async () => {
+    const reason = window.prompt('Send to Review — why does this need a second look? (optional)');
+    if (reason === null) return;                              // cancelled
+    setBusy(true);
+    try {
+      await sb.rpc('flag_lead_review', { p_deal_id: dealId, p_reason: reason || null });
+      const { data } = await sb.from('v_lead_review_queue').select('*').eq('deal_id', dealId).maybeSingle();
+      setItem(data || null);
+    } catch (e) { alert('Could not send to review: ' + (e?.message || e)); }
+    setBusy(false);
+  };
+  if (item === undefined) return null;                        // still loading
+  if (item === null) {                                        // not in the queue → offer to send it
+    return (
+      <div style={{ flexBasis: '100%', width: '100%', marginTop: 8 }}>
+        <button onClick={sendToReview} disabled={busy} title="Flag this lead for a human second-look in the Review Queue"
+          style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 600 }}>
+          {busy ? '…' : '🔎 Send to Review'}
+        </button>
+      </div>
+    );
+  }
+  const fm = REVIEW_FLAG_META[item.flag] || { icon: '🔎', color: '#fbbf24', bg: '#2a2412', label: item.flag };
   return (
     <div style={{ flexBasis: '100%', width: '100%', marginTop: 8, padding: '9px 12px', background: fm.bg, border: '1px solid ' + fm.color, borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
       <span style={{ fontSize: 11, fontWeight: 700, color: fm.color, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>🔎 IN REVIEW · {fm.icon} {fm.label}</span>
