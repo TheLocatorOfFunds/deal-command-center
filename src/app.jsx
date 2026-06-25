@@ -6917,7 +6917,8 @@ function ReviewBanner({ dealId }) {
 // on top. Click a row → opens the deal to call + log. Surfacing + launchpad only.
 function CallQueueView({ deals, onSelect, setView }) {
   const [reviewMap, setReviewMap] = useState({});
-  const [filter, setFilter] = useState('all');   // all | never | review | quiet
+  const [filter, setFilter] = useState('all');   // all | never | review | quiet | needsnum
+  const [busyId, setBusyId] = useState(null);
   useEffect(() => {
     let alive = true;
     sb.from('v_lead_review_queue').select('deal_id, flag, reason').then(({ data }) => {
@@ -6931,8 +6932,17 @@ function CallQueueView({ deals, onSelect, setView }) {
   const surplusOf = (d) => Number(d.verified_surplus) || Number(d?.meta?.verifiedSurplus) || Number(d?.meta?.estimatedSurplus) || Number(d.surplus_estimate) || 0;
   const phoneOf = (d) => (d?.meta?.homeownerPhone || d?.meta?.phone || d?.meta?.contactPhone || d?.meta?.ownerPhone || '').toString().trim();
   const fmt$ = (n) => !n || n <= 0 ? '—' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + Math.round(n);
+  const needsNum = (d) => !!(d?.meta?.needs_number);
+  const flagNeedsNumber = async (e, id, on) => {
+    e.stopPropagation(); setBusyId(id);
+    try { await sb.rpc('flag_needs_number', { p_deal_id: id, p_on: on }); }
+    catch (err) { alert('Could not update: ' + (err?.message || err)); }
+    setBusyId(null);
+  };
 
-  const ready = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && !DEAD.includes(d.status));
+  const callable = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && !DEAD.includes(d.status));
+  const needsNumberList = callable.filter(needsNum);
+  const ready = callable.filter(d => !needsNum(d));
   const toPrep = deals.filter(d => d.type === 'surplus' && !d.prepped_at && !d.deleted_at && !DEAD.includes(d.status) && isLeadStatus(d));
   const neverCalled = ready.filter(d => !d.last_contacted_at);
   const flagged = ready.filter(d => reviewMap[d.id]);
@@ -6944,7 +6954,7 @@ function CallQueueView({ deals, onSelect, setView }) {
     return `never called${r != null ? ` · ready ${r}d` : ''}`;
   };
 
-  let list = filter === 'never' ? neverCalled : filter === 'review' ? flagged : filter === 'quiet' ? quiet : ready;
+  let list = filter === 'never' ? neverCalled : filter === 'review' ? flagged : filter === 'quiet' ? quiet : filter === 'needsnum' ? needsNumberList : ready;
   list = [...list].sort((a, b) => surplusOf(b) - surplusOf(a));
 
   const chip = (id, label, n, accent) => (
@@ -6962,6 +6972,7 @@ function CallQueueView({ deals, onSelect, setView }) {
         {chip('never', 'Never called', neverCalled.length)}
         {chip('review', '🔎 Needs review', flagged.length, '#fbbf24')}
         {chip('quiet', 'Gone quiet', quiet.length)}
+        {chip('needsnum', '📵 Needs #', needsNumberList.length, '#f87171')}
       </div>
       {toPrep.length > 0 && (
         <button onClick={() => setView('leads-phase')} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '9px 12px', borderRadius: 8, background: '#11233a', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 14 }}>
@@ -6981,6 +6992,7 @@ function CallQueueView({ deals, onSelect, setView }) {
               <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>{ph || 'no phone'} · {lastWorked(d)}</div>
             </div>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{fmt$(surplusOf(d))}</span>
+            <button onClick={(e) => flagNeedsNumber(e, d.id, !needsNum(d))} disabled={busyId === d.id} title={needsNum(d) ? 'Found a number — put back in the call queue' : 'No good number — flag for skip-trace (pulls it off the call queue)'} style={{ fontSize: 11, padding: '4px 9px', borderRadius: 6, background: 'transparent', color: needsNum(d) ? '#6ee7b7' : '#a8a29e', border: '1px solid ' + (needsNum(d) ? '#166534' : '#44403c'), cursor: busyId === d.id ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}>{busyId === d.id ? '…' : needsNum(d) ? '✓ got #' : '📵'}</button>
             <span style={{ fontSize: 11, padding: '4px 12px', borderRadius: 6, background: rv ? '#332a12' : '#14532d', color: rv ? '#fbbf24' : '#bbf7d0', border: '1px solid ' + (rv ? '#854d0e' : '#166534'), fontWeight: 700, whiteSpace: 'nowrap' }}>{rv ? 'Open →' : 'Call →'}</span>
           </div>
         );
