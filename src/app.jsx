@@ -2259,7 +2259,7 @@ function DealCommandCenter({ session, profile }) {
                   live in the "More" expander below. */}
               {navItem('today',    '📌', 'Today',      { groupIds: ['today','attention'] })}
               {navItem('outreach', '🎯', 'Outreach',  { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
-              {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','flagged','hygiene','archive','awaiting','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
+              {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','flagged','hygiene','archive','awaiting','payouts','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
               {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
               {navItem('tasks',    '✅', 'Tasks')}
@@ -3569,6 +3569,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // SurplusOverview "Timing & Source" card → deal.actual_net stamps,
   // closed_at stamps, row flows into closedDeals on next render.
   const awaitingCheckAmountDeals = deals.filter(d => isAwaitingCheckAmount(d));
+  const payoutDeals = deals.filter(d => d.type === 'surplus' && !d.deleted_at && ['signed', 'filed', 'probate', 'awaiting-distribution'].includes(d.status));
   const deadNoReason = deletedDeals.filter(d => d.type === "surplus" && !d.meta?.dispositionReason);
   const leadDeals = deals.filter(d => isLeadStatus(d));
 
@@ -3881,7 +3882,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("forecast", "📅 Forecast")}
         </div>
       )}
-      {["call-queue", "active", "flagged", "hygiene", "archive", "deleted", "awaiting", "pipeline", "leads-phase"].includes(view) && (
+      {["call-queue", "active", "flagged", "hygiene", "archive", "deleted", "awaiting", "payouts", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
           {/* Sub-tab order per LABELS.md (canonical): New → Deals → Closed
               → Awaiting (transient) → Deleted → Kanban. Per #290 (2026-06-08),
@@ -3893,6 +3894,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {chipBtn("call-queue", "📞 Call Queue")}
           {chipBtn("leads-phase", `New${leadDeals.length ? ` (${leadDeals.length})` : ""}`)}
           {chipBtn("active", `Deals${activeDeals.length ? ` (${activeDeals.length})` : ""}`)}
+          {chipBtn("payouts", `💰 Awaiting payout${payoutDeals.length ? ` (${payoutDeals.length})` : ""}`)}
           {chipBtn("archive", `Closed${closedDeals.length ? ` (${closedDeals.length})` : ""}`)}
           {awaitingCheckAmountDeals.length > 0 && chipBtn("awaiting", `⏳ Awaiting check (${awaitingCheckAmountDeals.length})`)}
           {chipBtn("deleted", `Deleted${deletedDeals.length ? ` (${deletedDeals.length})` : ""}`)}
@@ -4036,7 +4038,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
@@ -4074,6 +4076,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "followups" ? (
             <FollowupsView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "payouts" ? (
+            <PayoutTrackerView deals={deals} onSelect={onSelect} onMoveDeal={onMoveDeal} />
           ) : view === "call-queue" ? (
             <CallQueueView deals={deals} onSelect={onSelect} setView={setView} />
           ) : view === "review" ? (
@@ -6905,6 +6909,39 @@ function ReviewBanner({ dealId }) {
             <div key={i}>🚫 <b style={{ color: '#fecaca' }}>{c.name || 'Contact'}</b>{c.relationship ? <span style={{ color: '#a8a29e' }}> ({c.relationship})</span> : null}{c.phone ? ' · ' + c.phone : ''} — {[c.do_not_call && 'do-not-call', c.do_not_text && 'do-not-text'].filter(Boolean).join(' + ')}{c.dnd_reason ? <span style={{ color: '#e7e5e4' }}> · “{c.dnd_reason}”</span> : <span style={{ color: '#a8a29e' }}> · no reason recorded</span>}</div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Payout Tracker (Nathan 2026-06-25) — signed deals through to the money ──
+// Focused pipeline board for CONVERTED deals: signed → filed → probate →
+// awaiting-distribution → recovered. Reuses KanbanBoard so a deal drags
+// stage-to-stage as it progresses; header tallies $ in flight + $ landed. This
+// is where signed deals (which now leave the Call Queue) live until the check.
+function PayoutTrackerView({ deals, onSelect, onMoveDeal }) {
+  const STAGES = ['signed', 'filed', 'probate', 'awaiting-distribution', 'recovered'];
+  const surplusOf = (d) => Number(d.verified_surplus) || Number(d?.meta?.verifiedSurplus) || Number(d?.meta?.estimatedSurplus) || Number(d.surplus_estimate) || 0;
+  const fmt$ = (n) => !n || n <= 0 ? '$0' : n >= 1e6 ? '$' + (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M' : n >= 1e3 ? '$' + Math.round(n / 1e3) + 'k' : '$' + Math.round(n);
+  const tracked = deals.filter(d => d.type === 'surplus' && !d.deleted_at && STAGES.includes(d.status));
+  const inFlight = tracked.filter(d => d.status !== 'recovered');
+  const pipelineTotal = inFlight.reduce((s, d) => s + surplusOf(d), 0);
+  const recovered = tracked.filter(d => d.status === 'recovered');
+  const recoveredTotal = recovered.reduce((s, d) => s + surplusOf(d), 0);
+  return (
+    <div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 6, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9' }}>💰 Awaiting Payout</span>
+        <span style={{ fontSize: 12, color: '#78716c' }}>signed deals, tracked through to the money landing</span>
+      </div>
+      <div style={{ display: 'flex', gap: 18, marginBottom: 16, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13, color: '#a8a29e' }}><b style={{ color: '#fafaf9' }}>{inFlight.length}</b> in progress · <b style={{ color: '#6ee7b7' }}>{fmt$(pipelineTotal)}</b> in the pipeline</span>
+        <span style={{ fontSize: 13, color: '#a8a29e' }}><b style={{ color: '#34d399' }}>{recovered.length}</b> recovered · <b style={{ color: '#34d399' }}>{fmt$(recoveredTotal)}</b> landed</span>
+      </div>
+      {tracked.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>No signed deals in the payout pipeline yet — they land here the moment a lead is set to "signed".</div>
+      ) : (
+        <KanbanBoard deals={tracked} statuses={STAGES} onSelect={onSelect} type="surplus" onMoveDeal={onMoveDeal} />
       )}
     </div>
   );
