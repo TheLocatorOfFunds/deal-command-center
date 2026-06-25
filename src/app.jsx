@@ -6845,6 +6845,7 @@ const REVIEW_FLAG_META = {
 function ReviewBanner({ dealId }) {
   const [item, setItem] = useState(undefined);   // undefined=loading · null=not flagged · obj=flagged
   const [busy, setBusy] = useState(false);
+  const [dnc, setDnc] = useState(null);          // DNC flag: which contact(s) are flagged + why
   useEffect(() => {
     let alive = true;
     sb.from('v_lead_review_queue').select('*').eq('deal_id', dealId).maybeSingle()
@@ -6852,6 +6853,19 @@ function ReviewBanner({ dealId }) {
       .catch(() => { if (alive) setItem(null); });
     return () => { alive = false; };
   }, [dealId]);
+  // When the flag is DNC, pull the specific flagged contact(s) + recorded reason
+  // so Eric/Inaam see WHO and WHY right here instead of digging into the contact
+  // record (asked by Eric 2026-06-25). Read-only, only fires when a DNC banner shows.
+  useEffect(() => {
+    if (item?.flag !== 'dnc') { setDnc(null); return; }
+    let alive = true;
+    sb.from('contact_deals').select('relationship, contacts(name, phone, do_not_call, do_not_text, dnd_reason)').eq('deal_id', dealId)
+      .then(({ data }) => {
+        if (!alive) return;
+        setDnc((data || []).map(r => ({ ...(r.contacts || {}), relationship: r.relationship })).filter(c => c.do_not_call || c.do_not_text));
+      }).catch(() => { if (alive) setDnc(null); });
+    return () => { alive = false; };
+  }, [dealId, item?.flag]);
   const markReviewed = async () => {
     setBusy(true);
     try { await sb.rpc('clear_lead_review', { p_deal_id: dealId }); } catch (e) {}
@@ -6885,6 +6899,13 @@ function ReviewBanner({ dealId }) {
       <span style={{ fontSize: 11, fontWeight: 700, color: fm.color, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>🔎 IN REVIEW · {fm.icon} {fm.label}</span>
       <span style={{ fontSize: 12, color: '#e7e5e4', flex: 1, minWidth: 200 }}>{item.reason}{item.evidence ? <span style={{ color: '#a8a29e', fontStyle: 'italic' }}> — {item.evidence}…</span> : null}</span>
       <button onClick={markReviewed} disabled={busy} title="I looked at this — clear it from the Review Queue" style={{ fontSize: 11, padding: '5px 12px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}>{busy ? '…' : '✓ Mark reviewed'}</button>
+      {item.flag === 'dnc' && dnc && dnc.length > 0 && (
+        <div style={{ flexBasis: '100%', width: '100%', fontSize: 11, color: '#fca5a5', display: 'flex', flexDirection: 'column', gap: 3, paddingTop: 2, borderTop: '1px solid rgba(252,165,165,0.2)', marginTop: 2 }}>
+          {dnc.map((c, i) => (
+            <div key={i}>🚫 <b style={{ color: '#fecaca' }}>{c.name || 'Contact'}</b>{c.relationship ? <span style={{ color: '#a8a29e' }}> ({c.relationship})</span> : null}{c.phone ? ' · ' + c.phone : ''} — {[c.do_not_call && 'do-not-call', c.do_not_text && 'do-not-text'].filter(Boolean).join(' + ')}{c.dnd_reason ? <span style={{ color: '#e7e5e4' }}> · “{c.dnd_reason}”</span> : <span style={{ color: '#a8a29e' }}> · no reason recorded</span>}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
