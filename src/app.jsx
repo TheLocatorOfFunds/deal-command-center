@@ -6940,7 +6940,10 @@ function CallQueueView({ deals, onSelect, setView }) {
     setBusyId(null);
   };
 
-  const callable = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && !DEAD.includes(d.status));
+  // Only un-signed PROSPECTS belong in the call-down queue. isLeadStatus = surplus
+  // 'new-lead' only — so signed / filed / probate / awaiting-distribution deals (already
+  // converted, being worked toward payout) drop out instead of showing as "ready to call".
+  const callable = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && isLeadStatus(d));
   const needsNumberList = callable.filter(needsNum);
   const ready = callable.filter(d => !needsNum(d));
   const toPrep = deals.filter(d => d.type === 'surplus' && !d.prepped_at && !d.deleted_at && !DEAD.includes(d.status) && isLeadStatus(d));
