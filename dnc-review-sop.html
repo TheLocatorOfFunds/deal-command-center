@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>DNC review SOP · RefundLocators</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0c0a09; color: #fafaf9; font-family: -apple-system, system-ui, 'Segoe UI', sans-serif; line-height: 1.6; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 32px 20px 80px; }
+  h1 { font-size: 24px; font-weight: 700; margin: 0 0 4px; }
+  .sub { color: #a8a29e; font-size: 14px; margin: 0 0 28px; }
+  h2 { font-size: 17px; font-weight: 700; margin: 30px 0 10px; color: #fcd34d; }
+  p, li { font-size: 15px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0 8px; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid #292524; vertical-align: top; }
+  th { color: #a8a29e; font-weight: 600; font-size: 12px; letter-spacing: .03em; text-transform: uppercase; }
+  td b { color: #fde68a; }
+  .callout { background: #1c1917; border: 1px solid #292524; border-left: 3px solid #fbbf24; border-radius: 8px; padding: 12px 14px; margin: 16px 0; }
+  .compliance { border-left-color: #f87171; }
+  .compliance b { color: #fca5a5; }
+  code { background: #1c1917; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+  .step { font-weight: 700; color: #fafaf9; }
+  .foot { margin-top: 40px; padding-top: 16px; border-top: 1px solid #292524; color: #78716c; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🚫 DNC review SOP</h1>
+  <p class="sub">For Eric &amp; Inaam · when a lead shows the do-not-contact banner in Review</p>
+
+  <h2>1. Read the banner</h2>
+  <p>The banner names the flagged contact, the number, which flag (do-not-call / do-not-text), and the recorded reason. Start there — that's the "why."</p>
+
+  <h2>2. Act by reason — <i>then</i> Mark Reviewed</h2>
+  <table>
+    <tr><th>Reason</th><th>What it means</th><th>Do this</th></tr>
+    <tr><td><b>Disconnected / bad number</b></td><td>the <i>number</i> is dead — the person is not opted out</td><td>don't dial it; use another contact if there is one → if none, see step 3</td></tr>
+    <tr><td><b>Do-not-text only</b> (call not flagged)</td><td>texting off, calling is fine</td><td>call as normal, just don't text</td></tr>
+    <tr><td><b>Do-not-call set</b></td><td>don't dial that contact</td><td>use another callable contact (heir / relative) if one exists</td></tr>
+    <tr><td><b>Genuine opt-out</b> ("stop contacting me")</td><td>legal hard-stop (TCPA)</td><td>no calls or texts to them, ever — <b>keep the lead open</b>, outreach just stops; work it through a co-claimant / heir if one exists</td></tr>
+    <tr><td><b>Auto-detected from notes</b></td><td>the system flagged a phrase</td><td>read the note → real opt-out = hard-stop; false positive = clear the contact's DND toggle (note why), then Mark Reviewed</td></tr>
+  </table>
+
+  <h2>3. No callable contact left</h2>
+  <p>If <b>every</b> contact is do-not-call or disconnected: <b>flag it "needs a new number"</b> and leave it — <span class="step">do NOT clear it to ready-to-call</span> until a good number is found. <b>Don't mark it dead</b> — the surplus is still recoverable; it just needs a fresh number (skip-trace).</p>
+
+  <div class="callout">
+    <b>What "Mark Reviewed" does:</b> it only removes the lead from the Review Queue. It does <b>not</b> call, strip a number, or change a DND flag. So only clear it <i>after</i> you've handled it per the steps above.
+  </div>
+
+  <div class="callout compliance">
+    <b>⚖️ Compliance:</b> a real "do not contact me" is a legal hard-stop. If you can't tell a bad number from a genuine opt-out, treat it as an opt-out and check with Nathan.
+  </div>
+
+  <p class="foot">RefundLocators internal SOP · approved by Nathan · 2026-06-25. Questions → Nathan.</p>
+</div>
+</body>
+</html>
