@@ -867,6 +867,7 @@ async function updateFaviconBadge(count) {
 function Root() {
   const [session, setSession]       = useState(null);
   const [profile, setProfile]       = useState(null);
+  const [profileError, setProfileError] = useState(false);
   const [checking, setChecking]     = useState(true);
   // Detect recovery link synchronously before any async calls resolve
   const [recovering, setRecovering] = useState(() => window.location.hash.includes('type=recovery'));
@@ -882,16 +883,36 @@ function Root() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setProfile(null); return; }
-    sb.from('profiles').select('*').eq('id', session.user.id).single().then(({ data }) => {
-      if (data) setProfile(data);
-      else setProfile({ id: session.user.id, name: session.user.email.split('@')[0], role: 'team' });
-    });
+    if (!session) { setProfile(null); setProfileError(false); return; }
+    let cancelled = false;
+    // Load the profile with retries. A FAILED lookup (timeout / transient DB
+    // hiccup) must NOT fall through to a role that bounces a real team member to
+    // the client portal — that locked Nathan out 2026-06-25 when the DB was
+    // saturated (old code did `role:'team'`, which isn't a recognized team role,
+    // so the gate below redirected him to portal.html). Retry transient errors,
+    // and only surface an explicit Reload if it genuinely can't load. Never guess
+    // a role on error (guessing 'team'/'user' either mis-routes admins OR leaks
+    // the admin shell to a client whose lookup failed).
+    const load = async (attempt = 0) => {
+      const { data, error } = await sb.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+      if (cancelled) return;
+      if (data) { setProfile(data); setProfileError(false); return; }
+      if (error) {
+        if (attempt < 5) { setTimeout(() => load(attempt + 1), 700 * (attempt + 1)); return; }
+        setProfileError(true);
+        return;
+      }
+      // No error + no row → genuinely unprovisioned user; let the role gate route them.
+      setProfile({ id: session.user.id, name: session.user.email.split('@')[0], role: 'pending' });
+    };
+    load();
+    return () => { cancelled = true; };
   }, [session]);
 
   if (checking) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading...</div></Shell>;
   if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />;
   if (!session) return <Login />;
+  if (profileError) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Couldn't load your account — the server was briefly busy.<br /><button onClick={() => window.location.reload()} style={{ marginTop: 16, padding: "8px 22px", borderRadius: 8, border: "1px solid #44403c", background: "#1c1917", color: "#fafaf9", fontWeight: 700, cursor: "pointer" }}>Reload</button></div></Shell>;
   if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
   // Defense-in-depth: if a signed-in user is NOT on the team (i.e. they
   // got role=client/attorney/pending), bounce them to portal.html /
