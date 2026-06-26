@@ -1216,14 +1216,14 @@ function DealCommandCenter({ session, profile }) {
       // Match on trailing 10 digits so +1 prefix doesn't break the match
       const tail = digits.slice(-10);
       const { data } = await sb.from('contacts')
-        .select('id, name, phone, contact_deals(deal_id, deals(name, id))')
+        .select('id, name, phone, do_not_call, do_not_text, dnd_reason, contact_deals(deal_id, deals(name, id))')
         .ilike('phone', `%${tail}%`)
         .limit(1);
       if (cancelled) return;
       const c = data?.[0];
       if (c) {
         const cd = c.contact_deals?.[0];
-        setDialpadContact({ name: c.name, phone: c.phone, dealName: cd?.deals?.name || null, dealId: cd?.deals?.id || cd?.deal_id || null });
+        setDialpadContact({ name: c.name, phone: c.phone, do_not_call: c.do_not_call, do_not_text: c.do_not_text, dnd_reason: c.dnd_reason, dealName: cd?.deals?.name || null, dealId: cd?.deals?.id || cd?.deal_id || null });
       } else {
         setDialpadContact(null);
       }
@@ -1275,6 +1275,16 @@ function DealCommandCenter({ session, profile }) {
 
   const startCall = React.useCallback(async (contact) => {
     if (callStatus) return;
+    // 🚫 DNC safeguard — covers EVERY call path (dialpad + click-to-call). If this
+    // number belongs to a do-not-call contact, force an explicit confirm before
+    // dialing. A do-not-text-only contact is fine to CALL, so only do_not_call gates.
+    try {
+      const ph = (contact?.phone || '').replace(/\D/g, '').slice(-10);
+      if (ph.length === 10) {
+        const { data: dncRow } = await sb.from('contacts').select('name, dnd_reason').eq('do_not_call', true).ilike('phone', `%${ph}%`).limit(1).maybeSingle();
+        if (dncRow && !window.confirm(`🚫 ${dncRow.name || 'This contact'} is marked DO-NOT-CALL${dncRow.dnd_reason ? `\n\nReason: ${dncRow.dnd_reason}` : ''}\n\nThis is a compliance flag — dialing it could be a TCPA violation. Call anyway?`)) return;
+      }
+    } catch (e) { /* never block a real call on the safeguard lookup failing */ }
     setCallStatus('connecting');
     setCallContact(contact);
     setCallMuted(false);
@@ -2463,8 +2473,14 @@ function DealCommandCenter({ session, profile }) {
                       <div style={{ padding: '14px 14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
                         {/* Contact match display */}
                         {dialpadContact && (
-                          <div style={{ background: '#292524', border: '1px solid #3d3a37', borderRadius: 8, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <div style={{ background: dialpadContact.do_not_call ? '#3a1d1d' : '#292524', border: '1px solid ' + (dialpadContact.do_not_call ? '#b91c1c' : '#3d3a37'), borderRadius: 8, padding: '8px 12px', display: 'flex', flexDirection: 'column', gap: 3 }}>
                             <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{dialpadContact.name}</span>
+                            {dialpadContact.do_not_call && (
+                              <span style={{ fontSize: 11, fontWeight: 700, color: '#fca5a5' }}>🚫 DO NOT CALL{dialpadContact.dnd_reason ? <span style={{ fontWeight: 400, color: '#fecaca' }}> — {dialpadContact.dnd_reason}</span> : ''}</span>
+                            )}
+                            {!dialpadContact.do_not_call && dialpadContact.do_not_text && (
+                              <span style={{ fontSize: 11, fontWeight: 700, color: '#fcd34d' }}>🚫 do-not-text (calling OK){dialpadContact.dnd_reason ? <span style={{ fontWeight: 400, color: '#fde68a' }}> — {dialpadContact.dnd_reason}</span> : ''}</span>
+                            )}
                             {dialpadContact.dealName && (
                               <span style={{ fontSize: 10, color: '#d97706' }}>
                                 Deal: <button onClick={() => { setActiveDealId(dialpadContact.dealId); setShowPhonePopover(false); }}
@@ -2505,8 +2521,8 @@ function DealCommandCenter({ session, profile }) {
                             startCall(dialpadContact || { name: e164, phone: e164 });
                           }}
                           disabled={!dialpadNumber}
-                          style={{ background: dialpadNumber ? '#16a34a' : '#292524', border: 'none', color: dialpadNumber ? '#fff' : '#57534e', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: dialpadNumber ? 'pointer' : 'default', fontFamily: 'inherit' }}>
-                          📞 Call
+                          style={{ background: !dialpadNumber ? '#292524' : dialpadContact?.do_not_call ? '#b91c1c' : '#16a34a', border: 'none', color: dialpadNumber ? '#fff' : '#57534e', borderRadius: 8, padding: '12px 0', fontSize: 14, fontWeight: 700, cursor: dialpadNumber ? 'pointer' : 'default', fontFamily: 'inherit' }}>
+                          {dialpadContact?.do_not_call ? '🚫 Call (do-not-call)' : '📞 Call'}
                         </button>
                       </div>
                     )}
