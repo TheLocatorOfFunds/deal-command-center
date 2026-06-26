@@ -7096,9 +7096,47 @@ function ReviewQueueView({ onJumpToDeal }) {
   const gaps = rows.filter(r => r.category === 'not_callable');
   const shown = filter === 'verify' ? verify : filter === 'gaps' ? gaps : rows;
 
+  // Split by sale phase — the primary axis Nathan asked for (2026-06-25).
+  // 'confirmed' = property sold at auction (cosDate or isPostAuction) → real
+  // surplus to verify + work. 'presale' = auction hasn't happened / unconfirmed
+  // → estimate only, don't work like real money. Phase comes from the view's
+  // sale_phase column (matches leadMissing() — realsheriff salePrice does NOT
+  // count as a confirmed sale).
+  const confirmedRows = shown.filter(r => r.sale_phase === 'confirmed');
+  const presaleRows = shown.filter(r => r.sale_phase !== 'confirmed');
+
   const FLAG = REVIEW_FLAG_META;
   const chip = (id, label, n) => (
     <button key={id} onClick={() => setFilter(id)} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: filter === id ? '#292524' : 'transparent', color: filter === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'), fontWeight: filter === id ? 700 : 500, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label} · {n}</button>
+  );
+
+  const renderRow = (r) => {
+    const fm = FLAG[r.flag] || { icon: '•', color: '#a8a29e', bg: '#292524', label: r.flag };
+    return (
+      <div key={r.deal_id} style={{ marginBottom: 8, padding: "11px 14px", background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid ' + fm.color, borderRadius: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', cursor: 'pointer' }} onClick={() => onJumpToDeal(r.deal_id)}>{r.name || r.deal_id}</span>
+          <span style={{ fontSize: 11, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{fmt$(r.surplus)}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, color: fm.color, background: fm.bg, padding: '2px 8px', borderRadius: 10 }}>{fm.icon} {fm.label}</span>
+          <div style={{ flex: 1 }} />
+          <button onClick={() => onJumpToDeal(r.deal_id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>
+          <button onClick={() => markReviewed(r.deal_id)} disabled={busy === r.deal_id} title="I looked at this — clear it from the queue" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: busy === r.deal_id ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>{busy === r.deal_id ? '…' : '✓ Reviewed'}</button>
+        </div>
+        <div style={{ fontSize: 12, color: '#d6d3d1', marginTop: 6 }}>{r.reason}</div>
+        {r.evidence && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 5, fontStyle: 'italic', lineHeight: 1.45, background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: '6px 9px' }}>📄 {r.evidence}…{r.ai_at && <span style={{ color: '#78716c' }}> — AI brief {String(r.ai_at).slice(0, 10)}</span>}</div>}
+      </div>
+    );
+  };
+
+  const section = (key, title, accent, blurb, items) => (
+    <div key={key} style={{ marginBottom: 22 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
+        <span style={{ fontSize: 12, fontWeight: 800, color: accent, letterSpacing: '0.03em' }}>{title}</span>
+        <span style={{ fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {items.length}</span>
+      </div>
+      <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 10, lineHeight: 1.45 }}>{blurb}</div>
+      {items.map(renderRow)}
+    </div>
   );
 
   return (
@@ -7120,23 +7158,12 @@ function ReviewQueueView({ onJumpToDeal }) {
         <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>🎉 Nothing to review — every ready lead is clean.</div>
       )}
 
-      {shown.map(r => {
-        const fm = FLAG[r.flag] || { icon: '•', color: '#a8a29e', bg: '#292524', label: r.flag };
-        return (
-          <div key={r.deal_id} style={{ marginBottom: 8, padding: "11px 14px", background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid ' + fm.color, borderRadius: 6 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9', cursor: 'pointer' }} onClick={() => onJumpToDeal(r.deal_id)}>{r.name || r.deal_id}</span>
-              <span style={{ fontSize: 11, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{fmt$(r.surplus)}</span>
-              <span style={{ fontSize: 10, fontWeight: 700, color: fm.color, background: fm.bg, padding: '2px 8px', borderRadius: 10 }}>{fm.icon} {fm.label}</span>
-              <div style={{ flex: 1 }} />
-              <button onClick={() => onJumpToDeal(r.deal_id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>
-              <button onClick={() => markReviewed(r.deal_id)} disabled={busy === r.deal_id} title="I looked at this — clear it from the queue" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: busy === r.deal_id ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>{busy === r.deal_id ? '…' : '✓ Reviewed'}</button>
-            </div>
-            <div style={{ fontSize: 12, color: '#d6d3d1', marginTop: 6 }}>{r.reason}</div>
-            {r.evidence && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 5, fontStyle: 'italic', lineHeight: 1.45, background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: '6px 9px' }}>📄 {r.evidence}…{r.ai_at && <span style={{ color: '#78716c' }}> — AI brief {String(r.ai_at).slice(0, 10)}</span>}</div>}
-          </div>
-        );
-      })}
+      {!loading && shown.length > 0 && (
+        <>
+          {confirmedRows.length > 0 && section('confirmed', '✅ Confirmed sale — surplus is real', '#6ee7b7', 'Property already sold at auction — the surplus actually exists. Verify it against the docket, then work it. These are the money.', confirmedRows)}
+          {presaleRows.length > 0 && section('presale', '🔵 Pre-sale — auction not done yet', '#93c5fd', "The sale isn't confirmed yet (no confirmation-of-sale date, not marked post-auction). The surplus is only an estimate — don't work these like confirmed money. Park them until the sale confirms.", presaleRows)}
+        </>
+      )}
     </div>
   );
 }
