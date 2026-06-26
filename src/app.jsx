@@ -13840,7 +13840,7 @@ function ReportsView({ deals, onSelect }) {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 14 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 14, marginTop: 14 }}>
         <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
           <div style={{ fontSize: 11, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>Tasks</div>
           <div style={{ display: "flex", gap: 16 }}>
@@ -13849,14 +13849,7 @@ function ReportsView({ deals, onSelect }) {
             <div><div style={{ fontSize: 22, fontWeight: 700, color: "#10b981", fontFamily: "'DM Mono', monospace" }}>{taskStats.done}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>done</div></div>
           </div>
         </div>
-        <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
-          <div style={{ fontSize: 11, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", fontWeight: 700, marginBottom: 10 }}>Client portal engagement</div>
-          <div style={{ display: "flex", gap: 16 }}>
-            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#fafaf9", fontFamily: "'DM Mono', monospace" }}>{clientTotal}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>total invited</div></div>
-            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#10b981", fontFamily: "'DM Mono', monospace" }}>{clientSignedIn}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>signed in</div></div>
-            <div><div style={{ fontSize: 22, fontWeight: 700, color: "#f59e0b", fontFamily: "'DM Mono', monospace" }}>{clientTotal - clientSignedIn}</div><div style={{ fontSize: 11, color: "#a8a29e" }}>unactivated</div></div>
-          </div>
-        </div>
+        {/* "Client portal engagement" stat card removed 2026-06-25 (Nathan): client portal set aside for now; revivable from git history. (grid collapsed 2-col → 1-col) */}
       </div>
 
       <SectionHeader icon="🧲" label="Lead intake · last 90 days" sub={`${leadsLast90.length} lead${leadsLast90.length === 1 ? '' : 's'} total · top sources`} />
@@ -21713,7 +21706,7 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
         {/* Client Portal + Counsel Portal (AttorneyAssignment) cards removed 2026-06-25 (Nathan):
             client + counsel portals set aside for now. Components, tables, RLS all intact; revive
             from git history when the client portal launches. */}
-        <WelcomeVideoCard deal={deal} logAct={logAct} onUpdateDeal={onUpdateDeal} />
+        {/* WelcomeVideoCard removed 2026-06-25 (Nathan): client-portal welcome video, set aside for now. Component + any meta.welcome_video data intact; revivable from git history. */}
       </div>
       <div>
         {/* Progress card removed — Tasks tab is the home for task tracking */}
