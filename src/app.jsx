@@ -4652,10 +4652,10 @@ function TeamView({ teamMembers, isOwner, jumpToThreadId, onJumpConsumed }) {
         .select('*')
         .eq('thread_id', activeThreadId)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })  // newest 500, NOT oldest — Ops crossed 500 msgs and was cutting off recent ones
         .limit(500);
       if (cancelled) return;
-      setMessages(data || []);
+      setMessages((data || []).reverse());           // reverse back to ascending for display
       // Mark thread read
       if (me.id) {
         await sb.from('team_message_reads').upsert({
@@ -32586,9 +32586,9 @@ function LaurenDCC() {
         .select('id, sender_id, sender_kind, body, created_at')
         .eq('thread_id', threadId)
         .is('deleted_at', null)
-        .order('created_at', { ascending: true })
+        .order('created_at', { ascending: false })  // newest 200, NOT oldest
         .limit(200);
-      setMsgs(data || []);
+      setMsgs((data || []).reverse());
     };
     load();
     const ch = sb.channel('lauren-fab-msgs-' + threadId)
