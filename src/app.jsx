@@ -18077,12 +18077,11 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         )}
         {isAdmin && (
           <>
-            <a href={`portal.html?preview=${deal.id}`} target="_blank" rel="noreferrer" title="Open this deal in the client portal preview" style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              👤 Client view
-            </a>
-            <a href={`attorney-portal.html#/case/${deal.id}`} target="_blank" rel="noreferrer" title="Open this deal in the counsel portal preview" style={{ background: "transparent", border: "1px solid #44403c", color: "#a8a29e", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              ⚖ Counsel view
-            </a>
+            {/* Client view / Counsel view portal-preview buttons removed 2026-06-25 (Nathan):
+                client + counsel portals are set aside for now (not in use — decluttering the deal
+                header). The portals themselves (portal.html / attorney-portal.html), their tables,
+                and the access cards still exist; revive these two buttons from git history when the
+                client portal launches. */}
             <button onClick={() => setShowPostUpdate(true)} title="Post a case update to the client and/or attorney timeline" style={{ background: "#d97706", color: "#0c0a09", border: "none", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
               📢 Post Update
             </button>
