@@ -18082,9 +18082,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
                 header). The portals themselves (portal.html / attorney-portal.html), their tables,
                 and the access cards still exist; revive these two buttons from git history when the
                 client portal launches. */}
-            <button onClick={() => setShowPostUpdate(true)} title="Post a case update to the client and/or attorney timeline" style={{ background: "#d97706", color: "#0c0a09", border: "none", padding: "4px 12px", borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              📢 Post Update
-            </button>
+            {/* 📢 Post Update button removed 2026-06-25 (Nathan): it posted case updates to the
+                client/counsel portal timelines, which are set aside for now. PostUpdateModal stays
+                defined but is now unreachable; revivable from git history. */}
             <SendPersonalizedLinkButton deal={deal} />
             {/* Send Intro Text button moved into the Comms tab (see 📝 Send Intro button) */}
             {/* Overflow menu — infrequent admin actions (Flag, Bonus Due) */}
@@ -21710,8 +21710,9 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           )}
           {(m.filed_at || deal.filed_at) && <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 10 }}>Filed {daysSince(m.filed_at || deal.filed_at)} days ago{(m.deadline || deal.deadline) && ` · ${deadlineInfo(m.deadline || deal.deadline).label || 'on track'}`}</div>}
         </Card>
-        <ClientPortalCard deal={deal} logAct={logAct} />
-        <AttorneyAssignmentCard deal={deal} logAct={logAct} />
+        {/* Client Portal + Counsel Portal (AttorneyAssignment) cards removed 2026-06-25 (Nathan):
+            client + counsel portals set aside for now. Components, tables, RLS all intact; revive
+            from git history when the client portal launches. */}
         <WelcomeVideoCard deal={deal} logAct={logAct} onUpdateDeal={onUpdateDeal} />
       </div>
       <div>
