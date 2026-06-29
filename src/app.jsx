@@ -2300,6 +2300,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
               {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
               {navItem('appointments','📅', 'Appointments',{ badge: apptUpcomingCount })}
+              {navItem('calls',    '☎️', 'Calls')}
               {navItem('tasks',    '✅', 'Tasks')}
               {isTeam && navItem('_docket', '⚖', 'Docket', { onClick: () => setShowDocket(true), badge: unackDocketCount })}
               {navItem('team',     '💬', 'Chat',      { badge: unreadChatCount })}
@@ -4072,7 +4073,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on views where deal-search is irrelevant — Today, Time tracking, Reports, etc.) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "appointments" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "appointments" && view !== "calls" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -4293,7 +4294,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           )}
           </ViewErrorBoundary>
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "appointments" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "appointments" && view !== "calls" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
