@@ -6715,6 +6715,20 @@ function FollowupsView({ deals, onJumpToDeal }) {
     load();
   };
 
+  // Remove a lead from the follow-up queue entirely (Nathan 2026-06-29).
+  // Distinct from the ✓ checkbox (which marks the follow-up DONE / completed):
+  // this is "this shouldn't be on my list" — deletes the reminder task. The
+  // deal + all its history stay; only the follow-up reminder goes. Confirm
+  // first since it's not the same as completing it.
+  const removeFollowup = async (t) => {
+    const who = (t.deal?.meta?.homeownerName || t.deal?.name || 'this lead').split(' - ')[0];
+    if (!window.confirm(`Remove ${who} from the follow-up queue?\n\nThis deletes the follow-up reminder — the deal and its history stay. (Not the same as marking it done.)`)) return;
+    setUpdating(t.id);
+    await sb.from('tasks').delete().eq('id', t.id);
+    setUpdating(null);
+    load();
+  };
+
   const dealsById = {};
   deals.forEach(d => { dealsById[d.id] = d; });
   const today = new Date().toISOString().slice(0, 10);
@@ -6812,6 +6826,7 @@ function FollowupsView({ deals, onJumpToDeal }) {
               </div>
             </div>
             <button onClick={() => onJumpToDeal(d.id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>
+            <button onClick={() => removeFollowup(t)} disabled={updating === t.id} title="Remove this lead from the follow-up queue — deletes the reminder (the deal stays). Different from ✓ done." style={{ fontSize: 10, padding: '4px 10px', borderRadius: 6, background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', cursor: updating === t.id ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700, flexShrink: 0 }}>✕ Remove</button>
           </div>
         );
       })}
