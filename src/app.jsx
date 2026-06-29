@@ -16769,6 +16769,7 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
 function CallDispositionModal({ pending, onClose }) {
   const [saving, setSaving] = React.useState(false);
   const [error, setError]   = React.useState(null);
+  const [note, setNote]     = React.useState(pending?.existing?.outcome_note || '');
 
   if (!pending) return null;
 
@@ -16781,6 +16782,7 @@ function CallDispositionModal({ pending, onClose }) {
     { code: 'no_answer',    label: '⏱ No answer',    color: '#a8a29e', desc: "Didn't pick up" },
     { code: 'wrong_number', label: '✗ Wrong number', color: '#f97316', desc: 'Reached someone else — blocks future SMS + voice' },
     { code: 'disconnected', label: '🚫 Disconnected',color: '#ef4444', desc: 'Number not in service — blocks future SMS + voice + flags DNC' },
+    { code: 'other',        label: '⋯ Other',        color: '#a8a29e', desc: "Doesn't fit the rest (busy, no voicemail set up, generic machine, couldn't confirm) — leaves the number active: no SMS/voice block, no DNC" },
   ];
 
   const phoneStatusFor = (outcome) => {
@@ -16825,6 +16827,7 @@ function CallDispositionModal({ pending, onClose }) {
       if (callLogId) {
         await sb.from('call_logs').update({
           outcome, outcome_set_at: now, outcome_set_by: userId,
+          outcome_note: note.trim() || null,
         }).eq('id', callLogId);
       }
 
@@ -16890,9 +16893,13 @@ function CallDispositionModal({ pending, onClose }) {
             ×
           </button>
         </div>
-        <div style={{ fontSize: 11, color: '#57534e', marginTop: 8, marginBottom: 16 }}>
+        <div style={{ fontSize: 11, color: '#57534e', marginTop: 8, marginBottom: 12 }}>
           {isEditing ? 'Update what really happened.' : 'Take a second to mark it — dead numbers get auto-blocked next round.'}
         </div>
+        <textarea value={note} onChange={e => setNote(e.target.value)}
+          placeholder="Note (optional) — e.g. busy signal · no voicemail set up · generic answering machine · couldn't confirm the person"
+          rows={2}
+          style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12, padding: '8px 10px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical' }} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {OPTIONS.map(o => {
             const isCurrent = initial === o.code;
@@ -27918,6 +27925,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                   no_answer:    { label: '⏱ No answer',    color: '#a8a29e' },
                   wrong_number: { label: '✗ Wrong number', color: '#f97316' },
                   disconnected: { label: '🚫 Disconnected',color: '#ef4444' },
+                  other:        { label: '⋯ Other',        color: '#a8a29e' },
                 };
                 const outcomeMeta = m.outcome ? OUTCOME_META[m.outcome] : null;
                 const canDispose = !isInbound && onOpenDisposition; // V1: outbound only
