@@ -7341,6 +7341,65 @@ function AddToAutomationsButton({ deal, userId, reload }) {
   );
 }
 
+// ─── IDI tracker (per-lead skip-trace status) ──────────────────────────
+// Nathan 2026-06-29: know whether a lead's been IDI'd, and whether it was a
+// FREE or PAID search, so we never double-pay the ~$1.75 paid skip-trace.
+// Free + paid are tracked independently in meta.idi = { free:{at,by},
+// paid:{at,by} } (a lead can be free-searched, then later paid-searched).
+// Manual log from the lead card; the research agent can write the SAME field
+// when it runs IDI via web automation, so agent-run searches also show here.
+// meta.idi is a DCC-owned key (not intel-main-managed) — safe to merge-write.
+function IdiTracker({ deal, userName, userId, onUpdateDeal, logAct }) {
+  const [open, setOpen] = React.useState(false);
+  if (deal?.type !== 'surplus') return null;
+  const idi = deal?.meta?.idi || {};
+  const who = userName || userId || 'someone';
+  const hasFree = !!idi.free?.at, hasPaid = !!idi.paid?.at;
+  const fmtD = (iso) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+
+  const log = (type) => {
+    if (type === 'paid' && hasPaid &&
+        !window.confirm(`This lead was already PAID-IDI'd on ${fmtD(idi.paid.at)} by ${idi.paid.by || 'someone'}.\n\nA paid skip-trace costs ~$1.75. Run another one anyway?`)) return;
+    if (type === 'free' && hasFree &&
+        !window.confirm(`Already free-IDI'd on ${fmtD(idi.free.at)}. Log another free search?`)) return;
+    const newMeta = { ...(deal.meta || {}), idi: { ...idi, [type]: { at: new Date().toISOString(), by: who } } };
+    onUpdateDeal && onUpdateDeal({ meta: newMeta });
+    logAct && logAct(`IDI ${type} search logged${type === 'paid' ? ' (~$1.75)' : ''}`, ['team']);
+    setOpen(false);
+  };
+
+  let label, color, bg, border;
+  if (hasPaid) { label = `IDI · Paid ✓${hasFree ? ' +Free' : ''}`; color = '#6ee7b7'; bg = '#064e3b'; border = '#10b981'; }
+  else if (hasFree) { label = 'IDI · Free ✓'; color = '#93c5fd'; bg = '#172554'; border = '#2563eb'; }
+  else { label = 'Log IDI'; color = '#a8a29e'; bg = 'transparent'; border = '#44403c'; }
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button onClick={() => setOpen(v => !v)}
+        title={hasPaid || hasFree ? `Already IDI'd — ${hasFree ? 'free ' + fmtD(idi.free.at) : ''}${hasFree && hasPaid ? ' · ' : ''}${hasPaid ? 'paid ' + fmtD(idi.paid.at) : ''}. Click to log another.` : 'Record an IDI skip-trace search on this lead (free or paid) so we don’t double-search it'}
+        style={{ background: bg, border: '1px solid ' + border, color, padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        🔎 {label}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: 14, width: 250, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>Log IDI search</div>
+            <div style={{ fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
+              {hasFree ? <div style={{ color: '#93c5fd' }}>Free ✓ <span style={{ color: '#78716c' }}>{fmtD(idi.free.at)}{idi.free.by ? ' · ' + idi.free.by : ''}</span></div> : <div style={{ color: '#57534e' }}>Free — not yet</div>}
+              {hasPaid ? <div style={{ color: '#6ee7b7' }}>Paid ✓ <span style={{ color: '#78716c' }}>{fmtD(idi.paid.at)}{idi.paid.by ? ' · ' + idi.paid.by : ''}</span></div> : <div style={{ color: '#57534e' }}>Paid — not yet</div>}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => log('free')} style={{ flex: 1, background: '#172554', color: '#93c5fd', border: '1px solid #2563eb', borderRadius: 6, padding: '7px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{hasFree ? 'Free again' : 'Free'}</button>
+              <button onClick={() => log('paid')} style={{ flex: 1, background: '#064e3b', color: '#6ee7b7', border: '1px solid #10b981', borderRadius: 6, padding: '7px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Paid · $1.75</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Send Intro Text modal — loads an SMS template matching the deal's
 // lead_tier (or 30DTS track), substitutes merge variables, lets Eric
 // review/edit, sends via send-sms Edge Function (Twilio today; swap to
@@ -18160,6 +18219,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         <PersonalizedUrlControl deal={deal} reload={loadAll} logAct={logAct} />
         <FollowupButton deal={deal} reload={loadAll} />
         <AddToAutomationsButton deal={deal} userId={userId} reload={loadAll} />
+        <IdiTracker deal={deal} userName={userName} userId={userId} onUpdateDeal={onUpdateDeal} logAct={logAct} />
         <ReviewBanner dealId={deal.id} />
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
