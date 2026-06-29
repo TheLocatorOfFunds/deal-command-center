@@ -9688,8 +9688,6 @@ function RelayView({ supabase, onOpenDeal, mode }) {
   const [pendingTouches, setPendingTouches] = React.useState([])
   const [deals, setDeals] = React.useState({})
   const [loading, setLoading] = React.useState(true)
-  const [scanning, setScanning] = React.useState(false)
-  const [scanResult, setScanResult] = React.useState(null)
   const [reviewPanel, setReviewPanel] = React.useState(null) // { deal, touch|null }
   // RVM drops awaiting approval (Phase A.3 follow-up, 2026-05-27). RVM touches
   // are held by relay-dispatcher in review mode (status stays 'pending' in
@@ -9962,35 +9960,10 @@ function RelayView({ supabase, onOpenDeal, mode }) {
     if (fullDeal) setReviewPanel({ deal: fullDeal, touch })
   }
 
-  async function handleScanNow() {
-    setScanning(true)
-    setScanResult(null)
-    try {
-      const { data, error } = await supabase.functions.invoke('relay-auto-enroll', {
-        method: 'POST',
-        body: {},
-      })
-      if (error) {
-        setScanResult({ ok: false, message: error.message || 'Scan failed' })
-      } else {
-        const pre = data?.preauction || {}
-        const sur = data?.surplus || {}
-        const total = (pre.enrolled || 0) + (sur.enrolled || 0)
-        const errs = data?.errors || 0
-        setScanResult({
-          ok: true,
-          message: total > 0
-            ? `Enrolled ${total} lead${total !== 1 ? 's' : ''} (${pre.enrolled || 0} pre-auction, ${sur.enrolled || 0} post-auction)${errs ? ` - ${errs} error${errs !== 1 ? 's' : ''}` : ''}`
-            : `Scan complete - no new eligible leads found${errs ? ` (${errs} error${errs !== 1 ? 's' : ''})` : ''}`,
-        })
-        if (total > 0) await loadData()
-      }
-    } catch (e) {
-      setScanResult({ ok: false, message: e.message || 'Scan failed' })
-    } finally {
-      setScanning(false)
-    }
-  }
+  // Scan Now (bulk auto-enroll) removed 2026-06-29 — enrollment is now manual,
+  // per-lead, from the lead card (🤖 Add to automations). The relay-auto-enroll
+  // EF + its already-dropped crons stay in place but are no longer triggered
+  // from the UI. This view is now a read + approve monitor.
 
   const activeCount = enrollments.filter(e => e.status === 'active').length
   const statusColors = {
@@ -10016,9 +9989,8 @@ function RelayView({ supabase, onOpenDeal, mode }) {
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
 
-      {/* Status bar — count summary + Scan Now + Refresh. In split mode the
-          counts make most sense alongside Enrolled (it's the population they
-          describe); Scan Now belongs with Ready (it brings new approvals in). */}
+      {/* Status bar — enrollment counts + Refresh. Enrollment itself happens
+          on the lead card (🤖 Add to automations); this view monitors + approves. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 28, flexWrap: 'wrap' }}>
         {showEnrolled && (
           <>
@@ -10028,31 +10000,17 @@ function RelayView({ supabase, onOpenDeal, mode }) {
             </div>
             <div style={{ color: '#94a3b8', fontSize: 13 }}>
               {enrollments.length} enrollments, {activeCount} active, {pendingTouches.length} pending approval
-              {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
+              {' '}<span style={{ color: '#475569' }}>· enroll from a lead card → 🤖 Add to automations</span>
             </div>
           </>
         )}
         {showReady && !showEnrolled && (
           <div style={{ color: '#94a3b8', fontSize: 13 }}>
             {pendingTouches.length} text{pendingTouches.length === 1 ? '' : 's'} + {rvmTouches.length} RVM drop{rvmTouches.length === 1 ? '' : 's'} awaiting review
-            {' '}<span style={{ color: '#475569' }}>(auto-scan every 15 min)</span>
+            {' '}<span style={{ color: '#475569' }}>· each one is human-approved before it sends</span>
           </div>
         )}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          {scanResult && (
-            <span style={{ fontSize: 12, color: scanResult.ok ? '#16a34a' : '#dc2626' }}>
-              {scanResult.message}
-            </span>
-          )}
-          {showReady && (
-            <button
-              onClick={handleScanNow}
-              disabled={scanning}
-              style={{ padding: '6px 14px', background: scanning ? '#1e293b' : '#0f3460', color: scanning ? '#475569' : '#93c5fd', border: '1px solid #1e4080', borderRadius: 6, cursor: scanning ? 'default' : 'pointer', fontSize: 13, fontWeight: 600 }}
-            >
-              {scanning ? 'Scanning...' : 'Scan Now'}
-            </button>
-          )}
           <button
             onClick={loadData}
             style={{ padding: '6px 12px', background: 'transparent', color: '#64748b', border: '1px solid #334155', borderRadius: 6, cursor: 'pointer', fontSize: 13 }}
