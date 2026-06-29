@@ -7381,57 +7381,72 @@ function AddToAutomationsButton({ deal, userId, reload }) {
   );
 }
 
-// ─── IDI tracker (per-lead skip-trace status) ──────────────────────────
-// Nathan 2026-06-29: know whether a lead's been IDI'd, and whether it was a
-// FREE or PAID search, so we never double-pay the ~$1.75 paid skip-trace.
-// Free + paid are tracked independently in meta.idi = { free:{at,by},
-// paid:{at,by} } (a lead can be free-searched, then later paid-searched).
-// Manual log from the lead card; the research agent can write the SAME field
-// when it runs IDI via web automation, so agent-run searches also show here.
-// meta.idi is a DCC-owned key (not intel-main-managed) — safe to merge-write.
+// ─── Skip-trace tracker (per-lead) ─────────────────────────────────────
+// Nathan 2026-06-29 (corrected): there is NO free-vs-paid IDI. Two INDEPENDENT
+// things: (1) IDI Core — the paid ~$1.75 skip-trace, binary IDI'd-or-not;
+// (2) a FREE skip-trace via some OTHER source (TruePeopleSearch, etc.), binary,
+// with an optional source note. Tracked in meta.skiptrace =
+// { idi:{at,by}, free:{at,by,source} } — DCC-owned key (not intel-main managed),
+// safe to merge-write. The research agent can write the same field. Point of it:
+// know if a lead's been IDI'd so we never double-pay IDI Core.
 function IdiTracker({ deal, userName, userId, onUpdateDeal, logAct }) {
   const [open, setOpen] = React.useState(false);
+  const [src, setSrc] = React.useState('');
   if (deal?.type !== 'surplus') return null;
-  const idi = deal?.meta?.idi || {};
+  const st = deal?.meta?.skiptrace || {};
   const who = userName || userId || 'someone';
-  const hasFree = !!idi.free?.at, hasPaid = !!idi.paid?.at;
+  const hasIdi = !!st.idi?.at, hasFree = !!st.free?.at;
   const fmtD = (iso) => iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
 
-  const log = (type) => {
-    if (type === 'paid' && hasPaid &&
-        !window.confirm(`This lead was already PAID-IDI'd on ${fmtD(idi.paid.at)} by ${idi.paid.by || 'someone'}.\n\nA paid skip-trace costs ~$1.75. Run another one anyway?`)) return;
-    if (type === 'free' && hasFree &&
-        !window.confirm(`Already free-IDI'd on ${fmtD(idi.free.at)}. Log another free search?`)) return;
-    const newMeta = { ...(deal.meta || {}), idi: { ...idi, [type]: { at: new Date().toISOString(), by: who } } };
+  const mark = (kind) => {
+    if (kind === 'idi' && hasIdi &&
+        !window.confirm(`This lead was already IDI'd on ${fmtD(st.idi.at)} by ${st.idi.by || 'someone'}.\n\nIDI Core costs ~$1.75 per search. Run it again anyway?`)) return;
+    const entry = kind === 'idi'
+      ? { at: new Date().toISOString(), by: who }
+      : { at: new Date().toISOString(), by: who, source: (src || '').trim() || null };
+    const newMeta = { ...(deal.meta || {}), skiptrace: { ...st, [kind]: entry } };
     onUpdateDeal && onUpdateDeal({ meta: newMeta });
-    logAct && logAct(`IDI ${type} search logged${type === 'paid' ? ' (~$1.75)' : ''}`, ['team']);
-    setOpen(false);
+    logAct && logAct(kind === 'idi' ? "IDI'd (IDI Core, ~$1.75)" : `Free skip-trace logged${entry.source ? ' · ' + entry.source : ''}`, ['team']);
+    setOpen(false); setSrc('');
   };
 
   let label, color, bg, border;
-  if (hasPaid) { label = `IDI · Paid ✓${hasFree ? ' +Free' : ''}`; color = '#6ee7b7'; bg = '#064e3b'; border = '#10b981'; }
-  else if (hasFree) { label = 'IDI · Free ✓'; color = '#93c5fd'; bg = '#172554'; border = '#2563eb'; }
-  else { label = 'Log IDI'; color = '#a8a29e'; bg = 'transparent'; border = '#44403c'; }
+  if (hasIdi) { label = `IDI'd ✓${hasFree ? ' · free ✓' : ''}`; color = '#6ee7b7'; bg = '#064e3b'; border = '#10b981'; }
+  else if (hasFree) { label = 'Free skip ✓'; color = '#93c5fd'; bg = '#172554'; border = '#2563eb'; }
+  else { label = 'Skip-trace'; color = '#a8a29e'; bg = 'transparent'; border = '#44403c'; }
 
   return (
     <div style={{ position: 'relative', display: 'inline-block' }}>
-      <button onClick={() => setOpen(v => !v)}
-        title={hasPaid || hasFree ? `Already IDI'd — ${hasFree ? 'free ' + fmtD(idi.free.at) : ''}${hasFree && hasPaid ? ' · ' : ''}${hasPaid ? 'paid ' + fmtD(idi.paid.at) : ''}. Click to log another.` : 'Record an IDI skip-trace search on this lead (free or paid) so we don’t double-search it'}
+      <button onClick={() => { setSrc(st.free?.source || ''); setOpen(v => !v); }}
+        title={hasIdi || hasFree ? `${hasIdi ? "IDI'd " + fmtD(st.idi.at) : "not IDI'd"}${hasFree ? ' · free skip ' + fmtD(st.free.at) : ''}. Click to update.` : 'Track skip-trace — IDI Core (paid ~$1.75) or a free source — so we don’t double-pay IDI'}
         style={{ background: bg, border: '1px solid ' + border, color, padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
         🔎 {label}
       </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
-          <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: 14, width: 250, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>Log IDI search</div>
-            <div style={{ fontSize: 11, marginBottom: 10, lineHeight: 1.5 }}>
-              {hasFree ? <div style={{ color: '#93c5fd' }}>Free ✓ <span style={{ color: '#78716c' }}>{fmtD(idi.free.at)}{idi.free.by ? ' · ' + idi.free.by : ''}</span></div> : <div style={{ color: '#57534e' }}>Free — not yet</div>}
-              {hasPaid ? <div style={{ color: '#6ee7b7' }}>Paid ✓ <span style={{ color: '#78716c' }}>{fmtD(idi.paid.at)}{idi.paid.by ? ' · ' + idi.paid.by : ''}</span></div> : <div style={{ color: '#57534e' }}>Paid — not yet</div>}
+          <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: 14, width: 280, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>Skip-trace status</div>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 12 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9' }}>IDI Core <span style={{ fontWeight: 400, color: '#78716c' }}>· paid ~$1.75</span></div>
+                {hasIdi
+                  ? <div style={{ fontSize: 11, color: '#6ee7b7' }}>✓ IDI'd {fmtD(st.idi.at)}{st.idi.by ? ' · ' + st.idi.by : ''}</div>
+                  : <div style={{ fontSize: 11, color: '#57534e' }}>not IDI'd yet</div>}
+              </div>
+              <button onClick={() => mark('idi')} style={{ flexShrink: 0, background: '#064e3b', color: '#6ee7b7', border: '1px solid #10b981', borderRadius: 6, padding: '6px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{hasIdi ? 'Re-run' : "Mark IDI'd"}</button>
             </div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => log('free')} style={{ flex: 1, background: '#172554', color: '#93c5fd', border: '1px solid #2563eb', borderRadius: 6, padding: '7px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{hasFree ? 'Free again' : 'Free'}</button>
-              <button onClick={() => log('paid')} style={{ flex: 1, background: '#064e3b', color: '#6ee7b7', border: '1px solid #10b981', borderRadius: 6, padding: '7px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Paid · $1.75</button>
+
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, borderTop: '1px solid #292524', paddingTop: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9' }}>Free skip-trace <span style={{ fontWeight: 400, color: '#78716c' }}>· other source</span></div>
+                {hasFree
+                  ? <div style={{ fontSize: 11, color: '#93c5fd' }}>✓ {fmtD(st.free.at)}{st.free.source ? ' · ' + st.free.source : ''}{st.free.by ? ' · ' + st.free.by : ''}</div>
+                  : <div style={{ fontSize: 11, color: '#57534e' }}>not done yet</div>}
+                <input value={src} onChange={e => setSrc(e.target.value)} placeholder="source (optional) — e.g. TruePeopleSearch" style={{ ...inputStyle, fontSize: 11, padding: '5px 8px', marginTop: 5, width: '100%', boxSizing: 'border-box' }} />
+              </div>
+              <button onClick={() => mark('free')} style={{ flexShrink: 0, background: '#172554', color: '#93c5fd', border: '1px solid #2563eb', borderRadius: 6, padding: '6px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>{hasFree ? 'Update' : 'Mark done'}</button>
             </div>
           </div>
         </>
