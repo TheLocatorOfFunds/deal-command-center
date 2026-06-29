@@ -7233,6 +7233,114 @@ function FollowupButton({ deal, reload }) {
   );
 }
 
+// ─── Add to automations (per-lead manual enrollment) ───────────────────
+// Nathan 2026-06-29: enrollment lives INSIDE the lead, not a separate Relay
+// tab. When you/Eric work a lead and can't reach anyone, hit this to enroll
+// them in an automated drip sequence. Auto-detects the sequence from the
+// deal's stage, maps the merge vars from meta, and calls the relay-enroll EF.
+// Texts STILL route through the approval queue before sending — nothing
+// auto-fires. Idempotent (already-enrolled = no-op). Replaces the old
+// "Scan Now" bulk enroll that lived in the Relay tab.
+const RELAY_SEQUENCES = {
+  'ohio-surplus-v1':        { label: 'Surplus · post-sale',        blurb: 'Sold at auction — recover the surplus owed back.' },
+  'ohio-preauction-v1':     { label: 'Pre-auction · date set',     blurb: 'Auction scheduled — reach them before the sale.' },
+  'ohio-preforeclosure-v1': { label: 'Pre-foreclosure · NOD',      blurb: 'Default just filed — earliest-stage outreach.' },
+};
+function detectRelaySequence(deal) {
+  const m = deal?.meta || {};
+  const isPostSale = !!(m.confirmationOfSaleDate || m.confirmation_of_sale_date || m.isPostAuction || m.is_post_auction
+    || (m.salePrice > 0) || (m.saleDate && new Date(m.saleDate).getTime() < Date.now()));
+  if (isPostSale) return 'ohio-surplus-v1';
+  const auctionSet = (m.saleDate && new Date(m.saleDate).getTime() >= Date.now()) || deal?.is_30dts;
+  if (auctionSet) return 'ohio-preauction-v1';
+  return 'ohio-preforeclosure-v1';
+}
+function relayContactData(deal) {
+  const m = deal?.meta || {};
+  const full = (m.homeownerName || deal?.name || '').trim();
+  const parts = full ? full.split(/\s+/) : [];
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  let case_month = '', case_year = '', auction_date = '';
+  if (m.saleDate && /^\d{4}-\d{2}-\d{2}/.test(String(m.saleDate))) {
+    const [y, mo, d] = String(m.saleDate).slice(0, 10).split('-');
+    const mi = parseInt(mo, 10) - 1;
+    if (mi >= 0 && mi < 12) { case_month = MONTHS[mi]; case_year = y; auction_date = `${MONTHS[mi]} ${parseInt(d, 10)}, ${y}`; }
+  }
+  return {
+    first_name: parts[0] || '',
+    last_name: parts.slice(1).join(' '),
+    county: (m.county || '').replace(/\s+county$/i, '').trim(),
+    street_address: (deal?.address || '').split(',')[0].trim(),
+    case_number: m.courtCase || '',
+    auction_date, case_month, case_year,
+    filing_month: case_month, filing_year: case_year,
+    days_until_auction: deal?.days_to_sale ?? '',
+    agent_first_name: 'Nathan',
+  };
+}
+function AddToAutomationsButton({ deal, userId, reload }) {
+  const [open, setOpen] = React.useState(false);
+  const [seq, setSeq] = React.useState(() => detectRelaySequence(deal));
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState(null);
+  if (deal?.type !== 'surplus') return null;
+  if (['closed', 'recovered', 'dead'].includes(deal?.status)) return null;
+  const phone = dealMetaPhone(deal?.meta);
+
+  const enroll = async () => {
+    if (!phone) { setMsg({ type: 'error', text: 'No phone on this lead — add one first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const { data, error } = await sb.functions.invoke('relay-enroll', {
+        body: { sequence_id: seq, contact_phone: phone, contact_data: relayContactData(deal), deal_id: deal.id, enrolled_by: userId || null },
+      });
+      if (error) {
+        let detail = '';
+        try { detail = (await error.context?.json?.())?.error || ''; } catch (e) {}
+        if (detail === 'already_enrolled') { setMsg({ type: 'success', text: 'Already in this sequence.' }); }
+        else { setMsg({ type: 'error', text: 'Could not add: ' + (detail || error.message) }); setBusy(false); return; }
+      } else if (data?.error === 'already_enrolled') {
+        setMsg({ type: 'success', text: 'Already in this sequence.' });
+      } else {
+        setMsg({ type: 'success', text: `Added — ${data?.touches_scheduled ?? ''} touches queued. Each text still needs your approval.` });
+        try { await sb.rpc('log_deal_activity', { p_deal_id: deal.id, p_type: 'note', p_outcome: null, p_body: `Added to automations — ${RELAY_SEQUENCES[seq]?.label || seq}`, p_next_followup_date: null, p_next_followup_note: null }); } catch (e) {}
+        reload && reload();
+      }
+    } catch (e) { setMsg({ type: 'error', text: 'Could not add: ' + e.message }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ position: 'relative', display: 'inline-block' }}>
+      <button onClick={() => { setSeq(detectRelaySequence(deal)); setMsg(null); setOpen(v => !v); }}
+        title="Enroll this lead in an automated drip sequence. Each text still needs approval before it sends."
+        style={{ background: 'transparent', border: '1px solid #44403c', color: '#a78bfa', padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        🤖 Add to automations
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+          <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: 14, width: 300, zIndex: 50, boxShadow: '0 8px 28px rgba(0,0,0,0.6)' }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>Add to automations</div>
+            <label style={{ fontSize: 11, color: '#a8a29e' }}>Sequence</label>
+            <select value={seq} onChange={e => setSeq(e.target.value)} style={{ ...selectStyle, fontSize: 12, width: '100%', marginTop: 4, marginBottom: 6 }}>
+              {Object.entries(RELAY_SEQUENCES).map(([id, info]) => <option key={id} value={id}>{info.label}</option>)}
+            </select>
+            <div style={{ fontSize: 11, color: '#78716c', marginBottom: 8, lineHeight: 1.4 }}>{RELAY_SEQUENCES[seq]?.blurb}</div>
+            <div style={{ fontSize: 11, color: '#a8a29e', marginBottom: 10 }}>📱 {phone || <span style={{ color: '#fca5a5' }}>no phone on file</span>}</div>
+            <div style={{ fontSize: 10, color: '#a8a29e', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, padding: '6px 8px', marginBottom: 10, lineHeight: 1.4 }}>🛡️ Each text still waits in the approval queue before it sends — nothing auto-fires.</div>
+            {msg && <div style={{ fontSize: 11, color: msg.type === 'error' ? '#fca5a5' : '#6ee7b7', marginBottom: 8 }}>{msg.text}</div>}
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button onClick={() => setOpen(false)} style={{ ...btnGhost, cursor: 'pointer' }}>Close</button>
+              <button onClick={enroll} disabled={busy || !phone} style={{ ...btnPrimary, cursor: busy ? 'wait' : 'pointer', opacity: (busy || !phone) ? 0.6 : 1 }}>{busy ? 'Adding…' : 'Add to automations'}</button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // Send Intro Text modal — loads an SMS template matching the deal's
 // lead_tier (or 30DTS track), substitutes merge variables, lets Eric
 // review/edit, sends via send-sms Edge Function (Twilio today; swap to
@@ -18093,6 +18201,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         )}
         <PersonalizedUrlControl deal={deal} reload={loadAll} logAct={logAct} />
         <FollowupButton deal={deal} reload={loadAll} />
+        <AddToAutomationsButton deal={deal} userId={userId} reload={loadAll} />
         <ReviewBanner dealId={deal.id} />
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
