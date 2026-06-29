@@ -956,6 +956,7 @@ function DealCommandCenter({ session, profile }) {
     // the whitelist, so refresh on these views bounced you back to today.
     'relay', 'calls', 'comms', 'va-queue', 'communications', 'automations',
     'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
+    'appointments',  // dedicated Appointments agenda (Nathan 2026-06-29)
     'review',     // Review Queue — ready leads needing a human look (Nathan 2026-06-21)
     'health',     // System Health — operator-health page (Nathan 2026-06-22)
     'call-queue', // Call Queue — VA call-down board, default in Leads hub (Nathan 2026-06-23)
@@ -993,6 +994,7 @@ function DealCommandCenter({ session, profile }) {
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [newLeadCount, setNewLeadCount] = useState(0);
   const [followupDueCount, setFollowupDueCount] = useState(0);
+  const [apptUpcomingCount, setApptUpcomingCount] = useState(0);
   const [reviewCount, setReviewCount] = useState(0);
   const [reviewDealIds, setReviewDealIds] = useState([]);  // ordered deal_ids in the Review queue — scopes prev/next nav
   const [unackDocketCount, setUnackDocketCount] = useState(0);
@@ -1708,6 +1710,14 @@ function DealCommandCenter({ session, profile }) {
     const { data } = await sb.rpc('get_followup_due_count');
     setFollowupDueCount(data || 0);
   };
+  const loadApptCount = async () => {
+    // Upcoming = scheduled + not long past (1h grace), matching the agenda's Upcoming chip.
+    const { count } = await sb.from('appointments')
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'scheduled')
+      .gte('scheduled_at', new Date(Date.now() - 3600_000).toISOString());
+    setApptUpcomingCount(count || 0);
+  };
 
   // Review-queue badge — # of "ready for outreach" leads flagged for a human look
   // (a gap, or a "funds may already be gone" signal). Drives the 🔎 Review nav
@@ -2043,7 +2053,11 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadReviewCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadApptCount(); loadReviewCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
+  useEffect(() => {
+    const ch = sb.channel('appt-count').on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, loadApptCount).subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
   // Sweep stale "active calls" every 60s so the pill disappears once the
   // 30-min window passes without needing a new realtime event to fire.
   useEffect(() => {
@@ -2285,6 +2299,7 @@ function DealCommandCenter({ session, profile }) {
               {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','flagged','hygiene','archive','awaiting','payouts','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
               {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
               {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
+              {navItem('appointments','📅', 'Appointments',{ badge: apptUpcomingCount })}
               {navItem('tasks',    '✅', 'Tasks')}
               {isTeam && navItem('_docket', '⚖', 'Docket', { onClick: () => setShowDocket(true), badge: unackDocketCount })}
               {navItem('team',     '💬', 'Chat',      { badge: unreadChatCount })}
@@ -4010,7 +4025,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
       })()}
 
       {/* Search / Filter / Layout toggle bar (hidden on views where deal-search is irrelevant — Today, Time tracking, Reports, etc.) */}
-      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
+      {view !== "today" && view !== "attention" && view !== "outreach" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "hygiene" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "appointments" && view !== "team" && view !== "time" && view !== "va-queue" && view !== "comms" && (
         <div style={{ display: "flex", gap: 10, marginBottom: 18, alignItems: "center", flexWrap: "wrap" }}>
           <input value={searchQ} onChange={e => setSearchQ(e.target.value)} placeholder="Search deals by name or address..." style={{ ...inputStyle, maxWidth: 300, background: "#1c1917" }} />
           {/* Tier filter — quick scan-by-tier for Eric's kanban view. */}
@@ -4079,7 +4094,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
@@ -4117,6 +4132,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "followups" ? (
             <FollowupsView deals={deals} onJumpToDeal={onSelect} />
+          ) : view === "appointments" ? (
+            <AppointmentsView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "payouts" ? (
             <PayoutTrackerView deals={deals} onSelect={onSelect} onMoveDeal={onMoveDeal} />
           ) : view === "call-queue" ? (
@@ -4229,7 +4246,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           )}
           </ViewErrorBoundary>
         </div>
-        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
+        {view !== "reports" && view !== "analytics" && view !== "traffic" && view !== "pipeline" && view !== "tasks" && view !== "followups" && view !== "appointments" && view !== "va-queue" && view !== "comms" && view !== "outreach" && view !== "automations" && view !== "relay" && view !== "communications" && view !== "inbox" && view !== "forecast" && view !== "leads" && view !== "attention" && <div>
           <div style={{ background: "#1c1917", border: "1px solid #292524", borderRadius: 10, padding: 16 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
               <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase" }}>Team Activity</div>
@@ -6859,6 +6876,116 @@ function FollowupsView({ deals, onJumpToDeal }) {
   );
 }
 
+// ─── Appointments agenda ───────────────────────────────────────────────
+// Nathan 2026-06-29: every upcoming appointment across all leads, grouped by
+// day. Eric sets them from a lead (📅 Appointment) or right after a call; this
+// is where the team sees who to meet and when. Mark done / no-show / cancel.
+function AppointmentsView({ deals, onJumpToDeal }) {
+  const [appts, setAppts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState('upcoming'); // upcoming | today | past | all
+  const [busy, setBusy] = useState(null);
+
+  const load = async () => {
+    const { data } = await sb.from('appointments').select('*').order('scheduled_at', { ascending: true }).limit(500);
+    setAppts(data || []); setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const ch = sb.channel('appointments-global').on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, load).subscribe();
+    return () => { sb.removeChannel(ch); };
+  }, []);
+
+  const setStatus = async (a, status) => {
+    setBusy(a.id);
+    await sb.from('appointments').update({ status, updated_at: new Date().toISOString() }).eq('id', a.id);
+    setBusy(null); load();
+  };
+
+  const dealsById = {}; deals.forEach(d => { dealsById[d.id] = d; });
+  const now = Date.now();
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const enriched = appts.map(a => ({ ...a, deal: dealsById[a.deal_id], ts: new Date(a.scheduled_at).getTime(), day: String(a.scheduled_at).slice(0, 10) }));
+  const upcoming = enriched.filter(a => a.status === 'scheduled' && a.ts >= now - 3600_000);
+  const counts = {
+    upcoming: upcoming.length,
+    today: enriched.filter(a => a.status === 'scheduled' && a.day === todayStr).length,
+  };
+  let shown;
+  if (filter === 'today') shown = enriched.filter(a => a.status === 'scheduled' && a.day === todayStr);
+  else if (filter === 'past') shown = enriched.filter(a => a.status !== 'scheduled' || a.ts < now);
+  else if (filter === 'all') shown = enriched;
+  else shown = upcoming;
+
+  const groups = {};
+  shown.forEach(a => { (groups[a.day] = groups[a.day] || []).push(a); });
+  const dayKeys = Object.keys(groups).sort(filter === 'past' ? (x, y) => y.localeCompare(x) : undefined);
+
+  const fmtTime = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const fmtDay = (d) => {
+    const dd = new Date(d + 'T00:00:00'), t = new Date(todayStr + 'T00:00:00');
+    const diff = Math.round((dd - t) / 86400000);
+    const base = dd.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+    return diff === 0 ? 'Today · ' + base : diff === 1 ? 'Tomorrow · ' + base : diff === -1 ? 'Yesterday · ' + base : base;
+  };
+  const STATUS = { scheduled: { label: 'scheduled', color: '#fcd34d' }, completed: { label: '✓ done', color: '#6ee7b7' }, no_show: { label: 'no-show', color: '#fca5a5' }, cancelled: { label: 'cancelled', color: '#78716c' } };
+
+  const chip = (id, label, n) => (
+    <button key={id} onClick={() => setFilter(id)} style={{ fontSize: 12, padding: '6px 14px', borderRadius: 6, background: filter === id ? '#292524' : 'transparent', color: filter === id ? '#fafaf9' : '#78716c', border: '1px solid ' + (filter === id ? '#44403c' : 'transparent'), fontWeight: filter === id ? 700 : 500, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: '0.06em' }}>{label}{n != null ? ' · ' + n : ''}</button>
+  );
+
+  return (
+    <div>
+      <div style={{ marginBottom: 16, padding: 16, background: '#1c1917', border: '1px solid #292524', borderRadius: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#fcd34d', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📅 Appointments</div>
+        <div style={{ fontSize: 13, color: '#a8a29e', marginTop: 4, lineHeight: 1.5 }}>Meetings the team has scheduled with leads. Set one from any lead (📅 Appointment) or right after a call.</div>
+        <div style={{ display: 'flex', gap: 4, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap', marginTop: 12 }}>
+          {chip('upcoming', 'Upcoming', counts.upcoming)}
+          {chip('today', 'Today', counts.today)}
+          {chip('past', 'Past / closed', null)}
+          {chip('all', 'All', null)}
+        </div>
+      </div>
+
+      {loading && <div style={{ padding: 20, textAlign: 'center', color: '#78716c', fontSize: 12 }}>Loading…</div>}
+      {!loading && shown.length === 0 && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10 }}>No appointments here. Set one from a lead with the 📅 Appointment button.</div>
+      )}
+
+      {dayKeys.map(day => (
+        <div key={day} style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: day === todayStr ? '#fcd34d' : '#a8a29e', marginBottom: 8, letterSpacing: '0.03em' }}>{fmtDay(day)}</div>
+          {groups[day].map(a => {
+            const d = a.deal;
+            const name = d ? String(d.meta?.homeownerName || d.name || a.deal_id).split(' - ')[0] : a.deal_id;
+            const st = STATUS[a.status] || STATUS.scheduled;
+            const overdue = a.status === 'scheduled' && a.ts < now;
+            return (
+              <div key={a.id} style={{ marginBottom: 8, padding: '11px 14px', background: '#1c1917', border: '1px solid ' + (overdue ? '#7f1d1d' : '#292524'), borderLeft: '3px solid ' + (overdue ? '#ef4444' : '#a16207'), borderRadius: 6, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: overdue ? '#fca5a5' : '#fcd34d', fontFamily: "'DM Mono', monospace", minWidth: 64 }}>{fmtTime(a.scheduled_at)}</div>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ fontSize: 13, color: '#fafaf9', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{ fontWeight: 600, cursor: d ? 'pointer' : 'default' }} onClick={() => d && onJumpToDeal(a.deal_id)}>{name}</span>
+                    <span style={{ fontSize: 11, color: '#a8a29e' }}>{apptKindLabel(a.kind)}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: st.color }}>{overdue ? '⚠ ' + st.label : st.label}</span>
+                  </div>
+                  {(a.location || a.note) && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 3 }}>{a.location ? '📍 ' + a.location : ''}{a.location && a.note ? ' · ' : ''}{a.note || ''}</div>}
+                </div>
+                {d && <button onClick={() => onJumpToDeal(a.deal_id)} style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>Open →</button>}
+                {a.status === 'scheduled' && <>
+                  <button onClick={() => setStatus(a, 'completed')} disabled={busy === a.id} title="Met — mark done" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 6, background: '#14532d', color: '#bbf7d0', border: '1px solid #166534', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>✓ Done</button>
+                  <button onClick={() => setStatus(a, 'no_show')} disabled={busy === a.id} title="They didn't show" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 6, background: 'transparent', color: '#fca5a5', border: '1px solid #7f1d1d', cursor: 'pointer', fontFamily: 'inherit', fontWeight: 700 }}>No-show</button>
+                  <button onClick={() => setStatus(a, 'cancelled')} disabled={busy === a.id} title="Cancel this appointment" style={{ ...btnGhost, fontSize: 10, padding: '4px 10px' }}>✕</button>
+                </>}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Shared flag styling for the Review Queue list + the in-deal review banner.
 // Error boundary so a single view crashing can't white-screen the whole app
 // (a Call Queue bug took the DCC down 2026-06-23). Shows the actual error +
@@ -7452,6 +7579,96 @@ function IdiTracker({ deal, userName, userId, onUpdateDeal, logAct }) {
         </>
       )}
     </div>
+  );
+}
+
+// ─── Appointments — set a real meeting time with a lead ────────────────
+// Nathan 2026-06-29: Eric calls a homeowner, they agree to meet — he needs to
+// lock in the time then and there. An appointment is a confirmed meeting at a
+// specific date+time (distinct from a follow-up reminder), with a type
+// (in-person / phone call-back / video) + optional location/note. Stored in
+// public.appointments; surfaced in the 📅 Appointments agenda + on the lead.
+// SetAppointmentModal is reused by the lead-card button AND the call popup.
+const APPT_KINDS = [
+  { code: 'in_person', label: '🤝 In-person' },
+  { code: 'phone',     label: '📞 Phone call-back' },
+  { code: 'video',     label: '🎥 Video' },
+];
+const apptKindLabel = (k) => APPT_KINDS.find(x => x.code === k)?.label || k;
+function SetAppointmentModal({ dealId, dealName, userId, onClose, onSaved }) {
+  const [date, setDate] = useState('');
+  const [time, setTime] = useState('10:00');
+  const [kind, setKind] = useState('in_person');
+  const [location, setLocation] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const save = async () => {
+    if (!dealId) { setErr('No lead attached to this appointment.'); return; }
+    if (!date || !time) { setErr('Pick a date and a time.'); return; }
+    setSaving(true); setErr(null);
+    try {
+      const scheduled_at = new Date(`${date}T${time}`).toISOString();
+      const { error } = await sb.from('appointments').insert({
+        deal_id: dealId, scheduled_at, kind,
+        location: location.trim() || null, note: note.trim() || null,
+        status: 'scheduled', created_by: userId || null,
+      });
+      if (error) throw error;
+      try {
+        const when = new Date(scheduled_at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+        await sb.rpc('log_deal_activity', { p_deal_id: dealId, p_type: 'meeting', p_outcome: 'scheduled',
+          p_body: `📅 Appointment set — ${apptKindLabel(kind)} · ${when}${location.trim() ? ' · ' + location.trim() : ''}${note.trim() ? ' · ' + note.trim() : ''}`,
+          p_next_followup_date: null, p_next_followup_note: null });
+      } catch (e) {}
+      onSaved && onSaved();
+      onClose && onClose();
+    } catch (e) { setErr(e.message); setSaving(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} title={`📅 Set appointment${dealName ? ' · ' + dealName : ''}`}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+        <Field label="Date"><input type="date" value={date} onChange={e => setDate(e.target.value)} style={inputStyle} /></Field>
+        <Field label="Time"><input type="time" value={time} onChange={e => setTime(e.target.value)} style={inputStyle} /></Field>
+      </div>
+      <Field label="Type" style={{ marginBottom: 12 }}>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {APPT_KINDS.map(k => (
+            <button key={k.code} onClick={() => setKind(k.code)}
+              style={{ flex: 1, padding: '8px 0', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                border: '1px solid ' + (kind === k.code ? '#a16207' : '#44403c'), background: kind === k.code ? '#78350f33' : 'transparent', color: kind === k.code ? '#fcd34d' : '#a8a29e' }}>
+              {k.label}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field label={kind === 'in_person' ? 'Address / where to meet' : 'Phone or link (optional)'} style={{ marginBottom: 12 }}>
+        <input value={location} onChange={e => setLocation(e.target.value)} placeholder={kind === 'in_person' ? 'Property or meeting address' : 'optional'} style={inputStyle} />
+      </Field>
+      <Field label="Note (optional)" style={{ marginBottom: 14 }}>
+        <textarea value={note} onChange={e => setNote(e.target.value)} rows={2} placeholder="What's the meeting about — e.g. go over the surplus claim, sign the agreement" style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit' }} />
+      </Field>
+      {err && <div style={{ fontSize: 12, color: '#fca5a5', marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button onClick={onClose} style={btnGhost}>Cancel</button>
+        <button onClick={save} disabled={saving} style={btnPrimary}>{saving ? 'Saving…' : 'Set appointment'}</button>
+      </div>
+    </Modal>
+  );
+}
+function AppointmentButton({ deal, userId, reload }) {
+  const [open, setOpen] = React.useState(false);
+  if (deal?.type !== 'surplus') return null;
+  return (
+    <>
+      <button onClick={() => setOpen(true)} title="Set a meeting time with this lead (in-person, phone call-back, or video)"
+        style={{ background: 'transparent', border: '1px solid #44403c', color: '#fcd34d', padding: '4px 12px', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        📅 Appointment
+      </button>
+      {open && <SetAppointmentModal dealId={deal.id} dealName={(deal.meta?.homeownerName || deal.name || '').split(' - ')[0]} userId={userId} onClose={() => setOpen(false)} onSaved={() => reload && reload()} />}
+    </>
   );
 }
 
@@ -16770,6 +16987,31 @@ function CallDispositionModal({ pending, onClose }) {
   const [saving, setSaving] = React.useState(false);
   const [error, setError]   = React.useState(null);
   const [note, setNote]     = React.useState(pending?.existing?.outcome_note || '');
+  const [apptDeal, setApptDeal]     = React.useState(null); // {id, name} — the call's lead, for "Set appointment"
+  const [apptUserId, setApptUserId] = React.useState(null);
+  const [showAppt, setShowAppt]     = React.useState(false);
+
+  React.useEffect(() => {
+    if (!pending) return;
+    let alive = true;
+    (async () => {
+      try {
+        const { data: au } = await sb.auth.getUser();
+        if (alive) setApptUserId(au?.user?.id || null);
+        let dealId = pending.existing?.deal_id || null;
+        if (!dealId && pending.toNumber) {
+          const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+          const { data } = await sb.from('call_logs').select('deal_id').eq('to_number', pending.toNumber).gte('started_at', since).not('deal_id', 'is', null).order('started_at', { ascending: false }).limit(1);
+          dealId = data?.[0]?.deal_id || null;
+        }
+        if (dealId) {
+          const { data: d } = await sb.from('deals').select('id, name, meta').eq('id', dealId).maybeSingle();
+          if (alive && d) setApptDeal({ id: d.id, name: (d.meta?.homeownerName || d.name || d.id).split(' - ')[0] });
+        }
+      } catch (e) {}
+    })();
+    return () => { alive = false; };
+  }, [pending]);
 
   if (!pending) return null;
 
@@ -16924,6 +17166,13 @@ function CallDispositionModal({ pending, onClose }) {
             );
           })}
         </div>
+        {apptDeal && (
+          <button onClick={() => setShowAppt(true)}
+            title="They agreed to meet? Lock in the date + time now."
+            style={{ marginTop: 12, width: '100%', background: 'transparent', border: '1px solid #a16207', color: '#fcd34d', borderRadius: 8, padding: '11px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+            📅 Set an appointment
+          </button>
+        )}
         {error && (
           <div style={{ marginTop: 12, padding: '8px 12px', background: '#3f1d1d', border: '1px solid #7f1d1d', borderRadius: 6, fontSize: 12, color: '#fecaca' }}>
             {error}
@@ -16933,6 +17182,9 @@ function CallDispositionModal({ pending, onClose }) {
           Close to skip — we'll ask again after the next call.
         </div>
       </div>
+      {showAppt && apptDeal && (
+        <SetAppointmentModal dealId={apptDeal.id} dealName={apptDeal.name} userId={apptUserId} onClose={() => setShowAppt(false)} onSaved={() => setShowAppt(false)} />
+      )}
     </div>
   );
 }
@@ -18282,6 +18534,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         <FollowupButton deal={deal} reload={loadAll} />
         <AddToAutomationsButton deal={deal} userId={userId} reload={loadAll} />
         <IdiTracker deal={deal} userName={userName} userId={userId} onUpdateDeal={onUpdateDeal} logAct={logAct} />
+        <AppointmentButton deal={deal} userId={userId} reload={loadAll} />
         <ReviewBanner dealId={deal.id} />
         <span style={{ fontSize: 11, color: "#78716c", marginLeft: 8 }}>Assigned to:</span>
         <select value={deal.assigned_to || deal.meta?.assigned_to || ""} onChange={e => {
