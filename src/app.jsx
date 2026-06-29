@@ -3412,7 +3412,52 @@ function ChatNotificationPopover({ currentUserId, onClose, onJumpToThread, onMar
 
 // ─── Call History View ───────────────────────────────────────────────
 // Full call log table — inbound + outbound, contact/deal linked, filterable.
-function CallHistoryView({ onSelect }) {
+// ─── Caller scoreboard (admin) — reads v_call_tracker ───────────────────
+// Director handoff 2026-06-29: per-caller, per-day outbound call stats so Nathan
+// can glance at Eric's (and Inaam's) numbers — booked is the KPI. Admin-only.
+function CallTrackerScoreboard() {
+  const [rows, setRows] = useState(null);
+  useEffect(() => {
+    sb.from('v_call_tracker').select('*').order('call_date', { ascending: false }).limit(60)
+      .then(({ data }) => setRows(data || []));
+  }, []);
+  if (!rows || rows.length === 0) return null;
+  const fmtDay = (d) => new Date(d + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const cols = [
+    { k: 'dials', label: 'Dials' }, { k: 'connected', label: 'Conn' },
+    { k: 'booked', label: '📅 Booked', hot: true }, { k: 'not_interested', label: 'Not int.' },
+    { k: 'voicemail', label: 'VM' }, { k: 'no_answer', label: 'No ans' },
+    { k: 'bad_number', label: 'Bad #' }, { k: 'connect_pct', label: 'Conn %', pct: true },
+  ];
+  return (
+    <div style={{ marginBottom: 16, padding: 14, background: '#1c1917', border: '1px solid #292524', borderRadius: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#fbbf24', letterSpacing: '0.1em', textTransform: 'uppercase' }}>📊 Caller scoreboard</div>
+      <div style={{ fontSize: 11, color: '#78716c', margin: '4px 0 10px' }}>Outbound dials per caller per day · 📅 booked is the KPI.</div>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid #292524' }}>
+              <th style={{ textAlign: 'left', padding: '6px 10px', color: '#78716c', fontWeight: 600 }}>Day</th>
+              <th style={{ textAlign: 'left', padding: '6px 10px', color: '#78716c', fontWeight: 600 }}>Caller</th>
+              {cols.map(c => <th key={c.k} style={{ textAlign: 'right', padding: '6px 10px', color: c.hot ? '#6ee7b7' : '#78716c', fontWeight: 600 }}>{c.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} style={{ borderBottom: '1px solid #1c1917' }}>
+                <td style={{ padding: '6px 10px', color: '#a8a29e', whiteSpace: 'nowrap' }}>{fmtDay(r.call_date)}</td>
+                <td style={{ padding: '6px 10px', color: '#fafaf9', fontWeight: 600 }}>{r.caller || '—'}</td>
+                {cols.map(c => <td key={c.k} style={{ textAlign: 'right', padding: '6px 10px', fontFamily: "'DM Mono', monospace", color: c.hot && r[c.k] > 0 ? '#6ee7b7' : '#d6d3d1' }}>{r[c.k] == null ? '—' : r[c.k]}{c.pct ? '%' : ''}</td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CallHistoryView({ onSelect, isAdmin }) {
   const [calls, setCalls] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [filter, setFilter] = useState('all'); // 'all' | 'inbound' | 'outbound' | 'missed'
@@ -3474,6 +3519,8 @@ function CallHistoryView({ onSelect }) {
           <button onClick={loadCalls} style={{ background: 'transparent', border: '1px solid #292524', color: '#78716c', padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>↻</button>
         </div>
       </div>
+
+      {isAdmin && <CallTrackerScoreboard />}
 
       {!loaded && <div style={{ textAlign: 'center', padding: 40, color: '#57534e' }}>Loading…</div>}
       {loaded && filtered.length === 0 && <div style={{ textAlign: 'center', padding: 40, color: '#57534e', border: '1px dashed #292524', borderRadius: 10 }}>No calls found</div>}
@@ -4100,7 +4147,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           {view === "today" ? (
             <><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
           ) : view === "calls" ? (
-            <CallHistoryView onSelect={onSelect} />
+            <CallHistoryView onSelect={onSelect} isAdmin={isAdmin} />
           ) : view === "attention" ? (
             <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "relay" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "comms" ? (
@@ -16990,6 +17037,8 @@ function CallDispositionModal({ pending, onClose }) {
   const [apptDeal, setApptDeal]     = React.useState(null); // {id, name} — the call's lead, for "Set appointment"
   const [apptUserId, setApptUserId] = React.useState(null);
   const [showAppt, setShowAppt]     = React.useState(false);
+  const apptAfterDispoRef = React.useRef(false); // true when booked-outcome opened the appt → close both on done
+  const closeAppt = () => { setShowAppt(false); if (apptAfterDispoRef.current) { apptAfterDispoRef.current = false; onClose && onClose(); } };
 
   React.useEffect(() => {
     if (!pending) return;
@@ -17019,19 +17068,22 @@ function CallDispositionModal({ pending, onClose }) {
   const initial   = pending.existing?.outcome || null;
 
   const OPTIONS = [
-    { code: 'connected',    label: '✓ Connected',    color: '#22c55e', desc: 'Spoke to homeowner' },
-    { code: 'voicemail',    label: '📨 Voicemail',   color: '#3b82f6', desc: 'Left a voicemail' },
-    { code: 'no_answer',    label: '⏱ No answer',    color: '#a8a29e', desc: "Didn't pick up" },
-    { code: 'wrong_number', label: '✗ Wrong number', color: '#f97316', desc: 'Reached someone else — blocks future SMS + voice' },
-    { code: 'disconnected', label: '🚫 Disconnected',color: '#ef4444', desc: 'Number not in service — blocks future SMS + voice + flags DNC' },
-    { code: 'other',        label: '⋯ Other',        color: '#a8a29e', desc: "Doesn't fit the rest (busy, no voicemail set up, generic machine, couldn't confirm) — leaves the number active: no SMS/voice block, no DNC" },
+    { code: 'connected',      label: '✓ Connected',         color: '#22c55e', desc: 'Spoke to them — no firm outcome yet' },
+    { code: 'booked',         label: '📅 Booked appointment', color: '#10b981', desc: 'Spoke + set a meeting — opens the appointment form next' },
+    { code: 'not_interested', label: '🙅 Not interested',    color: '#f97316', desc: 'Spoke — they passed (number stays active)' },
+    { code: 'voicemail',      label: '📨 Voicemail',         color: '#3b82f6', desc: 'Left a voicemail' },
+    { code: 'no_answer',      label: '⏱ No answer',          color: '#a8a29e', desc: "Didn't pick up" },
+    { code: 'wrong_number',   label: '✗ Wrong number',       color: '#f97316', desc: 'Reached someone else — blocks future SMS + voice' },
+    { code: 'disconnected',   label: '🚫 Disconnected',      color: '#ef4444', desc: 'Number not in service — blocks future SMS + voice + flags DNC' },
+    { code: 'do_not_call',    label: '🚫 Do Not Call',       color: '#ef4444', desc: 'They opted out — flags DNC so we never re-dial (the number may still work)' },
+    { code: 'other',          label: '⋯ Other',             color: '#a8a29e', desc: "Doesn't fit the rest (busy, no voicemail set up, generic machine, couldn't confirm) — leaves the number active: no SMS/voice block, no DNC" },
   ];
 
   const phoneStatusFor = (outcome) => {
-    if (outcome === 'connected')    return 'good';
+    if (outcome === 'connected' || outcome === 'booked' || outcome === 'not_interested') return 'good';
     if (outcome === 'wrong_number') return 'wrong_number';
     if (outcome === 'disconnected') return 'disconnected';
-    return null; // voicemail / no_answer don't change phone status
+    return null; // voicemail / no_answer / do_not_call / other don't change phone status
   };
 
   async function pick(outcome) {
@@ -17073,28 +17125,32 @@ function CallDispositionModal({ pending, onClose }) {
         }).eq('id', callLogId);
       }
 
-      // ── Step 2: propagate to contacts.phone_status ──────────────────────
+      // ── Step 2: propagate to contacts (phone status + DND) ──────────────
       const phoneStatus = phoneStatusFor(outcome);
-      if (phoneStatus) {
+      const isOptOut = (outcome === 'disconnected' || outcome === 'do_not_call');
+      if (phoneStatus || isOptOut) {
         const targetPhone = pending.existing?.to_number || pending.toNumber;
         if (targetPhone) {
           const bare = (targetPhone || '').replace(/^\+1/, '');
-          const updates = {
-            phone_status: phoneStatus,
-            phone_status_set_at: now,
-          };
-          // 'disconnected' is the strongest signal — also flip do_not_call so
-          // the cadence engine + voice gate refuse any future outreach.
-          if (outcome === 'disconnected') {
+          const updates = {};
+          if (phoneStatus) { updates.phone_status = phoneStatus; updates.phone_status_set_at = now; }
+          // 'disconnected' (dead line) and 'do_not_call' (caller-marked opt-out)
+          // both flip do_not_call so the cadence engine + voice gate refuse any
+          // future outreach.
+          if (isOptOut) {
             updates.do_not_call = true;
             updates.dnd_set_at = now;
-            updates.dnd_reason = 'Number disconnected (post-call disposition)';
+            updates.dnd_reason = outcome === 'do_not_call'
+              ? 'Phone opt-out (caller marked Do-Not-Call)'
+              : 'Number disconnected (post-call disposition)';
           }
           await sb.from('contacts').update(updates)
             .or(`phone.eq.${targetPhone},phone.eq.${bare}`);
         }
       }
 
+      // Booked is the win — jump straight into the appointment form.
+      if (outcome === 'booked' && apptDeal) { apptAfterDispoRef.current = true; setShowAppt(true); return; }
       onClose();
     } catch (e) {
       console.error('[disposition] save failed', e);
@@ -17167,7 +17223,7 @@ function CallDispositionModal({ pending, onClose }) {
           })}
         </div>
         {apptDeal && (
-          <button onClick={() => setShowAppt(true)}
+          <button onClick={() => { apptAfterDispoRef.current = false; setShowAppt(true); }}
             title="They agreed to meet? Lock in the date + time now."
             style={{ marginTop: 12, width: '100%', background: 'transparent', border: '1px solid #a16207', color: '#fcd34d', borderRadius: 8, padding: '11px 0', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
             📅 Set an appointment
@@ -17183,7 +17239,7 @@ function CallDispositionModal({ pending, onClose }) {
         </div>
       </div>
       {showAppt && apptDeal && (
-        <SetAppointmentModal dealId={apptDeal.id} dealName={apptDeal.name} userId={apptUserId} onClose={() => setShowAppt(false)} onSaved={() => setShowAppt(false)} />
+        <SetAppointmentModal dealId={apptDeal.id} dealName={apptDeal.name} userId={apptUserId} onClose={closeAppt} onSaved={closeAppt} />
       )}
     </div>
   );
