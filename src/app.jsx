@@ -1025,6 +1025,11 @@ function DealCommandCenter({ session, profile }) {
   // { id, deal, pendingPatch } — pendingPatch is the status change that
   // triggered it (so we apply status=dead + the reason meta together).
   const [dispositionDeal, setDispositionDeal] = useState(null);
+  // Surfaces a deal-save failure instead of swallowing it (Nathan 2026-06-29:
+  // Eric/Inaam saw surplus/address/obituary "disappear on save"). updateDealMeta
+  // used to ignore the update error + row count, so any blocked write vanished
+  // silently. Now a failed/0-row save raises this banner with the real reason.
+  const [saveError, setSaveError] = useState(null);
   // Toast queue for new team-chat messages — top-right popups that the
   // user must Reply to or Dismiss (no auto-timeout). Per Nathan: "I just
   // want to make it so that they don't have to click a bunch of buttons
@@ -2168,7 +2173,15 @@ function DealCommandCenter({ session, profile }) {
       }
     }
     setDeals(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d)); // optimistic
-    await sb.from('deals').update(patch).eq('id', id);
+    // Surface failures instead of swallowing them. .select() lets us catch a
+    // 0-row update (RLS / filter blocked it — no error, but nothing saved),
+    // which presents to the user as a field "disappearing" on the next reload.
+    const { data, error } = await sb.from('deals').update(patch).eq('id', id).select('id');
+    if (error || !data || data.length === 0) {
+      const reason = error ? error.message : 'The save affected 0 rows — a permission rule or filter blocked it (nothing was written).';
+      try { console.error('[deal save FAILED]', { id, fields: Object.keys(patch), error, rows: data?.length ?? 0 }); } catch (e) {}
+      setSaveError({ reason, fields: Object.keys(patch).filter(k => k !== 'meta').concat(patch.meta ? ['meta'] : []).join(', ') || '(none)', when: new Date().toLocaleTimeString() });
+    }
   };
 
   // Complete a "mark surplus lead dead" once the caller has picked a reason.
@@ -2628,6 +2641,18 @@ function DealCommandCenter({ session, profile }) {
       {showLibrary && <LibraryModal onClose={() => setShowLibrary(false)} isAdmin={isAdmin} userId={session.user.id} />}
       {showSystemAlerts && <SystemAlertsModal onClose={() => { setShowSystemAlerts(false); loadSystemAlertCount(); }} />}
       {dispositionDeal && <DispositionModal deal={dispositionDeal.deal} initialReason={dispositionDeal.deal?.meta?.dispositionReason || ''} presetReason={dispositionDeal.presetReason} onConfirm={confirmDisposition} onClose={() => setDispositionDeal(null)} />}
+      {saveError && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100000, background: '#7f1d1d', color: '#fee2e2', padding: '12px 16px', boxShadow: '0 4px 16px rgba(0,0,0,0.5)', display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+          <span style={{ fontSize: 20, lineHeight: 1 }}>⚠️</span>
+          <div style={{ flex: 1, fontSize: 13, lineHeight: 1.5 }}>
+            <div style={{ fontWeight: 800, marginBottom: 2 }}>Your change did NOT save — it will disappear on refresh.</div>
+            <div style={{ color: '#fecaca' }}>Field(s): <b style={{ color: '#fff', fontFamily: "'DM Mono', monospace" }}>{saveError.fields}</b> · {saveError.when}</div>
+            <div style={{ color: '#fecaca', marginTop: 2 }}>Reason: {saveError.reason}</div>
+            <div style={{ color: '#fca5a5', marginTop: 4, fontSize: 12 }}>📸 Please screenshot this and send it to Nathan so we can fix it.</div>
+          </div>
+          <button onClick={() => setSaveError(null)} style={{ background: 'transparent', border: '1px solid #fca5a5', color: '#fee2e2', borderRadius: 6, padding: '4px 12px', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>Dismiss</button>
+        </div>
+      )}
       <VersionWatcher />
 
       {/* Render fallback when the URL points to a deal that isn't in the
