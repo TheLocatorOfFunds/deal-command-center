@@ -28631,6 +28631,14 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
               const viaColor = ourNum === '+15139985440' ? '#10b981'   // 5440 = Twilio SMS → green
                              : ourNum === '+15135162306' ? '#60a5fa'   // 2306 = bridge/iMessage → blue
                              : '#78716c';
+              // The COUNTERPART (homeowner) number — the side that ISN'T ours.
+              // This is the exact line a reply came IN on / a text went OUT to,
+              // so the operator can tell which of a contact's several numbers it
+              // was (Eric 2026-06-30: "tell which number the 'wrong number'
+              // reply landed on so I remove the right one").
+              const theirNum = OUR_NUMS.includes(m.from_number) ? m.to_number
+                             : OUR_NUMS.includes(m.to_number)   ? m.from_number
+                             : (isInbound ? m.from_number : m.to_number);
 
               return (
                 <div key={m.id} style={{ display: 'flex', flexDirection: 'column', alignItems: isInbound ? 'flex-start' : 'flex-end', marginBottom: showMeta ? 10 : 2 }}>
@@ -28650,7 +28658,8 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 3, paddingLeft: isInbound ? 2 : 0, paddingRight: isInbound ? 0 : 2 }}>
                       {isInbound
                         ? <>
-                            <span style={{ fontSize: 10, fontWeight: 600, color: senderColor }}>{senderName.split(' ')[0]}</span>
+                            {senderContact && <span style={{ fontSize: 10, fontWeight: 600, color: senderColor }}>{senderName.split(' ')[0]}</span>}
+                            <span title="The number this text came IN from — if they say it's the wrong line, this is the one to pull" style={{ fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{fmtPhoneUS(theirNum)}</span>
                             {viaLast4 && (
                               <span title={`Received on ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
                             )}
@@ -28660,10 +28669,12 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                             {activeContact?._everyone && (() => {
                               // In Everyone view, show who outbound went to
                               const recipient = contacts.find(c => normalizePhone(c.phone) === normalizePhone(m.to_number));
-                              const recipientName = recipient?.name?.split(' ')[0] || m.to_number;
+                              const recipientName = recipient?.name?.split(' ')[0];
+                              if (!recipientName) return null;
                               const recipientColor = participantColor(recipient?.name || m.to_number);
                               return <span style={{ fontSize: 10, color: '#78716c' }}>to <span style={{ color: recipientColor, fontWeight: 600 }}>{recipientName}</span></span>;
                             })()}
+                            <span title="The number this text was sent TO" style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>→ {fmtPhoneUS(theirNum)}</span>
                             {viaLast4 && (
                               <span title={`Sent from ${ourNum}`} style={{ fontSize: 10, color: viaColor, fontFamily: "'DM Mono', monospace", border: `1px solid ${viaColor}44`, borderRadius: 4, padding: '0 4px' }}>via {viaLast4}</span>
                             )}
