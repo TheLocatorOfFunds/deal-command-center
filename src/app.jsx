@@ -1000,6 +1000,9 @@ function DealCommandCenter({ session, profile }) {
   const [unackDocketCount, setUnackDocketCount] = useState(0);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [unreadSmsCount, setUnreadSmsCount] = useState(0);
+  // Bell "Replies & callbacks" feed — unread text replies + recent inbound
+  // calls, the inbound stuff Nathan/Eric must see first (Nathan 2026-06-30).
+  const [inboundFeed, setInboundFeed] = useState([]);
   // Welcome-back unread banner. Hides after dismiss until a NEW message
   // arrives (count rises above the dismissal floor). Click → opens chat.
   const [chatBannerDismissedAt, setChatBannerDismissedAt] = useState(0);
@@ -1574,7 +1577,8 @@ function DealCommandCenter({ session, profile }) {
                   setActiveDealId(msg.deal_id);
                   window.location.hash = `#/deal/${msg.deal_id}/comms`;
                 } else {
-                  setView('outreach');
+                  setActiveDealId(null);
+                  setView('inbox');
                 }
                 n.close();
               };
@@ -1792,6 +1796,67 @@ function DealCommandCenter({ session, profile }) {
       .eq('direction', 'inbound')
       .is('read_by_team_at', null);
     setUnreadSmsCount(count || 0);
+  };
+
+  // Bell "Replies & callbacks" feed (Nathan 2026-06-30) — the inbound things
+  // a caller must act on, surfaced at the TOP of the 🔔 bell: unread text
+  // replies (messages_outbound inbound + unread) and recent inbound calls back
+  // (last 24h). Each row routes straight to the lead's Comms thread on click.
+  const loadInboundFeed = async () => {
+    const since24 = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const [txtRes, callRes] = await Promise.all([
+      sb.from('messages_outbound')
+        .select('id, deal_id, from_number, body, created_at')
+        .eq('direction', 'inbound').is('read_by_team_at', null)
+        .order('created_at', { ascending: false }).limit(25),
+      sb.from('call_logs')
+        .select('id, deal_id, from_number, started_at, status')
+        .eq('direction', 'inbound').gte('started_at', since24)
+        .order('started_at', { ascending: false }).limit(25),
+    ]);
+    const txt = (txtRes.data || []).map(r => ({
+      kind: 'text', id: r.id, dealId: r.deal_id, number: r.from_number,
+      preview: (r.body || '').replace(/\s+/g, ' ').trim().slice(0, 64), ts: r.created_at,
+    }));
+    const calls = (callRes.data || []).map(r => ({
+      kind: 'call', id: r.id, dealId: r.deal_id, number: r.from_number,
+      preview: (r.status === 'missed' || r.status === 'no-answer') ? 'Missed call back' : 'Called back',
+      ts: r.started_at,
+    }));
+    setInboundFeed([...txt, ...calls].sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime()));
+  };
+
+  // Click a bell reply/callback → open the lead's Comms thread ("up in the
+  // note"). Marks a text read. Inbound calls often have no deal_id, so resolve
+  // the lead from the caller's number via contacts → contact_deals. NEVER lands
+  // on Today — worst case it opens the full Inbox feed (the Today misroute Eric
+  // hit, 2026-06-30).
+  const openInboundItem = async (item) => {
+    setShowNotifDropdown(false);
+    if (item.kind === 'text') {
+      sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).eq('id', item.id)
+        .then(() => { loadUnreadSmsCount(); loadInboundFeed(); });
+    }
+    let dealId = item.dealId || null;
+    if (!dealId && item.number) {
+      const bare = (item.number || '').replace(/^\+1/, '');
+      try {
+        const { data: c } = await sb.from('contacts').select('id')
+          .or(`phone.eq.${item.number},phone.eq.${bare}`).limit(1);
+        if (c?.[0]) {
+          const { data: cd } = await sb.from('contact_deals').select('deal_id')
+            .eq('contact_id', c[0].id).limit(1);
+          dealId = cd?.[0]?.deal_id || null;
+        }
+      } catch (e) {}
+    }
+    if (dealId) {
+      setActiveDealId(dealId);
+      window.location.hash = `#/deal/${dealId}/comms`;
+    } else {
+      setActiveDealId(null);
+      setView('inbox');
+    }
   };
 
   // Aggregate of every realtime-driven unread surface. Drives the tab
@@ -2053,7 +2118,7 @@ function DealCommandCenter({ session, profile }) {
     setRecentActivity(data || []);
   };
 
-  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadApptCount(); loadReviewCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
+  useEffect(() => { loadDeals(); loadTeam(); loadRecentActivity(); loadLeadCount(); loadFollowupCount(); loadApptCount(); loadReviewCount(); loadDocketCount(); loadPendingWalkthroughs(); loadPendingOffersCount(); loadLaurenFlaggedCount(); loadUnreadChatCount(); loadUnreadSmsCount(); loadInboundFeed(); loadActiveCalls(); loadSystemAlertCount(); loadEngagementCount(); }, []);
   useEffect(() => {
     const ch = sb.channel('appt-count').on('postgres_changes', { event: '*', schema: 'public', table: 'appointments' }, loadApptCount).subscribe();
     return () => { sb.removeChannel(ch); };
@@ -2108,7 +2173,8 @@ function DealCommandCenter({ session, profile }) {
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'team_message_reads' }, loadUnreadChatCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_alerts' }, loadSystemAlertCount)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, loadUnreadSmsCount)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => { loadUnreadSmsCount(); loadInboundFeed(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, loadInboundFeed)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'personalized_link_views' }, loadEngagementCount)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, loadEngagementCount)
       .subscribe();
@@ -2422,12 +2488,15 @@ function DealCommandCenter({ session, profile }) {
           {/* Notifications bell — aggregates Docket, Leads, Walkthroughs, Offers, Alerts */}
           {isTeam && (() => {
             // Bell does NOT include unread chat — the red banner handles that separately
-            const totalNotifs = unackDocketCount + newLeadCount + engagementCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
+            const inboundCount = inboundFeed.length;
+            const hotInbound = inboundCount > 0; // green-accent the bell when a real reply/callback is waiting
+            const fmtPhone = (num) => { const x = (num || '').replace(/\D/g, ''); if (x.length === 11 && x[0] === '1') return `(${x.slice(1,4)}) ${x.slice(4,7)}-${x.slice(7)}`; if (x.length === 10) return `(${x.slice(0,3)}) ${x.slice(3,6)}-${x.slice(6)}`; return num || 'Unknown'; };
+            const totalNotifs = inboundCount + unackDocketCount + newLeadCount + engagementCount + pendingWalkthroughs.length + pendingOffersCount + (isOwner ? systemAlertCount + laurenFlaggedCount : 0);
             return (
               <div style={{ position: 'relative' }}>
-                <button onClick={() => setShowNotifDropdown(v => !v)}
-                  title={totalNotifs > 0 ? `${totalNotifs} notification${totalNotifs !== 1 ? 's' : ''}` : 'Notifications'}
-                  style={{ background: totalNotifs > 0 ? '#1c1917' : 'transparent', border: `1px solid ${totalNotifs > 0 ? '#78350f' : '#292524'}`, color: totalNotifs > 0 ? '#fbbf24' : '#78716c', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: 14, lineHeight: 1, position: 'relative', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit' }}>
+                <button onClick={() => { const next = !showNotifDropdown; setShowNotifDropdown(next); if (next) loadInboundFeed(); }}
+                  title={hotInbound ? `${inboundCount} repl${inboundCount !== 1 ? 'ies' : 'y'}/callback${inboundCount !== 1 ? 's' : ''} waiting` : totalNotifs > 0 ? `${totalNotifs} notification${totalNotifs !== 1 ? 's' : ''}` : 'Notifications'}
+                  style={{ background: hotInbound ? '#0f2a1e' : totalNotifs > 0 ? '#1c1917' : 'transparent', border: `1px solid ${hotInbound ? '#10b981' : totalNotifs > 0 ? '#78350f' : '#292524'}`, color: hotInbound ? '#34d399' : totalNotifs > 0 ? '#fbbf24' : '#78716c', borderRadius: 8, padding: '7px 10px', cursor: 'pointer', fontSize: 14, lineHeight: 1, position: 'relative', display: 'flex', alignItems: 'center', gap: 6, fontFamily: 'inherit' }}>
                   🔔
                   {totalNotifs > 0 && <span style={{ fontSize: 10, fontWeight: 700 }}>{totalNotifs > 99 ? '99+' : totalNotifs}</span>}
                 </button>
@@ -2436,6 +2505,28 @@ function DealCommandCenter({ session, profile }) {
                     onClick={() => setShowNotifDropdown(false)}>
                     <div style={{ padding: '10px 14px 6px', fontSize: 10, color: '#57534e', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', borderBottom: '1px solid #1c1917' }}>Notifications</div>
                     {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
+                    {inboundCount > 0 && (
+                      <div style={{ borderBottom: '2px solid #1c1917' }}>
+                        <div style={{ padding: '9px 14px 4px', fontSize: 9, color: '#34d399', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>📥 Replies &amp; callbacks</div>
+                        {inboundFeed.slice(0, 8).map(item => {
+                          const d = item.dealId ? deals.find(x => x.id === item.dealId) : null;
+                          const who = ((d?.meta?.homeownerName || d?.name || '').split(' - ')[0]) || fmtPhone(item.number);
+                          const mins = Math.max(0, Math.floor((Date.now() - new Date(item.ts).getTime()) / 60000));
+                          const age = mins < 1 ? 'now' : mins < 60 ? mins + 'm' : mins < 1440 ? Math.floor(mins / 60) + 'h' : Math.floor(mins / 1440) + 'd';
+                          return (
+                            <button key={item.kind + item.id} onClick={() => openInboundItem(item)}
+                              style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', padding: '9px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                              <span style={{ fontSize: 13, lineHeight: 1.4 }}>{item.kind === 'text' ? '📲' : '☎️'}</span>
+                              <span style={{ flex: 1, minWidth: 0 }}>
+                                <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who}</span>
+                                <span style={{ display: 'block', fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.kind === 'text' ? `“${item.preview}”` : item.preview}</span>
+                              </span>
+                              <span style={{ fontSize: 10, color: '#57534e', whiteSpace: 'nowrap', marginTop: 1 }}>{age}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                     {unackDocketCount > 0 && <button onClick={() => setShowDocket(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>⚖ <span style={{ flex: 1 }}>{unackDocketCount} docket event{unackDocketCount !== 1 ? 's' : ''}</span></button>}
                     {newLeadCount > 0 && <button onClick={() => setShowLeads(true)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fbbf24', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>📋 <span style={{ flex: 1 }}>{newLeadCount} new lead{newLeadCount !== 1 ? 's' : ''}</span></button>}
                     {engagementCount > 0 && <button onClick={() => { setActiveDealId(null); setView('today'); try { localStorage.setItem('dcc_engagement_seen_at', new Date().toISOString()); } catch (e) {} setEngagementCount(0); }} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '11px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', color: '#fdba74', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>🔥 <span style={{ flex: 1 }}>{engagementCount} new lead signal{engagementCount !== 1 ? 's' : ''} (opens + chats)</span></button>}
