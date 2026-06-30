@@ -17123,10 +17123,14 @@ function CallDispositionModal({ pending, onClose }) {
       }
 
       if (callLogId) {
-        await sb.from('call_logs').update({
+        const { data: updRows, error: upErr } = await sb.from('call_logs').update({
           outcome, outcome_set_at: now, outcome_set_by: userId,
           outcome_note: note.trim() || null,
-        }).eq('id', callLogId);
+        }).eq('id', callLogId).select('id');
+        if (upErr) throw upErr;
+        if (!updRows || updRows.length === 0) throw new Error("Didn't save — the call record rejected it. Tell the team (call_logs constraint/permissions).");
+      } else {
+        throw new Error("Couldn't link this to the call you just made. Wait a second and try again.");
       }
 
       // ── Step 2: propagate to contacts (phone status + DND) ──────────────
