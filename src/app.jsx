@@ -17035,6 +17035,9 @@ function CallDispositionModal({ pending, onClose }) {
   const [saving, setSaving] = React.useState(false);
   const [error, setError]   = React.useState(null);
   const [note, setNote]     = React.useState(pending?.existing?.outcome_note || '');
+  const [otherSelected, setOtherSelected] = React.useState(false); // 'Other' is two-step: type a note, then Save
+  const noteRef = React.useRef(null);
+  React.useEffect(() => { if (otherSelected && noteRef.current) { try { noteRef.current.focus(); } catch (e) {} } }, [otherSelected]);
   const [apptDeal, setApptDeal]     = React.useState(null); // {id, name} — the call's lead, for "Set appointment"
   const [apptUserId, setApptUserId] = React.useState(null);
   const [showAppt, setShowAppt]     = React.useState(false);
@@ -17195,17 +17198,20 @@ function CallDispositionModal({ pending, onClose }) {
         <div style={{ fontSize: 11, color: '#57534e', marginTop: 8, marginBottom: 12 }}>
           {isEditing ? 'Update what really happened.' : 'Take a second to mark it — dead numbers get auto-blocked next round.'}
         </div>
-        <textarea value={note} onChange={e => setNote(e.target.value)}
-          placeholder="Note (optional) — e.g. busy signal · no voicemail set up · generic answering machine · couldn't confirm the person"
+        {otherSelected && (
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#fcd34d', marginBottom: 6 }}>⋯ Other — type what happened, then Save below:</div>
+        )}
+        <textarea ref={noteRef} value={note} onChange={e => setNote(e.target.value)}
+          placeholder={otherSelected ? "What happened? e.g. busy signal · no voicemail set up · generic answering machine · couldn't confirm the person" : "Note (optional) — e.g. busy signal · no voicemail set up · generic answering machine · couldn't confirm the person"}
           rows={2}
-          style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12, padding: '8px 10px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical' }} />
+          style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12, padding: '8px 10px', background: '#0c0a09', border: '1px solid ' + (otherSelected ? '#a8a29e' : '#292524'), borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical' }} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {OPTIONS.map(o => {
-            const isCurrent = initial === o.code;
+            const isCurrent = initial === o.code || (o.code === 'other' && otherSelected);
             return (
               <button
                 key={o.code}
-                onClick={() => pick(o.code)}
+                onClick={() => { if (o.code === 'other') { setOtherSelected(true); } else { pick(o.code); } }}
                 disabled={saving}
                 style={{
                   background: isCurrent ? `${o.color}22` : '#0c0a09',
@@ -17223,6 +17229,12 @@ function CallDispositionModal({ pending, onClose }) {
             );
           })}
         </div>
+        {otherSelected && (
+          <button onClick={() => pick('other')} disabled={saving}
+            style={{ marginTop: 12, width: '100%', background: '#a8a29e', color: '#0c0a09', border: 'none', borderRadius: 8, padding: '12px 0', fontSize: 13, fontWeight: 800, cursor: saving ? 'wait' : 'pointer', fontFamily: 'inherit' }}>
+            {saving ? 'Saving…' : '✓ Save as Other'}
+          </button>
+        )}
         {apptDeal && (
           <button onClick={() => { apptAfterDispoRef.current = false; setShowAppt(true); }}
             title="They agreed to meet? Lock in the date + time now."
