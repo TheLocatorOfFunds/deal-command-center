@@ -1409,6 +1409,18 @@ function DealCommandCenter({ session, profile }) {
         setCallStatus('ended');
         stopCallTimer();
         resetCallOverlayState();
+        // Post-call disposition for the inbound callback (Eric 2026-06-30:
+        // callbacks had no way to log the outcome — an appointment set on a
+        // callback ended up unlinked). Mirrors the outbound flow, stamped
+        // 'inbound' so the modal resolves the CALLER's number + deal.
+        setPendingDisposition({
+          sid,
+          direction: 'inbound',
+          fromNumber: incomingCall.from,
+          contactName: incomingCall.callerName || incomingCall.from,
+          dealId: incomingCall.dealId || null,
+          startedAt: new Date().toISOString(),
+        });
         setTimeout(() => { setCallStatus(null); setCallContact(null); activeCallRef.current = null; }, 2500);
       });
     } catch (e) {
@@ -17142,10 +17154,13 @@ function CallDispositionModal({ pending, onClose }) {
       try {
         const { data: au } = await sb.auth.getUser();
         if (alive) setApptUserId(au?.user?.id || null);
-        let dealId = pending.existing?.deal_id || null;
-        if (!dealId && pending.toNumber) {
+        let dealId = pending.existing?.deal_id || pending.dealId || null;
+        const cnum = pending.existing
+          ? (pending.existing.direction === 'inbound' ? pending.existing.from_number : pending.existing.to_number)
+          : (pending.direction === 'inbound' ? (pending.fromNumber || pending.toNumber) : pending.toNumber);
+        if (!dealId && cnum) {
           const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-          const { data } = await sb.from('call_logs').select('deal_id').eq('to_number', pending.toNumber).gte('started_at', since).not('deal_id', 'is', null).order('started_at', { ascending: false }).limit(1);
+          const { data } = await sb.from('call_logs').select('deal_id').or(`to_number.eq.${cnum},from_number.eq.${cnum}`).gte('started_at', since).not('deal_id', 'is', null).order('started_at', { ascending: false }).limit(1);
           dealId = data?.[0]?.deal_id || null;
         }
         if (dealId) {
@@ -17161,6 +17176,16 @@ function CallDispositionModal({ pending, onClose }) {
 
   const isEditing = Boolean(pending.existing);
   const initial   = pending.existing?.outcome || null;
+  const isInboundCall = pending.existing
+    ? pending.existing.direction === 'inbound'
+    : pending.direction === 'inbound';
+  // The counterpart (the person being rated), whichever way the call went.
+  // Outbound → to_number; inbound → from_number. Drives deal lookup, phone
+  // status/DND, and the call-row fallback so an inbound callback resolves to
+  // the CALLER's number, never ours (Eric 2026-06-30).
+  const counterpartNumber = pending.existing
+    ? (pending.existing.direction === 'inbound' ? pending.existing.from_number : pending.existing.to_number)
+    : (pending.direction === 'inbound' ? (pending.fromNumber || pending.toNumber) : pending.toNumber);
 
   const OPTIONS = [
     { code: 'connected',      label: '✓ Connected',         color: '#22c55e', desc: 'Spoke to them — no firm outcome yet' },
@@ -17173,6 +17198,13 @@ function CallDispositionModal({ pending, onClose }) {
     { code: 'do_not_call',    label: '🚫 Do Not Call',       color: '#ef4444', desc: 'They opted out — flags DNC so we never re-dial (the number may still work)' },
     { code: 'other',          label: '⋯ Other',             color: '#a8a29e', desc: "Doesn't fit the rest (busy, no voicemail set up, generic machine, couldn't confirm) — leaves the number active: no SMS/voice block, no DNC" },
   ];
+
+  // Inbound callbacks are already answered — "didn't pick up / left a voicemail
+  // / dead line" don't apply. Show only outcomes that fit a live inbound
+  // conversation (Eric 2026-06-30: appointment / wrong number / other+note).
+  const shownOptions = isInboundCall
+    ? OPTIONS.filter(o => ['booked', 'connected', 'not_interested', 'wrong_number', 'do_not_call', 'other'].includes(o.code))
+    : OPTIONS;
 
   const phoneStatusFor = (outcome) => {
     if (outcome === 'connected' || outcome === 'booked' || outcome === 'not_interested') return 'good';
@@ -17201,12 +17233,11 @@ function CallDispositionModal({ pending, onClose }) {
       // Fallback: most-recent outbound call to this number in the last 15 min.
       // Covers the case where twilio-voice-outbound hadn't yet inserted the row
       // when the SID lookup ran, or where the SID never resolved.
-      if (!callLogId && pending.toNumber) {
+      if (!callLogId && counterpartNumber) {
         const sinceISO = new Date(Date.now() - 15 * 60 * 1000).toISOString();
         const { data: recent } = await sb.from('call_logs')
-          .select('id, contact_id, to_number')
-          .eq('direction', 'outbound')
-          .eq('to_number', pending.toNumber)
+          .select('id, contact_id, to_number, from_number')
+          .or(`to_number.eq.${counterpartNumber},from_number.eq.${counterpartNumber}`)
           .gte('started_at', sinceISO)
           .order('started_at', { ascending: false })
           .limit(1);
@@ -17228,7 +17259,7 @@ function CallDispositionModal({ pending, onClose }) {
       const phoneStatus = phoneStatusFor(outcome);
       const isOptOut = (outcome === 'disconnected' || outcome === 'do_not_call');
       if (phoneStatus || isOptOut) {
-        const targetPhone = pending.existing?.to_number || pending.toNumber;
+        const targetPhone = counterpartNumber;
         if (targetPhone) {
           const bare = (targetPhone || '').replace(/^\+1/, '');
           const updates = {};
@@ -17259,10 +17290,10 @@ function CallDispositionModal({ pending, onClose }) {
     }
   }
 
-  const headline = isEditing ? 'Edit call disposition' : 'How did the call go?';
+  const headline = isEditing ? 'Edit call disposition' : (isInboundCall ? 'How did the callback go?' : 'How did the call go?');
   const sub = pending.existing
-    ? `${pending.existing.direction === 'inbound' ? 'Inbound call' : 'Outbound call'} · ${pending.existing.to_number}`
-    : `${pending.contactName} · ${pending.toNumber}`;
+    ? `${isInboundCall ? 'Inbound call' : 'Outbound call'} · ${counterpartNumber || pending.existing.to_number}`
+    : `${pending.contactName} · ${counterpartNumber || pending.toNumber}`;
 
   return (
     <div
@@ -17301,7 +17332,7 @@ function CallDispositionModal({ pending, onClose }) {
           rows={2}
           style={{ width: '100%', boxSizing: 'border-box', marginBottom: 12, padding: '8px 10px', background: '#0c0a09', border: '1px solid ' + (otherSelected ? '#a8a29e' : '#292524'), borderRadius: 6, color: '#fafaf9', fontSize: 12, fontFamily: 'inherit', resize: 'vertical' }} />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {OPTIONS.map(o => {
+          {shownOptions.map(o => {
             const isCurrent = initial === o.code || (o.code === 'other' && otherSelected);
             return (
               <button
@@ -28337,15 +28368,21 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                 // set, or a "Mark outcome" pill if not. Click either to open
                 // the disposition modal for editing.
                 const OUTCOME_META = {
-                  connected:    { label: '✓ Connected',    color: '#22c55e' },
-                  voicemail:    { label: '📨 Voicemail',   color: '#3b82f6' },
-                  no_answer:    { label: '⏱ No answer',    color: '#a8a29e' },
-                  wrong_number: { label: '✗ Wrong number', color: '#f97316' },
-                  disconnected: { label: '🚫 Disconnected',color: '#ef4444' },
-                  other:        { label: '⋯ Other',        color: '#a8a29e' },
+                  connected:      { label: '✓ Connected',    color: '#22c55e' },
+                  booked:         { label: '📅 Booked',       color: '#10b981' },
+                  not_interested: { label: '🙅 Not interested', color: '#f97316' },
+                  voicemail:      { label: '📨 Voicemail',   color: '#3b82f6' },
+                  no_answer:      { label: '⏱ No answer',    color: '#a8a29e' },
+                  wrong_number:   { label: '✗ Wrong number', color: '#f97316' },
+                  disconnected:   { label: '🚫 Disconnected',color: '#ef4444' },
+                  do_not_call:    { label: '🚫 Do Not Call', color: '#ef4444' },
+                  other:          { label: '⋯ Other',        color: '#a8a29e' },
                 };
                 const outcomeMeta = m.outcome ? OUTCOME_META[m.outcome] : null;
-                const canDispose = !isInbound && onOpenDisposition; // V1: outbound only
+                // Inbound callbacks are dispositionable too now (Eric 2026-06-30)
+                // — the modal shows inbound-appropriate options + resolves the
+                // caller's number.
+                const canDispose = !!onOpenDisposition;
                 const dispositionBadge = canDispose ? (
                   outcomeMeta ? (
                     <button
