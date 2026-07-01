@@ -47,6 +47,98 @@ directory and the slash commands are not available, manually do the equivalent:
 - End: update your section in `WORKING_ON.md` with status + what you shipped + open follow-ups,
   write a `session_archives/YYYY-MM-DD-<slug>.md` if the session was substantive, commit both
 
+## Team-shared hard rules — the ones we've learned the hard way
+
+These override anything else. Every rule here traces to a real incident that
+cost time, money, or trust. Promoted from Justin's `CLAUDE.local.md`
+2026-07-01 so both sessions inherit them.
+
+### 1. Never declare "done" without verification evidence
+
+Every "done" / "shipped" / "fixed" / "should work now" claim must include ONE of:
+- A Claude-in-Chrome QA pass on the touched flow (screenshot or `read_console_messages` output)
+- A Supabase MCP query confirming the data shape (row count, columns, recent timestamps)
+- An explicit caveat: "unverified, blocking on X"
+
+If none of those apply, say "I think this should work" — not "done." Skill
+`verify-feature` formalizes this. **Why:** the most common pushback across
+sessions has been *"Links aren't working… Did you test this before you
+pushed it?"*
+
+### 2. Never call/text/email a real client from a test path
+
+Outbound test traffic uses ONLY known-safe numbers:
+- `+14797196859` (Justin's personal cell)
+- Nathan's known number (if confirmed for the test)
+- `justin@fundlocators.com` (email tests)
+
+Anything else is a real lead. Even one wrong send is a high-blast-radius
+failure. Before any send-sms / send-email / drop-rvm test, surface the exact
+`to_number` / `to_email` and ask if it's not on the allowlist. This applies
+in the iOS simulator too — the sim runs prod DCC.app + prod Supabase + real
+Twilio. Safe-to-send test contacts documented in
+`memory/test_contacts_for_sim_qa.md` (Justin's memory).
+
+**Why:** a real homeowner text has happened. Joseph Mondello + Charlotte
+Morrow cancellations were post-incident forensics.
+
+### 3. Check existing infrastructure before creating anything
+
+Before `create function` / `apply_migration` / setting an env var / generating
+a cert / creating a new EAS profile or Twilio sub-account or Resend domain /
+filing a new GitHub issue on a recurring topic, do this first:
+- `list_edge_functions` / `list_tables` / grep `supabase/migrations/`
+- `gh issue list --state all --search "<keyword>"` for issues
+- Check the corresponding `memory/` note if one exists
+
+There are 60+ Edge Functions and ~85 tables in this project. Duplication is
+easy and expensive.
+
+### 4. Estimates in vibe-coding hours, never human-dev hours
+
+When Justin or Nathan asks "how long will X take," answer in actual
+Claude+operator pair-coding time (often 15-30 minutes for things a human
+would quote at "a week"). Stop translating to traditional engineering
+estimates.
+
+### 5. Don't re-pitch after a decision
+
+When Justin or Nathan picks one of N options, do that one. Don't say "have
+you considered…" or "alternatively…" — move forward. They'll ask if they
+want reconsideration.
+
+### 6. Team-member first names ≠ homeowner-lead first names
+
+When generating any homeowner-facing copy (SMS, email, eSignatures field
+values, personalized-link content), scrub team-member first names from the
+output. Real bug: a draft to a homeowner named "Justin" used Justin
+Johnson (the co-founder) as the cosigner. Team members (first names):
+Justin, Nathan, Eric, Anam.
+
+### 7. File issues in batches of ≤6, or sequentially with pauses
+
+Mass-creating 7+ GitHub issues in one parallel batch trips the auto-mode
+classifier (it interprets the burst as runaway behavior). Either batch ≤6,
+or fire them one-by-one with 30s pauses.
+
+### 8. No em dashes in any written content
+
+Never use em dashes (—) in emails, SMS, code comments, commit messages,
+`WORKING_ON.md`, or anywhere else. Use a plain hyphen or rewrite.
+
+### 9. Do it yourself — never ask the operator to run something you could run
+
+Never ask Justin or Nathan to run a query, check a log, run a command, or
+look something up if Claude has the tools to do it. SSH `defender-mini`
+autonomously. Query Supabase MCP. Run `gh` CLI. Operator time is for
+decisions and approvals only.
+
+### 10. Voice the trade-offs once, then act
+
+Don't list 8 options. Recommend the top 1, mention the alternative if it's
+genuinely comparable, then ask if the operator wants the alternative —
+otherwise proceed with the recommendation.
+
 ## Architecture at a glance
 
 - **Source**: React JSX in `src/app.jsx` (~12,640 lines). Pre-compiled by **esbuild** to `app.js` (~483KB minified) via `npm run build`. **Edit `src/app.jsx`, NOT `index.html`.**
