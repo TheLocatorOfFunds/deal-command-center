@@ -21,29 +21,16 @@ agreed on the rollout plan.
 
 ## Currently parked
 
-### `20260505100000_client_status_change_notify.sql`
-- **Author:** Nathan, 2026-05-05
-- **Effect if applied:** Postgres trigger on `deals.status` UPDATE that
-  emails every enabled `client_access` recipient via Resend when status
-  hits `signed` / `filed` / `probate` / `hearing-set` /
-  `awaiting-distribution` / `recovered`.
-- **Why parked:** No human-in-the-loop approval. Per Justin 2026-05-07:
-  "We don't need to be sending out emails without someone approving
-  them." Need a "pending notifications" queue + approval UI before
-  re-shipping.
-- **State in prod:** Function `notify_client_status_change()` is INSTALLED
-  (we applied it once, then dropped the trigger). Function body remains
-  for reuse when the approval flow lands.
-
-### `20260505110000_client_docket_event_notify.sql`
-- **Author:** Nathan, 2026-05-05
-- **Effect if applied:** Postgres trigger on `docket_events` INSERT that
-  emails clients via Resend when a non-backfill event of type
-  `hearing_scheduled` / `hearing_continued` / `judgment_entered` /
-  `disbursement_ordered` / `disbursement_paid` lands.
-- **Why parked:** Same as above — no approval gate.
-- **State in prod:** Function `notify_client_docket_event()` is INSTALLED
-  (we applied it once, then dropped the trigger). Function body remains.
+### ~~`20260505100000_client_status_change_notify.sql`~~ + ~~`20260505110000_client_docket_event_notify.sql`~~ — REMOVED 2026-07-03
+- **Decision (Nathan, 2026-07-03):** client notifications stay **fully
+  manual** — a human writes and sends client updates; nothing auto-emails
+  clients on status/docket changes. No approval-queue flow will be built.
+- **Action taken:** both parked migration files deleted, and the dormant
+  `notify_client_status_change()` + `notify_client_docket_event()`
+  functions were `DROP`-ped from prod (they had 0 triggers — already
+  inert). There is nothing left to re-attach.
+- If auto-notify is ever revisited, start fresh with an approval gate;
+  do not resurrect these.
 
 ### `20260505120000_client_edit_requests.sql`
 - **Author:** Nathan, 2026-05-05 (parked here 2026-05-08)
@@ -112,23 +99,9 @@ agreed on the rollout plan.
 - **Apply when:** Lauren unified memory ships AND the ops_agent
   daemon is deployed on defender-mini.
 
-## Re-attaching the triggers (if/when ready)
+## Client-notify triggers — removed (see decision above)
 
-The functions are already in the database. To re-enable, just run:
-
-```sql
--- Status-change emails
-create trigger tg_notify_client_status_change
-  after update of status on public.deals
-  for each row
-  execute function public.notify_client_status_change();
-
--- Docket-event emails
-create trigger tg_notify_client_docket_event
-  after insert on public.docket_events
-  for each row
-  execute function public.notify_client_docket_event();
-```
-
-…but don't do that without an approval flow in front. That's the whole
-reason these are parked.
+The `notify_client_*` functions were dropped from the database on
+2026-07-03 (Nathan chose fully-manual client notifications). There is
+nothing to re-attach. If auto-notify ever comes back, build it fresh
+behind an approval gate.
