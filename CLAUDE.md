@@ -658,17 +658,31 @@ Both surfaces should write to `esignatures_contracts`. The webhook EF reconciles
 
 If you create a contract via MCP and want it to appear in DCC, set the `metadata` field to `{"deal_id": "<dcc-deal-id>", "source": "mcp"}` so the webhook can stitch it together.
 
-## ⚠️ Messaging gateway — ALWAYS use Nathan's iPhone, NEVER Twilio
+## Messaging gateway — texting is Twilio (the mac_bridge / Mac Mini path is RETIRED)
 
-**All outbound SMS, MMS, and video is sent via Nathan's iPhone through the mac_bridge.**
-Twilio is NOT used for outbound messages. Do not build Twilio outbound paths. Do not suggest Twilio for video or MMS.
+**Outbound texting goes through Twilio** (A2P 10DLC-verified `+15139985440`) via
+the `send-sms` edge function. **Confirmed by Nathan 2026-07-03: "texting is done
+through Twilio, we do not use the Mac Mini for anything."**
 
-The routing is automatic: Nathan's iPhone number is registered in `phone_numbers` with `gateway = 'mac_bridge'`.
-The `send-sms` edge function reads that row and returns `pending_mac` — the bridge daemon on the Mac Mini picks it up and fires it via iMessage/SMS from the iPhone.
+The Mac Mini iMessage bridge (`gateway='mac_bridge'` on Nathan's iPhone
+`+15135162306`) was used *at one point* to send blue-bubble iMessages from
+Nathan's phone, but it is **no longer in use** — production traffic is ~100%
+Twilio (verified 2026-07-03: 74 Twilio sends in 7 days vs 2 bridge sends in 30
+days, 0 messages stuck at `pending_mac`). A dead Mini is therefore **not** an
+outage.
 
-If you find yourself writing Twilio API calls for outbound messaging: stop, delete it, and use mac_bridge instead.
+- **Build new messaging on the Twilio `send-sms` path.**
+- The `mac_bridge` branch in `send-sms/index.ts` + the `+15135162306` row remain
+  as dormant code, but nothing routes through them in practice. Don't build on
+  the bridge; don't assume the Mini is running.
+- ⚠ There is **no auto-failover** from `mac_bridge` → Twilio: a message
+  explicitly routed to the (dead) bridge would sit at `pending_mac` forever. This
+  is why the bridge should stay retired rather than offered as a send option.
 
-The only Twilio code that exists is the legacy fallback in `send-sms/index.ts` — leave it there in case a non-bridge number is ever added, but it is NOT the active path and should not be extended.
+> **History note:** this section previously said the opposite ("ALWAYS use
+> Nathan's iPhone, NEVER Twilio"). That reflected the pre-2026-05-24 architecture,
+> before PR #211 made Twilio the default and the team moved fully off the bridge.
+> Corrected 2026-07-03.
 
 ## Mac Mini (Defender Mini) — SSH access
 
