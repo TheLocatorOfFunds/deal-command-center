@@ -27138,8 +27138,15 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
       .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs',         filter: `deal_id=eq.${dealId}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'emails',            filter: `deal_id=eq.${dealId}` }, load)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'deal_notes',        filter: `deal_id=eq.${dealId}` }, load)
+      // Contact link/unlink must refresh the Comms contact list too — otherwise an add or
+      // unlink done in the Contacts modal never reaches an already-open Comms tab (Eric,
+      // Kenney deal 2026-07-06). contact_deals carries deal_id, so filter to this deal.
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'contact_deals',      filter: `deal_id=eq.${dealId}` }, loadDealContacts)
       .subscribe();
-    const poll = setInterval(load, 6000);
+    // Poll is the realtime fallback — now also refreshes the contact list, so link/unlink
+    // AND contact-field edits (a corrected phone number) surface within 6s even when
+    // realtime is lagging (e.g. during a Supabase platform blip).
+    const poll = setInterval(() => { load(); loadDealContacts(); }, 6000);
     return () => { sb.removeChannel(ch); clearInterval(poll); };
   }, [dealId]);
 
