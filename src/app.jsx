@@ -1823,7 +1823,7 @@ function DealCommandCenter({ session, profile }) {
         .order('created_at', { ascending: false }).limit(25),
       sb.from('call_logs')
         .select('id, deal_id, from_number, started_at, status')
-        .eq('direction', 'inbound').gte('started_at', since24)
+        .eq('direction', 'inbound').is('acknowledged_at', null).gte('started_at', since24)
         .order('started_at', { ascending: false }).limit(25),
     ]);
     const txt = (txtRes.data || []).map(r => ({
@@ -1848,6 +1848,10 @@ function DealCommandCenter({ session, profile }) {
     if (item.kind === 'text') {
       sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).eq('id', item.id)
         .then(() => { loadUnreadSmsCount(); loadInboundFeed(); });
+    } else {
+      // Opening a callback also acknowledges it — you've dealt with it.
+      sb.from('call_logs').update({ acknowledged_at: new Date().toISOString(), acknowledged_by: session?.user?.id || null }).eq('id', item.id)
+        .then(() => loadInboundFeed());
     }
     let dealId = item.dealId || null;
     if (!dealId && item.number) {
@@ -1869,6 +1873,32 @@ function DealCommandCenter({ session, profile }) {
       setActiveDealId(null);
       setView('inbox');
     }
+  };
+
+  // Acknowledge a bell reply/callback WITHOUT opening it — the ✓ button (Nathan
+  // 2026-07-06: "we need a way to acknowledge these"). Text → mark read; call →
+  // stamp acknowledged_at. Either way it drops out of the feed.
+  const ackInboundItem = async (item) => {
+    if (item.kind === 'text') {
+      await sb.from('messages_outbound').update({ read_by_team_at: new Date().toISOString() }).eq('id', item.id);
+      loadUnreadSmsCount();
+    } else {
+      await sb.from('call_logs').update({ acknowledged_at: new Date().toISOString(), acknowledged_by: session?.user?.id || null }).eq('id', item.id);
+    }
+    loadInboundFeed();
+  };
+
+  // "Clear all" — acknowledge every reply/callback currently in the feed at once.
+  const ackAllInbound = async () => {
+    const now = new Date().toISOString();
+    const textIds = inboundFeed.filter(i => i.kind === 'text').map(i => i.id);
+    const callIds = inboundFeed.filter(i => i.kind === 'call').map(i => i.id);
+    await Promise.all([
+      textIds.length ? sb.from('messages_outbound').update({ read_by_team_at: now }).in('id', textIds) : Promise.resolve(),
+      callIds.length ? sb.from('call_logs').update({ acknowledged_at: now, acknowledged_by: session?.user?.id || null }).in('id', callIds) : Promise.resolve(),
+    ]);
+    loadUnreadSmsCount();
+    loadInboundFeed();
   };
 
   // Aggregate of every realtime-driven unread surface. Drives the tab
@@ -2519,22 +2549,30 @@ function DealCommandCenter({ session, profile }) {
                     {totalNotifs === 0 && <div style={{ padding: '14px 16px', fontSize: 12, color: '#57534e' }}>All caught up ✓</div>}
                     {inboundCount > 0 && (
                       <div style={{ borderBottom: '2px solid #1c1917' }}>
-                        <div style={{ padding: '9px 14px 4px', fontSize: 9, color: '#34d399', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>📥 Replies &amp; callbacks</div>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '9px 8px 4px 14px' }}>
+                          <span style={{ fontSize: 9, color: '#34d399', fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase' }}>📥 Replies &amp; callbacks</span>
+                          <button onClick={(e) => { e.stopPropagation(); ackAllInbound(); }} title="Acknowledge all — clear the list"
+                            style={{ background: 'transparent', border: 'none', color: '#78716c', fontSize: 10, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', padding: '0 4px', whiteSpace: 'nowrap' }}>✓ Clear all</button>
+                        </div>
                         {inboundFeed.slice(0, 8).map(item => {
                           const d = item.dealId ? deals.find(x => x.id === item.dealId) : null;
                           const who = ((d?.meta?.homeownerName || d?.name || '').split(' - ')[0]) || fmtPhone(item.number);
                           const mins = Math.max(0, Math.floor((Date.now() - new Date(item.ts).getTime()) / 60000));
                           const age = mins < 1 ? 'now' : mins < 60 ? mins + 'm' : mins < 1440 ? Math.floor(mins / 60) + 'h' : Math.floor(mins / 1440) + 'd';
                           return (
-                            <button key={item.kind + item.id} onClick={() => openInboundItem(item)}
-                              style={{ display: 'flex', alignItems: 'flex-start', gap: 9, width: '100%', padding: '9px 14px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
-                              <span style={{ fontSize: 13, lineHeight: 1.4 }}>{item.kind === 'text' ? '📲' : '☎️'}</span>
-                              <span style={{ flex: 1, minWidth: 0 }}>
-                                <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who}</span>
-                                <span style={{ display: 'block', fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.kind === 'text' ? `“${item.preview}”` : item.preview}</span>
-                              </span>
-                              <span style={{ fontSize: 10, color: '#57534e', whiteSpace: 'nowrap', marginTop: 1 }}>{age}</span>
-                            </button>
+                            <div key={item.kind + item.id} style={{ display: 'flex', alignItems: 'stretch', borderBottom: '1px solid #1c1917' }}>
+                              <button onClick={() => openInboundItem(item)} title="Open the lead"
+                                style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'flex-start', gap: 9, padding: '9px 6px 9px 14px', background: 'transparent', border: 'none', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+                                <span style={{ fontSize: 13, lineHeight: 1.4 }}>{item.kind === 'text' ? '📲' : '☎️'}</span>
+                                <span style={{ flex: 1, minWidth: 0 }}>
+                                  <span style={{ display: 'block', fontSize: 12, fontWeight: 700, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{who}</span>
+                                  <span style={{ display: 'block', fontSize: 11, color: '#a8a29e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.kind === 'text' ? `“${item.preview}”` : item.preview}</span>
+                                </span>
+                                <span style={{ fontSize: 10, color: '#57534e', whiteSpace: 'nowrap', marginTop: 1 }}>{age}</span>
+                              </button>
+                              <button onClick={(e) => { e.stopPropagation(); ackInboundItem(item); }} title="Acknowledge — clear this one"
+                                style={{ flexShrink: 0, width: 38, background: 'transparent', border: 'none', borderLeft: '1px solid #1c1917', color: '#57534e', fontSize: 14, cursor: 'pointer', fontFamily: 'inherit' }}>✓</button>
+                            </div>
                           );
                         })}
                       </div>
