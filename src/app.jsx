@@ -2310,12 +2310,13 @@ function DealCommandCenter({ session, profile }) {
   // Writes status=dead + the 3 DCC-owned meta keys intel-main reads, logs the
   // activity, then closes the modal. Merges onto existing meta so intel-main's
   // own keys (grade, estimatedSurplus, …) are preserved.
-  const confirmDisposition = async (reasonCode) => {
+  const confirmDisposition = async (reasonCode, detail) => {
     if (!dispositionDeal) return;
     const { id, deal, pendingPatch } = dispositionDeal;
     const meta = {
       ...(deal.meta || {}),
       dispositionReason: reasonCode,
+      dispositionDetail: detail || null,   // DCC-owned free-text reasoning (Eric 2026-07-06)
       dispositionAt: new Date().toISOString(),
       dispositionBy: userName || session.user.id,
     };
@@ -2323,7 +2324,7 @@ function DealCommandCenter({ session, profile }) {
     await sb.from('activity').insert({
       deal_id: id,
       user_id: session.user.id,
-      action: `🪦 Lead marked dead · reason: ${dispositionLabel(reasonCode)}`,
+      action: `🪦 Lead marked dead · reason: ${dispositionLabel(reasonCode)}${detail ? ` — ${detail}` : ''}`,
       visibility: ['team'],
     });
     setDispositionDeal(null);
@@ -17553,6 +17554,7 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
   // the modal into edit mode. Per Nathan 2026-05-29 (Kill button felt dead
   // because the confirm button is disabled until a reason is chosen).
   const [reason, setReason] = useState(initialReason || presetReason || '');
+  const [detail, setDetail] = useState(deal?.meta?.dispositionDetail || '');
   const [busy, setBusy] = useState(false);
   const editing = !!initialReason;
   const G1 = DISPOSITION_REASONS.filter(r => r.group === 'bad');
@@ -17560,7 +17562,7 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
   const submit = async () => {
     if (!reason || busy) return;
     setBusy(true);
-    try { await onConfirm(reason); } finally { setBusy(false); }
+    try { await onConfirm(reason, detail.trim() || null); } finally { setBusy(false); }
   };
   return (
     <Modal onClose={busy ? () => {} : onClose} title={editing ? 'Why did this lead die?' : 'Mark lead dead — why?'}>
@@ -17588,6 +17590,15 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
             {G2.map(r => <option key={r.code} value={r.code}>{r.label}</option>)}
           </optgroup>
         </select>
+      </div>
+      <div style={{ marginBottom: 18 }}>
+        <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Reasoning <span style={{ color: '#57534e', textTransform: 'none', letterSpacing: 0 }}>(optional — your notes for the audit trail)</span>
+        </label>
+        <textarea value={detail} onChange={e => setDetail(e.target.value)} disabled={busy}
+          placeholder="Anything specific worth recording — e.g. 'owner already claimed via atty Smith', 'no surplus after senior lien payoff', 'went with a competitor'…"
+          rows={3}
+          style={{ ...inputStyle, resize: 'vertical' }} />
       </div>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button onClick={busy ? undefined : onClose} disabled={busy} style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>Cancel</button>
@@ -18731,7 +18742,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         </select>
         {deal.type === 'surplus' && deal.status === 'dead' && (
           deal.meta?.dispositionReason
-            ? <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title="Edit why this lead was marked dead" style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>🪦 {dispositionLabel(deal.meta.dispositionReason)} <span style={{ color: '#57534e' }}>✎</span></button>
+            ? <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title={deal.meta.dispositionDetail ? `Reasoning: ${deal.meta.dispositionDetail}\n\n(click to edit)` : 'Edit why this lead was marked dead'} style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>🪦 {dispositionLabel(deal.meta.dispositionReason)}{deal.meta.dispositionDetail ? <span style={{ color: '#57534e' }}> · 📝</span> : null} <span style={{ color: '#57534e' }}>✎</span></button>
             : <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title="Record why this lead died — required for surplus leads" style={{ background: '#3a1d0e', color: '#fdba74', border: '1px solid #7c2d12', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>⚠ Set reason this died</button>
         )}
         {isLeadStatus(deal) && POST_ENGAGEMENT_STATUS[deal.type] && (
