@@ -131,3 +131,21 @@ rename lands on the mobile side.)
 - #294 — Future: shared/ JS dir (kill the manual-sync rule entirely)
 
 Last updated: 2026-06-08
+
+## Pre-foreclosure statuses (`deals.type = 'preforeclosure'`) — added 2026-07-06
+
+The Defender / homeowner-advocate lane (Nathan 2026-07-06): NOD filed, auction
+hasn't happened. Siloed from surplus by type.
+
+| DB value | UI label |
+|---|---|
+| `new-lead` | New Lead |
+| `contacted` | Contacted |
+| `consult-set` | Consult Set |
+| `retained` | Retained |
+| `resolved` | Resolved |
+| `dead` | Dead |
+
+Type badge on cards/detail: `🛡 DEFENDER`. Money fields (meta, DCC-owned):
+`nodDate`, `judgmentAmount`, `zillowEstimate`; equity is DERIVED on render
+(Zillow − judgment), never stored.

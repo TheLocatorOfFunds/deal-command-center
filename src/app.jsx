@@ -210,6 +210,10 @@ const downloadCSV = (rows, filename) => {
 const DEAL_STATUSES = {
   flip: ["lead", "under-contract", "rehab", "listing", "under-offer", "closed", "dead"],
   surplus: ["new-lead", "signed", "filed", "probate", "awaiting-distribution", "recovered", "urgent", "dead"],
+  // Pre-foreclosure silo (Defender / homeowner-advocate brand — Nathan 2026-07-06):
+  // NOD filed, auction hasn't happened. Judgment known, value from Zillow,
+  // equity = value − judgment. Separate pipeline from surplus by construction.
+  preforeclosure: ["new-lead", "contacted", "consult-set", "retained", "resolved", "dead"],
 };
 // Pre-engagement statuses — deals in these statuses are LEADS we're still
 // outreaching to, not active engaged cases. Filtered out of Active view
@@ -218,9 +222,35 @@ const DEAL_STATUSES = {
 const LEAD_STATUSES = {
   flip: ["lead"],
   surplus: ["new-lead"],
+  preforeclosure: ["new-lead"],
 };
-const ALL_LEAD_STATUSES = [...LEAD_STATUSES.flip, ...LEAD_STATUSES.surplus];
+const ALL_LEAD_STATUSES = [...new Set([...LEAD_STATUSES.flip, ...LEAD_STATUSES.surplus, ...LEAD_STATUSES.preforeclosure])];
 const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes(deal.status);
+
+// ─── Surplus phase: POTENTIAL vs CONFIRMED (Nathan 2026-07-06) ────────────
+// "It's potential surplus up until the confirmation, and then it's confirmed
+// surplus." verifiedSurplus (court-confirmed exact number) wins; otherwise
+// estimatedSurplus is a potential figure until the sale confirms. Read-only —
+// both keys are set elsewhere (verify flow / intel-main).
+const surplusPhase = (deal) => {
+  const m = (deal && deal.meta) || {};
+  const conf = parseFloat(m.verifiedSurplus);
+  if (Number.isFinite(conf) && conf > 0) return { phase: 'confirmed', amount: conf };
+  const est = parseFloat(m.estimatedSurplus);
+  if (Number.isFinite(est) && est > 0) return { phase: 'potential', amount: est };
+  return null;
+};
+function SurplusPhaseChip({ deal, style }) {
+  const p = surplusPhase(deal);
+  if (!p) return null;
+  const conf = p.phase === 'confirmed';
+  return (
+    <span title={conf ? 'CONFIRMED — exact surplus from the confirmed sale' : 'POTENTIAL — estimate until the sale is confirmed'}
+      style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.05em', color: conf ? '#6ee7b7' : '#fcd34d', background: conf ? '#064e3b' : '#451a03', border: `1px solid ${conf ? '#059669' : '#92400e'}`, borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap', ...style }}>
+      {conf ? '✓ CONFIRMED' : '~ POTENTIAL'}
+    </span>
+  );
+}
 
 // Type-aware archival. Per LABELS.md + #292: Closed means a real
 // closed-and-paid deal; Deleted means a killed lead / dropped deal.
@@ -522,6 +552,8 @@ const STATUS_COLORS = {
   "under-offer": "#06b6d4", "closed": "#10b981", "dead": "#78716c",
   "new-lead": "#3b82f6", "signed": "#f59e0b", "filed": "#8b5cf6",
   "probate": "#ec4899", "awaiting-distribution": "#06b6d4", "recovered": "#10b981", "urgent": "#ef4444",
+  // preforeclosure lifecycle (new-lead + dead shared above)
+  "contacted": "#f59e0b", "consult-set": "#8b5cf6", "retained": "#06b6d4", "resolved": "#10b981",
 };
 const EXPENSE_CATEGORIES = ["Acquisition","Inspection","Plumbing","Electrical","Well/Septic","Cleanup","Labor","Holding","Marketing","Setup","Site","Legal","Filing","Other"];
 
@@ -2459,7 +2491,7 @@ function DealCommandCenter({ session, profile }) {
           )}
           <div>
             <div className="page-kicker" style={{ fontSize: 11, fontWeight: 600, color: "#d97706", letterSpacing: "0.15em", textTransform: "uppercase" }}>
-              {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : "Surplus Fund Tracker") : "RefundLocators Deal Hub"}
+              {activeDeal ? (activeDeal.type === "flip" ? "Flip Command Center" : activeDeal.type === "preforeclosure" ? "Defender Pre-Foreclosure" : "Surplus Fund Tracker") : "RefundLocators Deal Hub"}
             </div>
             {activeDeal ? (
               <InlineEditableName deal={activeDeal} canEdit={isTeam} onSave={(patch) => updateDealMeta(activeDeal.id, patch)} />
@@ -3884,6 +3916,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
+  const preforeclosures = visible.filter(d => d.type === "preforeclosure");
   // #237 — confidence-tier filter on the surplus list. Counts come from the
   // pre-filter set so the filter dropdown + its counts don't vanish when a
   // tier filters down to empty.
@@ -4288,7 +4321,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
-            <><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
+            <><FreshAuctionStrip deals={deals} onSelect={onSelect} /><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
           ) : view === "calls" ? (
             <CallHistoryView onSelect={onSelect} isAdmin={isAdmin} />
           ) : view === "attention" ? (
@@ -4425,6 +4458,16 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                 } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
                   {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} />)}
+                </div>
+              </>)}
+              {preforeclosures.length > 0 && (<>
+                <SectionLabel icon="🛡" label={
+                  view === "archive"  ? "Closed Pre-Foreclosure"
+                  : view === "deleted" ? "Deleted Pre-Foreclosure"
+                  : "Pre-Foreclosure · Defender"
+                } />
+                <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
+                  {preforeclosures.map(d => <PreforeclosureCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
@@ -16033,6 +16076,85 @@ function ConversionFunnel({ deals, setView }) {
   );
 }
 
+// ─── FreshAuctionStrip — the day-of-auction speed queue (Nathan 2026-07-06) ──
+// "People we talk to the day of the auction have the best chance of getting a
+// contract signed… we need to be quicker." Surplus leads whose auction JUST
+// happened, freshest first: a lead pops on here the morning its saleDate
+// arrives (DAY 0) and ages out after 30 days. Leads not yet called since the
+// auction rank first. Click a row → open the lead.
+function FreshAuctionStrip({ deals, onSelect }) {
+  const [showAll, setShowAll] = React.useState(false);
+  const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+  const rows = [];
+  for (const d of (deals || [])) {
+    if (d.type !== 'surplus' || d.deleted_at || d.status !== 'new-lead') continue;
+    const m = d.meta || {};
+    if ((m.auctionStatus || '').toUpperCase() === 'CANCELLED') continue;
+    const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
+    if (!sd || !/^\d{4}-\d{2}-\d{2}$/.test(sd)) continue;
+    const saleMid = new Date(sd + 'T00:00:00');
+    const days = Math.round((todayMid - saleMid) / 86400000);
+    if (days < 0 || days > 30) continue; // future = hasn't sold yet; >30d = cold
+    const phase = surplusPhase(d);
+    const uncalled = !d.last_contacted_at || new Date(d.last_contacted_at) < saleMid;
+    const inReview = !!m.manual_review && !m.review_cleared_at;
+    rows.push({ d, m, days, phase, uncalled, inReview });
+  }
+  rows.sort((a, b) => (a.uncalled !== b.uncalled) ? (a.uncalled ? -1 : 1)
+    : (a.days - b.days) || ((b.phase?.amount || 0) - (a.phase?.amount || 0)));
+  if (rows.length === 0) return null;
+  const shown = showAll ? rows : rows.slice(0, 8);
+  const dayChip = (days) => {
+    const label = days === 0 ? '🔥 DAY 0' : `DAY ${days}`;
+    const c = days === 0 ? { bg: '#7f1d1d', bd: '#dc2626', fg: '#fecaca' }
+      : days <= 3 ? { bg: '#431407', bd: '#ea580c', fg: '#fdba74' }
+      : days <= 7 ? { bg: '#451a03', bd: '#a16207', fg: '#fcd34d' }
+      : { bg: '#1c1917', bd: '#44403c', fg: '#a8a29e' };
+    return <span style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.05em', color: c.fg, background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap', fontFamily: "'DM Mono', monospace" }}>{label}</span>;
+  };
+  return (
+    <div style={{ marginBottom: 22, background: '#151210', border: '1px solid #7c2d12', borderRadius: 12, overflow: 'hidden' }}>
+      <div style={{ padding: '12px 16px 10px', display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', borderBottom: '1px solid #292524' }}>
+        <div>
+          <span style={{ fontSize: 14, fontWeight: 800, color: '#fdba74' }}>🔥 Fresh auctions — call first</span>
+          <span style={{ fontSize: 11, color: '#78716c', marginLeft: 10 }}>sold in the last 30 days · freshest on top · day-of is the money call</span>
+        </div>
+        <span style={{ fontSize: 11, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{rows.filter(r => r.uncalled).length} not called yet · {rows.length} total</span>
+      </div>
+      {shown.map(({ d, m, days, phase, uncalled, inReview }) => (
+        <button key={d.id} onClick={() => onSelect(d.id)}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', padding: '10px 16px', background: 'transparent', border: 'none', borderBottom: '1px solid #1c1917', cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left' }}>
+          {dayChip(days)}
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={{ display: 'block', fontSize: 13, fontWeight: 700, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {(m.homeownerName || d.name || d.id).split(' - ')[0]}
+              {inReview && <span title="Still in the Review queue — verify before calling" style={{ fontSize: 10, color: '#c4b5fd', marginLeft: 8 }}>🔎 in review</span>}
+            </span>
+            <span style={{ display: 'block', fontSize: 11, color: '#78716c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {[m.county && `${cleanCountyName(m.county)} County`, m.courtCase, `sold ${m.saleDate.slice(0, 10)}`].filter(Boolean).join(' · ')}
+            </span>
+          </span>
+          {phase && (
+            <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: phase.phase === 'confirmed' ? '#6ee7b7' : '#fcd34d', fontFamily: "'DM Mono', monospace" }}>{fmt(phase.amount)}</span>
+              <SurplusPhaseChip deal={d} />
+            </span>
+          )}
+          <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, color: uncalled ? '#fca5a5' : '#4ade80', whiteSpace: 'nowrap' }}>
+            {uncalled ? '📞 not called' : '✓ called'}
+          </span>
+        </button>
+      ))}
+      {rows.length > 8 && (
+        <button onClick={() => setShowAll(v => !v)}
+          style={{ width: '100%', padding: '9px 16px', background: 'transparent', border: 'none', color: '#78716c', fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>
+          {showAll ? '▲ Show fewer' : `▼ Show all ${rows.length}`}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function TodayView({ deals, onSelect, isAdmin, setView, onRequestDisposition }) {
   const now = new Date();
   const year = now.getFullYear();
@@ -16854,6 +16976,41 @@ function MiniDocketPulse({ dealId }) {
   );
 }
 
+// ─── PreforeclosureCard — Defender-lane lead card (Nathan 2026-07-06) ──────
+// NOD filed, auction hasn't happened. The money number is potential equity =
+// Zillow value − judgment. Deliberately NOT SurplusCard — different lane,
+// different fields, no surplus/outreach-readiness machinery.
+function PreforeclosureCard({ deal, onClick, onDelete, onToggleFlag }) {
+  const sc = STATUS_COLORS[deal.status] || "#78716c";
+  const m = deal.meta || {};
+  const flagged = m.flagged;
+  const j = parseFloat(m.judgmentAmount);
+  const z = parseFloat(m.zillowEstimate);
+  const equity = (Number.isFinite(z) && z > 0 && Number.isFinite(j)) ? z - j : null;
+  return (
+    <div onClick={onClick} style={{ background: "#1c1917", border: flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, paddingTop: 40, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
+      <div style={{ position: "absolute", top: 10, left: 18, right: 18, display: "flex", gap: 6, alignItems: "center" }}>
+        <StatusBadge status={deal.status} />
+        <span title="Pre-foreclosure — Defender / homeowner-advocate lane" style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.06em', color: '#93c5fd', background: '#0c1a2e', border: '1px solid #1e3a5f', borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}>🛡 DEFENDER</span>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>{deal.name}</div>
+          <div style={{ fontSize: 11, color: "#a8a29e", marginTop: 2 }}>{deal.address}</div>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
+        {equity != null && <MiniStat label="Potential Equity" value={fmt(equity)} />}
+        {Number.isFinite(z) && z > 0 && <MiniStat label="Zillow Value" value={fmt(z)} />}
+        {Number.isFinite(j) && j > 0 && <MiniStat label="Judgment" value={fmt(j)} />}
+        {m.nodDate && <MiniStat label="NOD Date" value={m.nodDate} />}
+        {m.county && <MiniStat label="County" value={m.county} />}
+      </div>
+    </div>
+  );
+}
+
 function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = false, contactExtra = {}, onLog }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
@@ -16931,7 +17088,12 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
-          {m.estimatedSurplus > 0 && <MiniStat label="Est. Surplus" value={fmt(m.estimatedSurplus)} />}
+          {(() => {
+            // Phase-aware money label (Nathan 2026-07-06): confirmed = exact
+            // court-confirmed number; potential = estimate until the sale confirms.
+            const p = surplusPhase(deal);
+            return p ? <MiniStat label={p.phase === 'confirmed' ? '✓ Confirmed Surplus' : '~ Potential Surplus'} value={fmt(p.amount)} /> : null;
+          })()}
           {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
           {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
           {m.county && <MiniStat label="County" value={m.county} />}
@@ -17022,6 +17184,11 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
   const [leadSource, setLeadSource] = useState("");
   const [deadline, setDeadline] = useState("");
   const [filedAt, setFiledAt] = useState("");
+  // Pre-foreclosure (Defender) fields — NOD date + judgment + Zillow value;
+  // potential equity = value − judgment, derived live below.
+  const [nodDate, setNodDate] = useState("");
+  const [pfJudgment, setPfJudgment] = useState("");
+  const [pfZillow, setPfZillow] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
   // Possible-duplicate matches against existing deals — recomputed on
   // every name/address change with a 250ms debounce. Closes the gap
@@ -17073,7 +17240,9 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
     const id = type + "-" + uid();
     const meta = type === "flip"
       ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [], assigned_to: assignedTo || "" }
-      : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "", assigned_to: assignedTo || "" };
+      : type === "preforeclosure"
+        ? { nodDate: nodDate || "", judgmentAmount: parseFloat(pfJudgment) || 0, zillowEstimate: parseFloat(pfZillow) || 0, county: "", courtCase: "", assigned_to: assignedTo || "" }
+        : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "", assigned_to: assignedTo || "" };
     const deal = { id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta, assigned_to: assignedTo || null };
     if (leadSource) deal.meta.lead_source = leadSource;
     if (deadline) deal.meta.deadline = deadline;
@@ -17088,8 +17257,14 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
       <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
         <TabBtn active={type === "flip"} onClick={() => setType("flip")}>🏠 Flip / RE Deal</TabBtn>
         <TabBtn active={type === "surplus"} onClick={() => setType("surplus")}>💰 Surplus Fund</TabBtn>
+        <TabBtn active={type === "preforeclosure"} onClick={() => setType("preforeclosure")}>🛡 Pre-Foreclosure</TabBtn>
       </div>
-      <Field label="Deal Name"><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "Property address or nickname" : "Client name"} /></Field>
+      {type === "preforeclosure" && (
+        <div style={{ marginBottom: 14, padding: '8px 12px', background: '#0c1a2e', border: '1px solid #1e3a5f', borderRadius: 6, fontSize: 11, color: '#93c5fd', lineHeight: 1.5 }}>
+          🛡 <strong>Defender lane</strong> — Notice of Default filed, auction hasn't happened. Goal: reach the homeowner <em>before</em> the sale.
+        </div>
+      )}
+      <Field label="Deal Name"><input value={name} onChange={e => setName(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "Property address or nickname" : type === "preforeclosure" ? "Homeowner name" : "Client name"} /></Field>
       <Field label="Location / County" style={{ marginTop: 12 }}><input value={address} onChange={e => setAddress(e.target.value)} style={inputStyle} placeholder={type === "flip" ? "City, State" : "County, State"} /></Field>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
         <Field label="Lead Source">
@@ -17107,6 +17282,30 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
           <input type="date" value={filedAt} onChange={e => setFiledAt(e.target.value)} style={inputStyle} />
         </Field>
       )}
+      {type === "preforeclosure" && (() => {
+        const j = parseFloat(pfJudgment); const z = parseFloat(pfZillow);
+        const equity = (Number.isFinite(z) && z > 0 && Number.isFinite(j)) ? z - j : null;
+        return (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
+              <Field label="NOD Date">
+                <input type="date" value={nodDate} onChange={e => setNodDate(e.target.value)} style={inputStyle} />
+              </Field>
+              <Field label="Judgment ($)">
+                <input type="number" value={pfJudgment} onChange={e => setPfJudgment(e.target.value)} style={inputStyle} placeholder="e.g. 145000" />
+              </Field>
+              <Field label="Zillow Value ($)">
+                <input type="number" value={pfZillow} onChange={e => setPfZillow(e.target.value)} style={inputStyle} placeholder="e.g. 320000" />
+              </Field>
+            </div>
+            {equity != null && (
+              <div style={{ marginTop: 10, padding: '8px 12px', background: equity > 0 ? '#052e16' : '#3f1d1d', border: `1px solid ${equity > 0 ? '#166534' : '#7f1d1d'}`, borderRadius: 6, fontSize: 12, fontWeight: 700, color: equity > 0 ? '#86efac' : '#fca5a5', fontFamily: "'DM Mono', monospace" }}>
+                Potential equity: {fmt(equity)} <span style={{ fontWeight: 400, color: '#78716c', fontFamily: 'inherit' }}>(Zillow − judgment)</span>
+              </div>
+            )}
+          </>
+        );
+      })()}
       <Field label="Assigned To" style={{ marginTop: 12 }}>
         <select value={assignedTo} onChange={e => setAssignedTo(e.target.value)} style={{ ...inputStyle, padding: "8px 10px" }}>
           <option value="">Unassigned</option>
@@ -18920,7 +19119,9 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
 
       {tab === "overview" && (isFlip
         ? <FlipOverview deal={deal} expenses={expenses} totalExpenses={totalExpenses} netProfit={netProfit} strategy={strategy} salePrice={salePrice} closingDollars={closingDollars} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} isAdmin={isAdmin} userId={userId} onJumpToTab={setTab} />
-        : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} userId={userId} onJumpToTab={setTab} />)}
+        : deal.type === "preforeclosure"
+          ? <PreforeclosureOverview deal={deal} onUpdateDeal={onUpdateDeal} />
+          : <SurplusOverview deal={deal} totalExpenses={totalExpenses} projectedFee={projectedFee} tasksDone={tasksDone} tasksTotal={tasks.length} onUpdateDeal={onUpdateDeal} logAct={logAct} isAdmin={isAdmin} userId={userId} onJumpToTab={setTab} />)}
       {/* Comms = SMS/iMessage + in-app messages + unified timeline. Stacked */}
       {/* sections for now; Stage 3 merges into a single threaded GHL-style view. */}
       {tab === "comms" && (
@@ -22177,6 +22378,65 @@ function ObituaryField({ value, onChange, placeholder, style }) {
       placeholder={placeholder}
       style={style}
     />
+  );
+}
+
+// ─── PreforeclosureOverview — Defender-lane detail (Nathan 2026-07-06) ──────
+// Lean by design: the numbers that matter pre-auction (Zillow value, judgment,
+// derived equity) + NOD date + county/case. All DCC-owned meta keys — none are
+// promoted columns or intel-main-managed, so a plain meta merge is safe here.
+function PreforeclosureOverview({ deal, onUpdateDeal }) {
+  const m = deal.meta || {};
+  const [f, setF] = React.useState({
+    nodDate: m.nodDate || '', judgmentAmount: m.judgmentAmount ?? '',
+    zillowEstimate: m.zillowEstimate ?? '', county: m.county || '', courtCase: m.courtCase || '',
+  });
+  const save = (key) => {
+    const raw = f[key];
+    const val = (key === 'judgmentAmount' || key === 'zillowEstimate') ? (parseFloat(raw) || 0) : (raw || '');
+    if ((m[key] ?? '') === val) return;
+    onUpdateDeal({ meta: { ...m, [key]: val } });
+  };
+  const j = parseFloat(f.judgmentAmount);
+  const z = parseFloat(f.zillowEstimate);
+  const equity = (Number.isFinite(z) && z > 0 && Number.isFinite(j)) ? z - j : null;
+  const Tile = ({ label, value, color }) => (
+    <div style={{ background: '#0c0a09', border: `1px solid ${color}44`, borderTop: `2px solid ${color}`, borderRadius: 8, padding: '10px 14px' }}>
+      <div style={{ fontSize: 10, color: '#78716c', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{label}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 3 }}>{value}</div>
+    </div>
+  );
+  // Plain function (called as F({...}), NOT <F/>) — an inline component would
+  // get a new identity every render and remount its <input>, dropping focus
+  // after each keystroke (the classic inline-component trap).
+  const F = ({ label, k, type: t }) => (
+    <div key={k}>
+      <label style={{ display: 'block', fontSize: 10, color: '#78716c', fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 5 }}>{label}</label>
+      <input type={t || 'text'} value={f[k]}
+        onChange={e => setF(s => ({ ...s, [k]: e.target.value }))}
+        onBlur={() => save(k)}
+        style={{ width: '100%', boxSizing: 'border-box', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, color: '#fafaf9', fontSize: 13, padding: '8px 10px', fontFamily: 'inherit' }} />
+    </div>
+  );
+  return (
+    <div>
+      <div style={{ marginBottom: 16, padding: '10px 14px', background: '#0c1a2e', border: '1px solid #1e3a5f', borderRadius: 8, fontSize: 12, color: '#93c5fd', lineHeight: 1.5 }}>
+        🛡 <strong>Defender lane — pre-foreclosure.</strong> NOD is filed; the auction hasn't happened. The play is reaching the homeowner <em>before</em> the sale. If it sells at auction, the surplus side takes over as a separate lead.
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10, marginBottom: 18 }}>
+        {Number.isFinite(z) && z > 0 && <Tile label="Zillow Value" value={fmt(z)} color="#3b82f6" />}
+        {Number.isFinite(j) && j > 0 && <Tile label="Judgment" value={fmt(j)} color="#ef4444" />}
+        {equity != null && <Tile label="Potential Equity" value={fmt(equity)} color={equity > 0 ? '#10b981' : '#ef4444'} />}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
+        {F({ label: 'NOD Date', k: 'nodDate', type: 'date' })}
+        {F({ label: 'Judgment ($)', k: 'judgmentAmount', type: 'number' })}
+        {F({ label: 'Zillow Value ($)', k: 'zillowEstimate', type: 'number' })}
+        {F({ label: 'County', k: 'county' })}
+        {F({ label: 'Case #', k: 'courtCase' })}
+      </div>
+      <div style={{ marginTop: 14, fontSize: 11, color: '#57534e' }}>Edits save when you leave a field. Equity recomputes from Zillow − judgment.</div>
+    </div>
   );
 }
 

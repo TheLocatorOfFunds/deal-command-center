@@ -205,7 +205,7 @@ Core tables, all in `public` schema:
 | Table | Purpose | Key columns |
 |---|---|---|
 | `profiles` | 1:1 with `auth.users` | `id` (uuid, FK to auth.users), `name`, `role` — one of `admin`, `user` (legacy admin), `va`, `attorney`, `client` |
-| `deals` | The core entity | `id` (text PK), `type` ('flip' / 'surplus' / 'wholesale' / 'rental' / 'other'), `status`, `name`, `address`, `meta` (jsonb for flexible per-type fields), `owner_id` |
+| `deals` | The core entity | `id` (text PK), `type` ('flip' / 'surplus' / **'preforeclosure'** (Defender lane, added 2026-07-06) / 'wholesale' / 'rental' / 'other'), `status`, `name`, `address`, `meta` (jsonb for flexible per-type fields), `owner_id` |
 | `expenses` | Per-deal line items | `deal_id` FK, `category`, `amount`, `date`, `vendor`, `notes` |
 | `tasks` | Per-deal todos | `deal_id` FK, `title`, `done`, `assigned_to`, `due_date` |
 | `vendors` | Per-deal contractors/contacts (deal-scoped, different from `contacts`) | `deal_id` FK, `name`, `role`, `phone`, `email` |
