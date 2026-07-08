@@ -1530,6 +1530,21 @@ function DealCommandCenter({ session, profile }) {
   // changes) gate on email match against the OWNER_EMAILS set defined
   // module-scope. Currently Nathan + Justin only.
   const isOwner = !!session.user.email && OWNER_EMAILS.has(String(session.user.email).toLowerCase());
+  // My Day (#333) is Nathan's alone — deliberately NOT isOwner (OWNER_EMAILS
+  // includes Justin). Email match on Nathan's two addresses + user-id fallback.
+  const isMyDayUser = (
+    ['nathan@fundlocators.com', 'nathan@refundlocators.com'].includes(String(session.user.email || '').toLowerCase())
+    || session.user.id === 'd6b072d2-0822-4631-a56e-9ec45ac7b243'
+  );
+  // Nathan's account lands on My Day after login (acceptance #1). Only when
+  // there's no explicit deep link (hash view or deal) — those still win.
+  const myDayLandedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (myDayLandedRef.current || !isMyDayUser) return;
+    myDayLandedRef.current = true;
+    const h = parseHash();
+    if (!h.view && !h.dealId) { setActiveDealId(null); setView('myday'); }
+  }, [isMyDayUser]);
 
   // Auto-init Twilio Device for team members on page load.
   // Attempt getUserMedia silently first: if mic was previously granted it
@@ -2482,6 +2497,7 @@ function DealCommandCenter({ session, profile }) {
                   stays in Today's groupIds so old links resolve. Back-office +
                   rare utilities (Time, Health, Contacts, Intake, Import, Library)
                   live in the "More" expander below. */}
+              {isMyDayUser && navItem('myday', '🌅', 'My Day')}
               {navItem('today',    '📌', 'Today',      { groupIds: ['today','attention'] })}
               {navItem('outreach', '🎯', 'Outreach',  { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
               {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','flagged','hygiene','archive','awaiting','payouts','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
@@ -2905,7 +2921,7 @@ function DealCommandCenter({ session, profile }) {
           onRestored={async () => { await loadDeals(); /* triggers activeDeal lookup again */ }}
         />
       ) : !activeDeal ? (
-        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} isAdmin={isAdmin} isOwner={isOwner} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} startCall={startCall} callStatus={callStatus} onOpenCallDisposition={setPendingDisposition} onToggleFlag={(id) => {
+        <DealList deals={deals} activity={recentActivity} onSelect={setActiveDealId} onNew={() => setShowNewDeal(true)} onDelete={deleteDeal} onOpenLog={() => setShowLog(true)} view={view} setView={setView} teamMembers={teamMembers} onUpdateDeal={updateDealMeta} onRequestDisposition={(d, presetReason) => setDispositionDeal({ id: d.id, deal: d, pendingPatch: { status: 'dead' }, presetReason })} isAdmin={isAdmin} isOwner={isOwner} isMyDay={isMyDayUser} userName={userName} userId={session.user.id} userRole={profile.role} chatJumpThreadId={chatJumpThreadId} onChatJumpConsumed={() => setChatJumpThreadId(null)} startCall={startCall} callStatus={callStatus} onOpenCallDisposition={setPendingDisposition} onToggleFlag={(id) => {
           const d = deals.find(x => x.id === id);
           if (!d) return;
           const m = d.meta || {};
@@ -3823,7 +3839,7 @@ function CallHistoryView({ onSelect, isAdmin }) {
 }
 
 // ─── Deal List ───────────────────────────────────────────────────────
-function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, isOwner, userId, userRole, chatJumpThreadId, onChatJumpConsumed, startCall, callStatus, onOpenCallDisposition }) {
+function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, isOwner, isMyDay, userName, userId, userRole, chatJumpThreadId, onChatJumpConsumed, startCall, callStatus, onOpenCallDisposition }) {
   const [searchQ, setSearchQ] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
@@ -4367,11 +4383,15 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "myday" || view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
             <><FreshAuctionStrip deals={deals} onSelect={onSelect} /><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
+          ) : view === "myday" ? (
+            isMyDay
+              ? <MyDayView deals={deals} onSelect={onSelect} startCall={startCall} callStatus={callStatus} userName={userName} />
+              : <div style={{ padding: 60, textAlign: 'center', color: '#78716c', fontSize: 13 }}>This page is the founder's personal landing view.</div>
           ) : view === "calls" ? (
             <CallHistoryView onSelect={onSelect} isAdmin={isAdmin} />
           ) : view === "attention" ? (
@@ -16124,6 +16144,182 @@ function ConversionFunnel({ deals, setView }) {
         <Arrow />
         <Cell icon="✍" label="Signed · 7d" count={counts.signed} onClick={() => setView && setView('active')} color="#f59e0b" />
       </div>
+    </div>
+  );
+}
+
+// ─── MyDayView — Nathan's calm founder landing (#333, built 2026-07-08) ─────
+// One screen, ≤5 things, all his: today's appointments · waiting-on-you ·
+// yesterday's money line · a collapsed Top-3-to-call. Deliberately NO kanban,
+// NO comms feed, NO badges. Visible + default-landing ONLY for Nathan (the
+// isMyDayUser gate in App — his two emails, not OWNER_EMAILS, which includes
+// Justin). Money line mirrors the Revenue Director's bases (cash_collected /
+// dials / appointments queries); "signed yesterday" is intentionally absent —
+// no reliable status-history source exists yet.
+function MyDayView({ deals, onSelect, startCall, callStatus, userName }) {
+  const [appts, setAppts] = React.useState(null);
+  const [waiting, setWaiting] = React.useState(null);
+  const [money, setMoney] = React.useState(null);
+  const [clicked, setClicked] = React.useState([]);
+  const [apptContacts, setApptContacts] = React.useState({});
+  const busy = callStatus && callStatus !== 'ended';
+
+  React.useEffect(() => {
+    let alive = true;
+    const dayBounds = (offsetDays) => {
+      const s = new Date(); s.setHours(0, 0, 0, 0); s.setDate(s.getDate() + offsetDays);
+      const e = new Date(s); e.setDate(e.getDate() + 1);
+      return [s.toISOString(), e.toISOString()];
+    };
+    (async () => {
+      const [t0, t1] = dayBounds(0);
+      const [y0, y1] = dayBounds(-1);
+      const [aRes, wRes, colRes, dialRes, apptSetRes, plRes] = await Promise.all([
+        sb.from('appointments').select('id, deal_id, contact_id, scheduled_at, kind, location, note').eq('status', 'scheduled').gte('scheduled_at', t0).lt('scheduled_at', t1).order('scheduled_at'),
+        // "Waiting on you" rule (documented on #333): assigned to Nathan, open,
+        // due within [today-3, today+7]. tasks.assigned_to alone is NOT a
+        // founder-block signal — the docket automation bulk-assigns Nathan by
+        // default and a 2026-04 backfill left 300+ tasks for 2022-era hearings.
+        // The tight due-window keeps this to genuinely-current items.
+        sb.from('tasks').select('id, deal_id, title, created_at, due_date').eq('assigned_to', userName || 'Nathan').eq('done', false)
+          .gte('due_date', new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10))
+          .lte('due_date', new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10))
+          .order('due_date').limit(30),
+        sb.from('deals').select('actual_net').eq('status', 'recovered').gte('closed_at', y0).lt('closed_at', y1),
+        sb.from('call_logs').select('id', { count: 'exact', head: true }).eq('direction', 'outbound').gte('created_at', y0).lt('created_at', y1),
+        sb.from('appointments').select('id', { count: 'exact', head: true }).gte('created_at', y0).lt('created_at', y1),
+        sb.from('personalized_links').select('deal_id, view_count').gt('view_count', 0).is('responded_at', null).not('deal_id', 'is', null).limit(50),
+      ]);
+      if (!alive) return;
+      setAppts(aRes.data || []);
+      setWaiting(wRes.data || []);
+      setMoney({
+        collected: (colRes.data || []).reduce((s, d) => s + (parseFloat(d.actual_net) || 0), 0),
+        dials: dialRes.count || 0,
+        apptsSet: apptSetRes.count || 0,
+      });
+      setClicked((plRes.data || []).map(r => r.deal_id));
+      const cids = (aRes.data || []).map(a => a.contact_id).filter(Boolean);
+      if (cids.length) {
+        const { data: cs } = await sb.from('contacts').select('id, phone, name, do_not_call').in('id', cids);
+        if (alive && cs) setApptContacts(Object.fromEntries(cs.map(c => [c.id, c])));
+      }
+    })();
+    return () => { alive = false; };
+  }, [userName]);
+
+  const dealById = React.useMemo(() => Object.fromEntries((deals || []).map(d => [d.id, d])), [deals]);
+  const liveDeal = (id) => { const d = dealById[id]; return d && !d.deleted_at && d.status !== 'dead' ? d : null; };
+  const firstName = (d) => ((d?.meta?.homeownerName || d?.name || '').split(' - ')[0].split(/\s+/)[0]) || '—';
+  const countyOf = (d) => d?.meta?.county ? cleanCountyName(d.meta.county) + ' County' : '';
+  const phoneOf = (d) => dealMetaPhone(d?.meta || {}) || null;
+
+  // Top 3 to call — the consult spec: DAY 0-1 fresh auction (uncalled) →
+  // clicked-their-link-never-replied → freshest remaining auction. The 19
+  // verify_senior_liens leads are excluded (inflated figures).
+  const top3 = React.useMemo(() => {
+    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+    const fresh = [];
+    for (const d of (deals || [])) {
+      if (d.type !== 'surplus' || d.deleted_at || d.status !== 'new-lead') continue;
+      const m = d.meta || {};
+      if (m.reviewFlag === 'verify_senior_liens') continue;
+      if ((m.auctionStatus || '').toUpperCase() === 'CANCELLED') continue;
+      const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
+      if (!sd || !/^\d{4}-\d{2}-\d{2}$/.test(sd)) continue;
+      const days = Math.round((todayMid - new Date(sd + 'T00:00:00')) / 86400000);
+      if (days < 0 || days > 30) continue;
+      const uncalled = !d.last_contacted_at || new Date(d.last_contacted_at) < new Date(sd + 'T00:00:00');
+      fresh.push({ d, days, uncalled });
+    }
+    fresh.sort((a, b) => (a.uncalled !== b.uncalled) ? (a.uncalled ? -1 : 1) : a.days - b.days);
+    const picks = []; const used = new Set();
+    const add = (d, why) => { if (d && !used.has(d.id) && picks.length < 3) { used.add(d.id); picks.push({ d, why }); } };
+    fresh.filter(f => f.days <= 1 && f.uncalled).forEach(f => add(f.d, f.days === 0 ? '🔥 Auction was TODAY — first caller usually wins' : 'Auction yesterday — still fresh'));
+    clicked.forEach(id => { const d = liveDeal(id); if (d && d.meta?.reviewFlag !== 'verify_senior_liens') add(d, 'Opened their money page — never replied'); });
+    fresh.forEach(f => add(f.d, `Auction ${f.days} day${f.days === 1 ? '' : 's'} ago${f.uncalled ? ' — not called yet' : ''}`));
+    return picks;
+  }, [deals, clicked, dealById]);
+
+  const hour = new Date().getHours();
+  const greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+  const fmtTime = (iso) => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  const rowStyle = { display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', background: '#1c1917', border: '1px solid #292524', borderRadius: 10, marginBottom: 8, cursor: 'pointer' };
+  const sectionTitle = { fontSize: 12, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 14 };
+  const CallBtn = ({ phone, name, contactId }) => phone ? (
+    <button onClick={(e) => { e.stopPropagation(); if (!busy) startCall({ phone, name, contact_id: contactId }); }}
+      disabled={!!busy}
+      style={{ background: busy ? '#292524' : '#065f46', color: busy ? '#57534e' : '#6ee7b7', border: 'none', borderRadius: 8, padding: '8px 16px', fontSize: 13, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit', flexShrink: 0 }}>
+      📞 Call
+    </button>
+  ) : null;
+
+  const waitingLive = (waiting || []).filter(t => liveDeal(t.deal_id));
+  const shownWaiting = waitingLive.slice(0, 5);
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto', padding: '28px 8px 60px' }}>
+      <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', marginBottom: 6 }}>{greet}, {(userName || 'Nathan').split(' ')[0]}.</div>
+      {money && (
+        <div style={{ fontSize: 13, color: '#a8a29e', marginBottom: 40 }}>
+          Yesterday: <strong style={{ color: '#6ee7b7' }}>{fmt(money.collected)}</strong> collected · <strong style={{ color: '#fafaf9' }}>{money.dials}</strong> dial{money.dials === 1 ? '' : 's'} · <strong style={{ color: '#fafaf9' }}>{money.apptsSet}</strong> appointment{money.apptsSet === 1 ? '' : 's'} set
+        </div>
+      )}
+      <div style={{ marginBottom: 36 }}>
+        <div style={sectionTitle}>Today's appointments</div>
+        {appts === null ? <div style={{ color: '#57534e', fontSize: 13 }}>Loading…</div>
+          : appts.length === 0 ? <div style={{ color: '#78716c', fontSize: 14 }}>No appointments today.</div>
+          : appts.map(a => {
+              const d = liveDeal(a.deal_id);
+              const c = apptContacts[a.contact_id];
+              const phone = (c && !c.do_not_call && c.phone) || phoneOf(d);
+              return (
+                <div key={a.id} onClick={() => d && onSelect(d.id)} style={{ ...rowStyle, cursor: d ? 'pointer' : 'default' }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: '#fcd34d', fontFamily: "'DM Mono', monospace", flexShrink: 0 }}>{fmtTime(a.scheduled_at)}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#fafaf9' }}>{(c?.name || '').split(' ')[0] || firstName(d)}{d && countyOf(d) ? <span style={{ color: '#78716c', fontWeight: 400 }}> · {countyOf(d)}</span> : null}</div>
+                    {a.note && <div style={{ fontSize: 12, color: '#a8a29e', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.note}</div>}
+                  </div>
+                  <CallBtn phone={phone} name={c?.name || d?.name} contactId={a.contact_id} />
+                </div>
+              );
+            })}
+      </div>
+      <div style={{ marginBottom: 36 }}>
+        <div style={sectionTitle}>Waiting on you</div>
+        {waiting === null ? <div style={{ color: '#57534e', fontSize: 13 }}>Loading…</div>
+          : shownWaiting.length === 0 ? <div style={{ color: '#78716c', fontSize: 14 }}>Nothing is waiting on you.</div>
+          : (<>
+              {shownWaiting.map(t => {
+                const d = liveDeal(t.deal_id);
+                return (
+                  <div key={t.id} onClick={() => d && onSelect(t.deal_id)} style={{ ...rowStyle, alignItems: 'baseline', padding: '12px 16px' }}>
+                    <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: '#fafaf9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.title}</div>
+                    <div style={{ fontSize: 12, color: '#78716c', flexShrink: 0 }}>{d ? firstName(d) : ''}</div>
+                  </div>
+                );
+              })}
+              {waitingLive.length > 5 && <div style={{ fontSize: 12, color: '#78716c', paddingLeft: 4 }}>+{waitingLive.length - 5} more in Tasks</div>}
+            </>)}
+      </div>
+      <details style={{ marginBottom: 36 }}>
+        <summary style={{ ...sectionTitle, cursor: 'pointer', display: 'list-item' }}>Top 3 to call</summary>
+        {top3.length === 0 ? <div style={{ color: '#78716c', fontSize: 14, marginTop: 12 }}>Nothing urgent — the fresh-auction queue is clear.</div>
+          : top3.map(({ d, why }) => {
+              const p = surplusPhase(d);
+              const phone = phoneOf(d);
+              return (
+                <div key={d.id} onClick={() => onSelect(d.id)} style={{ ...rowStyle, marginTop: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#fafaf9' }}>{firstName(d)}<span style={{ color: '#78716c', fontWeight: 400 }}> · {countyOf(d)}</span>{p ? <span style={{ color: p.phase === 'confirmed' ? '#6ee7b7' : '#fcd34d', fontWeight: 700 }}> · {fmt(p.amount)}</span> : null}</div>
+                    <div style={{ fontSize: 12, color: '#fdba74' }}>{why}</div>
+                  </div>
+                  <CallBtn phone={phone} name={d.name} />
+                </div>
+              );
+            })}
+      </details>
+      <div style={{ fontSize: 12, color: '#57534e' }}>Everything else lives in the sidebar when you want it. This page stays small on purpose.</div>
     </div>
   );
 }
