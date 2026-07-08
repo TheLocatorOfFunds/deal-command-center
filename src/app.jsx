@@ -2355,7 +2355,25 @@ function DealCommandCenter({ session, profile }) {
         return;
       }
     }
-    setDeals(ds => ds.map(d => d.id === id ? { ...d, ...patch } : d)); // optimistic
+    // Optimistic local apply — and mirror mapped-COLUMN writes into meta locally,
+    // exactly like the DB trigger does server-side. Without this, a save of a
+    // mapped field (sheriffDocketLink, estimatedAvailableEquity, obituary, …)
+    // only reaches client meta via the realtime round-trip — and when realtime
+    // drops (throttled tab / degraded Supabase), reopening the deal re-reads
+    // STALE meta and the field looks blank even though the save landed
+    // (Inaam's "name / address / equity / docket link disappear", 2026-07-08).
+    setDeals(ds => ds.map(d => {
+      if (d.id !== id) return d;
+      const next = { ...d, ...patch };
+      const mirrored = {};
+      for (const k of Object.keys(patch)) {
+        for (const mk of Object.keys(META_TO_COLUMN)) {
+          if (META_TO_COLUMN[mk] === k) { mirrored[mk] = patch[k]; break; }
+        }
+      }
+      if (Object.keys(mirrored).length) next.meta = { ...(patch.meta || d.meta || {}), ...mirrored };
+      return next;
+    }));
     // Surface failures instead of swallowing them. .select() lets us catch a
     // 0-row update (RLS / filter blocked it — no error, but nothing saved),
     // which presents to the user as a field "disappearing" on the next reload.
