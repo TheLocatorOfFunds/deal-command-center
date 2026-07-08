@@ -234,10 +234,17 @@ const isLeadStatus = (deal) => deal && (LEAD_STATUSES[deal.type] || []).includes
 // both keys are set elsewhere (verify flow / intel-main).
 const surplusPhase = (deal) => {
   const m = (deal && deal.meta) || {};
-  const conf = parseFloat(m.verifiedSurplus);
-  if (Number.isFinite(conf) && conf > 0) return { phase: 'confirmed', amount: conf };
-  const est = parseFloat(m.estimatedSurplus);
-  if (Number.isFinite(est) && est > 0) return { phase: 'potential', amount: est };
+  const firstNum = (...vals) => {
+    for (const v of vals) { const n = parseFloat(v); if (Number.isFinite(n) && n > 0) return n; }
+    return null;
+  };
+  const conf = firstNum(m.verifiedSurplus);
+  if (conf) return { phase: 'confirmed', amount: conf };
+  // Same cascade the funnel/kanban sums use — meta.estimatedSurplus first, then
+  // the legacy hand-entered key, equity, then Castle's surplus_estimate COLUMN.
+  // Keeps the money visible even when a value lives under a sibling key.
+  const est = firstNum(m.estimatedSurplus, m.estimated_surplus, m.estimatedAvailableEquity, deal && deal.surplus_estimate);
+  if (est) return { phase: 'potential', amount: est };
   return null;
 };
 
@@ -17276,7 +17283,7 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
     const meta = type === "flip"
       ? { contractPrice: 0, reinstatement: 0, lienPayoff: 0, listPrice: 0, flatFee: 0, buyerAgentPct: 3, closingMiscPct: 1, concessions: [], assigned_to: assignedTo || "" }
       : type === "preforeclosure"
-        ? { nodDate: nodDate || "", judgmentAmount: parseFloat(pfJudgment) || 0, zillowEstimate: parseFloat(pfZillow) || 0, county: "", courtCase: "", assigned_to: assignedTo || "" }
+        ? { nodDate: nodDate || "", judgmentAmount: parseFloat(String(pfJudgment).replace(/[$,\s]/g, '')) || 0, zillowEstimate: parseFloat(String(pfZillow).replace(/[$,\s]/g, '')) || 0, county: "", courtCase: "", assigned_to: assignedTo || "" }
         : { estimatedSurplus: 0, feePct: 22, attorney: "", courtCase: "", county: "", assigned_to: assignedTo || "" };
     const deal = { id, type, name, address, status: type === "flip" ? "lead" : "new-lead", created: new Date().toISOString().slice(0, 10), meta, assigned_to: assignedTo || null };
     if (leadSource) deal.meta.lead_source = leadSource;
@@ -17318,7 +17325,8 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
         </Field>
       )}
       {type === "preforeclosure" && (() => {
-        const j = parseFloat(pfJudgment); const z = parseFloat(pfZillow);
+        const j = parseFloat(String(pfJudgment).replace(/[$,\s]/g, ''));
+        const z = parseFloat(String(pfZillow).replace(/[$,\s]/g, ''));
         const equity = (Number.isFinite(z) && z > 0 && Number.isFinite(j)) ? z - j : null;
         return (
           <>
@@ -17327,10 +17335,10 @@ function NewDealModal({ onAdd, onClose, teamMembers, deals = [], onOpenDeal }) {
                 <input type="date" value={nodDate} onChange={e => setNodDate(e.target.value)} style={inputStyle} />
               </Field>
               <Field label="Judgment ($)">
-                <input type="number" value={pfJudgment} onChange={e => setPfJudgment(e.target.value)} style={inputStyle} placeholder="e.g. 145000" />
+                <input type="text" inputMode="decimal" value={pfJudgment} onChange={e => setPfJudgment(e.target.value)} style={inputStyle} placeholder="e.g. 145000" />
               </Field>
               <Field label="Zillow Value ($)">
-                <input type="number" value={pfZillow} onChange={e => setPfZillow(e.target.value)} style={inputStyle} placeholder="e.g. 320000" />
+                <input type="text" inputMode="decimal" value={pfZillow} onChange={e => setPfZillow(e.target.value)} style={inputStyle} placeholder="e.g. 320000" />
               </Field>
             </div>
             {equity != null && (
@@ -22416,6 +22424,36 @@ function ObituaryField({ value, onChange, placeholder, style }) {
   );
 }
 
+// ─── MoneyInput — paste-tolerant money field (Inaam's field-wipe bug, 2026-07-08) ──
+// <input type="number"> silently becomes "" (badInput) when you PASTE a formatted
+// figure like "$140,430" from a court doc — and the old onChange coerced "" → null,
+// so the paste WIPED the field ("fields disappear when I save"; nulled 33 of 38
+// worked July leads). Text input + inputMode=decimal + sanitizer: strips $ , and
+// spaces, commits finite numbers, commits null ONLY on a deliberate clear, and on
+// unparseable garbage keeps the last good value instead of nulling it.
+function MoneyInput({ value, onCommit, placeholder }) {
+  const [raw, setRaw] = React.useState(value == null ? '' : String(value));
+  const focusedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!focusedRef.current) setRaw(value == null ? '' : String(value));
+  }, [value]);
+  const handle = (e) => {
+    const r = e.target.value;
+    setRaw(r);
+    const cleaned = r.replace(/[$,\s]/g, '');
+    if (cleaned === '') { onCommit(null); return; }
+    const n = parseFloat(cleaned);
+    if (Number.isFinite(n)) onCommit(n);
+  };
+  return (
+    <input type="text" inputMode="decimal" value={raw} placeholder={placeholder || '$'}
+      onFocus={() => { focusedRef.current = true; }}
+      onBlur={() => { focusedRef.current = false; setRaw(value == null ? '' : String(value)); }}
+      onChange={handle}
+      style={inputStyle} />
+  );
+}
+
 // ─── PreforeclosureOverview — Defender-lane detail (Nathan 2026-07-06) ──────
 // Lean by design: the numbers that matter pre-auction (Zillow value, judgment,
 // derived equity) + NOD date + county/case. All DCC-owned meta keys — none are
@@ -22428,12 +22466,16 @@ function PreforeclosureOverview({ deal, onUpdateDeal }) {
   });
   const save = (key) => {
     const raw = f[key];
-    const val = (key === 'judgmentAmount' || key === 'zillowEstimate') ? (parseFloat(raw) || 0) : (raw || '');
+    // Sanitize money before parsing — pasted "$145,000" must not become 0
+    // (same paste trap as the Case Details MoneyInput fix, 2026-07-08).
+    const val = (key === 'judgmentAmount' || key === 'zillowEstimate')
+      ? (parseFloat(String(raw).replace(/[$,\s]/g, '')) || 0)
+      : (raw || '');
     if ((m[key] ?? '') === val) return;
     onUpdateDeal({ meta: { ...m, [key]: val } });
   };
-  const j = parseFloat(f.judgmentAmount);
-  const z = parseFloat(f.zillowEstimate);
+  const j = parseFloat(String(f.judgmentAmount).replace(/[$,\s]/g, ''));
+  const z = parseFloat(String(f.zillowEstimate).replace(/[$,\s]/g, ''));
   const equity = (Number.isFinite(z) && z > 0 && Number.isFinite(j)) ? z - j : null;
   const Tile = ({ label, value, color }) => (
     <div style={{ background: '#0c0a09', border: `1px solid ${color}44`, borderTop: `2px solid ${color}`, borderRadius: 8, padding: '10px 14px' }}>
@@ -22465,8 +22507,8 @@ function PreforeclosureOverview({ deal, onUpdateDeal }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12 }}>
         {F({ label: 'NOD Date', k: 'nodDate', type: 'date' })}
-        {F({ label: 'Judgment ($)', k: 'judgmentAmount', type: 'number' })}
-        {F({ label: 'Zillow Value ($)', k: 'zillowEstimate', type: 'number' })}
+        {F({ label: 'Judgment ($)', k: 'judgmentAmount' })}
+        {F({ label: 'Zillow Value ($)', k: 'zillowEstimate' })}
         {F({ label: 'County', k: 'county' })}
         {F({ label: 'Case #', k: 'courtCase' })}
       </div>
@@ -22594,13 +22636,13 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
           {isAdmin && <>
             <SubLabel>Financial</SubLabel>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <Field label="Est. Available Equity (pre-auction)"><input type="number" value={m.estimatedAvailableEquity ?? ""} onChange={e => updateMeta({ estimatedAvailableEquity: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Estimated Surplus (post-auction)"><input type="number" value={m.estimatedSurplus ?? ""} onChange={e => updateMeta({ estimatedSurplus: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Verified Surplus (court-confirmed)"><input type="number" value={m.verifiedSurplus ?? ""} onChange={e => updateMeta({ verifiedSurplus: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Judgment Debt"><input type="number" value={m.judgmentAmount ?? ""} onChange={e => updateMeta({ judgmentAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Total Debt"><input type="number" value={m.totalDebt ?? ""} onChange={e => updateMeta({ totalDebt: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Mortgage Balance 1"><input type="number" value={m.mortgageBalance1 ?? ""} onChange={e => updateMeta({ mortgageBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
-              <Field label="Lien Balance 1"><input type="number" value={m.lienBalance1 ?? ""} onChange={e => updateMeta({ lienBalance1: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Est. Available Equity (pre-auction)"><MoneyInput value={m.estimatedAvailableEquity} onCommit={v => updateMeta({ estimatedAvailableEquity: v })} /></Field>
+              <Field label="Estimated Surplus (post-auction)"><MoneyInput value={m.estimatedSurplus} onCommit={v => updateMeta({ estimatedSurplus: v })} /></Field>
+              <Field label="Verified Surplus (court-confirmed)"><MoneyInput value={m.verifiedSurplus} onCommit={v => updateMeta({ verifiedSurplus: v })} /></Field>
+              <Field label="Judgment Debt"><MoneyInput value={m.judgmentAmount} onCommit={v => updateMeta({ judgmentAmount: v })} /></Field>
+              <Field label="Total Debt"><MoneyInput value={m.totalDebt} onCommit={v => updateMeta({ totalDebt: v })} /></Field>
+              <Field label="Mortgage Balance 1"><MoneyInput value={m.mortgageBalance1} onCommit={v => updateMeta({ mortgageBalance1: v })} /></Field>
+              <Field label="Lien Balance 1"><MoneyInput value={m.lienBalance1} onCommit={v => updateMeta({ lienBalance1: v })} /></Field>
             </div>
 
             {/* (PR #297 added a "Recovery (post-close)" duplicate input here
@@ -22613,12 +22655,12 @@ function SurplusOverview({ deal, totalExpenses, projectedFee, tasksDone, tasksTo
             <SubLabel>Sale & Timeline</SubLabel>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
               <Field label="Sale Date (auction)"><input type="date" value={m.saleDate || ""} onChange={e => updateMeta({ saleDate: e.target.value || null })} style={inputStyle} /></Field>
-              <Field label="Sale Price (sold at auction)"><input type="number" value={m.salePrice ?? ""} onChange={e => updateMeta({ salePrice: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Sale Price (sold at auction)"><MoneyInput value={m.salePrice} onCommit={v => updateMeta({ salePrice: v })} /></Field>
               <Field label="Confirmation of Sale Date"><input type="date" value={m.confirmationOfSaleDate || ""} onChange={e => updateMeta({ confirmationOfSaleDate: e.target.value || null })} style={inputStyle} /></Field>
               <Field label="Redemption Deadline"><input type="date" value={m.redemptionDeadline || ""} onChange={e => updateMeta({ redemptionDeadline: e.target.value || null })} style={inputStyle} /></Field>
-              <Field label="Minimum Bid Amount"><input type="number" value={m.minimumBidAmount ?? ""} onChange={e => updateMeta({ minimumBidAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Minimum Bid Amount"><MoneyInput value={m.minimumBidAmount} onCommit={v => updateMeta({ minimumBidAmount: v })} /></Field>
               <Field label="Court Appraisal Date"><input type="date" value={m.courtAppraisalOrderDate || ""} onChange={e => updateMeta({ courtAppraisalOrderDate: e.target.value || null })} style={inputStyle} /></Field>
-              <Field label="Court Appraisal Value"><input type="number" value={m.courtAppraisalValue ?? ""} onChange={e => updateMeta({ courtAppraisalValue: e.target.value === "" ? null : parseFloat(e.target.value) })} style={inputStyle} placeholder="$" /></Field>
+              <Field label="Court Appraisal Value"><MoneyInput value={m.courtAppraisalValue} onCommit={v => updateMeta({ courtAppraisalValue: v })} /></Field>
             </div>
 
             <SubLabel>Liens (open / mortgage history)</SubLabel>
