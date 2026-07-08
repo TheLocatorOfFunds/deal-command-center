@@ -240,6 +240,28 @@ const surplusPhase = (deal) => {
   if (Number.isFinite(est) && est > 0) return { phase: 'potential', amount: est };
   return null;
 };
+
+// ─── The lane rule (Nathan 2026-07-08): "Anything that has not sold at auction
+// is pre-foreclosure — Defender." Sold at auction → surplus (FundLocators).
+// A surplus-typed lead with a FUTURE sale date renders in the Defender lane and
+// auto-graduates to the surplus lane the day it sells (no data change — the
+// type column stays 'surplus' so intel-main sync + review flows keep working).
+// Unknown/no sale date defaults to the surplus lane (assuming sold is the safer
+// default for the money side).
+const isPreSale = (deal) => {
+  if (!deal) return false;
+  if (deal.type === 'preforeclosure') return true;
+  if (deal.type !== 'surplus') return false;
+  const m = deal.meta || {};
+  if ((m.auctionStatus || '').toUpperCase() === 'SOLD') return false;
+  if (m.isPostAuction === true || m.isPostAuction === 'true') return false;
+  const conf = parseFloat(m.verifiedSurplus);
+  if (Number.isFinite(conf) && conf > 0) return false; // confirmed surplus = definitely sold
+  const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
+  if (!sd || !/^\d{4}-\d{2}-\d{2}$/.test(sd)) return false;
+  const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+  return new Date(sd + 'T00:00:00') > todayMid;
+};
 function SurplusPhaseChip({ deal, style }) {
   const p = surplusPhase(deal);
   if (!p) return null;
@@ -3916,11 +3938,14 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     return true;
   });
   const flips = visible.filter(d => d.type === "flip");
-  const preforeclosures = visible.filter(d => d.type === "preforeclosure");
+  // Lane rule (Nathan 2026-07-08): not sold at auction yet → Defender lane,
+  // even if the row is surplus-typed (upcoming auctions auto-graduate to the
+  // surplus lane the day they sell).
+  const preforeclosures = visible.filter(d => d.type === "preforeclosure" || (d.type === "surplus" && isPreSale(d)));
   // #237 — confidence-tier filter on the surplus list. Counts come from the
   // pre-filter set so the filter dropdown + its counts don't vanish when a
   // tier filters down to empty.
-  const surplusAll = visible.filter(d => d.type === "surplus");
+  const surplusAll = visible.filter(d => d.type === "surplus" && !isPreSale(d));
   const confWalkerCount = surplusAll.filter(d => d.meta?.confidenceTier === 'walker_verified').length;
   const confVerifyCount = surplusAll.filter(d => d.meta?.confidenceTier === 'complaint_inferred').length;
   let surplus = confTierFilter === "all" ? surplusAll : surplusAll.filter(d => (d.meta?.confidenceTier || '') === confTierFilter);
@@ -4464,10 +4489,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                 <SectionLabel icon="🛡" label={
                   view === "archive"  ? "Closed Pre-Foreclosure"
                   : view === "deleted" ? "Deleted Pre-Foreclosure"
-                  : "Pre-Foreclosure · Defender"
+                  : "Pre-Foreclosure · Defender (not sold at auction yet)"
                 } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
-                  {preforeclosures.map(d => <PreforeclosureCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {preforeclosures.map(d => d.type === "preforeclosure"
+                    ? <PreforeclosureCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />
+                    : <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
@@ -17071,6 +17098,9 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
     <div onClick={onClick} style={{ background: "#1c1917", border: dl.overdue ? "1px solid #7f1d1d" : flagged ? "1px solid #78350f" : "1px solid #292524", borderRadius: 10, padding: 18, paddingTop: 40, cursor: "pointer", borderLeft: `3px solid ${sc}`, position: "relative" }}>
       <div style={{ position: "absolute", top: 10, left: 18, right: 70, display: "flex", gap: 6, alignItems: "center" }}>
         <StatusBadge status={deal.status} />
+        {isPreSale(deal) && (
+          <span title="Auction hasn't happened yet — Defender lane. Graduates to the surplus lane the day it sells." style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.06em', color: '#93c5fd', background: '#0c1a2e', border: '1px solid #1e3a5f', borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}>🛡 PRE-SALE</span>
+        )}
       </div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
@@ -17089,10 +17119,15 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 12 }}>
           {(() => {
-            // Phase-aware money label (Nathan 2026-07-06): confirmed = exact
-            // court-confirmed number; potential = estimate until the sale confirms.
+            // Three-stage money label (Nathan 2026-07-06/08): pre-sale = potential
+            // EQUITY (value − judgment; it isn't surplus until it sells) → sold =
+            // potential surplus → confirmed = exact court-confirmed surplus.
             const p = surplusPhase(deal);
-            return p ? <MiniStat label={p.phase === 'confirmed' ? '✓ Confirmed Surplus' : '~ Potential Surplus'} value={fmt(p.amount)} /> : null;
+            if (!p) return null;
+            const label = p.phase === 'confirmed' ? '✓ Confirmed Surplus'
+              : isPreSale(deal) ? '~ Potential Equity (pre-sale)'
+              : '~ Potential Surplus';
+            return <MiniStat label={label} value={fmt(p.amount)} />;
           })()}
           {m.attorney && <MiniStat label="Attorney" value={m.attorney} />}
           {m.feePct > 0 && <MiniStat label="Fee %" value={m.feePct + "%"} />}
