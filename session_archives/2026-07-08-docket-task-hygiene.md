@@ -57,7 +57,11 @@ date itself.**
 - **Ledger insert works over the raw Management API.** The 2026-05-27
   archive says the MCP harness blocks direct `schema_migrations` writes;
   the `POST /v1/projects/<ref>/database/query` channel does not - insert
-  `(version, name, statements)` and `migrations-applied.yml` goes green.
+  `(version, name, statements)`. Caveat: `migrations-applied.yml` is
+  currently red for an unrelated reason - the repo secret SUPABASE_PAT
+  gets an account-privilege 403 on the migrations READ endpoint (started
+  on or before the 2026-07-06 push). Ledger row confirmed present by
+  direct query; see #334 for the PAT rotation.
 
 ## Follow-ups
 
