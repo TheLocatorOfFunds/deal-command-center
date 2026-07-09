@@ -347,8 +347,12 @@ surfaced 2 customer-facing email triggers that were committed-but-unapplied.
 
 ## Nathan's session
 
-**Status:** Idle — 2026-06-22 — DCC simplification (1–7): nav→Outreach hub, 🩺 Health page, Daily Worklist, meta→column verified-complete, Relay KEPT (paused); + nav-badge-mismatch sweep + dead-deal cleanup trigger. All pushed; archived.
+**Status:** Idle - 2026-07-08 - docket-task hygiene shipped: 151 dead auto-tasks closed (337→186 open), trigger now skips unflagged-historical events + creates tasks UNASSIGNED (was bulk-'Nathan'). Migration `20260708210000` applied + ledgered. #333 'Waiting on you' window can widen once the 186 legacy Nathan-assigned tasks work down.
 **Branch:** main (all work pushed)
+
+**Today (2026-07-08, evening) - what shipped**
+
+- **Docket-task hygiene** (migration `20260708210000_docket_task_hygiene.sql`, applied via Management API + ledger row inserted; DB-only, no app rebuild). Root cause of the 337-open-task pollution: the April 2026 Castle backfill arrived WITHOUT `raw.backfill=true`, so `handle_docket_auto_task()`'s is_backfill guard never fired - tasks spawned for hearings as old as 2005, all bulk-assigned 'Nathan'. Fix: (1) trigger skips any event whose `event_date` is >30 days past regardless of the flag (backfills demonstrably arrive unflagged - this is the guard that matters); (2) hearing-prep tasks never spawn for already-past hearings, and due_date is clamped so a task can't be born overdue; (3) `assigned_to` now NULL - auto-tasks are team items, assignment is a deliberate human act (checked: web Tasks tab, mobile, and `get_daily_worklist()` all render unassigned tasks fine; only My Day's 'Waiting on you' filters `assigned_to='Nathan'`, which is exactly the desired exclusion); (4) data cleanup closed 151 open docket tasks due before 2026-06-03 across 65 deals, one team-visible 🧹 activity row per deal. Verified: before 337 open/151 stale, after 186 open/0 stale/186 recent untouched; live-fire trigger test in a rolled-back txn (2022 unflagged hearing → 0 tasks, future hearing → 1 unassigned task due hearing-2d, 0 test rows leaked). Noted on #333 that the 'Waiting on you' due-window can widen. **Gotcha for future sessions:** `current_date` boundaries drift if your verify queries straddle UTC midnight - use fixed literal dates in cleanup predicates.
 
 **Today (2026-06-22) — what shipped**
 
