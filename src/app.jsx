@@ -17752,23 +17752,26 @@ function CallDispositionModal({ pending, onClose }) {
       // ── Step 2: propagate to contacts (phone status + DND) ──────────────
       const phoneStatus = phoneStatusFor(outcome);
       const isOptOut = (outcome === 'disconnected' || outcome === 'do_not_call');
-      if (phoneStatus || isOptOut) {
+      if (isOptOut) {
+        // Normalized per-number DND (mark_number_dnd RPC). The old exact-string
+        // .or(phone.eq...) match silently missed contacts whose phone is stored
+        // formatted — Pal Kis "(216) 240-6688" stayed contactable after a
+        // Do-Not-Call disposition (2026-07-09). The RPC digit-normalizes both
+        // sides and flags every contact carrying the number (calls + texts).
+        if (counterpartNumber) {
+          await sb.rpc('mark_number_dnd', {
+            p_phone: counterpartNumber,
+            p_reason: outcome === 'do_not_call'
+              ? 'Phone opt-out (caller marked Do-Not-Call)'
+              : 'Number disconnected (post-call disposition)',
+            p_status: phoneStatus || null,
+          });
+        }
+      } else if (phoneStatus) {
         const targetPhone = counterpartNumber;
         if (targetPhone) {
           const bare = (targetPhone || '').replace(/^\+1/, '');
-          const updates = {};
-          if (phoneStatus) { updates.phone_status = phoneStatus; updates.phone_status_set_at = now; }
-          // 'disconnected' (dead line) and 'do_not_call' (caller-marked opt-out)
-          // both flip do_not_call so the cadence engine + voice gate refuse any
-          // future outreach.
-          if (isOptOut) {
-            updates.do_not_call = true;
-            updates.dnd_set_at = now;
-            updates.dnd_reason = outcome === 'do_not_call'
-              ? 'Phone opt-out (caller marked Do-Not-Call)'
-              : 'Number disconnected (post-call disposition)';
-          }
-          await sb.from('contacts').update(updates)
+          await sb.from('contacts').update({ phone_status: phoneStatus, phone_status_set_at: now })
             .or(`phone.eq.${targetPhone},phone.eq.${bare}`);
         }
       }
@@ -27575,6 +27578,9 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
         phone: c.phone,
         contact_id: c.id,
         deceased: !!c.deceased,
+        do_not_call: !!c.do_not_call,
+        do_not_text: !!c.do_not_text,
+        dnd_reason: c.dnd_reason || null,
         // Stamp _homeowner=true on the real linked-homeowner entries so
         // the Comms-tab UI gates (✕ hidden, ✏ shown, edit form open)
         // match the previous meta-synth experience.
@@ -27623,7 +27629,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
   // ── Load contacts from contact_deals ─────────────────────────────────────
   const loadDealContacts = async () => {
     const { data } = await sb.from('contact_deals')
-      .select('contacts(id, name, phone, email, kind, deceased)')
+      .select('contacts(id, name, phone, email, kind, deceased, do_not_call, do_not_text, dnd_reason)')
       .eq('deal_id', dealId);
     if (data) setDcContacts(data.map(r => r.contacts).filter(Boolean));
   };
@@ -28802,8 +28808,13 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                 : <><a href={`tel:${activeContact.phone}`} style={{ color: 'inherit', textDecoration: 'none' }}>{activeContact.phone}</a>{activeContact.role ? ` · ${activeContact.role}` : ''}</>
               }
             </div>
+            {!activeContact._everyone && (activeContact.do_not_call || activeContact.do_not_text) && (
+              <div title={activeContact.dnd_reason || 'Marked do-not-contact'} style={{ fontSize: 10, fontWeight: 800, color: '#fca5a5', marginTop: 2 }}>
+                🚫 DO NOT CONTACT{activeContact.dnd_reason ? <span style={{ fontWeight: 400, color: '#f0a5a5' }}> — {String(activeContact.dnd_reason).slice(0, 90)}{String(activeContact.dnd_reason).length > 90 ? '…' : ''}</span> : null}
+              </div>
+            )}
           </div>
-          {activeContact && !activeContact._everyone && activeContact.phone && (
+          {activeContact && !activeContact._everyone && activeContact.phone && !activeContact.do_not_call && (
             <button
               onClick={() => startCall(activeContact)}
               disabled={!!callStatus}
@@ -28816,6 +28827,28 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                 flexShrink: 0, opacity: callStatus ? 0.4 : 1,
               }}>
               📞
+            </button>
+          )}
+          {/* Per-number Do-Not-Contact (Nathan 2026-07-09, the Pal Kis opt-out).
+              One click flags EVERY contact carrying this number — calls AND
+              texts — via the normalized mark_number_dnd RPC (exact-string
+              matching silently missed formatted numbers before). */}
+          {activeContact && !activeContact._everyone && activeContact.phone && !(activeContact.do_not_call || activeContact.do_not_text) && (
+            <button
+              title="Do not contact — blocks calls AND texts to this number, every contact that carries it"
+              onClick={async () => {
+                const reason = window.prompt(`Block ALL calls + texts to ${activeContact.phone}?\n\nWhy? (e.g. "asked us to stop contacting them")`);
+                if (reason === null) return;
+                const { data: n, error } = await sb.rpc('mark_number_dnd', {
+                  p_phone: activeContact.phone,
+                  p_reason: `${reason.trim() || 'Marked do-not-contact from the Comms thread'} — set ${new Date().toLocaleDateString()} by team`,
+                });
+                if (error) { alert('Could not mark do-not-contact: ' + error.message); return; }
+                alert(`🚫 Done — ${n || 0} contact record${n === 1 ? '' : 's'} with this number blocked (calls + texts).`);
+                loadDealContacts();
+              }}
+              style={{ background: 'transparent', border: '1px solid #7f1d1d', color: '#fca5a5', borderRadius: 5, padding: '4px 8px', fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0, fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
+              🚫 Do not contact
             </button>
           )}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
