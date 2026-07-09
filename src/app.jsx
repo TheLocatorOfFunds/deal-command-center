@@ -17688,7 +17688,7 @@ function CallDispositionModal({ pending, onClose }) {
     { code: 'voicemail',      label: '📨 Voicemail',         color: '#3b82f6', desc: 'Left a voicemail' },
     { code: 'no_answer',      label: '⏱ No answer',          color: '#a8a29e', desc: "Didn't pick up" },
     { code: 'wrong_number',   label: '✗ Wrong number',       color: '#f97316', desc: 'Reached someone else — blocks future SMS + voice' },
-    { code: 'disconnected',   label: '🚫 Disconnected',      color: '#ef4444', desc: 'Number not in service — blocks future SMS + voice + flags DNC' },
+    { code: 'disconnected',   label: '🚫 Disconnected',      color: '#ef4444', desc: "Number not in service — marks THIS number dead; the person's other numbers stay active" },
     { code: 'do_not_call',    label: '🚫 Do Not Call',       color: '#ef4444', desc: 'They opted out — flags DNC so we never re-dial (the number may still work)' },
     { code: 'other',          label: '⋯ Other',             color: '#a8a29e', desc: "Doesn't fit the rest (busy, no voicemail set up, generic machine, couldn't confirm) — leaves the number active: no SMS/voice block, no DNC" },
   ];
@@ -17751,8 +17751,11 @@ function CallDispositionModal({ pending, onClose }) {
 
       // ── Step 2: propagate to contacts (phone status + DND) ──────────────
       const phoneStatus = phoneStatusFor(outcome);
-      const isOptOut = (outcome === 'disconnected' || outcome === 'do_not_call');
-      if (isOptOut) {
+      // Person-level DNC is reserved for a HUMAN opting out (do_not_call).
+      // 'disconnected' only marks the number's status — blanket-flagging the
+      // contact would wrongly block their OTHER working numbers (contacts.phone
+      // is a comma list; 2026-07-09 sweep found 58 such cases).
+      if (outcome === 'do_not_call') {
         // Normalized per-number DND (mark_number_dnd RPC). The old exact-string
         // .or(phone.eq...) match silently missed contacts whose phone is stored
         // formatted — Pal Kis "(216) 240-6688" stayed contactable after a
@@ -17761,9 +17764,7 @@ function CallDispositionModal({ pending, onClose }) {
         if (counterpartNumber) {
           await sb.rpc('mark_number_dnd', {
             p_phone: counterpartNumber,
-            p_reason: outcome === 'do_not_call'
-              ? 'Phone opt-out (caller marked Do-Not-Call)'
-              : 'Number disconnected (post-call disposition)',
+            p_reason: 'Phone opt-out (caller marked Do-Not-Call)',
             p_status: phoneStatus || null,
           });
         }
