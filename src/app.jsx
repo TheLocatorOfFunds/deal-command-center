@@ -960,7 +960,7 @@ function Root() {
       if (data) { setProfile(data); setProfileError(false); return; }
       if (error) {
         if (attempt < 5) { setTimeout(() => load(attempt + 1), 700 * (attempt + 1)); return; }
-        setProfileError(true);
+        setProfileError(error.message || true); // keep the reason — shown small on the failure screen
         return;
       }
       // No error + no row → genuinely unprovisioned user; let the role gate route them.
@@ -973,7 +973,20 @@ function Root() {
   if (checking) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading...</div></Shell>;
   if (recovering) return <SetNewPassword onDone={() => setRecovering(false)} />;
   if (!session) return <Login />;
-  if (profileError) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Couldn't load your account — the server was briefly busy.<br /><button onClick={() => window.location.reload()} style={{ marginTop: 16, padding: "8px 22px", borderRadius: 8, border: "1px solid #44403c", background: "#1c1917", color: "#fafaf9", fontWeight: 700, cursor: "pointer" }}>Reload</button></div></Shell>;
+  if (profileError) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>
+    Couldn't load your account.
+    <div style={{ fontSize: 12, color: "#57534e", marginTop: 8, maxWidth: 460, marginLeft: "auto", marginRight: "auto", lineHeight: 1.5 }}>
+      If <b>Reload</b> doesn't fix it after a try or two, your saved login is probably stale — use <b>Sign out &amp; log back in</b> (Eric hit this 2026-07-15; a fresh sign-in is the cure).
+    </div>
+    <div style={{ marginTop: 18, display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+      <button onClick={() => window.location.reload()} style={{ padding: "8px 22px", borderRadius: 8, border: "1px solid #44403c", background: "#1c1917", color: "#fafaf9", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Reload</button>
+      <button onClick={async () => { try { await sb.auth.signOut(); } catch (e) {} try { Object.keys(localStorage).filter(k => k.startsWith('sb-')).forEach(k => localStorage.removeItem(k)); } catch (e) {} window.location.reload(); }}
+        style={{ padding: "8px 22px", borderRadius: 8, border: "1px solid #7c2d12", background: "#1c1917", color: "#fdba74", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+        Sign out &amp; log back in
+      </button>
+    </div>
+    {typeof profileError === 'string' && <div style={{ fontSize: 10, color: "#44403c", marginTop: 16, fontFamily: "'DM Mono', monospace" }}>detail: {profileError.slice(0, 140)}</div>}
+  </div></Shell>;
   if (!profile) return <Shell><div style={{ textAlign: "center", padding: 80, color: "#78716c" }}>Loading profile...</div></Shell>;
   // Defense-in-depth: if a signed-in user is NOT on the team (i.e. they
   // got role=client/attorney/pending), bounce them to portal.html /
