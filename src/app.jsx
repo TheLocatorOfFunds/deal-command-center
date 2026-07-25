@@ -2378,7 +2378,11 @@ function DealCommandCenter({ session, profile }) {
     // _skipDeadGate=true. Spec: docs/LEAD_OUTCOME_FEEDBACK_BUILD.md.
     if (!_skipDeadGate && patch.status === 'dead') {
       const d = deals.find(x => x.id === id);
-      if (d && d.type === 'surplus' && !d.meta?.dispositionReason) {
+      // Every deal type funnels through the reason modal now (OH-Intel ferry
+      // 2026-07-24: 81 reasonless kills, ~$7.3M unauditable, 4 false kills
+      // revived). A DB trigger (require_kill_reason) backstops paths this
+      // client gate can't see (mobile, SQL).
+      if (d && !d.meta?.dispositionReason) {
         setDispositionDeal({ id, deal: d, pendingPatch: patch });
         return;
       }
@@ -18032,8 +18036,15 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
   const editing = !!initialReason;
   const G1 = DISPOSITION_REASONS.filter(r => r.group === 'bad');
   const G2 = DISPOSITION_REASONS.filter(r => r.group === 'real');
+  // Big-money guard (OH-Intel ferry 2026-07-24): killing a lead carrying ≥$20k
+  // needs the WHY written down — a wrong "no_surplus" kill cost ~$25k once.
+  // 'Other' always needs the note (it's the catch-all that made kills unauditable).
+  const money = surplusPhase(deal);
+  const bigMoney = !!(money && money.amount >= 20000);
+  const detailRequired = reason === 'other' || bigMoney;
+  const detailMissing = detailRequired && !detail.trim();
   const submit = async () => {
-    if (!reason || busy) return;
+    if (!reason || busy || detailMissing) return;
     setBusy(true);
     try { await onConfirm(reason, detail.trim() || null); } finally { setBusy(false); }
   };
@@ -18066,16 +18077,18 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
       </div>
       <div style={{ marginBottom: 18 }}>
         <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Reasoning <span style={{ color: '#57534e', textTransform: 'none', letterSpacing: 0 }}>(optional — your notes for the audit trail)</span>
+          Reasoning {detailRequired
+            ? <span style={{ color: '#fca5a5', textTransform: 'none', letterSpacing: 0 }}>(required — {reason === 'other' ? '"Other" needs the specifics' : `this lead carries ${fmt(money.amount)}; write down why it's dead`})</span>
+            : <span style={{ color: '#57534e', textTransform: 'none', letterSpacing: 0 }}>(optional — your notes for the audit trail)</span>}
         </label>
         <textarea value={detail} onChange={e => setDetail(e.target.value)} disabled={busy}
           placeholder="Anything specific worth recording — e.g. 'owner already claimed via atty Smith', 'no surplus after senior lien payoff', 'went with a competitor'…"
           rows={3}
-          style={{ ...inputStyle, resize: 'vertical' }} />
+          style={{ ...inputStyle, resize: 'vertical', ...(detailMissing ? { border: '1px solid #7f1d1d' } : {}) }} />
       </div>
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button onClick={busy ? undefined : onClose} disabled={busy} style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>Cancel</button>
-        <button onClick={submit} disabled={!reason || busy} style={{ background: !reason ? '#292524' : '#78350f', color: !reason ? '#57534e' : '#fbbf24', border: '1px solid ' + (!reason ? '#292524' : '#92400e'), padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: (!reason || busy) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
+        <button onClick={submit} disabled={!reason || busy || detailMissing} style={{ background: (!reason || detailMissing) ? '#292524' : '#78350f', color: (!reason || detailMissing) ? '#57534e' : '#fbbf24', border: '1px solid ' + ((!reason || detailMissing) ? '#292524' : '#92400e'), padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: (!reason || busy || detailMissing) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
           {busy ? '⏳ Saving…' : (editing ? 'Update reason' : 'Mark dead')}
         </button>
       </div>
@@ -18106,7 +18119,10 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
     return () => { cancelled = true; };
   }, [deal.owner_id, inRecovery, ownedByOther]);
 
-  const otherRequired = reason === 'other' && !detail.trim();
+  // ≥$20k deletions also need the WHY written down (OH-Intel ferry 2026-07-24).
+  const delMoney = surplusPhase(deal);
+  const delBigMoney = !!(delMoney && delMoney.amount >= 20000);
+  const otherRequired = (reason === 'other' || delBigMoney) && !detail.trim();
   const blocked = busy || otherRequired || (inRecovery && !ack);
 
   const submit = async () => {
@@ -18191,7 +18207,9 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
       </div>
       <div style={{ marginBottom: 16 }}>
         <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          Detail {reason === 'other' ? <span style={{ color: '#fca5a5' }}>(required)</span> : <span style={{ color: '#57534e' }}>(optional)</span>}
+          Detail {(reason === 'other' || delBigMoney)
+            ? <span style={{ color: '#fca5a5', textTransform: 'none', letterSpacing: 0 }}>(required{delBigMoney && reason !== 'other' ? ` — this lead carries ${fmt(delMoney.amount)}` : ''})</span>
+            : <span style={{ color: '#57534e' }}>(optional)</span>}
         </label>
         <textarea
           value={detail}
