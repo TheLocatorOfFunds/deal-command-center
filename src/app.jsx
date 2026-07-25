@@ -2421,13 +2421,16 @@ function DealCommandCenter({ session, profile }) {
   // Writes status=dead + the 3 DCC-owned meta keys intel-main reads, logs the
   // activity, then closes the modal. Merges onto existing meta so intel-main's
   // own keys (grade, estimatedSurplus, …) are preserved.
-  const confirmDisposition = async (reasonCode, detail) => {
+  const confirmDisposition = async (reasonCode, detail, evidenceIds) => {
     if (!dispositionDeal) return;
     const { id, deal, pendingPatch } = dispositionDeal;
+    const priorEvidence = Array.isArray(deal.meta?.dispositionEvidence) ? deal.meta.dispositionEvidence : [];
+    const allEvidence = [...priorEvidence, ...(evidenceIds || [])];
     const meta = {
       ...(deal.meta || {}),
       dispositionReason: reasonCode,
       dispositionDetail: detail || null,   // DCC-owned free-text reasoning (Eric 2026-07-06)
+      dispositionEvidence: allEvidence.length ? allEvidence : null, // document ids proving the kill (Nathan 2026-07-24)
       dispositionAt: new Date().toISOString(),
       dispositionBy: userName || session.user.id,
     };
@@ -2435,7 +2438,7 @@ function DealCommandCenter({ session, profile }) {
     await sb.from('activity').insert({
       deal_id: id,
       user_id: session.user.id,
-      action: `🪦 Lead marked dead · reason: ${dispositionLabel(reasonCode)}${detail ? ` — ${detail}` : ''}`,
+      action: `🪦 Lead marked dead · reason: ${dispositionLabel(reasonCode)}${detail ? ` — ${detail}` : ''}${(evidenceIds || []).length ? ` · 📎 ${evidenceIds.length} evidence file${evidenceIds.length === 1 ? '' : 's'} attached` : ''}`,
       visibility: ['team'],
     });
     setDispositionDeal(null);
@@ -18024,6 +18027,69 @@ function VersionWatcher() {
   );
 }
 
+// ─── KillEvidenceAttach — proof-of-death uploads (Nathan 2026-07-24) ────────
+// "Why is this dead" shouldn't just be words: attach the docket entry, payoff
+// statement, obituary, or competitor-claim screenshot that made the call.
+// Files land in the deal's normal Documents (deal-docs bucket + documents row,
+// named 'Kill evidence — …') so they're visible forever on the Docs tab, and
+// the ids ride on meta.dispositionEvidence for the 🪦📎 badge. Paste (⌘V) a
+// screenshot straight into the box — same pattern as the comms composer.
+function KillEvidenceAttach({ dealId, evidence, setEvidence, disabled }) {
+  const [uploading, setUploading] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const fileRef = React.useRef(null);
+  const uploadFiles = async (files) => {
+    const list = Array.from(files || []).filter(f => f && (String(f.type).startsWith('image/') || f.type === 'application/pdf'));
+    if (!list.length || disabled) return;
+    setUploading(true); setErr(null);
+    try {
+      const { data: au } = await sb.auth.getUser();
+      const uid = au?.user?.id || null;
+      const added = [];
+      for (const file of list) {
+        const clean = (file.name || 'screenshot.png').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const path = `${dealId}/kill-evidence-${Date.now()}-${clean}`;
+        const up = await sb.storage.from('deal-docs').upload(path, file, { contentType: file.type || 'application/octet-stream' });
+        if (up.error) throw new Error(up.error.message);
+        const { data: row, error } = await sb.from('documents').insert({
+          deal_id: dealId, name: `Kill evidence — ${file.name || 'screenshot'}`, path,
+          size: file.size, uploaded_by: uid, extraction_status: 'pending',
+        }).select('id, name').single();
+        if (error) throw new Error(error.message);
+        added.push(row);
+      }
+      setEvidence(ev => [...ev, ...added]);
+    } catch (e) { setErr(e.message || 'Upload failed'); }
+    setUploading(false);
+  };
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <label style={{ display: 'block', fontSize: 11, color: '#a8a29e', fontWeight: 600, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+        Evidence <span style={{ color: '#57534e', textTransform: 'none', letterSpacing: 0 }}>(optional but gold — the docket entry / payoff / obituary that proves it)</span>
+      </label>
+      <div tabIndex={0} role="button"
+        onClick={() => !disabled && fileRef.current && fileRef.current.click()}
+        onPaste={(e) => {
+          const files = Array.from(e.clipboardData?.items || []).map(i => (i.getAsFile ? i.getAsFile() : null)).filter(Boolean);
+          if (files.length) { e.preventDefault(); uploadFiles(files); }
+        }}
+        style={{ border: '1px dashed #44403c', borderRadius: 8, padding: '14px 12px', textAlign: 'center', fontSize: 12, color: uploading ? '#fbbf24' : '#78716c', cursor: disabled ? 'default' : 'pointer', outline: 'none', background: '#0c0a09' }}>
+        {uploading ? '⏳ Uploading…' : '📎 Click to attach a PDF or image — or click here, then paste a screenshot (⌘V)'}
+      </div>
+      <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple style={{ display: 'none' }}
+        onChange={(e) => { uploadFiles(e.target.files); e.target.value = ''; }} />
+      {evidence.length > 0 && (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {evidence.map(d => (
+            <div key={d.id} style={{ fontSize: 11, color: '#6ee7b7' }}>✓ {d.name}</div>
+          ))}
+        </div>
+      )}
+      {err && <div style={{ marginTop: 6, fontSize: 11, color: '#fca5a5' }}>{err}</div>}
+    </div>
+  );
+}
+
 function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClose }) {
   // presetReason pre-selects the dropdown (e.g. 'sale_vacated' when killing from
   // the Sale-Risk strip — the docket already tells us why) so the "Mark dead"
@@ -18032,8 +18098,10 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
   // because the confirm button is disabled until a reason is chosen).
   const [reason, setReason] = useState(initialReason || presetReason || '');
   const [detail, setDetail] = useState(deal?.meta?.dispositionDetail || '');
+  const [evidence, setEvidence] = useState([]); // {id, name} docs uploaded this session
   const [busy, setBusy] = useState(false);
   const editing = !!initialReason;
+  const priorEvidenceCount = Array.isArray(deal?.meta?.dispositionEvidence) ? deal.meta.dispositionEvidence.length : 0;
   const G1 = DISPOSITION_REASONS.filter(r => r.group === 'bad');
   const G2 = DISPOSITION_REASONS.filter(r => r.group === 'real');
   // Big-money guard (OH-Intel ferry 2026-07-24): killing a lead carrying ≥$20k
@@ -18046,7 +18114,7 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
   const submit = async () => {
     if (!reason || busy || detailMissing) return;
     setBusy(true);
-    try { await onConfirm(reason, detail.trim() || null); } finally { setBusy(false); }
+    try { await onConfirm(reason, detail.trim() || null, evidence.map(d => d.id)); } finally { setBusy(false); }
   };
   return (
     <Modal onClose={busy ? () => {} : onClose} title={editing ? 'Why did this lead die?' : 'Mark lead dead — why?'}>
@@ -18086,6 +18154,10 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
           rows={3}
           style={{ ...inputStyle, resize: 'vertical', ...(detailMissing ? { border: '1px solid #7f1d1d' } : {}) }} />
       </div>
+      <KillEvidenceAttach dealId={deal.id} evidence={evidence} setEvidence={setEvidence} disabled={busy} />
+      {priorEvidenceCount > 0 && evidence.length === 0 && (
+        <div style={{ fontSize: 11, color: '#78716c', marginTop: -8, marginBottom: 14 }}>📎 {priorEvidenceCount} evidence file{priorEvidenceCount === 1 ? '' : 's'} already attached — see the Docs tab.</div>
+      )}
       <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
         <button onClick={busy ? undefined : onClose} disabled={busy} style={{ background: 'transparent', color: '#a8a29e', border: '1px solid #44403c', padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: busy ? 'wait' : 'pointer', fontFamily: 'inherit' }}>Cancel</button>
         <button onClick={submit} disabled={!reason || busy || detailMissing} style={{ background: (!reason || detailMissing) ? '#292524' : '#78350f', color: (!reason || detailMissing) ? '#57534e' : '#fbbf24', border: '1px solid ' + ((!reason || detailMissing) ? '#292524' : '#92400e'), padding: '8px 16px', borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: (!reason || busy || detailMissing) ? 'not-allowed' : 'pointer', fontFamily: 'inherit' }}>
@@ -18099,6 +18171,7 @@ function DispositionModal({ deal, initialReason, presetReason, onConfirm, onClos
 function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
   const [reason, setReason] = useState('sale_unwound');
   const [detail, setDetail] = useState('');
+  const [evidence, setEvidence] = useState([]); // kill-evidence docs uploaded this session
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
 
@@ -18152,10 +18225,11 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
       //    Deleted Leads view if anyone restores it.
       const reasonLabel = DELETE_REASONS.find(r => r.code === reason)?.label || reason;
       const detailSuffix = detail.trim() ? ` — ${detail.trim()}` : '';
+      const evidenceSuffix = evidence.length ? ` · 📎 ${evidence.length} evidence file${evidence.length === 1 ? '' : 's'} attached` : '';
       await sb.from('activity').insert({
         deal_id: deal.id,
         user_id: userId,
-        action: `Deal soft-deleted · reason: ${reasonLabel}${detailSuffix}`,
+        action: `Deal soft-deleted · reason: ${reasonLabel}${detailSuffix}${evidenceSuffix}`,
         visibility: ['team'],
       });
 
@@ -18220,6 +18294,7 @@ function DeleteDealModal({ deal, userId, onClose, onDeleted }) {
           style={{ ...inputStyle, resize: 'vertical' }}
         />
       </div>
+      <KillEvidenceAttach dealId={deal.id} evidence={evidence} setEvidence={setEvidence} disabled={busy} />
       {err && <div style={{ color: '#fca5a5', fontSize: 12, marginBottom: 12, padding: 8, background: '#7f1d1d', borderRadius: 4 }}>{err}</div>}
       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
         <button onClick={onClose} disabled={busy} style={btnGhost}>Cancel</button>
@@ -19233,7 +19308,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         </select>
         {deal.type === 'surplus' && deal.status === 'dead' && (
           deal.meta?.dispositionReason
-            ? <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title={deal.meta.dispositionDetail ? `Reasoning: ${deal.meta.dispositionDetail}\n\n(click to edit)` : 'Edit why this lead was marked dead'} style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>🪦 {dispositionLabel(deal.meta.dispositionReason)}{deal.meta.dispositionDetail ? <span style={{ color: '#57534e' }}> · 📝</span> : null} <span style={{ color: '#57534e' }}>✎</span></button>
+            ? <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title={`${deal.meta.dispositionDetail ? `Reasoning: ${deal.meta.dispositionDetail}\n` : ''}${Array.isArray(deal.meta.dispositionEvidence) && deal.meta.dispositionEvidence.length ? `📎 ${deal.meta.dispositionEvidence.length} evidence file(s) — see Docs tab\n` : ''}\n(click to edit)`} style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>🪦 {dispositionLabel(deal.meta.dispositionReason)}{deal.meta.dispositionDetail ? <span style={{ color: '#57534e' }}> · 📝</span> : null}{Array.isArray(deal.meta.dispositionEvidence) && deal.meta.dispositionEvidence.length ? <span style={{ color: '#57534e' }}> · 📎{deal.meta.dispositionEvidence.length}</span> : null} <span style={{ color: '#57534e' }}>✎</span></button>
             : <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title="Record why this lead died — required for surplus leads" style={{ background: '#3a1d0e', color: '#fdba74', border: '1px solid #7c2d12', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>⚠ Set reason this died</button>
         )}
         {isLeadStatus(deal) && POST_ENGAGEMENT_STATUS[deal.type] && (
