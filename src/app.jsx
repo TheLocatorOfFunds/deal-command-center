@@ -19790,10 +19790,14 @@ function useDealMetaBuffer(deal, onUpdateDeal) {
   const debounceRef = React.useRef(null);
   const pendingPatchRef = React.useRef({});
   const dealMetaRef = React.useRef(deal.meta || {});
+  // Mirror of localMeta readable synchronously — the FLUSH BASE. Must always
+  // include this client's own recent edits; see the flush comment below.
+  const localMetaRef = React.useRef(deal.meta || {});
   const onUpdateDealRef = React.useRef(onUpdateDeal);
   React.useEffect(() => { dealMetaRef.current = deal.meta || {}; }, [deal.meta]);
   React.useEffect(() => { onUpdateDealRef.current = onUpdateDeal; }, [onUpdateDeal]);
   React.useEffect(() => {                          // switching deals: adopt fully, clear dirt
+    localMetaRef.current = deal.meta || {};
     setLocalMeta(deal.meta || {});
     dirtyKeys.current = new Set();
   }, [deal.id]);
@@ -19802,6 +19806,7 @@ function useDealMetaBuffer(deal, onUpdateDeal) {
     setLocalMeta(prev => {
       const next = { ...server };
       dirtyKeys.current.forEach(k => { next[k] = prev[k]; });
+      localMetaRef.current = next;
       return next;
     });
   }, [deal.meta]);
@@ -19823,15 +19828,26 @@ function useDealMetaBuffer(deal, onUpdateDeal) {
     }
     // Build the row patch. If any meta-only keys remain, include a
     // meta-merge alongside the column updates (single UPDATE, atomic).
+    //
+    // BASE = localMetaRef (server state + THIS CLIENT'S dirty keys), NOT the
+    // raw server echo. With the old dealMetaRef base, editing two meta fields
+    // a few seconds apart clobbered the first: flush B was built on a server
+    // snapshot that didn't include flush A yet (the realtime echo takes
+    // longer than the gap between edits), so B's meta overwrote A's key back
+    // to its old value. That was the "first save vanishes, retry sticks"
+    // bug — Eric's June multi-phone report and Inaam's Judgment Debt
+    // (2026-07-27). Mapped-column keys were immune (per-column UPDATEs);
+    // meta-path keys like judgmentAmount were not.
     const rowPatch = { ...colPatch };
     if (Object.keys(metaOnly).length) {
-      rowPatch.meta = { ...(dealMetaRef.current || {}), ...metaOnly };
+      rowPatch.meta = { ...(localMetaRef.current || dealMetaRef.current || {}), ...metaOnly };
     }
     onUpdateDealRef.current(rowPatch);
   }, []);
   React.useEffect(() => flushPending, [deal.id, flushPending]); // flush on switch / unmount
   const updateMeta = React.useCallback((patch) => {
     Object.keys(patch).forEach(k => dirtyKeys.current.add(k));
+    localMetaRef.current = { ...localMetaRef.current, ...patch };
     setLocalMeta(prev => ({ ...prev, ...patch }));
     pendingPatchRef.current = { ...pendingPatchRef.current, ...patch };
     if (debounceRef.current) clearTimeout(debounceRef.current);
