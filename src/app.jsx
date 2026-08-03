@@ -18,10 +18,11 @@ const useRecording = () => useContext(RecordingContext);
 // updates their own role gets rejected unless their email is in this set.
 // To add/remove an owner: update this list AND the matching list in the
 // migration's is_owner() function.
-// Live-transfer target (Nathan 2026-08-03): the fallback iPhone leg that
-// twilio-voice already rings on inbound — the number confirmed to be live.
-// If Nathan's cell changes, update here + the twilio-voice fallback const.
-const NATHAN_CELL = '+15139982306';
+// Live-transfer target — Nathan's cell, confirmed by Nathan 2026-08-03.
+// NOTE: twilio-voice's inbound fallback leg still rings +15139982306 (a
+// different number) — flagged to Nathan same day; change there too if that
+// line isn't his.
+const NATHAN_CELL = '+15135162306';
 
 const OWNER_EMAILS = new Set([
   'nathan@fundlocators.com',
@@ -103,7 +104,7 @@ const commsViaChip = (row) => {
   if (!ourNum) return null;
   const last4 = ourNum.replace(/\D/g, '').slice(-4);
   const color = ourNum === '+15139985440' ? '#10b981'   // Twilio voice / SMS → green
-              : ourNum === '+15135162306' ? '#60a5fa'   // iPhone bridge / iMessage → blue
+              : ourNum === '+15135162306' ? '#60a5fa'   // Nathan's cell (ex-bridge line) → blue
               : '#78716c';
   return { ourNum, last4, color };
 };
@@ -27685,7 +27686,7 @@ function OutboundMessages({ dealId, vendors, deal, startCall, callStatus, onOpen
                            : null;
               const viaLast4 = ourNum ? ourNum.replace(/\D/g, '').slice(-4) : null;
               const viaColor = ourNum === '+15139985440' ? '#10b981'   // 5440 = Twilio SMS → green
-                             : ourNum === '+15135162306' ? '#60a5fa'   // 2306 = bridge/iMessage → blue
+                             : ourNum === '+15135162306' ? '#60a5fa'   // 2306 = Nathan's cell (ex-bridge) → blue
                              : '#78716c';
               // The COUNTERPART (homeowner) number — the side that ISN'T ours.
               // This is the exact line a reply came IN on / a text went OUT to,
