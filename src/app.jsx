@@ -18,6 +18,11 @@ const useRecording = () => useContext(RecordingContext);
 // updates their own role gets rejected unless their email is in this set.
 // To add/remove an owner: update this list AND the matching list in the
 // migration's is_owner() function.
+// Live-transfer target (Nathan 2026-08-03): the fallback iPhone leg that
+// twilio-voice already rings on inbound — the number confirmed to be live.
+// If Nathan's cell changes, update here + the twilio-voice fallback const.
+const NATHAN_CELL = '+15139982306';
+
 const OWNER_EMAILS = new Set([
   'nathan@fundlocators.com',
   'nathan@refundlocators.com',
@@ -3283,6 +3288,30 @@ function DealCommandCenter({ session, profile }) {
             {addingToCall && callStatus === 'in-progress' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
                 <div style={{ fontSize: 10, color: '#78716c', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Add to call</div>
+                {/* One-tap live transfer to Nathan (2026-08-03). Blind: the
+                    homeowner's leg redirects to Nathan's cell (the EF resolves
+                    the right leg server-side); this browser call ends and the
+                    outcome popup appears as usual. */}
+                <button
+                  onClick={async () => {
+                    const sid = callSid;
+                    setAddCallMsg(null);
+                    try {
+                      const { data, error } = await sb.functions.invoke('twilio-add-to-call', {
+                        body: { call_sid: sid, to_number: NATHAN_CELL, action: 'transfer' },
+                      });
+                      if (error) throw new Error(error.message);
+                      if (!data?.ok) throw new Error(data?.error || 'Transfer failed');
+                      setAddCallMsg({ type: 'ok', text: 'Transferring the caller to Nathan…' });
+                      setAddingToCall(false);
+                      setTimeout(() => { setAddCallMsg(null); hangupCall(); }, 3000);
+                    } catch (e) {
+                      setAddCallMsg({ type: 'error', text: e.message });
+                    }
+                  }}
+                  style={{ background: '#7c2d12', border: '1px solid #ea580c', color: '#fdba74', borderRadius: 8, padding: '10px 0', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit', width: '100%' }}>
+                  📲 Transfer → Nathan's cell
+                </button>
                 <div style={{ display: 'flex', gap: 6 }}>
                   <input
                     type="tel"

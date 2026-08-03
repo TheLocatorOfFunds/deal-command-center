@@ -44,10 +44,10 @@ const twilioFetch = async (
   return fetch(url, {
     method,
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
+      ...(method === 'POST' ? { 'Content-Type': 'application/x-www-form-urlencoded' } : {}),
       'Authorization': 'Basic ' + btoa(`${acctSid}:${authToken}`),
     },
-    body: encoded,
+    ...(method === 'POST' ? { body: encoded } : {}),
   });
 };
 
@@ -102,11 +102,32 @@ Deno.serve(async (req: Request) => {
   const callApiBase = `https://api.twilio.com/2010-04-01/Accounts/${acctSid}/Calls`;
 
   if (action === 'transfer') {
-    // Blind transfer: redirect the active call to TwiML that dials the new number
+    // Blind transfer: redirect the HOMEOWNER'S leg to TwiML that dials the new
+    // number. The browser only knows ITS OWN leg's SID — redirecting that
+    // would connect the agent to the target and DROP the homeowner (the bug
+    // that made this feature dead-on-arrival). Resolve the PSTN leg:
+    //   1) an in-progress CHILD whose `to` is a +number  (outbound browser call)
+    //   2) else the call itself when it's PSTN on either side (answered inbound)
+    //   3) else its parent (client-leg SID handed in on inbound)
+    let targetSid = call_sid;
+    try {
+      const kidsRes = await twilioFetch(`${callApiBase}.json?ParentCallSid=${encodeURIComponent(call_sid)}&Status=in-progress`, 'GET', {}, acctSid, authToken);
+      const kidsData = await kidsRes.json();
+      const pstnKid = (kidsData.calls || []).find((c: { to?: string; sid: string }) => (c.to || '').startsWith('+'));
+      if (pstnKid) {
+        targetSid = pstnKid.sid;
+      } else {
+        const selfRes = await twilioFetch(`${callApiBase}/${call_sid}.json`, 'GET', {}, acctSid, authToken);
+        const self = await selfRes.json();
+        const selfPstn = (self.to || '').startsWith('+') || (self.from || '').startsWith('+');
+        if (!selfPstn && self.parent_call_sid) targetSid = self.parent_call_sid;
+      }
+    } catch (_e) { /* fall back to the given sid */ }
+
     const twimlUrl = `${supaUrl}/functions/v1/twilio-conference-twiml?action=transfer&to=${encodeURIComponent(toNormalized)}&from=${encodeURIComponent(fromNum)}`;
 
     const redirectRes = await twilioFetch(
-      `${callApiBase}/${call_sid}.json`,
+      `${callApiBase}/${targetSid}.json`,
       'POST',
       { Url: twimlUrl, Method: 'POST' },
       acctSid,
