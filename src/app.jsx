@@ -1028,6 +1028,7 @@ function DealCommandCenter({ session, profile }) {
     // Added 2026-05-15 per Justin: these were nav items but missing from
     // the whitelist, so refresh on these views bounced you back to today.
     'relay', 'calls', 'comms', 'communications', 'automations',
+    'dialer',     // Power Dialer — one-lead-at-a-time calling (F-35 Phase 3, 2026-08-03)
     'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
     'appointments',  // dedicated Appointments agenda (Nathan 2026-06-29)
     'review',     // Review Queue — ready leads needing a human look (Nathan 2026-06-21)
@@ -3196,7 +3197,7 @@ function DealCommandCenter({ session, profile }) {
     {pendingDisposition && (
       <CallDispositionModal
         pending={pendingDisposition}
-        onClose={() => setPendingDisposition(null)}
+        onClose={() => { setPendingDisposition(null); try { window.dispatchEvent(new Event('dcc:disposition-closed')); } catch (e) {} }}
       />
     )}
 
@@ -4371,11 +4372,11 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "myday" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "myday" || view === "dialer" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
-            <><FreshAuctionStrip deals={deals} onSelect={onSelect} /><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
+            <><FreshAuctionStrip deals={deals} onSelect={onSelect} setView={setView} /><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
           ) : view === "myday" ? (
             isMyDay
               ? <MyDayView deals={deals} onSelect={onSelect} startCall={startCall} callStatus={callStatus} userName={userName} />
@@ -4409,6 +4410,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             <AppointmentsView deals={deals} onJumpToDeal={onSelect} />
           ) : view === "payouts" ? (
             <PayoutTrackerView deals={deals} onSelect={onSelect} onMoveDeal={onMoveDeal} />
+          ) : view === "dialer" ? (
+            <PowerDialerView deals={deals} onSelect={onSelect} startCall={startCall} callStatus={callStatus} setView={setView} />
           ) : view === "call-queue" ? (
             <CallQueueView deals={deals} onSelect={onSelect} setView={setView} />
           ) : view === "review" ? (
@@ -7417,6 +7420,181 @@ function PayoutTrackerView({ deals, onSelect, onMoveDeal }) {
 // ready-to-call pile, biggest surplus first; each row shows health (clean vs
 // flagged) + how long since it was last worked. New/unprepped leads get a strip
 // on top. Click a row → opens the deal to call + log. Surfacing + launchpad only.
+// ─── PowerDialerView — one-lead-at-a-time calling (F-35 Phase 3, 2026-08-03) ──
+// "Eric's 145 dials/week deserve a rifle, not a spreadsheet." One ranked lead
+// at a time: per-call card (consult-reply spec), one-tap dial, the outcome
+// modal auto-pops on hangup (existing flow) and the queue only advances when
+// it's answered — a forced disposition. Ranking mirrors the speed doctrine:
+// DAY 0-1 fresh auctions (uncalled) → clicked-their-link-never-replied →
+// fresh auctions → biggest money. Numbers in bad_phone_numbers are never
+// dialed; deceased leads and senior-lien-flagged leads stay out of v1.
+function PowerDialerView({ deals, onSelect, startCall, callStatus, setView }) {
+  const [idx, setIdx] = React.useState(0);
+  const [sessionCalls, setSessionCalls] = React.useState(0);
+  const [badSet, setBadSet] = React.useState(null);
+  const [clicked, setClicked] = React.useState(new Set());
+  const [history, setHistory] = React.useState({});
+  const [docket, setDocket] = React.useState({});
+  const awaitingRef = React.useRef(false);
+  const busy = callStatus && callStatus !== 'ended';
+  const bare10 = (x) => String(x || '').replace(/\D/g, '').slice(-10);
+
+  React.useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [badRes, plRes] = await Promise.all([
+        sb.from('bad_phone_numbers').select('phone'),
+        sb.from('personalized_links').select('deal_id').gt('view_count', 0).not('deal_id', 'is', null),
+      ]);
+      if (!alive) return;
+      setBadSet(new Set((badRes.data || []).map(b => b.phone)));
+      setClicked(new Set((plRes.data || []).map(r => r.deal_id)));
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const numbersOf = (d) => {
+    const m = d.meta || {};
+    const raw = [m.homeownerPhone, m.phone, m.contactPhone].filter(Boolean).join(',');
+    return [...new Set(raw.split(/[,;\/]+/).map(s => s.trim()).filter(s => bare10(s).length === 10))];
+  };
+
+  const queue = React.useMemo(() => {
+    if (!badSet) return [];
+    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+    const rows = [];
+    for (const d of (deals || [])) {
+      if (d.type !== 'surplus' || d.deleted_at || d.status !== 'new-lead' || !d.prepped_at) continue;
+      const m = d.meta || {};
+      if (m.reviewFlag === 'verify_senior_liens') continue;
+      if (isDeceased(d)) continue;
+      const nums = numbersOf(d).filter(n => !badSet.has(bare10(n)));
+      if (!nums.length) continue;
+      const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
+      const validSd = sd && /^\d{4}-\d{2}-\d{2}$/.test(sd);
+      const days = validSd ? Math.round((todayMid - new Date(sd + 'T00:00:00')) / 86400000) : null;
+      const freshDays = (days != null && days >= 0 && days <= 30) ? days : null;
+      const uncalled = !d.last_contacted_at || (validSd && new Date(d.last_contacted_at) < new Date(sd + 'T00:00:00'));
+      const p = surplusPhase(d);
+      let tier = 3, why = 'Ready to call';
+      if (freshDays != null && uncalled) { tier = 0; why = freshDays === 0 ? '🔥 Auction was TODAY — first caller usually wins' : `Auction ${freshDays}d ago — not called since`; }
+      else if (clicked.has(d.id)) { tier = 1; why = 'Opened their money page — never replied'; }
+      else if (freshDays != null) { tier = 2; why = `Auction ${freshDays} day${freshDays === 1 ? '' : 's'} ago`; }
+      rows.push({ d, nums, freshDays, tier, why, amount: (p && p.amount) || 0, phase: p ? p.phase : null });
+    }
+    rows.sort((a, b) => a.tier - b.tier || ((a.freshDays ?? 99) - (b.freshDays ?? 99)) || b.amount - a.amount);
+    return rows;
+  }, [deals, badSet, clicked]);
+
+  const cur = queue[idx] || null;
+
+  React.useEffect(() => {
+    if (!cur) return;
+    const ids = queue.slice(idx, idx + 5).map(r => r.d.id).filter(id => !(id in history));
+    if (!ids.length) return;
+    let alive = true;
+    (async () => {
+      const [callsRes, dkRes] = await Promise.all([
+        sb.from('call_logs').select('deal_id, outcome, started_at').in('deal_id', ids).eq('direction', 'outbound').order('started_at', { ascending: false }).limit(200),
+        sb.from('docket_events').select('deal_id, event_type, event_date').in('deal_id', ids).order('event_date', { ascending: false }).limit(100),
+      ]);
+      if (!alive) return;
+      const h = {}; const dq = {};
+      ids.forEach(id => { h[id] = { attempts: 0, lastOutcome: null, lastAt: null }; });
+      (callsRes.data || []).forEach(c => { const e = h[c.deal_id]; if (!e) return; e.attempts++; if (!e.lastAt) { e.lastAt = c.started_at; e.lastOutcome = c.outcome; } });
+      (dkRes.data || []).forEach(ev => { if (!dq[ev.deal_id]) dq[ev.deal_id] = ev; });
+      setHistory(prev => ({ ...prev, ...h }));
+      setDocket(prev => ({ ...prev, ...dq }));
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line
+  }, [cur && cur.d.id, badSet]);
+
+  // Forced-disposition advance: after a dialer call, the outcome modal pops on
+  // hangup (existing flow); we only move on when it closes.
+  React.useEffect(() => {
+    const onClosed = () => {
+      if (!awaitingRef.current) return;
+      awaitingRef.current = false;
+      setSessionCalls(n => n + 1);
+      setIdx(i => i + 1);
+    };
+    window.addEventListener('dcc:disposition-closed', onClosed);
+    return () => window.removeEventListener('dcc:disposition-closed', onClosed);
+  }, []);
+
+  const fmtAgo = (iso) => {
+    if (!iso) return '';
+    const ddays = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+    return ddays === 0 ? 'today' : ddays === 1 ? 'yesterday' : `${ddays}d ago`;
+  };
+
+  if (!badSet) return <div style={{ textAlign: 'center', padding: 80, color: '#78716c' }}>Loading the queue…</div>;
+  if (!cur) return (
+    <div style={{ textAlign: 'center', padding: 80, color: '#a8a29e' }}>
+      <div style={{ fontSize: 40, marginBottom: 12 }}>🎉</div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: '#fafaf9' }}>Queue clear.</div>
+      <div style={{ fontSize: 13, marginTop: 6 }}>{sessionCalls > 0 ? `${sessionCalls} call${sessionCalls === 1 ? '' : 's'} this session. ` : ''}Every callable ready lead has been worked.</div>
+      <button onClick={() => setView('call-queue')} style={{ marginTop: 20, background: '#1c1917', border: '1px solid #44403c', color: '#fafaf9', borderRadius: 8, padding: '9px 22px', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>← Back to Call Queue</button>
+    </div>
+  );
+
+  const { d, nums, freshDays, why } = cur;
+  const m = d.meta || {};
+  const p = surplusPhase(d);
+  const h = history[d.id];
+  const dk = docket[d.id];
+  const who = (m.homeownerName || d.name || d.id).split(' - ')[0];
+
+  return (
+    <div style={{ maxWidth: 640, margin: '0 auto', padding: '18px 8px 60px' }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ fontSize: 13, color: '#78716c' }}>⚡ Power Dial · lead <strong style={{ color: '#fafaf9' }}>{idx + 1}</strong> of {queue.length} · {sessionCalls} call{sessionCalls === 1 ? '' : 's'} this session</div>
+        <button onClick={() => setView('call-queue')} style={{ background: 'transparent', border: '1px solid #292524', color: '#78716c', borderRadius: 6, padding: '4px 12px', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}>End session</button>
+      </div>
+
+      <div style={{ background: '#151210', border: '1px solid #7c2d12', borderRadius: 14, padding: 22 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 4 }}>
+          {freshDays != null && (
+            <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '0.05em', color: freshDays <= 1 ? '#fecaca' : '#fdba74', background: freshDays <= 1 ? '#7f1d1d' : '#431407', border: `1px solid ${freshDays <= 1 ? '#dc2626' : '#ea580c'}`, borderRadius: 5, padding: '2px 9px', fontFamily: "'DM Mono', monospace" }}>DAY {freshDays}</span>
+          )}
+          {isPreSale(d) && <span style={{ fontSize: 10, fontWeight: 800, color: '#93c5fd', background: '#0c1a2e', border: '1px solid #1e3a5f', borderRadius: 4, padding: '2px 7px' }}>🛡 PRE-SALE</span>}
+          {p && <span style={{ fontSize: 14, fontWeight: 800, color: p.phase === 'confirmed' ? '#6ee7b7' : '#fcd34d', fontFamily: "'DM Mono', monospace" }}>{fmt(p.amount)} {p.phase === 'confirmed' ? '✓ confirmed' : '~ potential'}</span>}
+        </div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: '#fafaf9' }}>{who}</div>
+        <div style={{ fontSize: 12, color: '#a8a29e', marginTop: 2 }}>
+          {[m.county && cleanCountyName(m.county) + ' County', m.courtCase, d.address].filter(Boolean).join(' · ')}
+        </div>
+        <div style={{ fontSize: 12, color: '#fdba74', fontWeight: 700, marginTop: 8 }}>{why}</div>
+
+        <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 14, fontSize: 12, color: '#a8a29e' }}>
+          <span>{h ? `${h.attempts} prior call${h.attempts === 1 ? '' : 's'}` : '…'}{h && h.lastOutcome ? ` · last: ${h.lastOutcome.replace(/_/g, ' ')} ${fmtAgo(h.lastAt)}` : ''}</span>
+          {clicked.has(d.id) && <span style={{ color: '#6ee7b7', fontWeight: 700 }}>👁 opened their link</span>}
+          {dk && <span>⚖ {String(dk.event_type || '').replace(/_/g, ' ')} · {dk.event_date}</span>}
+        </div>
+
+        <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {nums.slice(0, 4).map((n, i) => (
+            <button key={n} disabled={!!busy}
+              onClick={() => { awaitingRef.current = true; startCall({ phone: n, name: who, dealId: d.id }); }}
+              style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, background: busy ? '#292524' : (i === 0 ? '#065f46' : '#1c1917'), border: `1px solid ${i === 0 ? '#10b981' : '#44403c'}`, color: '#fafaf9', borderRadius: 10, padding: '14px 18px', fontSize: 16, fontWeight: 800, cursor: busy ? 'default' : 'pointer', fontFamily: "'DM Mono', monospace", opacity: busy ? 0.6 : 1 }}>
+              <span>📞 {n}</span>
+              <span style={{ fontSize: 10, color: i === 0 ? '#6ee7b7' : '#78716c', fontFamily: 'inherit' }}>{i === 0 ? 'CALL' : 'alt'}</span>
+            </button>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
+          <button onClick={() => onSelect(d.id)} style={{ flex: 1, background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', borderRadius: 8, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>Open lead</button>
+          <button disabled={!!busy} onClick={() => setIdx(i => i + 1)} style={{ flex: 1, background: 'transparent', border: '1px solid #44403c', color: '#78716c', borderRadius: 8, padding: '9px 0', fontSize: 12, fontWeight: 700, cursor: busy ? 'default' : 'pointer', fontFamily: 'inherit' }}>Skip →</button>
+        </div>
+      </div>
+
+      {busy && <div style={{ textAlign: 'center', marginTop: 14, fontSize: 12, color: '#fbbf24' }}>Call in progress — the outcome popup appears when it ends, then the queue advances.</div>}
+    </div>
+  );
+}
+
 function CallQueueView({ deals, onSelect, setView }) {
   const [reviewMap, setReviewMap] = useState({});
   const [filter, setFilter] = useState('all');   // all | never | review | quiet | needsnum
@@ -7470,6 +7648,8 @@ function CallQueueView({ deals, onSelect, setView }) {
     <div>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 22, fontWeight: 800, color: '#fafaf9' }}>📞 Call Queue</span>
+        <button onClick={() => setView('dialer')} title="One lead at a time — ranked, one-tap dial, forced outcome"
+          style={{ marginLeft: 12, background: '#7c2d12', border: '1px solid #ea580c', color: '#fdba74', borderRadius: 7, padding: '6px 16px', fontSize: 13, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit', verticalAlign: 'middle' }}>⚡ Power Dial</button>
         <span style={{ fontSize: 12, color: '#78716c' }}>{ready.length} ready · {neverCalled.length} never called · biggest surplus first</span>
       </div>
       <div style={{ display: 'flex', gap: 4, marginBottom: 14, background: '#0c0a09', border: '1px solid #292524', borderRadius: 8, padding: 3, width: 'fit-content', flexWrap: 'wrap' }}>
@@ -14765,7 +14945,7 @@ function MyDayView({ deals, onSelect, startCall, callStatus, userName }) {
 // happened, freshest first: a lead pops on here the morning its saleDate
 // arrives (DAY 0) and ages out after 30 days. Leads not yet called since the
 // auction rank first. Click a row → open the lead.
-function FreshAuctionStrip({ deals, onSelect }) {
+function FreshAuctionStrip({ deals, onSelect, setView }) {
   const [showAll, setShowAll] = React.useState(false);
   const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
   const rows = [];
@@ -14802,7 +14982,11 @@ function FreshAuctionStrip({ deals, onSelect }) {
           <span style={{ fontSize: 14, fontWeight: 800, color: '#fdba74' }}>🔥 Fresh auctions — call first</span>
           <span style={{ fontSize: 11, color: '#78716c', marginLeft: 10 }}>sold in the last 30 days · freshest on top · day-of is the money call</span>
         </div>
-        <span style={{ fontSize: 11, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{rows.filter(r => r.uncalled).length} not called yet · {rows.length} total</span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ fontSize: 11, color: '#a8a29e', fontFamily: "'DM Mono', monospace" }}>{rows.filter(r => r.uncalled).length} not called yet · {rows.length} total</span>
+          {setView && <button onClick={() => setView('dialer')} title="One lead at a time — ranked, one-tap dial, forced outcome"
+            style={{ background: '#7c2d12', border: '1px solid #ea580c', color: '#fdba74', borderRadius: 7, padding: '5px 14px', fontSize: 12, fontWeight: 800, cursor: 'pointer', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>⚡ Power Dial</button>}
+        </span>
       </div>
       {shown.map(({ d, m, days, phase, uncalled, inReview }) => (
         <button key={d.id} onClick={() => onSelect(d.id)}
@@ -15998,6 +16182,16 @@ function CallDispositionModal({ pending, onClose }) {
           await sb.from('contacts').update({ phone_status: phoneStatus, phone_status_set_at: now })
             .or(`phone.eq.${targetPhone},phone.eq.${bare}`);
         }
+      }
+      // Feed the dead-number registry (F-35 Phase 3): every disconnected /
+      // wrong-number outcome teaches the dialer which numbers to never
+      // waste a dial on again. Fire-and-forget; occurrence bumps on repeats.
+      if ((outcome === 'disconnected' || outcome === 'wrong_number') && counterpartNumber) {
+        sb.rpc('mark_bad_number', {
+          p_phone: counterpartNumber,
+          p_reason: outcome,
+          p_deal_id: pending.existing?.deal_id || apptDeal?.id || null,
+        }).then(() => {}, () => {});
       }
 
       // Booked is the win — jump straight into the appointment form.
