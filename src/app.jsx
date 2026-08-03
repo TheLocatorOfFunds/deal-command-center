@@ -1023,12 +1023,11 @@ function DealCommandCenter({ session, profile }) {
   // the view-route is new — was just ephemeral useState before, so
   // any refresh while NOT on a deal reset to today.
   const VALID_VIEWS = [
-    'today', 'attention', 'outreach', 'inbox', 'leads', 'forecast',
-    'active', 'flagged', 'hygiene', 'archive', 'pipeline', 'leads-phase',
+    'today', 'outreach', 'inbox', 'active', 'archive', 'pipeline', 'leads-phase',
     'tasks', 'time', 'reports', 'analytics', 'traffic', 'team',
     // Added 2026-05-15 per Justin: these were nav items but missing from
     // the whitelist, so refresh on these views bounced you back to today.
-    'relay', 'calls', 'comms', 'va-queue', 'communications', 'automations',
+    'relay', 'calls', 'comms', 'communications', 'automations',
     'followups',  // dedicated Follow-ups queue (Nathan 2026-06-01)
     'appointments',  // dedicated Appointments agenda (Nathan 2026-06-29)
     'review',     // Review Queue — ready leads needing a human look (Nathan 2026-06-21)
@@ -2166,7 +2165,11 @@ function DealCommandCenter({ session, profile }) {
     // stay in DB (sent SMS history, court PDFs, AI summaries,
     // personalized URLs, activity log). See migration
     // 20260507180000_deals_soft_delete.sql.
-    const { data } = await sb.from('deals').select('*').is('deleted_at', null).order('created_at', { ascending: false });
+    // v_deals_list = deals minus meta.case_intel_summary (the F-35 payload
+    // trim, 2026-08-03: the AI briefs were ~400KB ≈ a third of the list
+    // payload). CaseIntelligence fetches the brief on deal-open; realtime
+    // updates still arrive from `deals` with full meta, which is fine.
+    const { data } = await sb.from('v_deals_list').select('*').is('deleted_at', null).order('created_at', { ascending: false });
     setDeals(data || []);
     setLoaded(true);
   };
@@ -2517,22 +2520,27 @@ function DealCommandCenter({ session, profile }) {
                   stays in Today's groupIds so old links resolve. Back-office +
                   rare utilities (Time, Health, Contacts, Intake, Import, Library)
                   live in the "More" expander below. */}
+              {/* F-35 nav, final form (audit 2026-08-03): FIVE choices —
+                  My Day · Today · Leads · Outreach · Chat. The calling loop's
+                  supporting cast (Review/Follow-ups/Appointments/Calls/Tasks/
+                  Docket/Insights) lives in More, badges intact; a rolled-up
+                  badge on More keeps due work visible while collapsed. */}
               {isMyDayUser && navItem('myday', '🌅', 'My Day')}
-              {navItem('today',    '📌', 'Today',      { groupIds: ['today','attention'] })}
-              {navItem('outreach', '🎯', 'Outreach',  { groupIds: ['outreach','automations','relay','communications','inbox','comms','leads'] })}
-              {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','flagged','hygiene','archive','awaiting','payouts','deleted','pipeline','leads-phase'], badge: flaggedDeals.length })}
-              {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
-              {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
-              {navItem('appointments','📅', 'Appointments',{ badge: apptUpcomingCount })}
-              {navItem('calls',    '☎️', 'Calls')}
-              {navItem('tasks',    '✅', 'Tasks')}
-              {isTeam && navItem('_docket', '⚖', 'Docket', { onClick: () => setShowDocket(true), badge: unackDocketCount })}
+              {navItem('today',    '📌', 'Today',      { groupIds: ['today'] })}
+              {navItem('call-queue', '🏠', 'Leads',   { groupIds: ['call-queue','active','archive','awaiting','payouts','deleted','pipeline','leads-phase'] })}
+              {navItem('outreach', '🎯', 'Outreach',  { groupIds: ['outreach','automations','relay','communications','inbox','comms'] })}
               {navItem('team',     '💬', 'Chat',      { badge: unreadChatCount })}
-              {navItem('reports',  '📊', 'Insights',  { groupIds: ['reports','analytics','traffic','forecast'], adminOnly: true })}
               {div()}
-              {navItem('_more', showMore ? '▾' : '▸', 'More', { onClick: () => setShowMore(v => !v), groupIds: ['time','health'] })}
+              {navItem('_more', showMore ? '▾' : '▸', 'More', { onClick: () => setShowMore(v => !v), groupIds: ['review','followups','appointments','calls','tasks','reports','analytics','traffic','time','health'], badge: showMore ? 0 : (reviewCount + followupDueCount + apptUpcomingCount + unackDocketCount) })}
               {showMore && (
                 <div style={{ paddingLeft: 12 }}>
+                  {navItem('review',   '🔎', 'Review',    { badge: reviewCount })}
+                  {navItem('followups','📞', 'Follow-ups',{ badge: followupDueCount })}
+                  {navItem('appointments','📅', 'Appointments',{ badge: apptUpcomingCount })}
+                  {navItem('calls',    '☎️', 'Calls')}
+                  {navItem('tasks',    '✅', 'Tasks')}
+                  {isTeam && navItem('_docket', '⚖', 'Docket', { onClick: () => setShowDocket(true), badge: unackDocketCount })}
+                  {navItem('reports',  '📊', 'Insights',  { groupIds: ['reports','analytics','traffic'], adminOnly: true })}
                   {isTeam  && navItem('_contacts', '👥', 'Contacts', { onClick: () => { setActiveDealId(null); setShowContacts(true); setShowMore(false); } })}
                   {isTeam  && navItem('_leads',    '📋', 'Intake',   { onClick: () => { setShowLeads(true);   setShowMore(false); }, badge: newLeadCount })}
                   {isTeam  && navItem('_library',  '📚', 'Library',  { onClick: () => { setShowLibrary(true); setShowMore(false); } })}
@@ -2878,27 +2886,6 @@ function DealCommandCenter({ session, profile }) {
           The Chat sidebar badge still shows the count; the full-width
           banner above the page was redundant noise. Code preserved so we
           can flip it back on if VAs miss the cue. */}
-      {false && isTeam && unreadChatCount > 0 && unreadChatCount > chatBannerDismissedAt && (
-        <div
-          onClick={() => { setActiveDealId(null); setView('team'); setChatBannerDismissedAt(unreadChatCount); markAllChatRead(); }}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            background: 'rgba(220,38,38,0.12)',
-            borderLeft: '3px solid #dc2626',
-            padding: '7px 12px', marginBottom: 14, cursor: 'pointer',
-            animation: 'unreadBannerSlide 0.18s ease-out',
-          }}
-          title="Click to open chat"
-        >
-          <span style={{ fontSize: 12, fontWeight: 600, color: '#fca5a5' }}>
-            💬 {unreadChatCount} unread chat message{unreadChatCount === 1 ? '' : 's'} — click to open
-          </span>
-          <button
-            onClick={(e) => { e.stopPropagation(); setChatBannerDismissedAt(unreadChatCount); }}
-            style={{ background: 'transparent', border: 'none', color: '#78716c', cursor: 'pointer', fontSize: 14, padding: '0 2px', lineHeight: 1, flexShrink: 0 }}
-          >×</button>
-        </div>
-      )}
 
       {showWalkthroughs && <WalkthroughRequestsModal onClose={() => setShowWalkthroughs(false)} userId={session.user.id} onJumpToDeal={(id) => { setActiveDealId(id); setShowWalkthroughs(false); }} />}
       {showNewDeal && <NewDealModal onAdd={addDeal} onClose={() => setShowNewDeal(false)} teamMembers={teamMembers} deals={deals} onOpenDeal={(id) => setActiveDealId(id)} />}
@@ -3029,8 +3016,6 @@ function DealCommandCenter({ session, profile }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {[
               { label: '📞 Communications', onClick: () => setView('communications'), count: 0 },
-              { label: '⚑ Flagged',     onClick: () => setView('flagged'),  count: 0 },
-              { label: '🩺 Hygiene',    onClick: () => setView('hygiene'),  count: 0 },
               { label: '📦 Closed',     onClick: () => setView('archive'),  count: 0 },
               ...(isAdmin ? [
                 { label: '📈 Reports',   onClick: () => setView('reports'),   count: 0 },
@@ -3048,7 +3033,6 @@ function DealCommandCenter({ session, profile }) {
               { sep: 'Account' },
               ...(isAdmin ? [
                 { label: '👤 Team',         onClick: () => setShowTeam(true),                                count: 0 },
-                { label: '🤖 VA Queue',     onClick: () => { setActiveDealId(null); setView('va-queue'); }, count: 0 },
               ] : []),
               { label: '↪ Sign out',     onClick: signOut, count: 0, destructive: true },
             ].filter(i => i.show !== false).map((item, idx) => {
@@ -4239,14 +4223,6 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                      turn pieces back on selectively.
           Leads:     New · Deals · Closed · Awaiting (transient) · Deleted · Kanban
           Insights:  Reports · Analytics · Traffic */}
-      {false && ["outreach", "inbox", "leads", "forecast"].includes(view) && (
-        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
-          {chipBtn("outreach", "🤖 Drafts & Replies")}
-          {chipBtn("inbox", "📬 Inbox")}
-          {chipBtn("leads", "📨 Leads")}
-          {chipBtn("forecast", "📅 Forecast")}
-        </div>
-      )}
       {["call-queue", "active", "flagged", "hygiene", "archive", "deleted", "awaiting", "payouts", "pipeline", "leads-phase"].includes(view) && (
         <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content", flexWrap: "wrap" }}>
           {/* Sub-tab order per LABELS.md (canonical): New → Deals → Closed
@@ -4294,14 +4270,6 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
           retired — those views are embedded as expanders inside InsightsView.
           Per Nathan 2026-05-29 ("less complicated and messy"). Chips preserved
           (false &&) in case we want to re-promote any to its own tab. */}
-      {false && isAdmin && ["reports", "analytics", "traffic", "comms"].includes(view) && (
-        <div style={{ display: "flex", gap: 4, marginBottom: 16, background: "#0c0a09", borderRadius: 8, padding: 3, border: "1px solid #292524", width: "fit-content" }}>
-          {chipBtn("reports", "📈 Reports")}
-          {chipBtn("analytics", "📊 Analytics")}
-          {chipBtn("traffic", "🌐 Traffic")}
-          {chipBtn("comms", "💬 Comms")}
-        </div>
-      )}
 
       {/* Leads-phase revenue banner — shows potential revenue if all leads
           converted, plus a count by type. Kept separate from the main-page
@@ -4403,7 +4371,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         </div>
       )}
 
-      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "myday" || view === "attention" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "forecast" || view === "leads" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "va-queue" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
+      <div className="main-grid" style={{ display: "grid", gridTemplateColumns: (view === "myday" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "reports" || view === "analytics" || view === "traffic" || view === "pipeline" || view === "tasks" || view === "followups" || view === "appointments" || view === "review" || view === "team" || view === "time" || view === "calls" || view === "comms" || view === "relay" || view === "health" || view === "call-queue" || view === "payouts") ? "minmax(0, 1fr)" : "minmax(0, 1fr) 320px", gap: 20 }}>
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
@@ -4414,8 +4382,6 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               : <div style={{ padding: 60, textAlign: 'center', color: '#78716c', fontSize: 13 }}>This page is the founder's personal landing view.</div>
           ) : view === "calls" ? (
             <CallHistoryView onSelect={onSelect} isAdmin={isAdmin} />
-          ) : view === "attention" ? (
-            <AttentionView deals={deals} onSelect={onSelect} />
           ) : view === "relay" || view === "outreach" || view === "automations" || view === "inbox" || view === "communications" || view === "comms" ? (
             // Outreach hub (2026-06-22 nav collapse): one sidebar button,
             // tabbed inside — Automations (the cadence engine) + Messages (the
@@ -4429,18 +4395,12 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               view={view} deals={deals} onSelect={onSelect} setView={setView} isAdmin={isAdmin}
               startCall={startCall} callStatus={callStatus} onOpenCallDisposition={onOpenCallDisposition}
             />
-          ) : view === "forecast" ? (
-            <ForecastView deals={deals} onSelect={onSelect} />
-          ) : view === "leads" ? (
-            <LeadsOutreachView />
           ) : view === "reports" ? (
             <InsightsView deals={deals} onSelect={onSelect} isAdmin={isAdmin} />
           ) : view === "analytics" ? (
             <AnalyticsView deals={deals} onSelect={onSelect} />
           ) : view === "traffic" ? (
             <WebTrafficView />
-          ) : view === "hygiene" ? (
-            <HygieneDashboard deals={deals} onSelect={onSelect} />
           ) : view === "pipeline" ? (
             <SalesPipeline deals={deals} onSelect={onSelect} onUpdateDeal={(id, patch) => onUpdateDeal(id, patch)} isAdmin={isAdmin} />
           ) : view === "followups" ? (
@@ -4461,8 +4421,6 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
             isAdmin ? <HealthView /> : null
           ) : view === "team" ? (
             <TeamView teamMembers={teamMembers} isOwner={isOwner} jumpToThreadId={chatJumpThreadId} onJumpConsumed={onChatJumpConsumed} />
-          ) : view === "va-queue" ? (
-            isAdmin ? <VaQueueView userId={userId} /> : null
           ) : layoutMode === "kanban" ? (
             <div>
               <SurplusStageTabs value={surplusStageFilter} onChange={setSurplusStageFilter} counts={stageCounts} sums={stageSums} />
@@ -9410,7 +9368,7 @@ function fmtAgeMinutes(m) {
 }
 
 // Compact strip — renders nothing when everything is green/disabled.
-// Used at the top of AttentionView so operational issues surface next to deal issues.
+// Surfaces operational issues next to deal issues (Today view).
 function ScraperAlertStrip() {
   const { rows } = useScraperHealth();
   if (!rows) return null;
@@ -9528,7 +9486,7 @@ function ScraperHealthPanel() {
 
 // Cross-deal deadline alert strip — silent when no deal has any docket event
 // with a deadline_metadata countdown coming up in the next 14 days. Pinned at
-// the top of AttentionView next to the Castle scraper alerts. The data
+// alongside the Castle scraper alerts. The data
 // comes from Castle's K.3 emission landing in docket_events.deadline_metadata.
 function DeadlineAlertStrip({ onSelect }) {
   const [items, setItems] = useState(null);
@@ -9626,382 +9584,6 @@ function useAliveRef() {
 // (especially Castle's K.1/K.3/H.b emissions which haven't begun yet, and
 // Phase 8's per-county scraper rollout which is months-away).
 //
-// Sections:
-//   🏛 Court hearings · next 7 days     (docket_events.event_type='hearing_scheduled')
-//   ⏳ Statutory deadlines · next 14d   (docket_events.deadline_metadata)
-//   📤 Cadence drips · next 48h         (outreach_queue scheduled future)
-//   💰 Disbursement watch · 14d+ stale  (litigation_stage='distribution_ordered' w/o paid)
-//   🔥 Stale active deals · 14d+ silent (active deals w/ no recent outbound)
-//   🏛 Sheriff sales · next 14 days     (foreclosure_cases.sale_date)
-function ForecastView({ deals, onSelect }) {
-  return (
-    <div>
-      <div style={{ marginBottom: 18 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-          📅 Forecast
-          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· what's coming · 7-14 days out</span>
-        </h2>
-        <div style={{ fontSize: 11, color: '#78716c', marginTop: 6, lineHeight: 1.55 }}>
-          Plan instead of react. Sections refresh every 5 min. Empty sections will populate as Castle's pipeline emits the data type — many event types and full county coverage are still rolling out (Phase 8: 5/88 counties live).
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
-        <ForecastHearings onSelect={onSelect} />
-        <ForecastDeadlines onSelect={onSelect} />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start', marginTop: 20 }}>
-        <ForecastCadenceDrips deals={deals} onSelect={onSelect} />
-        <ForecastDisbursementWatch onSelect={onSelect} />
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start', marginTop: 20 }}>
-        <ForecastStaleDeals deals={deals} onSelect={onSelect} />
-        <ForecastSheriffSales />
-      </div>
-
-      <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
-        <b style={{ color: '#a8a29e' }}>Coverage note:</b> sheriff sales + court hearings only show for counties Castle is actively monitoring. Currently <code style={{ color: '#a8a29e' }}>Hamilton</code>, <code style={{ color: '#a8a29e' }}>Franklin</code>, <code style={{ color: '#a8a29e' }}>Butler</code>, <code style={{ color: '#a8a29e' }}>Cuyahoga</code>, <code style={{ color: '#a8a29e' }}>Montgomery</code> (5 of 88 OH counties). The other 83 surface as Castle's Phase 8 ships per-county scrapers.
-      </div>
-    </div>
-  );
-}
-
-// ─── Forecast: Court hearings · next 7 days ────────────────────
-function ForecastHearings({ onSelect }) {
-  const [rows, setRows] = useState(null);
-  const alive = useAliveRef();
-  const load = React.useCallback(async () => {
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const in7d = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
-    const { data } = await sb.from('docket_events')
-      .select('id, deal_id, event_type, event_date, description, court_system, county')
-      .eq('event_type', 'hearing_scheduled')
-      .gte('event_date', todayIso)
-      .lte('event_date', in7d)
-      .eq('is_backfill', false)
-      .order('event_date', { ascending: true });
-    if (!alive.current) return;
-    if (!data || data.length === 0) { setRows([]); return; }
-    const dealIds = [...new Set(data.map(d => d.deal_id))];
-    const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
-    if (!alive.current) return;
-    const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
-    setRows(data.map(e => ({ ...e, deal: byId[e.deal_id] || { id: e.deal_id, name: e.deal_id } })));
-  }, [alive]);
-  // Stable ref so the channel subscription doesn't churn when load identity changes
-  const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
-  useEffect(() => {
-    // Empty deps — subscribe once. useId would give per-instance unique names but
-    // singleton names are fine since cleanup runs before any same-named re-subscribe.
-    const ch = sb.channel('forecast-hearings').on('postgres_changes', { event: '*', schema: 'public', table: 'docket_events' }, () => loadRef.current()).subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, []);
-
-  return (
-    <ForecastSection icon="🏛" label="Court hearings · next 7 days" sub="From docket_events. Castle event type: hearing_scheduled." count={rows?.length}>
-      {rows === null && <ForecastLoading />}
-      {rows && rows.length === 0 && <ForecastEmpty text="No hearings scheduled in the next 7 days for any monitored deal." />}
-      {rows && rows.length > 0 && rows.map(e => (
-        <ForecastRow key={e.id} onClick={() => onSelect && onSelect(e.deal_id)}>
-          <ForecastDate iso={e.event_date} />
-          <ForecastBody primary={e.deal.name} secondary={e.description ? e.description.slice(0, 80) : (e.county ? e.county + ' County' : '')} />
-        </ForecastRow>
-      ))}
-    </ForecastSection>
-  );
-}
-
-// ─── Forecast: Statutory deadlines · next 14 days ──────────────
-function ForecastDeadlines({ onSelect }) {
-  const [rows, setRows] = useState(null);
-  const alive = useAliveRef();
-  const load = React.useCallback(async () => {
-    const since = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
-    const { data } = await sb.from('docket_events')
-      .select('id, deal_id, event_type, event_date, description, deadline_metadata')
-      .gte('event_date', since)
-      .not('deadline_metadata', 'is', null)
-      .eq('is_backfill', false);
-    if (!alive.current) return;
-    if (!data || data.length === 0) { setRows([]); return; }
-    const dealIds = [...new Set(data.map(d => d.deal_id))];
-    const { data: deals } = await sb.from('deals').select('id, name, status').in('id', dealIds);
-    if (!alive.current) return;
-    const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
-    const upcoming = [];
-    for (const e of data) {
-      const d = eventDeadline(e);
-      if (!d) continue;
-      if (d.daysRemaining < 0 || d.daysRemaining > 14) continue;
-      upcoming.push({ ...e, deadline: d, deal: byId[e.deal_id] || { id: e.deal_id, name: e.deal_id } });
-    }
-    upcoming.sort((a, b) => a.deadline.daysRemaining - b.deadline.daysRemaining);
-    setRows(upcoming);
-  }, [alive]);
-  const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
-
-  return (
-    <ForecastSection icon="⏳" label="Statutory deadlines · next 14 days" sub="From docket_events.deadline_metadata. Castle's K.3 emission lights this up." count={rows?.length}>
-      {rows === null && <ForecastLoading />}
-      {rows && rows.length === 0 && <ForecastEmpty text="No statutory deadlines approaching. (Castle's deadline_metadata emission ships as motions/orders fire on monitored deals — empty until then.)" />}
-      {rows && rows.length > 0 && rows.map(e => {
-        const c = deadlineColor(e.deadline.daysRemaining);
-        return (
-          <ForecastRow key={e.id} onClick={() => onSelect && onSelect(e.deal_id)}>
-            <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: c, fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
-              {e.deadline.daysRemaining}d
-            </div>
-            <ForecastBody primary={e.deal.name} secondary={`${deadlineKindLabel(e.deadline.kind)} · due ${e.deadline.deadlineDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`} />
-          </ForecastRow>
-        );
-      })}
-    </ForecastSection>
-  );
-}
-
-// ─── Forecast: Cadence drips · next 48h ────────────────────────
-function ForecastCadenceDrips({ deals, onSelect }) {
-  const [rows, setRows] = useState(null);
-  const alive = useAliveRef();
-  // Hold deals in a ref so load identity stays stable when deals reference changes —
-  // prevents channel re-subscribe churn on every parent re-render.
-  const dealsRef = useRef(deals); dealsRef.current = deals;
-  const load = React.useCallback(async () => {
-    const now = new Date();
-    const in48h = new Date(Date.now() + 48 * 60 * 60 * 1000);
-    const { data } = await sb.from('outreach_queue')
-      .select('id, deal_id, contact_phone, cadence_day, status, draft_body, scheduled_for')
-      .eq('status', 'pending')
-      .gte('cadence_day', 1)
-      .gte('scheduled_for', now.toISOString())
-      .lte('scheduled_for', in48h.toISOString())
-      .order('scheduled_for', { ascending: true })
-      .limit(50);
-    if (!alive.current) return;
-    if (!data) { setRows([]); return; }
-    const dealsById = Object.fromEntries((dealsRef.current || []).map(d => [d.id, d]));
-    setRows(data.map(r => ({ ...r, deal: dealsById[r.deal_id] || { id: r.deal_id, name: r.deal_id } })));
-  }, [alive]);
-  const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
-  useEffect(() => {
-    const ch = sb.channel('forecast-cadence').on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, () => loadRef.current()).subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, []);
-
-  return (
-    <ForecastSection icon="📤" label="Cadence drips · next 48h" sub="What the cadence engine is about to send. Pause individual deals from their Comms tab." count={rows?.length}>
-      {rows === null && <ForecastLoading />}
-      {rows && rows.length === 0 && <ForecastEmpty text="No drips scheduled in the next 48h." />}
-      {rows && rows.length > 0 && rows.map(r => {
-        const fireAt = new Date(r.scheduled_for);
-        const minsUntil = Math.max(0, Math.round((fireAt.getTime() - Date.now()) / 60000));
-        const fmt = minsUntil < 60 ? `in ${minsUntil}m` : minsUntil < 1440 ? `in ${(minsUntil / 60).toFixed(1)}h` : `in ${(minsUntil / 1440).toFixed(1)}d`;
-        return (
-          <ForecastRow key={r.id} onClick={() => onSelect && onSelect(r.deal_id)}>
-            <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: '#a78bfa', fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
-              D{r.cadence_day}
-            </div>
-            <ForecastBody primary={r.deal.name} secondary={(r.draft_body || '(drafting…)').slice(0, 80)} />
-            <div style={{ fontSize: 10, color: '#a78bfa', whiteSpace: 'nowrap', flexShrink: 0 }}>{fmt}</div>
-          </ForecastRow>
-        );
-      })}
-    </ForecastSection>
-  );
-}
-
-// ─── Forecast: Disbursement watch · check overdue ──────────────
-function ForecastDisbursementWatch({ onSelect }) {
-  const [rows, setRows] = useState(null);
-  const alive = useAliveRef();
-  const load = React.useCallback(async () => {
-    // Look for distribution_ordered events older than 14 days where the deal
-    // hasn't yet had a distribution_paid event. The "where's my check" leading
-    // indicator. Per Nathan's portal copy commitment of "24h after receipt" —
-    // anything past 14 days from order-entry without payment deserves attention.
-    const before14d = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
-    const { data: ordered } = await sb.from('docket_events')
-      .select('id, deal_id, event_type, event_date, description, litigation_stage')
-      .or('event_type.eq.disbursement_ordered,litigation_stage.eq.distribution_ordered')
-      .lte('event_date', before14d)
-      .eq('is_backfill', false);
-    if (!alive.current) return;
-    if (!ordered || ordered.length === 0) { setRows([]); return; }
-    const dealIds = [...new Set(ordered.map(o => o.deal_id))];
-    const { data: paid } = await sb.from('docket_events')
-      .select('deal_id')
-      .or('event_type.eq.disbursement_paid,litigation_stage.eq.distribution_paid')
-      .in('deal_id', dealIds);
-    if (!alive.current) return;
-    const paidSet = new Set((paid || []).map(p => p.deal_id));
-    const unresolved = ordered.filter(o => !paidSet.has(o.deal_id));
-    if (unresolved.length === 0) { setRows([]); return; }
-    const { data: deals } = await sb.from('deals').select('id, name, status, meta').in('id', [...new Set(unresolved.map(o => o.deal_id))]);
-    if (!alive.current) return;
-    const byId = Object.fromEntries((deals || []).map(d => [d.id, d]));
-    const enriched = unresolved.map(o => {
-      const d = new Date(o.event_date);
-      const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-      return { ...o, deal: byId[o.deal_id] || { id: o.deal_id, name: o.deal_id }, daysSinceOrdered: days };
-    });
-    enriched.sort((a, b) => b.daysSinceOrdered - a.daysSinceOrdered);
-    setRows(enriched);
-  }, [alive]);
-  const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
-
-  return (
-    <ForecastSection icon="💰" label="Disbursement watch · 14d+ stale" sub="Distribution ordered ≥14 days ago, no payment recorded. The 'where's my check?' leading indicator." count={rows?.length}>
-      {rows === null && <ForecastLoading />}
-      {rows && rows.length === 0 && <ForecastEmpty text="No stuck disbursements. Either nothing's been ordered yet or everything paid out within 14 days." />}
-      {rows && rows.length > 0 && rows.map(o => (
-        <ForecastRow key={o.id} onClick={() => onSelect && onSelect(o.deal_id)}>
-          <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: o.daysSinceOrdered > 30 ? '#ef4444' : '#f59e0b', fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
-            {o.daysSinceOrdered}d
-          </div>
-          <ForecastBody primary={o.deal.name} secondary={`Distribution ordered ${o.event_date}. No payment yet.`} />
-        </ForecastRow>
-      ))}
-    </ForecastSection>
-  );
-}
-
-// ─── Forecast: Stale active deals · 14d+ no contact ───────────
-function ForecastStaleDeals({ deals, onSelect }) {
-  const [rows, setRows] = useState(null);
-  const alive = useAliveRef();
-  const dealsRef = useRef(deals); dealsRef.current = deals;
-  const load = React.useCallback(async () => {
-    const ARCHIVE = new Set(['closed', 'recovered', 'dead']);
-    const active = (dealsRef.current || []).filter(d => !ARCHIVE.has(d.status));
-    if (active.length === 0) { if (alive.current) setRows([]); return; }
-    const since = new Date(Date.now() - 14 * 86400000).toISOString();
-    const { data: recentMsgs } = await sb.from('messages_outbound')
-      .select('deal_id, created_at')
-      .eq('direction', 'outbound')
-      .gte('created_at', since)
-      .in('deal_id', active.map(d => d.id));
-    if (!alive.current) return;
-    const recent = new Set((recentMsgs || []).map(m => m.deal_id));
-    const stale = active.filter(d => !recent.has(d.id));
-    stale.sort((a, b) => new Date(a.updated_at || 0).getTime() - new Date(b.updated_at || 0).getTime());
-    setRows(stale.slice(0, 30));
-  }, [alive]);
-  const loadRef = useRef(load); loadRef.current = load;
-  // Re-fire load when deals prop changes (new deal added, status changed, etc.)
-  useEffect(() => { loadRef.current(); }, [deals]);
-  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
-
-  return (
-    <ForecastSection icon="🔥" label="Stale active deals · 14d+ no outbound" sub="Active deals you haven't messaged in 2+ weeks. Top 30, oldest first." count={rows?.length}>
-      {rows === null && <ForecastLoading />}
-      {rows && rows.length === 0 && <ForecastEmpty text="No stale deals. Every active deal has had outbound contact in the last 2 weeks." />}
-      {rows && rows.length > 0 && rows.map(d => {
-        const lastUpdated = d.updated_at ? Math.floor((Date.now() - new Date(d.updated_at).getTime()) / 86400000) : null;
-        return (
-          <ForecastRow key={d.id} onClick={() => onSelect && onSelect(d.id)}>
-            <div style={{ minWidth: 60, fontSize: 11, fontWeight: 700, color: '#dc2626', fontFamily: "'DM Mono', monospace", textAlign: 'center' }}>
-              {lastUpdated != null ? `${lastUpdated}d` : '—'}
-            </div>
-            <ForecastBody primary={d.name || d.id} secondary={`${d.status || 'active'}${d.lead_tier ? ' · Tier ' + d.lead_tier : ''}${d.meta?.county ? ' · ' + d.meta.county + ' Co.' : ''}`} />
-          </ForecastRow>
-        );
-      })}
-    </ForecastSection>
-  );
-}
-
-// ─── Forecast: Sheriff sales · next 14 days ────────────────────
-function ForecastSheriffSales() {
-  const [rows, setRows] = useState(null);
-  const alive = useAliveRef();
-  const load = React.useCallback(async () => {
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const in14d = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
-    const { data } = await sb.from('foreclosure_cases')
-      .select('id, case_number, county, property_address, sale_date, estimated_surplus_low, estimated_surplus_high, judgment_amount, source')
-      .gte('sale_date', todayIso)
-      .lte('sale_date', in14d)
-      .order('sale_date', { ascending: true })
-      .limit(50);
-    if (!alive.current) return;
-    setRows(data || []);
-  }, [alive]);
-  const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { load(); const t = setInterval(() => loadRef.current(), 5 * 60 * 1000); return () => clearInterval(t); }, [load]);
-
-  return (
-    <ForecastSection icon="🏛" label="Sheriff sales · next 14 days" sub="From foreclosure_cases (Castle auction sweeps). Castle covers 5 OH counties." count={rows?.length}>
-      {rows === null && <ForecastLoading />}
-      {rows && rows.length === 0 && <ForecastEmpty text="No upcoming sheriff sales in the next 14 days. (Castle's auction sweeps populate this — empty until next sweep run.)" />}
-      {rows && rows.length > 0 && rows.map(s => {
-        const surplusMid = s.estimated_surplus_low && s.estimated_surplus_high
-          ? Math.round((Number(s.estimated_surplus_low) + Number(s.estimated_surplus_high)) / 2)
-          : null;
-        return (
-          <ForecastRow key={s.id}>
-            <ForecastDate iso={s.sale_date} />
-            <ForecastBody primary={s.property_address || s.case_number} secondary={`${s.county || '—'} · case ${s.case_number || '—'}${surplusMid ? ' · est. surplus ~$' + surplusMid.toLocaleString() : ''}`} />
-          </ForecastRow>
-        );
-      })}
-    </ForecastSection>
-  );
-}
-
-// ─── Shared Forecast helpers ────────────────────────────────────
-function ForecastSection({ icon, label, sub, count, children }) {
-  return (
-    <div>
-      <div style={{ marginBottom: 10 }}>
-        <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span>{icon}</span>
-          <span>{label}</span>
-          {count != null && count > 0 && <span style={{ background: '#292524', color: '#fafaf9', padding: '1px 8px', borderRadius: 10, fontSize: 10, fontWeight: 700, letterSpacing: 0 }}>{count}</span>}
-        </div>
-        {sub && <div style={{ fontSize: 11, color: '#57534e', marginTop: 3, lineHeight: 1.5 }}>{sub}</div>}
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto', paddingRight: 4 }}>
-        {children}
-      </div>
-    </div>
-  );
-}
-function ForecastRow({ children, onClick }) {
-  return (
-    <div onClick={onClick} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 10px', background: '#0c0a09', border: '1px solid #292524', borderRadius: 6, cursor: onClick ? 'pointer' : 'default' }}>
-      {children}
-    </div>
-  );
-}
-function ForecastDate({ iso }) {
-  const d = new Date(iso);
-  const days = Math.floor((d.getTime() - Date.now()) / 86400000);
-  return (
-    <div style={{ minWidth: 60, textAlign: 'center', flexShrink: 0 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" }}>{d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-      <div style={{ fontSize: 9, color: '#78716c', marginTop: 1 }}>{days <= 0 ? 'today' : days === 1 ? 'tmrw' : `${days}d`}</div>
-    </div>
-  );
-}
-function ForecastBody({ primary, secondary }) {
-  return (
-    <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 12, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{primary}</div>
-      {secondary && <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{secondary}</div>}
-    </div>
-  );
-}
-function ForecastEmpty({ text }) {
-  return <div style={{ fontSize: 11, color: '#78716c', padding: 14, border: '1px dashed #292524', borderRadius: 6, fontStyle: 'italic', lineHeight: 1.5 }}>{text}</div>;
-}
-function ForecastLoading() {
-  return <div style={{ fontSize: 11, color: '#78716c', padding: 14 }}>Loading…</div>;
-}
-
 // ─── Relay Deal Detail Panel ─────────────────────────────────────
 // Slide-over panel shown when reviewing a lead before approving.
 // touch is the outreach_queue row (null when opened from enrollments table).
@@ -10992,7 +10574,7 @@ function ReviewModeBanner({ isAdmin }) {
 // ════════════════════════════════════════════════════════════════════
 // AutomationsView — unified Outreach + Relay surface (5/27 plan, Phase 1)
 // ════════════════════════════════════════════════════════════════════
-// Wraps OutreachView ("Ready to Approve") + RelayView ("Enrolled") with
+// Wraps the cadence Ready-to-Approve body + RelayView ("Enrolled") with
 // a sub-tab switcher. Backend was already merged (one outreach_queue,
 // both engines feeding it, Relay rows labeled "Relay · step N" per
 // ff28d4c). This component is just the UI consolidation.
@@ -11298,356 +10880,6 @@ function AutomationsView({ deals, onSelect, setView, isAdmin, initialSubtab }) {
   );
 }
 
-function OutreachView({ deals, onSelect, setView, isAdmin }) {
-  const [stats, setStats] = useState({ pending_drafts: 0, replies_waiting: 0, scheduled_24h: 0, sent_today: 0 });
-  const alive = useAliveRef();
-
-  const loadStats = React.useCallback(async () => {
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    const next24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const [draftsRes, repliesRes, schedRes, sentRes] = await Promise.all([
-      sb.from('outreach_queue').select('id', { count: 'exact', head: true }).in('status', ['queued', 'generating', 'pending']),
-      sb.from('messages_outbound').select('id', { count: 'exact', head: true }).eq('direction', 'inbound').is('read_by_team_at', null),
-      sb.from('outreach_queue').select('id', { count: 'exact', head: true }).eq('status', 'pending').lte('scheduled_for', next24h.toISOString()).gt('scheduled_for', new Date().toISOString()),
-      sb.from('messages_outbound').select('id', { count: 'exact', head: true }).eq('direction', 'outbound').gte('created_at', todayStart.toISOString()),
-    ]);
-    if (!alive.current) return;
-    setStats({
-      pending_drafts: draftsRes.count || 0,
-      replies_waiting: repliesRes.count || 0,
-      scheduled_24h: schedRes.count || 0,
-      sent_today: sentRes.count || 0,
-    });
-  }, [alive]);
-
-  const loadStatsRef = useRef(loadStats); loadStatsRef.current = loadStats;
-  useEffect(() => { loadStats(); }, [loadStats]);
-  useEffect(() => {
-    const ch = sb.channel('outreach-stats')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'outreach_queue' }, () => loadStatsRef.current())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadStatsRef.current())
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, []);
-
-  const Tile = ({ label, value, sub, color }) => (
-    <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: `2px solid ${color}`, borderRadius: 10, padding: 14 }}>
-      <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{value}</div>
-      <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2 }}>{sub}</div>
-    </div>
-  );
-
-  return (
-    <div>
-      {/* The top-of-page heading is owned by AutomationsView now (parent
-          sub-tab wrapper). This component is the "Ready to Approve" body. */}
-      <ReviewModeBanner isAdmin={isAdmin} />
-
-      <DoubleQueueGuard deals={deals} onSelect={onSelect} />
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 24 }}>
-        <Tile label="Drafts ready to send" value={stats.pending_drafts} sub={stats.pending_drafts === 0 ? 'Nothing pending' : 'all phases · queue shows active phase'} color="#d8b560" />
-        <Tile label="Replies waiting" value={stats.replies_waiting} sub={stats.replies_waiting === 0 ? 'Inbox clear' : 'oldest first below'} color="#3b82f6" />
-        <Tile label="Drips scheduled · next 24h" value={stats.scheduled_24h} sub="cadence engine" color="#a78bfa" />
-        <Tile label="Sent today" value={stats.sent_today} sub="outbound count" color="#10b981" />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, alignItems: 'start' }}>
-        <div>
-          <SectionHeader icon="🤖" label="Drafts ready to send" sub="The draft queue lives on Today now — one home, no duplicate. Jump there to review + send." />
-          <button onClick={() => setView && setView('today')} style={{ display: 'block', width: '100%', textAlign: 'left', background: '#1c1917', border: '1px solid #44403c', borderRadius: 10, padding: '18px 20px', cursor: 'pointer', fontFamily: 'inherit' }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace" }}>{stats.pending_drafts} draft{stats.pending_drafts !== 1 ? 's' : ''} ready</div>
-            <div style={{ fontSize: 12, color: '#fdba74', marginTop: 5, fontWeight: 700 }}>→ Review &amp; send on Today</div>
-            {stats.pending_drafts === 0 && <div style={{ fontSize: 12, color: '#78716c', marginTop: 6 }}>Nothing pending — push an A/B-tier deal into outreach to queue one.</div>}
-          </button>
-        </div>
-        <div>
-          <SectionHeader icon="💬" label="Replies waiting" sub="Inbound SMS from claimants you haven't responded to yet. Oldest first — clear by replying or marking seen." />
-          <ReplyInbox onSelect={onSelect} />
-        </div>
-      </div>
-
-      <div style={{ marginTop: 32, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
-        <b style={{ color: '#a8a29e' }}>How this hub works:</b> Drafts come from <code style={{ color: '#a8a29e' }}>outreach_queue</code> — Justin's AI auto-drafts the intro + each cadence-day follow-up the moment a deal is queued. You review + send. Replies surface from <code style={{ color: '#a8a29e' }}>messages_outbound</code> where direction='inbound' and read_by_team_at is null. Realtime — new replies pop in without refresh. Once Lauren intake-and-classify lands (Justin), some replies will auto-escalate or auto-draft responses for your review.
-      </div>
-    </div>
-  );
-}
-
-// ─── InboxView — unified cross-deal inbound feed ─────────────────────
-// Aggregates inbound SMS (messages_outbound), inbound calls (call_logs),
-// and inbound emails (emails) into a single chronological stream so
-// Nathan/Eric can see "what came in today" without bouncing between
-// Comms tabs deal-by-deal. Filters: all / sms / calls / email / unread.
-// Window: rolling 7 days (toggleable to 30). Click any row to open the
-// originating deal's Comms tab.
-function InboxView({ deals, onSelect }) {
-  const [items, setItems] = useState(null);
-  const [filter, setFilter] = useState('all');
-  const [days, setDays] = useState(7);
-  const alive = useAliveRef();
-
-  const load = React.useCallback(async () => {
-    if (!deals || deals.length === 0) { setItems([]); return; }
-    const ids = deals.map(d => d.id);
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-
-    const [smsRes, callsRes, emailsRes] = await Promise.all([
-      sb.from('messages_outbound')
-        .select('id, deal_id, body, from_number, created_at, read_by_team_at')
-        .eq('direction', 'inbound')
-        .in('deal_id', ids)
-        .gte('created_at', since)
-        .order('created_at', { ascending: false })
-        .limit(300),
-      sb.from('call_logs')
-        .select('id, deal_id, direction, status, started_at, duration_seconds, from_number, recording_url')
-        .eq('direction', 'inbound')
-        .in('deal_id', ids)
-        .gte('started_at', since)
-        .order('started_at', { ascending: false })
-        .limit(200),
-      sb.from('emails')
-        .select('id, deal_id, subject, from_email, body_text, created_at')
-        .eq('direction', 'inbound')
-        .in('deal_id', ids)
-        .gte('created_at', since)
-        .order('created_at', { ascending: false })
-        .limit(200),
-    ]);
-
-    if (!alive.current) return;
-    const dealsById = Object.fromEntries(deals.map(d => [d.id, d]));
-
-    const sms = (smsRes.data || []).map(r => ({
-      kind: 'sms',
-      key: 'sms-' + r.id,
-      raw: r,
-      ts: r.created_at,
-      deal: dealsById[r.deal_id] || null,
-      sender: r.from_number || 'Unknown',
-      preview: r.body || '',
-      unread: !r.read_by_team_at,
-    }));
-    const calls = (callsRes.data || []).map(r => {
-      const dur = r.duration_seconds || 0;
-      const durStr = dur > 0 ? `${Math.floor(dur / 60)}m ${dur % 60}s` : '';
-      const statusStr = r.status === 'missed' || r.status === 'no-answer'
-        ? 'Missed call'
-        : r.status === 'completed' && dur > 0
-          ? `Call · ${durStr}`
-          : `Call · ${r.status}`;
-      return {
-        kind: 'call',
-        key: 'call-' + r.id,
-        raw: r,
-        ts: r.started_at,
-        deal: dealsById[r.deal_id] || null,
-        sender: r.from_number || 'Unknown',
-        preview: statusStr + (r.recording_url ? ' · 🎙 recording' : ''),
-        unread: false,
-      };
-    });
-    const emails = (emailsRes.data || []).map(r => ({
-      kind: 'email',
-      key: 'email-' + r.id,
-      raw: r,
-      ts: r.created_at,
-      deal: dealsById[r.deal_id] || null,
-      sender: r.from_email || 'Unknown',
-      preview: r.subject || (r.body_text ? r.body_text.slice(0, 120) : '(no subject)'),
-      unread: false,
-    }));
-
-    const merged = [...sms, ...calls, ...emails].sort((a, b) =>
-      new Date(b.ts).getTime() - new Date(a.ts).getTime()
-    );
-    setItems(merged);
-  }, [deals, days, alive]);
-
-  const loadRef = useRef(load); loadRef.current = load;
-  useEffect(() => { load(); }, [load]);
-  useEffect(() => {
-    const ch = sb.channel('inbox-view-feed')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages_outbound' }, () => loadRef.current())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'call_logs' }, () => loadRef.current())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'emails' }, () => loadRef.current())
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, []);
-
-  const markSmsSeen = async (id) => {
-    const { error } = await sb.from('messages_outbound')
-      .update({ read_by_team_at: new Date().toISOString() })
-      .eq('id', id);
-    if (error) { alert('Could not mark seen: ' + error.message); return; }
-    await load();
-  };
-
-  const fmtAge = (iso) => {
-    if (!iso) return '';
-    const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
-    if (m < 1) return 'just now';
-    if (m < 60) return m + 'm ago';
-    if (m < 1440) return (m / 60).toFixed(1) + 'h ago';
-    return Math.floor(m / 1440) + 'd ago';
-  };
-
-  const filtered = !items ? null : items.filter(i => {
-    if (filter === 'all') return true;
-    if (filter === 'unread') return i.unread;
-    return i.kind === filter;
-  });
-
-  const counts = !items ? { all: 0, sms: 0, call: 0, email: 0, unread: 0 } : {
-    all: items.length,
-    sms: items.filter(i => i.kind === 'sms').length,
-    call: items.filter(i => i.kind === 'call').length,
-    email: items.filter(i => i.kind === 'email').length,
-    unread: items.filter(i => i.unread).length,
-  };
-
-  const KIND_META = {
-    sms:   { icon: '📱', label: 'SMS',   stripe: '#3b82f6' },
-    call:  { icon: '☎',  label: 'Call',  stripe: '#10b981' },
-    email: { icon: '📧', label: 'Email', stripe: '#a78bfa' },
-  };
-
-  const ChipBtn = ({ id, label, count, color }) => (
-    <button onClick={() => setFilter(id)}
-      style={{
-        background: filter === id ? '#292524' : 'transparent',
-        color: filter === id ? '#fafaf9' : '#a8a29e',
-        border: filter === id ? `1px solid ${color || '#44403c'}` : '1px solid transparent',
-        padding: '6px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
-        cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 6
-      }}>
-      {label}
-      <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{count}</span>
-    </button>
-  );
-
-  return (
-    <div>
-      <div style={{ marginBottom: 18 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10 }}>
-          📬 Inbox
-          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· every inbound SMS, call &amp; email across every deal</span>
-        </h2>
-      </div>
-
-      <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 18, padding: 6, background: '#1c1917', border: '1px solid #292524', borderRadius: 8 }}>
-        <ChipBtn id="all"    label="All"    count={counts.all} />
-        <ChipBtn id="sms"    label="📱 SMS"    count={counts.sms} color="#3b82f6" />
-        <ChipBtn id="call"   label="☎ Calls"  count={counts.call} color="#10b981" />
-        <ChipBtn id="email"  label="📧 Email"  count={counts.email} color="#a78bfa" />
-        <ChipBtn id="unread" label="🔴 Unread" count={counts.unread} color="#ef4444" />
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' }}>
-          <span style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.08em', textTransform: 'uppercase', fontWeight: 700 }}>Window</span>
-          <button onClick={() => setDays(7)} style={{ background: days === 7 ? '#292524' : 'transparent', color: days === 7 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>7d</button>
-          <button onClick={() => setDays(30)} style={{ background: days === 30 ? '#292524' : 'transparent', color: days === 30 ? '#fafaf9' : '#78716c', border: 'none', padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>30d</button>
-        </div>
-      </div>
-
-      {filtered === null && (
-        <div style={{ fontSize: 12, color: '#78716c', padding: 18 }}>Loading inbox…</div>
-      )}
-      {filtered && filtered.length === 0 && (
-        <div style={{ fontSize: 12, color: '#78716c', padding: 24, border: '1px dashed #292524', borderRadius: 8, textAlign: 'center' }}>
-          {filter === 'all'
-            ? `No inbound activity in the last ${days} days. Replies, calls, and emails will appear here in real time.`
-            : `No ${filter === 'unread' ? 'unread items' : filter + ' items'} in the last ${days} days.`}
-        </div>
-      )}
-
-      {filtered && filtered.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {filtered.map(it => {
-            const meta = KIND_META[it.kind];
-            return (
-              <div key={it.key}
-                onClick={() => {
-                  // Auto-mark inbound SMS rows seen when the user clicks
-                  // through to the deal — clicking the row IS the act of
-                  // looking at the notification. Was previously only fired
-                  // by the explicit "Mark seen" button, which left the
-                  // badge sitting in the header for users who just clicked
-                  // through to the deal to handle it. Fixes the web-side
-                  // half of #173.
-                  if (it.kind === 'sms' && it.unread && it.raw?.id) {
-                    markSmsSeen(it.raw.id);
-                  }
-                  if (it.deal && onSelect) onSelect(it.deal.id);
-                }}
-                style={{
-                  background: '#0c0a09',
-                  border: '1px solid #292524',
-                  borderLeft: `3px solid ${meta.stripe}`,
-                  borderRadius: 7,
-                  padding: '10px 12px',
-                  cursor: it.deal ? 'pointer' : 'default',
-                  display: 'grid',
-                  gridTemplateColumns: '28px 1fr auto',
-                  gap: 10,
-                  alignItems: 'start',
-                }}>
-                <div style={{ fontSize: 18, lineHeight: 1, marginTop: 2 }}>{meta.icon}</div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 280 }}>
-                      {it.deal?.name || '(unmatched)'}
-                    </span>
-                    {it.deal?.lead_tier && (
-                      <span style={{ fontSize: 9, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 5px', borderRadius: 3, letterSpacing: '0.05em' }}>
-                        TIER {it.deal.lead_tier}
-                      </span>
-                    )}
-                    {it.unread && (
-                      <span style={{ fontSize: 9, fontWeight: 700, background: '#7f1d1d', color: '#fca5a5', padding: '1px 6px', borderRadius: 3, letterSpacing: '0.05em' }}>
-                        UNREAD
-                      </span>
-                    )}
-                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {it.sender}</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#d6d3d1', lineHeight: 1.45, fontStyle: it.kind === 'sms' ? 'italic' : 'normal', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
-                    {it.kind === 'sms' ? `"${it.preview}"` : it.preview}
-                  </div>
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                  <span style={{ fontSize: 10, color: '#a8a29e', fontFamily: "'DM Mono', monospace", whiteSpace: 'nowrap' }}>
-                    {fmtAge(it.ts)}
-                  </span>
-                  {it.kind === 'sms' && it.unread && (
-                    <button onClick={(e) => { e.stopPropagation(); markSmsSeen(it.raw.id); }}
-                      style={{ ...btnGhost, fontSize: 10, padding: '2px 7px', color: '#a8a29e' }}>
-                      Mark seen
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
-        <b style={{ color: '#a8a29e' }}>What's here:</b> Every inbound SMS (<code style={{ color: '#a8a29e' }}>messages_outbound</code> direction=inbound), inbound call (<code style={{ color: '#a8a29e' }}>call_logs</code> direction=inbound), and inbound email (<code style={{ color: '#a8a29e' }}>emails</code> direction=inbound) across every deal you can access, sorted newest first. Click any row to jump to that deal's Comms tab. Realtime — new inbound items pop in without refresh.
-      </div>
-    </div>
-  );
-}
-
-// SectionHeader helper for OutreachView (matches ReportsView's pattern)
-const SectionHeader = ({ icon, label, sub }) => (
-  <div style={{ marginBottom: 12, marginTop: 4 }}>
-    <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.12em", textTransform: "uppercase", display: "flex", alignItems: "center", gap: 8 }}>
-      <span>{icon}</span>{label}
-    </div>
-    {sub && <div style={{ fontSize: 12, color: "#a8a29e", marginTop: 4, lineHeight: 1.5 }}>{sub}</div>}
-  </div>
-);
-
 // ─── Leads (click-to-text outreach via personalized_links) ─────────
 // Top-level view managing personalized_links rows. Three sub-tabs:
 // Ready (has phone, untexted) / Texted / All. Each row shows lead +
@@ -11656,296 +10888,6 @@ const SectionHeader = ({ icon, label, sub }) => (
 // row drops off Ready. Castle populates rows automatically; manual
 // entry form at top of Ready handles ad-hoc adds.
 //
-// Distinct from LeadsModal (intake-form `leads` table). This view
-// is `personalized_links` only.
-function LeadsOutreachView() {
-  const [status, setStatus] = useState('ready');
-  const [rows, setRows] = useState([]);
-  const [counts, setCounts] = useState({ ready: 0, texted: 0, all: 0 });
-  const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [showManual, setShowManual] = useState(false);
-  const [createdToken, setCreatedToken] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const [editingRow, setEditingRow] = useState(null);
-  const alive = useAliveRef();
-  const PAGE = 50;
-
-  const fmtMoney = (n) => n == null ? '—' : (Number(n) >= 1000 ? `$${Math.round(Number(n)/1000)}k` : `$${Number(n).toLocaleString()}`);
-  const fmtPhone = (p) => {
-    if (!p) return '—';
-    const d = String(p).replace(/\D/g, '');
-    if (d.length === 10) return `(${d.slice(0,3)}) ${d.slice(3,6)}-${d.slice(6)}`;
-    if (d.length === 11 && d[0] === '1') return `(${d.slice(1,4)}) ${d.slice(4,7)}-${d.slice(7)}`;
-    return p;
-  };
-  const fmtRel = (iso) => {
-    if (!iso) return '—';
-    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-    if (sec < 60) return `${sec}s ago`;
-    if (sec < 3600) return `${Math.round(sec/60)}m ago`;
-    if (sec < 86400) return `${Math.round(sec/3600)}h ago`;
-    if (sec < 86400 * 7) return `${Math.round(sec/86400)}d ago`;
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
-  const smsHref = (row) => {
-    if (!row.phone) return '';
-    const d = String(row.phone).replace(/\D/g, '');
-    const phone = d.length === 10 ? `+1${d}` : `+${d}`;
-    const first = (row.first_name || '').trim();
-    const addr = (row.property_address || '').split(',')[0].trim();
-    const county = (row.county || '').trim();
-    const lo = row.estimated_surplus_low, hi = row.estimated_surplus_high;
-    const mid = (lo != null && hi != null) ? Math.round(((Number(lo) + Number(hi)) / 2) / 1000) : null;
-    const body = `Hi${first ? ' ' + first : ''} — Nathan with RefundLocators. ${county || 'Your'} County may be holding ` +
-      (mid ? `~$${mid}k` : 'surplus funds') +
-      ` from your ${addr || 'former'} sale. Details: refundlocators.com/s/${row.token}`;
-    // Note: leading '&' before body= is required for iOS iMessage compatibility.
-    return `sms:${phone}&body=${encodeURIComponent(body)}`;
-  };
-
-  const COLS = 'token, first_name, last_name, phone, property_address, county, sale_date, sale_price, judgment_amount, estimated_surplus_low, estimated_surplus_high, case_number, source, created_at, texted_at, first_viewed_at, last_viewed_at, view_count, responded_at, claim_submitted_at';
-
-  const loadCounts = React.useCallback(async () => {
-    const [a, r, t] = await Promise.all([
-      sb.from('personalized_links').select('token', { count: 'exact', head: true }).not('phone', 'is', null),
-      sb.from('personalized_links').select('token', { count: 'exact', head: true }).not('phone', 'is', null).is('texted_at', null),
-      sb.from('personalized_links').select('token', { count: 'exact', head: true }).not('phone', 'is', null).not('texted_at', 'is', null),
-    ]);
-    if (!alive.current) return;
-    setCounts({ all: a.count || 0, ready: r.count || 0, texted: t.count || 0 });
-  }, [alive]);
-
-  const loadRows = React.useCallback(async () => {
-    setLoading(true);
-    let q = sb.from('personalized_links')
-      .select(COLS, { count: 'exact' })
-      .not('phone', 'is', null)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + PAGE - 1);
-    if (status === 'ready') q = q.is('texted_at', null);
-    if (status === 'texted') q = q.not('texted_at', 'is', null);
-    const { data, count } = await q;
-    if (!alive.current) return;
-    setRows(data || []);
-    setTotal(count || 0);
-    setLoading(false);
-  }, [status, offset, alive]);
-
-  useEffect(() => { loadRows(); }, [loadRows]);
-  useEffect(() => { loadCounts(); }, [loadCounts]);
-
-  const markTexted = async (token) => {
-    await sb.from('personalized_links').update({ texted_at: new Date().toISOString() }).eq('token', token);
-    if (status === 'ready') setRows(prev => prev.filter(r => r.token !== token));
-    loadCounts();
-  };
-  const resetTexted = async (token) => {
-    await sb.from('personalized_links').update({ texted_at: null }).eq('token', token);
-    loadRows(); loadCounts();
-  };
-  const onTextClick = (row) => {
-    const href = smsHref(row);
-    if (!href) return;
-    window.location.href = href;
-    setTimeout(() => markTexted(row.token), 1500);
-  };
-
-  const copyUrl = async () => {
-    if (!createdToken) return;
-    try {
-      await navigator.clipboard.writeText(`https://refundlocators.com/s/${createdToken}`);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (e) { /* clipboard blocked */ }
-  };
-
-  const totalPages = Math.max(1, Math.ceil(total / PAGE));
-  const page = Math.floor(offset / PAGE) + 1;
-
-  return (
-    <div>
-      <div style={{ marginBottom: 18 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0, display: 'inline-flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-          📨 Leads
-          <span style={{ fontSize: 12, fontWeight: 400, color: '#a8a29e' }}>· click-to-text personalized URLs</span>
-        </h2>
-      </div>
-
-      {/* Sub-tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 18, background: '#1c1917', borderRadius: 8, padding: 3, border: '1px solid #292524', width: 'fit-content' }}>
-        {[['ready', 'Ready', counts.ready], ['texted', 'Texted', counts.texted], ['all', 'All', counts.all]].map(([k, label, c]) => (
-          <button key={k} onClick={() => { setStatus(k); setOffset(0); }} style={{
-            background: status === k ? '#292524' : 'transparent',
-            color: status === k ? '#fafaf9' : '#78716c',
-            border: status === k ? '1px solid #44403c' : '1px solid transparent',
-            padding: '6px 14px', borderRadius: 6, fontSize: 12, fontWeight: status === k ? 700 : 500,
-            cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 8, fontFamily: 'inherit',
-          }}>
-            {label}
-            <span style={{ fontSize: 10, color: status === k ? '#d97706' : '#57534e', fontFamily: "'DM Mono', monospace" }}>{c.toLocaleString()}</span>
-          </button>
-        ))}
-      </div>
-
-      {/* Manual create — only on Ready */}
-      {status === 'ready' && (
-        <div style={{ marginBottom: 18 }}>
-          {!showManual ? (
-            <button onClick={() => setShowManual(true)} style={{ ...btnGhost, fontSize: 12 }}>＋ Manually add a lead</button>
-          ) : (
-            <ManualLeadForm onCancel={() => setShowManual(false)} onCreated={(token) => { setCreatedToken(token); setShowManual(false); loadRows(); loadCounts(); }} />
-          )}
-          {createdToken && (
-            <div style={{ marginTop: 10, padding: '10px 14px', background: 'rgba(16,185,129,0.08)', border: '1px solid #064e3b', borderRadius: 8, display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'space-between', flexWrap: 'wrap' }}>
-              <div style={{ fontSize: 12, color: '#6ee7b7' }}>
-                ✓ Lead created. URL: <code style={{ background: '#0c0a09', padding: '1px 6px', borderRadius: 4, fontFamily: "'DM Mono', monospace", color: '#fafaf9' }}>refundlocators.com/s/{createdToken}</code>
-              </div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={copyUrl} style={{ ...btnGhost, fontSize: 11 }}>{copied ? '✓ Copied' : 'Copy URL'}</button>
-                <a href={`https://refundlocators.com/s/${createdToken}`} target="_blank" rel="noopener noreferrer" style={{ ...btnGhost, fontSize: 11, textDecoration: 'none', display: 'inline-block' }}>Preview ↗</a>
-                <button onClick={() => setCreatedToken(null)} style={{ ...btnGhost, fontSize: 11 }}>Dismiss</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Loading / empty / list */}
-      {loading && <div style={{ padding: 60, textAlign: 'center', color: '#78716c', fontSize: 13 }}>Loading…</div>}
-
-      {!loading && rows.length === 0 && (
-        <div style={{ padding: '60px 24px', textAlign: 'center', color: '#a8a29e', fontSize: 13, lineHeight: 1.6, maxWidth: 480, margin: '0 auto' }}>
-          {status === 'ready' && <><b style={{ color: '#fafaf9', display: 'block', marginBottom: 6 }}>No leads ready to text.</b>Once Castle writes rows to <code style={{ background: '#1c1917', padding: '1px 6px', borderRadius: 3, fontFamily: "'DM Mono', monospace", fontSize: 11 }}>personalized_links</code> with phone numbers populated, they'll appear here.</>}
-          {status === 'texted' && 'Nothing texted yet — go send some.'}
-          {status === 'all' && 'No leads with phone numbers in the database.'}
-        </div>
-      )}
-
-      {!loading && rows.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {rows.map(row => (
-            <div key={row.token} style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: 18, alignItems: 'center', padding: '14px 18px', background: '#1c1917', border: '1px solid #292524', borderRadius: 10 }}>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                  {(row.first_name || '—') + ' ' + (row.last_name || '')}
-                  {row.claim_submitted_at && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.18)', color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase' }}>✓ submitted claim</span>}
-                  {row.responded_at && !row.claim_submitted_at && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(217,119,6,0.18)', color: '#fbbf24', letterSpacing: '0.05em', textTransform: 'uppercase' }}>responded</span>}
-                  {row.first_viewed_at && !row.responded_at && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(78,164,255,0.15)', color: '#93c5fd', letterSpacing: '0.05em', textTransform: 'uppercase' }}>viewed {row.view_count || 1}×</span>}
-                </div>
-                <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 6 }}>{row.property_address || '—'}</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace", marginBottom: 4 }}>
-                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>County</span>{row.county || '—'}</span>
-                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>Surplus</span>{fmtMoney(row.estimated_surplus_low)}–{fmtMoney(row.estimated_surplus_high)}</span>
-                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>Phone</span>{fmtPhone(row.phone)}</span>
-                  <span><span style={{ color: '#57534e', fontSize: 9, letterSpacing: '0.06em', textTransform: 'uppercase', marginRight: 5 }}>Case</span>{row.case_number || '—'}</span>
-                </div>
-                <div style={{ fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace" }}>
-                  Castle picked up {fmtRel(row.created_at)}
-                  {row.texted_at && <> · texted {fmtRel(row.texted_at)}</>}
-                  {row.first_viewed_at && <> · first viewed {fmtRel(row.first_viewed_at)}</>}
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, minWidth: 140 }}>
-                <a href={`https://refundlocators.com/s/${row.token}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: '#a8a29e', textDecoration: 'none', textAlign: 'center', padding: '5px 10px', borderRadius: 6, border: '1px solid #292524' }} title="Preview the page they'll see">
-                  preview ↗
-                </a>
-                {row.texted_at ? (
-                  <button onClick={() => resetTexted(row.token)} style={{ ...btnGhost, fontSize: 11 }} title="Bring this lead back to the Ready queue">reset</button>
-                ) : row.phone ? (
-                  <a
-                    href={smsHref(row)}
-                    onClick={() => { setTimeout(() => markTexted(row.token), 1500); }}
-                    style={{ background: '#d97706', color: '#0c0a09', border: 0, padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', fontFamily: 'inherit', textDecoration: 'none', textAlign: 'center', display: 'inline-block' }}
-                  >
-                    Text {row.first_name || 'lead'} →
-                  </a>
-                ) : (
-                  <button disabled style={{ background: '#44403c', color: '#78716c', border: 0, padding: '10px 16px', borderRadius: 8, fontSize: 13, fontWeight: 700, cursor: 'not-allowed', whiteSpace: 'nowrap', fontFamily: 'inherit' }}>No phone</button>
-                )}
-                <button onClick={() => setEditingRow(row)} title="Edit this lead's info" style={{ ...btnGhost, fontSize: 11, padding: '4px 10px' }}>
-                  ✏️ Edit
-                </button>
-              </div>
-            </div>
-          ))}
-
-          {total > PAGE && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 4px', gap: 12 }}>
-              <button onClick={() => setOffset(Math.max(0, offset - PAGE))} disabled={offset === 0} style={{ ...btnGhost, fontSize: 12, opacity: offset === 0 ? 0.4 : 1 }}>← prev</button>
-              <span style={{ fontSize: 11, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>page {page} / {totalPages} · {total.toLocaleString()} total</span>
-              <button onClick={() => setOffset(offset + PAGE)} disabled={offset + PAGE >= total} style={{ ...btnGhost, fontSize: 12, opacity: offset + PAGE >= total ? 0.4 : 1 }}>next →</button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {editingRow && (
-        <EditLeadModal
-          row={editingRow}
-          onClose={() => setEditingRow(null)}
-          onSaved={() => { setEditingRow(null); loadRows(); loadCounts(); }}
-        />
-      )}
-    </div>
-  );
-}
-
-// Mint a personalized_links token. Per Nathan's call 2026-04-28 (option A
-// from the security tradeoff conversation): readable name-based slug like
-// "richardmikol" rather than the historical 8-char random nanoid. Same
-// shape works for both PersonalizedUrlControl (Generate URL on a deal)
-// and ManualLeadForm (ad-hoc lead entry).
-//
-// Slug format: lowercase, alphanumeric only, no separator (e.g.
-// "richardmikol", "marysmith"). Collision handling: append 2, 3, ... up to
-// 99, then fall back to a random nanoid. Random nanoid is also the fallback
-// when both first and last names are missing.
-//
-// SECURITY NOTE: name-based slugs are guessable. /s/jonesmary, /s/smithbob
-// etc. can find other leads. We accepted this tradeoff for branding +
-// SMS-friendliness at current deal volume (~12 active). Revisit if DCC
-// scales — see chat 2026-04-28 for the full discussion.
-async function mintPersonalizedLinkSlug(firstName, lastName) {
-  const slugify = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  const base = slugify(firstName) + slugify(lastName);
-
-  const randomNanoid = () => {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const arr = new Uint8Array(8);
-    crypto.getRandomValues(arr);
-    let id = '';
-    for (let i = 0; i < 8; i++) id += alphabet[arr[i] % alphabet.length];
-    return id;
-  };
-
-  if (!base) return randomNanoid();
-
-  let candidate = base;
-  for (let suffix = 1; suffix <= 99; suffix++) {
-    const { count } = await sb.from('personalized_links')
-      .select('token', { count: 'exact', head: true })
-      .eq('token', candidate);
-    if (!count) return candidate;
-    candidate = base + (suffix + 1);
-  }
-  return randomNanoid();
-}
-
-// ─────────────────────────────────────────────────────────────────────
-// Comms / Conversation Analytics — admin-only
-//
-// Pulls from messages_outbound (SMS in/out), outreach_queue (drafts +
-// scheduled), personalized_link_views (engagement on /s/<token> pages),
-// personalized_links (link metadata + claim_submitted_at), and
-// lauren_conversations (web chat — usually empty until refundlocators.com
-// chat starts driving traffic).
-//
-// Two ways to read this view:
-//   1. KPI tiles — last 30d snapshot of activity + response + conversion
-//   2. Per-deal digest — which deals need follow-up vs are progressing
-// ─────────────────────────────────────────────────────────────────────
 function CommsAnalyticsView() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({});
@@ -12274,303 +11216,6 @@ function CommsAnalyticsView() {
 // at the top with Approve / Reject buttons + optional reviewer note;
 // completed rows below in read-only form.
 //
-// Approval is a pure status flip today — no auto-execution. Owner
-// reviews the request, hits Approve, then performs the actual
-// records request / outreach drafting manually. The audit trail is
-// the queue row itself (who requested, when, what, reason; who
-// reviewed, when, note).
-// ─────────────────────────────────────────────────────────────────────
-function VaQueueView({ userId }) {
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showHistory, setShowHistory] = useState(false);
-  const [busyId, setBusyId] = useState(null);
-  const [noteInputs, setNoteInputs] = useState({}); // queue_id → note text
-  const alive = useAliveRef();
-
-  const fmtRel = (iso) => {
-    if (!iso) return "—";
-    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-    if (sec < 60) return `${sec}s ago`;
-    if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
-    if (sec < 86400) return `${Math.round(sec / 3600)}h ago`;
-    if (sec < 86400 * 7) return `${Math.round(sec / 86400)}d ago`;
-    return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  };
-
-  const TOOL_LABELS = {
-    queue_records_request: "Records request",
-    queue_outreach_draft:  "Outreach draft",
-    queue_case_flag:       "Case flag",
-  };
-  const TOOL_ICONS = {
-    queue_records_request: "📂",
-    queue_outreach_draft:  "✉️",
-    queue_case_flag:       "🚩",
-  };
-
-  const STATUS_PILL = {
-    pending:   { label: "Pending",   bg: "#78350f30", color: "#fcd34d" },
-    approved:  { label: "Approved",  bg: "#065f4630", color: "#86efac" },
-    rejected:  { label: "Rejected",  bg: "#7f1d1d30", color: "#fca5a5" },
-    executed:  { label: "Executed",  bg: "#1e3a8a30", color: "#93c5fd" },
-    cancelled: { label: "Cancelled", bg: "#3f3f4630", color: "#a8a29e" },
-    failed:    { label: "Failed",    bg: "#7f1d1d30", color: "#fca5a5" },
-  };
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data, error } = await sb
-      .from("va_work_queue")
-      .select("*, requester:requested_by_id(id, name, display_name), reviewer:reviewed_by_id(id, name, display_name)")
-      .order("status", { ascending: true })  // pending sorts before others alphabetically too
-      .order("created_at", { ascending: false })
-      .limit(200);
-    if (!alive.current) return;
-    if (error) {
-      console.error("va_work_queue load failed", error);
-      setRows([]);
-    } else {
-      setRows(data || []);
-    }
-    setLoading(false);
-  }, [alive]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const setStatus = async (id, nextStatus) => {
-    setBusyId(id);
-    const note = (noteInputs[id] || "").trim() || null;
-    const { error } = await sb
-      .from("va_work_queue")
-      .update({
-        status: nextStatus,
-        reviewer_note: note,
-        reviewed_by_id: userId,
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq("id", id);
-    if (error) {
-      alert(`Couldn't update: ${error.message}`);
-      setBusyId(null);
-      return;
-    }
-    if (alive.current) {
-      setNoteInputs((n) => { const next = { ...n }; delete next[id]; return next; });
-      await load();
-    }
-    setBusyId(null);
-  };
-
-  const pending = rows.filter((r) => r.status === "pending");
-  const completed = rows.filter((r) => r.status !== "pending");
-
-  const renderRow = (r, kind /* 'pending' | 'history' */) => {
-    const args = r.tool_args || {};
-    const name = TOOL_LABELS[r.tool_name] || r.tool_name;
-    const icon = TOOL_ICONS[r.tool_name] || "📌";
-    const reqName = r.requester?.display_name || r.requester?.name || "(unknown VA)";
-    const revName = r.reviewer?.display_name || r.reviewer?.name || null;
-    const pill = STATUS_PILL[r.status] || STATUS_PILL.pending;
-    return (
-      <div key={r.id} style={{
-        background: "#1c1917",
-        border: kind === "pending" ? "1px solid #d97706" : "1px solid #292524",
-        borderRadius: 10,
-        padding: 16,
-        marginBottom: 12,
-        opacity: kind === "pending" ? 1 : 0.85,
-      }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 18 }} aria-hidden>{icon}</span>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "#fafaf9" }}>{name}</span>
-          <span style={{
-            background: pill.bg, color: pill.color,
-            padding: "2px 8px", borderRadius: 999,
-            fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em",
-          }}>{pill.label}</span>
-          <span style={{ marginLeft: "auto", fontSize: 11, color: "#78716c" }}>
-            {reqName} · {fmtRel(r.created_at)}
-          </span>
-        </div>
-
-        {r.reason && (
-          <div style={{
-            background: "#0c0a09",
-            border: "1px solid #292524",
-            borderRadius: 6,
-            padding: "10px 12px",
-            marginBottom: 8,
-            fontSize: 13,
-            color: "#d6d3d1",
-            lineHeight: 1.5,
-          }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4 }}>VA's reason</div>
-            {r.reason}
-          </div>
-        )}
-
-        {Object.keys(args).length > 0 && (
-          <details style={{ marginBottom: 8 }}>
-            <summary style={{ cursor: "pointer", fontSize: 11, color: "#a8a29e", padding: "4px 0" }}>
-              Request details ({Object.keys(args).length} fields)
-            </summary>
-            <pre style={{
-              background: "#0c0a09",
-              border: "1px solid #292524",
-              borderRadius: 6,
-              padding: 10,
-              marginTop: 4,
-              fontSize: 11,
-              color: "#a8a29e",
-              fontFamily: 'ui-monospace, "SF Mono", Menlo, monospace',
-              whiteSpace: "pre-wrap",
-              maxHeight: 200,
-              overflow: "auto",
-            }}>{JSON.stringify(args, null, 2)}</pre>
-          </details>
-        )}
-
-        {r.reviewer_note && (
-          <div style={{
-            fontSize: 12,
-            color: "#d6d3d1",
-            padding: "8px 0",
-            borderTop: "1px dashed #292524",
-            marginTop: 8,
-          }}>
-            <span style={{ fontWeight: 600 }}>{revName || "Reviewer"}</span>: {r.reviewer_note}
-            <span style={{ color: "#78716c", marginLeft: 8 }}>· {fmtRel(r.reviewed_at)}</span>
-          </div>
-        )}
-
-        {kind === "pending" && (
-          <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "stretch", flexWrap: "wrap" }}>
-            <input
-              type="text"
-              value={noteInputs[r.id] || ""}
-              onChange={(e) => setNoteInputs({ ...noteInputs, [r.id]: e.target.value })}
-              placeholder="Optional note for the VA…"
-              disabled={busyId === r.id}
-              style={{
-                flex: 1, minWidth: 200,
-                background: "#0c0a09",
-                border: "1px solid #44403c",
-                borderRadius: 6,
-                color: "#fafaf9",
-                padding: "8px 10px",
-                fontSize: 13,
-              }}
-            />
-            <button
-              type="button"
-              disabled={busyId === r.id}
-              onClick={() => setStatus(r.id, "approved")}
-              style={{
-                background: "#10b981",
-                color: "#0c0a09",
-                border: "none",
-                borderRadius: 6,
-                padding: "8px 14px",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: busyId === r.id ? "default" : "pointer",
-                opacity: busyId === r.id ? 0.6 : 1,
-              }}
-            >
-              {busyId === r.id ? "…" : "Approve"}
-            </button>
-            <button
-              type="button"
-              disabled={busyId === r.id}
-              onClick={() => setStatus(r.id, "rejected")}
-              style={{
-                background: "transparent",
-                color: "#fca5a5",
-                border: "1px solid #7f1d1d",
-                borderRadius: 6,
-                padding: "8px 14px",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: busyId === r.id ? "default" : "pointer",
-                opacity: busyId === r.id ? 0.6 : 1,
-              }}
-            >
-              Reject
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <h2 style={{ fontSize: 20, fontWeight: 700, color: "#fafaf9", margin: 0 }}>
-          VA Queue
-        </h2>
-        <p style={{ marginTop: 4, marginBottom: 0, color: "#a8a29e", fontSize: 13 }}>
-          Action requests from VA-audience Lauren. Approve to clear; manual execution still needed for now.
-        </p>
-      </div>
-
-      {loading ? (
-        <div style={{ padding: 40, textAlign: "center", color: "#78716c" }}>Loading…</div>
-      ) : (
-        <>
-          {pending.length === 0 ? (
-            <div style={{
-              background: "#0c0a09",
-              border: "1px dashed #292524",
-              borderRadius: 10,
-              padding: 40,
-              textAlign: "center",
-              color: "#78716c",
-              fontSize: 14,
-              marginBottom: 20,
-            }}>
-              No pending requests. VAs queue actions through Lauren and they land here.
-            </div>
-          ) : (
-            <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: "#d97706", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-                Pending review · {pending.length}
-              </div>
-              {pending.map((r) => renderRow(r, "pending"))}
-            </div>
-          )}
-
-          {completed.length > 0 && (
-            <div>
-              <button
-                type="button"
-                onClick={() => setShowHistory((s) => !s)}
-                style={{
-                  background: "transparent",
-                  border: "1px solid #292524",
-                  borderRadius: 6,
-                  color: "#a8a29e",
-                  padding: "6px 12px",
-                  fontSize: 12,
-                  cursor: "pointer",
-                  marginBottom: 12,
-                }}
-              >
-                {showHistory ? "▾" : "▸"} History · {completed.length}
-              </button>
-              {showHistory && completed.map((r) => renderRow(r, "history"))}
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-// Manual entry form for ad-hoc personalized_links rows.
-// Token comes from mintPersonalizedLinkSlug() — name-based slug per
-// Nathan's 2026-04-28 call. source='dcc-manual', expires_at=+90d.
 function ManualLeadForm({ onCancel, onCreated }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -12918,7 +11563,7 @@ function ReplyInbox({ onSelect, limit = 100 }) {
             onClick={() => {
               // Clicking the row IS the act of looking at the reply —
               // auto-mark seen + navigate to the deal. Same fix as
-              // InboxView. Fixes the web-side badge dismissal bug (#173).
+              // Fixes the web-side badge dismissal bug (#173).
               if (r.id) markSeen(r.id);
               if (r.deal && onSelect) onSelect(r.deal.id);
             }}
@@ -13059,7 +11704,7 @@ function DealLessThreadComposer({ thread, startCall, callStatus, onSent }) {
 //
 // Folds in the old Reply Inbox: the Texting tab has an "Unread" filter that
 // shows only inbound messages not yet marked read_by_team_at, and selecting a
-// thread marks its inbound messages seen. The standalone ReplyInbox/InboxView
+// thread marks its inbound messages seen. The old standalone inbox views
 // is superseded by this (the "inbox" route now renders CommunicationsView).
 function CommunicationsView({ onSelect, startCall, callStatus, onOpenCallDisposition }) {
   // Unified conversation hub (Justin 2026-05-27): one combined, newest-at-top
@@ -14004,236 +12649,6 @@ function LeadEngagementStrip({ deals, onSelect }) {
             </button>
           );
         })}
-      </div>
-    </div>
-  );
-}
-
-function AttentionView({ deals, onSelect }) {
-  const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState([]);
-  const [clearing, setClearing] = useState(null); // null | 'all' | <deal_id>
-
-  // Hoist the user id so the clear handlers can upsert user_deal_views.
-  const [userId, setUserId] = useState(null);
-  useEffect(() => {
-    sb.auth.getUser().then(({ data }) => setUserId(data?.user?.id || null));
-  }, []);
-
-  const load = React.useCallback(async () => {
-      setLoading(true);
-      const ARCHIVE = new Set(['closed', 'recovered', 'dead']);
-      const active = deals.filter(d => !ARCHIVE.has(d.status));
-      if (active.length === 0) { setRows([]); setLoading(false); return; }
-      const ids = active.map(d => d.id);
-
-      // Pull everything we need in parallel. Using per-deal grouping below.
-      const [docketUnack, inboundSms, allCalls, inboundEmail, pendingDrafts] = await Promise.all([
-        sb.from('docket_events').select('id, deal_id, event_type, description, event_date, received_at').in('deal_id', ids).eq('is_backfill', false).is('acknowledged_at', null),
-        sb.from('messages_outbound').select('id, deal_id, body, from_number, created_at').in('deal_id', ids).eq('direction', 'inbound').order('created_at', { ascending: false }).limit(500),
-        sb.from('call_logs').select('id, deal_id, direction, status, started_at, duration_seconds').in('deal_id', ids).order('started_at', { ascending: false }).limit(500),
-        sb.from('emails').select('id, deal_id, subject, from_email, created_at').in('deal_id', ids).eq('direction', 'inbound').order('created_at', { ascending: false }).limit(500),
-        sb.from('outreach_queue').select('id, deal_id, cadence_day, status, scheduled_for, draft_body').in('deal_id', ids).in('status', ['queued', 'generating', 'pending']),
-      ]);
-
-      // Use user_deal_views to know what's been seen per tab. For the
-      // Attention dashboard we don't want already-acknowledged items (for
-      // docket) or already-seen comms — so we subtract the user's seen time.
-      const { data: views } = await sb.from('user_deal_views').select('deal_id, tab, last_seen_at');
-      const seenByDeal = new Map();
-      (views || []).forEach(v => {
-        const cur = seenByDeal.get(v.deal_id) || {};
-        cur[v.tab] = v.last_seen_at;
-        seenByDeal.set(v.deal_id, cur);
-      });
-
-      const perDeal = new Map();
-      for (const d of active) {
-        const seen = seenByDeal.get(d.id) || {};
-        const commsSince = seen.comms || '1970-01-01T00:00:00Z';
-        perDeal.set(d.id, {
-          deal: d,
-          docket: (docketUnack.data || []).filter(r => r.deal_id === d.id),
-          sms_unread: (inboundSms.data || []).filter(r => r.deal_id === d.id && new Date(r.created_at) > new Date(commsSince)),
-          calls_unread: (allCalls.data || []).filter(r => r.deal_id === d.id && new Date(r.started_at) > new Date(commsSince)),
-          emails_unread: (inboundEmail.data || []).filter(r => r.deal_id === d.id && new Date(r.created_at) > new Date(commsSince)),
-          drafts_pending: (pendingDrafts.data || []).filter(r => r.deal_id === d.id),
-        });
-      }
-
-      const list = [...perDeal.values()]
-        .map(r => {
-          const total = r.docket.length + r.sms_unread.length + r.calls_unread.length + r.emails_unread.length + r.drafts_pending.length;
-          return { ...r, total };
-        })
-        .filter(r => r.total > 0)
-        .sort((a, b) => b.total - a.total);
-      setRows(list);
-      setLoading(false);
-  }, [deals]);
-
-  useEffect(() => { load(); }, [load]);
-
-  // Clear one deal — marks Comms + Docket seen-now for the current user and
-  // acknowledges all un-acked docket events on that deal. Does NOT touch
-  // pending outreach drafts; those clear only when Nathan sends or skips.
-  const clearDeal = async (dealId, unackDocketIds) => {
-    if (!userId || clearing) return;
-    setClearing(dealId);
-    const now = new Date().toISOString();
-    try {
-      await sb.from('user_deal_views').upsert([
-        { user_id: userId, deal_id: dealId, tab: 'comms',  last_seen_at: now },
-        { user_id: userId, deal_id: dealId, tab: 'docket', last_seen_at: now },
-      ], { onConflict: 'user_id,deal_id,tab' });
-      if (unackDocketIds && unackDocketIds.length > 0) {
-        await Promise.all(unackDocketIds.map(id =>
-          sb.rpc('acknowledge_docket_event', { p_event_id: id })
-        ));
-      }
-      await load();
-    } finally {
-      setClearing(null);
-    }
-  };
-
-  const clearAll = async () => {
-    if (!userId || clearing || rows.length === 0) return;
-    if (!window.confirm(`Mark everything seen across ${rows.length} deal${rows.length === 1 ? '' : 's'}? Pending outreach drafts are NOT cleared — those still need send or skip.`)) return;
-    setClearing('all');
-    const now = new Date().toISOString();
-    const views = rows.flatMap(r => [
-      { user_id: userId, deal_id: r.deal.id, tab: 'comms',  last_seen_at: now },
-      { user_id: userId, deal_id: r.deal.id, tab: 'docket', last_seen_at: now },
-    ]);
-    const docketIds = rows.flatMap(r => r.docket.map(d => d.id));
-    try {
-      if (views.length > 0) await sb.from('user_deal_views').upsert(views, { onConflict: 'user_id,deal_id,tab' });
-      if (docketIds.length > 0) await Promise.all(docketIds.map(id =>
-        sb.rpc('acknowledge_docket_event', { p_event_id: id })
-      ));
-      await load();
-    } finally {
-      setClearing(null);
-    }
-  };
-
-  // Attention = the Deadlines screen (per Nathan 2026-05-27): court response
-  // deadlines + appeal windows — the clocks you can't miss. The old per-deal
-  // "N items / Mark all seen" unread wall was noise already covered by Today +
-  // the 🔔 bell, so we render just the deadline + warm-lead strips. The per-deal
-  // load/rows/clear logic above + the old return below are now unused — left in
-  // place to keep this change small + trivially revertible; safe to prune later.
-  return (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0 }}>⏰ Deadlines</h2>
-        <div style={{ fontSize: 12, color: '#a8a29e', marginTop: 3 }}>
-          Court response deadlines &amp; appeal windows across your active cases — the clocks you can't miss. Unread messages &amp; drafts live on Today + the 🔔 bell.
-        </div>
-      </div>
-      <DeadlineAlertStrip onSelect={onSelect} />
-    </div>
-  );
-
-  const totalAll = rows.reduce((s, r) => s + r.total, 0);
-  const totalDraftsOnly = rows.reduce((s, r) => s + (r.total === r.drafts_pending.length ? r.drafts_pending.length : 0), 0);
-
-  // Can we show a meaningful "Mark all seen" button? Only if there are
-  // any un-acked docket items OR unread comms. Drafts are not covered by it.
-  const clearableCount = rows.reduce((s, r) => s + r.docket.length + r.sms_unread.length + r.calls_unread.length + r.emails_unread.length, 0);
-
-  return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          <h2 style={{ fontSize: 22, fontWeight: 700, color: '#fafaf9', margin: 0 }}>🔔 Attention</h2>
-          <div style={{ fontSize: 12, color: '#a8a29e' }}>
-            {totalAll === 0 ? 'Nothing needs attention across your active deals right now.' : `${totalAll} item${totalAll === 1 ? '' : 's'} across ${rows.length} deal${rows.length === 1 ? '' : 's'}`}
-          </div>
-        </div>
-        {clearableCount > 0 && (
-          <button
-            onClick={clearAll}
-            disabled={clearing !== null}
-            title="Mark everything (Comms + Docket) seen across all deals. Pending outreach drafts stay — those still need to be sent or skipped."
-            style={{
-              background: clearing === 'all' ? '#292524' : '#78350f',
-              color: '#fbbf24',
-              border: '1px solid #92400e',
-              padding: '6px 14px',
-              borderRadius: 6, fontSize: 12, fontWeight: 700,
-              cursor: clearing ? 'wait' : 'pointer',
-              letterSpacing: '0.06em',
-              fontFamily: 'inherit',
-            }}>
-            {clearing === 'all' ? '⏳ Clearing…' : `✓ Mark all ${clearableCount} seen`}
-          </button>
-        )}
-      </div>
-
-      {/* ScraperAlertStrip removed from Attention 2026-04-30 per Nathan —
-          88 realsheriff_* agents made the strip a wall of pills, redundant
-          with the proper Docket Center → Scraper Health drill-in. The
-          strip component is kept defined for potential reuse elsewhere
-          (e.g. ReportsView), but Attention surfaces only deal-level work. */}
-      <DeadlineAlertStrip onSelect={onSelect} />
-
-      <LeadEngagementStrip deals={deals} onSelect={onSelect} />
-
-      {rows.length === 0 && (
-        <div style={{ padding: 40, textAlign: 'center', color: '#78716c', border: '1px dashed #292524', borderRadius: 10, fontSize: 14 }}>
-          All clear. No unread Comms, no un-acknowledged docket events, no pending outreach drafts.
-        </div>
-      )}
-
-      {rows.map(r => {
-        const parts = [];
-        if (r.docket.length > 0)         parts.push({ label: `⚖ ${r.docket.length} docket`,           tab: 'docket', color: '#f59e0b' });
-        if (r.sms_unread.length > 0)     parts.push({ label: `💬 ${r.sms_unread.length} SMS`,          tab: 'comms',  color: '#3b82f6' });
-        if (r.calls_unread.length > 0)   parts.push({ label: `📞 ${r.calls_unread.length} call${r.calls_unread.length === 1 ? '' : 's'}`, tab: 'comms', color: '#8b5cf6' });
-        if (r.emails_unread.length > 0)  parts.push({ label: `📧 ${r.emails_unread.length} email${r.emails_unread.length === 1 ? '' : 's'}`, tab: 'comms', color: '#06b6d4' });
-        if (r.drafts_pending.length > 0) parts.push({ label: `📝 ${r.drafts_pending.length} draft${r.drafts_pending.length === 1 ? '' : 's'}`, tab: 'comms', color: '#22c55e' });
-
-        const rowHasClearable = r.docket.length + r.sms_unread.length + r.calls_unread.length + r.emails_unread.length > 0;
-        const isClearingThis = clearing === r.deal.id;
-        return (
-          <div key={r.deal.id}
-            style={{ padding: "12px 14px", marginBottom: 8, background: "#0c0a09", border: "1px solid #292524", borderLeft: "3px solid #d97706", borderRadius: 8, display: "flex", alignItems: "center", gap: 14 }}>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#d97706', fontFamily: "'DM Mono', monospace", minWidth: 32, textAlign: "center" }}>{r.total}</div>
-            <div style={{ flex: 1, minWidth: 0, cursor: 'pointer' }} onClick={() => onSelect(r.deal.id)}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#fafaf9', marginBottom: 3 }}>
-                {r.deal.name || r.deal.id}
-                <span style={{ fontSize: 11, fontWeight: 400, color: '#78716c', marginLeft: 8 }}>· {r.deal.status}</span>
-                {r.deal.lead_tier && <span style={{ fontSize: 10, fontWeight: 700, background: '#78350f', color: '#fbbf24', padding: '1px 6px', borderRadius: 3, marginLeft: 6, letterSpacing: '0.05em' }}>TIER {r.deal.lead_tier}</span>}
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {parts.map(p => (
-                  <span key={p.label} style={{ fontSize: 10, fontWeight: 600, color: p.color, background: p.color + '1a', padding: '2px 8px', borderRadius: 4, letterSpacing: '0.04em' }}>{p.label}</span>
-                ))}
-              </div>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-              {rowHasClearable && (
-                <button
-                  onClick={(e) => { e.stopPropagation(); clearDeal(r.deal.id, r.docket.map(d => d.id)); }}
-                  disabled={clearing !== null}
-                  title="Mark Comms + Docket seen for this deal. Pending drafts (if any) stay."
-                  style={{ background: "transparent", border: "1px solid #292524", color: '#a8a29e', borderRadius: 5, padding: "4px 9px", fontSize: 10, fontWeight: 600, cursor: clearing ? 'wait' : 'pointer', letterSpacing: '0.04em', fontFamily: 'inherit' }}>
-                  {isClearingThis ? '⏳' : '✓ Clear'}
-                </button>
-              )}
-              <button onClick={() => onSelect(r.deal.id)}
-                style={{ background: "transparent", border: "none", color: '#78716c', fontSize: 11, cursor: 'pointer', padding: '4px 4px', fontFamily: 'inherit' }}>
-                Open →
-              </button>
-            </div>
-          </div>
-        );
-      })}
-
-      <div style={{ marginTop: 24, padding: 14, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
-        <b style={{ color: '#a8a29e' }}>How this works:</b> counts reflect per-user unread state. Opening a deal's Comms tab marks all Comms items seen for you; same for Docket. Justin's reads don't mark items seen for you, and vice versa. Docket items also clear when someone clicks Acknowledge on them. Pending drafts are from Justin's outreach_queue and clear when you send or skip from the AutomationsQueue on Today.
       </div>
     </div>
   );
@@ -16858,218 +15273,6 @@ const HYGIENE_LABELS = {
 };
 const hygieneLabel = (k) => HYGIENE_LABELS[k] || k;
 
-function HygieneDashboard({ deals, onSelect }) {
-  const openSurplus = deals.filter(d =>
-    d.type === 'surplus' && !['closed', 'dead', 'recovered'].includes(d.status)
-  );
-  const [support, setSupport] = useState({ ca: new Map(), aa: new Map(), docs: new Map() });
-  const [loading, setLoading] = useState(true);
-  const [expandedId, setExpandedId] = useState(null);
-  const [filter, setFilter] = useState('all');
-  const [sortBy, setSortBy] = useState('completeness');
-
-  const loadSupport = async () => {
-    if (openSurplus.length === 0) { setLoading(false); return; }
-    const ids = openSurplus.map(d => d.id);
-    const [caRes, aaRes, docRes] = await Promise.all([
-      sb.from('client_access').select('deal_id, enabled, email, user_id, last_seen_at').in('deal_id', ids),
-      sb.from('attorney_assignments').select('deal_id, enabled, email, user_id').in('deal_id', ids),
-      sb.from('documents').select('deal_id').in('deal_id', ids),
-    ]);
-    const ca = new Map();
-    (caRes.data || []).forEach(r => {
-      const arr = ca.get(r.deal_id) || [];
-      arr.push(r);
-      ca.set(r.deal_id, arr);
-    });
-    const aa = new Map();
-    (aaRes.data || []).forEach(r => {
-      const arr = aa.get(r.deal_id) || [];
-      arr.push(r);
-      aa.set(r.deal_id, arr);
-    });
-    const docs = new Map();
-    (docRes.data || []).forEach(r => {
-      docs.set(r.deal_id, (docs.get(r.deal_id) || 0) + 1);
-    });
-    setSupport({ ca, aa, docs });
-    setLoading(false);
-  };
-
-  useEffect(() => { loadSupport(); /* eslint-disable-next-line */ }, [openSurplus.length]);
-
-  const scoreOf = (deal) => {
-    const m = deal.meta || {};
-    const ca = support.ca.get(deal.id) || [];
-    const aa = support.aa.get(deal.id) || [];
-    const docCount = support.docs.get(deal.id) || 0;
-    const attorneyNamed = !!(m.attorney && String(m.attorney).trim());
-
-    const checks = [
-      { key: 'phone',    label: HYGIENE_LABELS.phone,    passed: !!dealMetaPhone(m),  severity: 'high' },
-      { key: 'email',    label: HYGIENE_LABELS.email,    passed: !!(m.homeownerEmail && String(m.homeownerEmail).trim()),  severity: 'high' },
-      { key: 'portal',   label: HYGIENE_LABELS.portal,   passed: ca.some(r => r.enabled),                                  severity: 'high' },
-      { key: 'case',     label: HYGIENE_LABELS.case,     passed: !!(m.courtCase && String(m.courtCase).trim()),            severity: 'high' },
-      { key: 'county',   label: HYGIENE_LABELS.county,   passed: !!(m.county && String(m.county).trim()),                  severity: 'high' },
-      { key: 'filed',    label: HYGIENE_LABELS.filed,    passed: !!(deal.filed_at || m.filed_at),                          severity: 'med'  },
-      { key: 'deadline', label: HYGIENE_LABELS.deadline, passed: !!(deal.deadline || m.deadline),                          severity: 'med'  },
-      { key: 'surplus',  label: HYGIENE_LABELS.surplus,  passed: !!(m.estimatedSurplus && Number(m.estimatedSurplus) > 0), severity: 'med'  },
-      { key: 'fee',      label: HYGIENE_LABELS.fee,      passed: !!(m.feePct && Number(m.feePct) > 0),                     severity: 'med'  },
-      { key: 'attorney', label: HYGIENE_LABELS.attorney, passed: attorneyNamed,                                            severity: 'med'  },
-      { key: 'atty_portal', label: HYGIENE_LABELS.atty_portal, passed: (!attorneyNamed || aa.some(r => r.enabled)),        severity: 'med'  },
-      { key: 'docs',     label: HYGIENE_LABELS.docs,     passed: docCount > 0,                                             severity: 'low'  },
-      { key: 'video',    label: HYGIENE_LABELS.video,    passed: !!(m.welcome_video && m.welcome_video.path),              severity: 'low'  },
-    ];
-
-    const passed = checks.filter(c => c.passed).length;
-    const total = checks.length;
-    const highMissing = checks.filter(c => !c.passed && c.severity === 'high').length;
-    return { checks, passed, total, highMissing };
-  };
-
-  const scored = openSurplus.map(d => ({ deal: d, score: scoreOf(d) }));
-
-  // Gap stats: how many deals are missing each field?
-  const gapStats = {};
-  scored.forEach(({ score }) => {
-    score.checks.forEach(c => {
-      if (!c.passed) gapStats[c.key] = (gapStats[c.key] || 0) + 1;
-    });
-  });
-  const topGaps = Object.entries(gapStats).sort((a, b) => b[1] - a[1]);
-
-  const filtered = filter === 'all'
-    ? scored
-    : scored.filter(({ score }) => score.checks.some(c => !c.passed && c.key === filter));
-
-  const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'completeness') {
-      if (a.score.highMissing !== b.score.highMissing) return b.score.highMissing - a.score.highMissing;
-      return a.score.passed - b.score.passed;
-    }
-    if (sortBy === 'name') return (a.deal.name || '').localeCompare(b.deal.name || '');
-    return 0;
-  });
-
-  return (
-    <div>
-      {/* Summary + gap filter bar */}
-      <div style={{ marginBottom: 16, padding: 16, background: "#1c1917", border: "1px solid #292524", borderRadius: 10 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 10, gap: 12, flexWrap: "wrap" }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: "#78716c", letterSpacing: "0.1em", textTransform: "uppercase" }}>Deal Hygiene Scan</div>
-            <div style={{ fontSize: 13, color: "#a8a29e", marginTop: 6, lineHeight: 1.5, maxWidth: 560 }}>
-              {openSurplus.length} open surplus deal{openSurplus.length === 1 ? '' : 's'} scanned against 13 hygiene checks.
-              Rows with missing high-priority fields (phone, portal access, case number) sort to the top.
-              Click a row to expand, "Open" to fix it.
-            </div>
-          </div>
-          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase" }}>Sort</span>
-            <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...selectStyle, fontSize: 11, padding: "4px 8px", minWidth: 120 }}>
-              <option value="completeness">Least complete first</option>
-              <option value="name">Name (A–Z)</option>
-            </select>
-          </div>
-        </div>
-
-        {topGaps.length > 0 && (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 4 }}>
-            <span style={{ fontSize: 10, color: "#78716c", letterSpacing: "0.08em", textTransform: "uppercase", alignSelf: "center", marginRight: 4 }}>Top gaps</span>
-            {topGaps.slice(0, 8).map(([key, count]) => (
-              <button key={key} onClick={() => setFilter(filter === key ? 'all' : key)} style={{
-                fontSize: 10,
-                padding: "3px 9px",
-                borderRadius: 4,
-                cursor: "pointer",
-                background: filter === key ? "#78350f" : "transparent",
-                color: filter === key ? "#fbbf24" : "#a8a29e",
-                border: "1px solid " + (filter === key ? "#d97706" : "#44403c"),
-                letterSpacing: "0.04em",
-              }}>
-                {hygieneLabel(key)}: {count}
-              </button>
-            ))}
-            {filter !== 'all' && (
-              <button onClick={() => setFilter('all')} style={{ fontSize: 10, padding: "3px 9px", borderRadius: 4, cursor: "pointer", background: "transparent", color: "#78716c", border: "1px solid #44403c" }}>
-                Clear filter
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {loading && <div style={{ padding: 24, textAlign: "center", color: "#78716c", fontSize: 12 }}>Loading hygiene scan…</div>}
-
-      {!loading && sorted.length === 0 && (
-        <div style={{ padding: 40, textAlign: "center", color: "#78716c", border: "1px dashed #292524", borderRadius: 10, fontSize: 13 }}>
-          {openSurplus.length === 0 ? "No open surplus deals to scan. Add a surplus deal first." : "No deals match the current filter."}
-        </div>
-      )}
-
-      {!loading && sorted.map(({ deal, score }) => {
-        const isExpanded = expandedId === deal.id;
-        const pct = Math.round((score.passed / score.total) * 100);
-        const barColor = pct >= 80 ? '#10b981' : pct >= 50 ? '#d97706' : '#ef4444';
-        return (
-          <div key={deal.id} style={{ marginBottom: 8, background: "#1c1917", border: "1px solid " + (score.highMissing > 0 ? "#7f1d1d" : "#292524"), borderLeft: `3px solid ${barColor}`, borderRadius: 8, overflow: "hidden" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", cursor: "pointer" }} onClick={() => setExpandedId(isExpanded ? null : deal.id)}>
-              <span style={{ fontSize: 10, color: "#78716c", width: 10, flexShrink: 0 }}>{isExpanded ? '▼' : '▶'}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: "#fafaf9", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {deal.name}
-                </div>
-                <div style={{ fontSize: 10, color: "#78716c", display: "flex", gap: 6, marginTop: 2 }}>
-                  <span>{deal.meta?.county || '—'}</span>
-                  <span>·</span>
-                  <span style={{ textTransform: "uppercase", letterSpacing: "0.06em" }}>{deal.status.replace(/-/g, ' ')}</span>
-                  {score.highMissing > 0 && (
-                    <>
-                      <span>·</span>
-                      <span style={{ color: "#ef4444", fontWeight: 700 }}>{score.highMissing} critical gap{score.highMissing === 1 ? '' : 's'}</span>
-                    </>
-                  )}
-                </div>
-              </div>
-              <div style={{ width: 130, flexShrink: 0 }}>
-                <div style={{ height: 5, background: "#0c0a09", borderRadius: 3, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${pct}%`, background: barColor, transition: "width 0.2s" }} />
-                </div>
-                <div style={{ fontSize: 10, color: "#78716c", marginTop: 3, textAlign: "right", fontFamily: "'DM Mono', monospace" }}>
-                  {score.passed}/{score.total} · {pct}%
-                </div>
-              </div>
-              <button onClick={e => { e.stopPropagation(); onSelect(deal.id); }} style={{ ...btnGhost, fontSize: 10, padding: "4px 10px", whiteSpace: "nowrap" }}>
-                Open →
-              </button>
-            </div>
-
-            {isExpanded && (
-              <div style={{ padding: "10px 16px 14px 36px", borderTop: "1px solid #292524", background: "#0c0a09" }}>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: "6px 16px" }}>
-                  {score.checks.map(c => {
-                    const mute = c.passed;
-                    const dot = c.passed ? '✓' : (c.severity === 'high' ? '✗' : '○');
-                    const dotColor = c.passed ? '#10b981' : (c.severity === 'high' ? '#ef4444' : '#78716c');
-                    return (
-                      <div key={c.key} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 11 }}>
-                        <span style={{ fontSize: 13, color: dotColor, width: 12, flexShrink: 0, fontWeight: 700 }}>{dot}</span>
-                        <span style={{ color: mute ? "#78716c" : (c.severity === 'high' ? "#fca5a5" : "#a8a29e"), textDecoration: mute ? 'line-through' : 'none' }}>
-                          {c.label}
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
@@ -19544,7 +17747,6 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
         </div>
       )}
       {tab === "expenses" && <Expenses items={expenses} dealId={deal.id} userId={userId} logAct={logAct} reload={loadAll} />}
-      {tab === "tasks" && <Tasks items={tasks} dealId={deal.id} userId={userId} teamMembers={teamMembers} logAct={logAct} reload={loadAll} deal={deal} />}
       {tab === "files" && (
         <div>
           <Documents items={documents} dealId={deal.id} deal={deal} userId={userId} logAct={logAct} reload={loadAll} />
@@ -19555,7 +17757,6 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
           </div>
         </div>
       )}
-      {tab === "lauren" && <DealLaurenHistory dealId={deal.id} deal={deal} userId={userId} />}
 
       {showPostUpdate && (
         <PostUpdateModal
@@ -22007,13 +20208,27 @@ function CaseIntelligence({ dealId, deal, onJumpToTab, onUpdateDeal }) {
   useEffect(() => {
     if (!dealId) return;
     if (autoRefreshedRef.current.has(dealId)) return;
-    const STALE_MS = 15 * 60 * 1000;
-    const cached = deal?.meta?.case_intel_summary;
-    const ageMs = cached?.generated_at ? Date.now() - new Date(cached.generated_at).getTime() : Infinity;
-    if (ageMs > STALE_MS) {
-      autoRefreshedRef.current.add(dealId);
-      refreshSummary();
-    }
+    let alive = true;
+    (async () => {
+      const STALE_MS = 15 * 60 * 1000;
+      // The list payload no longer carries case_intel_summary (F-35 payload
+      // trim, 2026-08-03) — fetch the real cached brief from the deals row
+      // BEFORE the staleness decision, or every deal-open would fire a
+      // Claude regeneration against a summary that actually exists.
+      let cached = deal?.meta?.case_intel_summary;
+      if (!cached) {
+        const { data } = await sb.from('deals').select('summary:meta->case_intel_summary').eq('id', dealId).maybeSingle();
+        cached = data?.summary || null;
+        if (alive && cached) setSummary(cached);
+      }
+      if (!alive || autoRefreshedRef.current.has(dealId)) return;
+      const ageMs = cached?.generated_at ? Date.now() - new Date(cached.generated_at).getTime() : Infinity;
+      if (ageMs > STALE_MS) {
+        autoRefreshedRef.current.add(dealId);
+        refreshSummary();
+      }
+    })();
+    return () => { alive = false; };
     // eslint-disable-next-line
   }, [dealId]);
 
@@ -26069,187 +24284,6 @@ function AskLaurenAboutDeal({ deal, userId }) {
 // linked to this deal — either via the personalized_links token, or via
 // the same visitor_id (catches cross-page chats from the same browser).
 //
-// Backed by lauren_conversations_for_deal(deal_id) RPC (admin-gated).
-// See refundlocators-next/docs/lauren-handoff-for-dcc.md for full spec.
-function DealLaurenHistory({ dealId, deal, userId }) {
-  const [convos, setConvos] = useState(null);
-  const [error, setError] = useState(null);
-  const [openId, setOpenId] = useState(null);
-  const alive = useAliveRef();
-
-  const load = React.useCallback(async () => {
-    const { data, error: rpcErr } = await sb.rpc('lauren_conversations_for_deal', { p_deal_id: dealId });
-    if (!alive.current) return;
-    if (rpcErr) { setError(rpcErr.message); return; }
-    setConvos(data || []);
-  }, [dealId, alive]);
-
-  useEffect(() => { load(); }, [load]);
-
-  // Realtime — refresh when a new conversation lands or claim flips
-  useEffect(() => {
-    const ch = sb.channel('lauren-convos-deal-' + dealId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'lauren_conversations' }, () => load())
-      .subscribe();
-    return () => { sb.removeChannel(ch); };
-  }, [dealId, load]);
-
-  const fmtRel = (iso) => {
-    if (!iso) return '—';
-    const sec = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
-    if (sec < 60) return sec + 's ago';
-    if (sec < 3600) return Math.round(sec / 60) + 'm ago';
-    if (sec < 86400) return Math.round(sec / 3600) + 'h ago';
-    if (sec < 86400 * 7) return Math.round(sec / 86400) + 'd ago';
-    return new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
-
-  const firstUserMsg = (transcript) => {
-    if (!Array.isArray(transcript)) return '';
-    const u = transcript.find(m => m && m.role === 'user');
-    return (u?.content || '').trim();
-  };
-
-  // Keyword-flag for quick triage
-  const ALARM_RE = /\b(scam|legit|sue|lawyer|attorney general|complaint|cancel|refund|fraud|trust|catch)\b/i;
-  const hasAlarm = (transcript) => Array.isArray(transcript) && transcript.some(m => m?.role === 'user' && ALARM_RE.test(m?.content || ''));
-
-  const totalConvos = convos?.length || 0;
-  const convertedConvos = (convos || []).filter(c => c.submitted_claim).length;
-
-  if (error) {
-    return (
-      <div style={{ padding: 20, background: '#7f1d1d22', border: '1px solid #7f1d1d', borderRadius: 8, color: '#fca5a5', fontSize: 13 }}>
-        Could not load Lauren history: {error}
-        <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 6 }}>
-          The migration <code style={{ background: '#0c0a09', padding: '1px 6px', borderRadius: 3 }}>20260428010000_lauren_conversations_for_deal.sql</code> may not be applied yet.
-        </div>
-      </div>
-    );
-  }
-
-  if (convos === null) {
-    return <div style={{ padding: 30, textAlign: 'center', color: '#78716c', fontSize: 13 }}>Loading Lauren history…</div>;
-  }
-
-  if (totalConvos === 0) {
-    return (
-      <div>
-        <AskLaurenAboutDeal deal={deal} userId={userId} />
-        <div style={{ padding: 40, textAlign: 'center', color: '#a8a29e', fontSize: 13, lineHeight: 1.6, border: '1px dashed #292524', borderRadius: 10 }}>
-          <div style={{ fontSize: 24, marginBottom: 8 }}>🤖</div>
-          <b style={{ color: '#fafaf9', display: 'block', marginBottom: 6 }}>No Lauren conversations yet for this deal.</b>
-          Once a visitor with this deal's personalized URL chats with Lauren on refundlocators.com, the conversation will show up here automatically.
-          {!deal?.refundlocators_token && (
-            <div style={{ marginTop: 14, fontSize: 11, color: '#fbbf24' }}>
-              ⚠ This deal doesn't have a personalized URL yet — generate one from the deal header to enable Lauren tracking.
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div>
-      <AskLaurenAboutDeal deal={deal} userId={userId} />
-      {/* Stats row */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 18 }}>
-        <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #d97706', borderRadius: 10, padding: 14 }}>
-          <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Conversations</div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{totalConvos}</div>
-        </div>
-        <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #10b981', borderRadius: 10, padding: 14 }}>
-          <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Converted</div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{convertedConvos}</div>
-          <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2 }}>
-            {totalConvos > 0 ? Math.round(100 * convertedConvos / totalConvos) : 0}% rate
-          </div>
-        </div>
-        <div style={{ background: '#1c1917', border: '1px solid #292524', borderTop: '2px solid #ef4444', borderRadius: 10, padding: 14 }}>
-          <div style={{ fontSize: 10, color: '#78716c', letterSpacing: '0.1em', textTransform: 'uppercase', fontWeight: 700 }}>Flagged</div>
-          <div style={{ fontSize: 26, fontWeight: 700, color: '#fafaf9', fontFamily: "'DM Mono', monospace", marginTop: 4 }}>{(convos || []).filter(c => hasAlarm(c.transcript)).length}</div>
-          <div style={{ fontSize: 11, color: '#a8a29e', marginTop: 2 }}>scam / legit / lawyer keywords</div>
-        </div>
-      </div>
-
-      {/* Conversation list */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {convos.map(c => {
-          const isOpen = openId === c.id;
-          const flagged = hasAlarm(c.transcript);
-          return (
-            <div key={c.id} style={{
-              background: '#1c1917', border: '1px solid ' + (c.submitted_claim ? '#064e3b' : flagged ? '#78350f' : '#292524'),
-              borderRadius: 10, overflow: 'hidden',
-            }}>
-              {/* Row header — click to expand */}
-              <button onClick={() => setOpenId(isOpen ? null : c.id)} style={{
-                width: '100%', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
-                padding: '12px 14px', background: 'transparent', border: 0, cursor: 'pointer', fontFamily: 'inherit', textAlign: 'left',
-              }}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 13, fontWeight: 700, color: '#fafaf9' }}>{fmtRel(c.started_at)}</span>
-                    <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>{c.message_count} msgs</span>
-                    {c.page_origin && <span style={{ fontSize: 10, color: '#78716c', fontFamily: "'DM Mono', monospace" }}>· {c.page_origin}</span>}
-                    {c.matched_via === 'visitor' && <span style={{ fontSize: 9, color: '#a8a29e', padding: '1px 6px', borderRadius: 3, background: '#292524', textTransform: 'uppercase', letterSpacing: '0.05em' }}>same visitor</span>}
-                    {c.submitted_claim && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(16,185,129,0.18)', color: '#10b981', letterSpacing: '0.05em', textTransform: 'uppercase' }}>✓ claim submitted</span>}
-                    {flagged && !c.submitted_claim && <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 10, background: 'rgba(239,68,68,0.18)', color: '#fca5a5', letterSpacing: '0.05em', textTransform: 'uppercase' }}>⚠ flagged</span>}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#a8a29e', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', fontStyle: 'italic' }}>
-                    "{firstUserMsg(c.transcript) || (c.seed_message || '(no user message)')}"
-                  </div>
-                </div>
-                <div style={{ fontSize: 14, color: '#78716c', flexShrink: 0 }}>{isOpen ? '▾' : '▸'}</div>
-              </button>
-
-              {/* Expanded transcript */}
-              {isOpen && (
-                <div style={{ borderTop: '1px solid #292524', padding: '14px 16px', background: '#0c0a09' }}>
-                  {Array.isArray(c.transcript) && c.transcript.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {c.transcript.map((m, i) => (
-                        <div key={i} style={{
-                          alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                          maxWidth: '84%', padding: '8px 12px',
-                          background: m.role === 'user' ? '#d97706' : '#292524',
-                          color: m.role === 'user' ? '#1c0a00' : '#fafaf9',
-                          borderRadius: 12,
-                          borderBottomRightRadius: m.role === 'user' ? 3 : 12,
-                          borderBottomLeftRadius: m.role !== 'user' ? 3 : 12,
-                          fontSize: 12, lineHeight: 1.55,
-                          whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                          fontWeight: m.role === 'user' ? 500 : 400,
-                        }}>
-                          {m.content}
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div style={{ color: '#78716c', fontSize: 12, fontStyle: 'italic' }}>No messages logged yet for this conversation.</div>
-                  )}
-                  {/* Meta footer */}
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid #292524', fontSize: 10, color: '#57534e', fontFamily: "'DM Mono', monospace", display: 'flex', gap: 14, flexWrap: 'wrap' }}>
-                    <span>visitor: {c.visitor_id?.slice(0, 12)}…</span>
-                    {c.token && <span>token: {c.token}</span>}
-                    <span>started: {new Date(c.started_at).toLocaleString()}</span>
-                    <span>last: {new Date(c.last_message_at).toLocaleString()}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <div style={{ marginTop: 18, padding: 12, background: '#0c0a09', border: '1px dashed #292524', borderRadius: 8, fontSize: 11, color: '#78716c', lineHeight: 1.6 }}>
-        Conversations linked to this deal via the personalized URL token, or from the same browser visitor within the last 30 days. Read-only — Lauren on the website is Justin's lane. Coming next: keyword alerts in the DCC inbox + "Ask Lauren about this deal" button.
-      </div>
-    </div>
-  );
-}
-
 // ─── Per-deal screen recordings (Loom replacement) ───────────────────
 //
 // Per Nathan 2026-04-29: Inaam was making Looms for every case he

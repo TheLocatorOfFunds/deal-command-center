@@ -1,6 +1,8 @@
 # Director ↔ DCC interface contract
 
-**Last updated:** 2026-06-09 (by DCC/Nathan session — filed Director-Queue hand-off `oh-2026-06-09-1524-dcc-misflagged-surplus-claimstatus.md`: ~16 OH surplus cases whose intel_case status contradicts the refreshed docket reads, for Director to verify + reconcile)
+**Last updated:** 2026-07-06 (by Intel Director — added 3 managed `deals.meta` keys: `workOrderScore` / `workOrderRank` / `workOrderServedAt`, written by `work_order.py`, NOT the 30-min sync. Surfaces the Revenue work-order rank on the deal card. See the managed-keys table below.)
+
+**Prior:** 2026-06-09 (DCC/Nathan session — filed Director-Queue hand-off `oh-2026-06-09-1524-dcc-misflagged-surplus-claimstatus.md`: ~16 OH surplus cases whose intel_case status contradicts the refreshed docket reads, for Director to verify + reconcile)
 **Living doc.** Either side updates as the contract evolves. Bump the date when you do.
 
 ## Domains
@@ -57,6 +59,14 @@ intel-main sets these via initial push + keeps them fresh on the 30-min sync cro
 | `lastIntelSyncAt` | `now()` at sync time | `2026-05-16T…Z` |
 | `sourced_from`, `sourced_at`, `sourced_by` | set once on initial push | `intel-main` / iso ts / operator email |
 | `feePct` | **SET ONCE on initial push** (seeds RefundLocators' disclosed 25% surplus rate) — pushed deals bypass DCC's new-deal form, which would otherwise default this. **NOT touched by the 30-min sync** — so a team-negotiated rate on a worked deal is safe to edit and won't be clobbered. | `25` |
+| `workOrderScore` | `work_order.py` — Revenue convertibility rank = `expected_fee × contactable_gate × claim_status × freshness × phone_quality × owner_path` (Revenue Director owns the weights; Intel Director serves) | `49400.0` |
+| `workOrderRank` | `work_order.py` — 1-based position in the ranked call queue | `1` |
+| `workOrderServedAt` | `now()` at each `work_order.py` serve | `2026-07-06T18:36:…Z` |
+
+**⚠ Write path for the `workOrder*` keys is NOT the 30-min sync.** They're written by
+`intel-director/work_order.py` (read-merge-write via the app REST path — merges into `meta`, never
+clobbers), on-demand / when that serve runs — not by `sync-deal-updates`. Still intel-main-managed,
+still do-not-touch on the DCC side; just a different cron/trigger than the rest of this table.
 
 **Null handling:** intel-main drops null/undefined keys from the patch before merging — it never overwrites an existing DCC value with `null`. So if a value disappears on the intel-main side, the prior DCC value persists until intel-main has a real replacement.
 

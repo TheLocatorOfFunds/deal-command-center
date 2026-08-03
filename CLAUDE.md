@@ -335,7 +335,34 @@ build confirm its commit via `eas build:list` matches your HEAD before submittin
 (`<token>`, invalid). Strip with `EXPO_TOKEN="${EXPO_TOKEN//[<>]/}"`. Use the homebrew
 `eas` (`/opt/homebrew/bin/eas`), not `npx eas-cli@latest`.
 
-## Top-level views (current sidebar, top → bottom)
+## Top-level views (F-35 final form — 2026-08-03 Phase 1)
+
+**The rail shows FIVE choices** (audit decision: "the app should present ≤6
+choices to anyone who opens it"):
+
+1. **🌅 My Day** — Nathan-only founder landing (email-gated; his default view).
+2. **📌 Today** — FreshAuctionStrip (day-of-auction speed queue) + DailyWorklist + KPI/funnel.
+3. **🏠 Leads** (`call-queue` group) — active/kanban/leads-phase/closed/deleted/awaiting/payouts.
+4. **🎯 Outreach** — OutreachHub tabs: Automations (cadence review) · Messages · Comms Analytics.
+5. **💬 Chat** — team chat + Lauren.
+
+**▸ More** (rolled-up badge when collapsed): Review · Follow-ups · Appointments ·
+Calls · Tasks · Docket(modal) · Insights(admin) · Contacts · Intake · Library ·
+Import(admin) · Time(admin) · Health(admin).
+
+**Removed in Phase 1 (2026-08-03)** — components deleted, routes dead, ~2,000
+lines: `AttentionView` (folded into Today long ago), web `ForecastView` cluster
+(mobile Forecast stays), `OutreachView`, `InboxView`, `LeadsOutreachView`,
+`HygieneDashboard`, `VaQueueView` (the va_work_queue TABLE stays — lauren-internal
+uses it), `DealLaurenHistory`, all `{false && …}` graveyards, dead EFs
+(`quo-webhook`, `twilio-diag`, `twilio-diag-5440`, `twilio-debug`, `get-case`),
+and empty never-written tables `foreclosure_cases` + `surplus_docket_events`
+(renamed `zz_archived_*`). List payload trimmed ~400KB via `v_deals_list`
+(meta minus `case_intel_summary`; CaseIntelligence fetches the brief on open).
+
+<details><summary>Pre-2026-08-03 nav history (stale — kept for archaeology)</summary>
+
+## Top-level views (pre-F-35 sidebar, top → bottom)
 
 **Source of truth for label strings:** [`LABELS.md`](./LABELS.md) at repo
 root. Web and mobile don't share JS code today (#294), so any time you
@@ -361,6 +388,13 @@ switches between sibling sub-views (see `groupBtn`/`chipBtn` in `src/app.jsx` ~l
 Sidebar entries that open **modals** (not views): **👥 Contacts**, **⚖ Docket**, **📋 Intake**, **📥 Import** (admin), **📚 Library**. Header also has 🔍 Search (⌘K), the 🔔 notification bell, and the Phone dialpad popover. (`calls`/CallHistoryView still exists as a route but is no longer a sidebar item.)
 
 > **IA note — 2026-06-22 nav collapse:** the old separate **Automations** + **Comms** + **Relay** nav items are now ONE **Outreach** hub (3 tabs); `forecast` moved Automations→Insights; the duplicate 💬 icon is gone; a new **🩺 Health** admin view landed. All old hash URLs still resolve via `groupIds`. The **Relay** cadence engine is intentionally **PAUSED but KEPT** (Nathan likes the manual review flow) — its 2 auto-enroll/dispatch crons were dropped 2026-06-22, but the UI, `relay_*` tables, and EFs (`relay-auto-enroll`/`relay-dispatcher`/`drop-rvm`) stay; Scan Now + approve-to-send run on demand. Recreate SQL for the crons is in `~/Documents/Claude/DCC_RELAY_DECOMMISSION_2026-06-22.md` (local). Backend caveat that remains: the cadence (`outreach_queue`) and Relay enrollment (`relay_*`) systems can still both target a lead — the UI is unified, the two backend queues are not merged.
+
+</details>
+
+> **⚠ Per the F-35 audit decisions (2026-08-03):** Relay's runtime is slated for
+> decommission in Phase 2 (cadence engine wins — Decision 2); e-sign consolidates
+> on **DocuSign** (Decision 1 — do not re-litigate); Justin decoupling changes
+> fire in Phase 2 (Decision 3). Audit + decisions: `~/Documents/Claude/DCC_F35_AUDIT_2026-08-03.md` (LOCAL-ONLY).
 
 ## Common change recipes
 
