@@ -287,6 +287,38 @@ function SurplusPhaseChip({ deal, style }) {
   );
 }
 
+// ─── On hold / low priority (Nathan 2026-08-04, the Colleen Doherty case) ───
+// A lead we deliberately are NOT outreaching right now — e.g. the homeowner's
+// loss mitigation was approved and the court granted a stay. NOT dead: the
+// case can resume, so the lead stays in the pipeline wearing the reason and
+// drops out of every calling surface (Power Dialer, Call Queue, fresh-auction
+// strip, Daily Worklist, My Day). Written as meta.hold {reason, until, by, at}
+// via the ⏸ Hold button in the deal header; meta.hold is NOT an intel-managed
+// key so the 30-min sync never touches it. `until` (optional) is the check-back
+// date: once it passes, dealHold() returns null and the lead walks back into
+// the queues by itself — a hold can never silently become a black hole.
+const dealHold = (deal) => {
+  const h = deal && deal.meta && deal.meta.hold;
+  if (!h || !h.reason) return null;
+  const u = typeof h.until === 'string' ? h.until.slice(0, 10) : null;
+  if (u && /^\d{4}-\d{2}-\d{2}$/.test(u)) {
+    const todayMid = new Date(); todayMid.setHours(0, 0, 0, 0);
+    if (new Date(u + 'T00:00:00') <= todayMid) return null; // expired → back in the queues
+  }
+  return h;
+};
+function HoldBadge({ deal, style }) {
+  const h = dealHold(deal);
+  if (!h) return null;
+  const u = typeof h.until === 'string' ? h.until.slice(0, 10) : null;
+  return (
+    <span title={`On hold — no outreach right now.\n${h.reason}${u ? `\nBack in the queues ${u}` : '\nHolds until someone clears it'}${h.by ? `\nSet by ${h.by}${typeof h.at === 'string' ? ' on ' + h.at.slice(0, 10) : ''}` : ''}`}
+      style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.05em', color: '#93c5fd', background: '#172554', border: '1px solid #1e40af', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap', ...style }}>
+      ⏸ HOLD
+    </span>
+  );
+}
+
 // Type-aware archival. Per LABELS.md + #292: Closed means a real
 // closed-and-paid deal; Deleted means a killed lead / dropped deal.
 // Surplus type drops 'closed' (the enum value isn't used for surplus
@@ -4406,7 +4438,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         <div style={{ minWidth: 0 }}>
           <ViewErrorBoundary resetKey={view}>
           {view === "today" ? (
-            <><FreshAuctionStrip deals={deals} onSelect={onSelect} setView={setView} /><DailyWorklist onSelect={onSelect} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
+            <><FreshAuctionStrip deals={deals} onSelect={onSelect} setView={setView} /><DailyWorklist onSelect={onSelect} deals={deals} /><TodayView deals={deals} onSelect={onSelect} isAdmin={isAdmin} setView={setView} onRequestDisposition={onRequestDisposition} /></>
           ) : view === "myday" ? (
             isMyDay
               ? <MyDayView deals={deals} onSelect={onSelect} startCall={startCall} callStatus={callStatus} userName={userName} />
@@ -4833,6 +4865,9 @@ function DealStatusBadges({ deal }) {
           deceased homeowners were visually indistinguishable from
           living ones, leading to incorrect outreach approach risk. */}
       <DeceasedBadge deal={deal} size="sm" />
+      {/* ⏸ On hold — deliberately not outreaching (stay granted, loss mit, etc.).
+          Renders wherever the badges do (cards + drawer header). */}
+      <HoldBadge deal={deal} style={{ marginLeft: 5 }} />
       {/* Surplus lifecycle pill — the "where's the money" state. Primary signal.
           When it shows, the bare PRE/POST tags are suppressed (the stage label
           already says post/pre) to cut clutter. Per Nathan 2026-05-29. */}
@@ -7498,6 +7533,7 @@ function PowerDialerView({ deals, onSelect, startCall, callStatus, setView }) {
       const m = d.meta || {};
       if (m.reviewFlag === 'verify_senior_liens') continue;
       if (isDeceased(d)) continue;
+      if (dealHold(d)) continue; // ⏸ on hold — deliberately no outreach right now
       const nums = numbersOf(d).filter(n => !badSet.has(bare10(n)));
       if (!nums.length) continue;
       const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
@@ -7653,7 +7689,11 @@ function CallQueueView({ deals, onSelect, setView }) {
   // Only un-signed PROSPECTS belong in the call-down queue. isLeadStatus = surplus
   // 'new-lead' only — so signed / filed / probate / awaiting-distribution deals (already
   // converted, being worked toward payout) drop out instead of showing as "ready to call".
-  const callable = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && isLeadStatus(d));
+  const callableAll = deals.filter(d => d.type === 'surplus' && d.prepped_at && !d.deleted_at && isLeadStatus(d));
+  // ⏸ Held leads leave the working pool entirely but keep their own chip so
+  // "we're deliberately not calling these" stays visible instead of invisible.
+  const held = callableAll.filter(d => dealHold(d));
+  const callable = callableAll.filter(d => !dealHold(d));
   const needsNumberList = callable.filter(needsNum);
   const ready = callable.filter(d => !needsNum(d));
   const toPrep = deals.filter(d => d.type === 'surplus' && !d.prepped_at && !d.deleted_at && !DEAD.includes(d.status) && isLeadStatus(d));
@@ -7667,7 +7707,7 @@ function CallQueueView({ deals, onSelect, setView }) {
     return `never called${r != null ? ` · ready ${r}d` : ''}`;
   };
 
-  let list = filter === 'never' ? neverCalled : filter === 'review' ? flagged : filter === 'quiet' ? quiet : filter === 'needsnum' ? needsNumberList : ready;
+  let list = filter === 'never' ? neverCalled : filter === 'review' ? flagged : filter === 'quiet' ? quiet : filter === 'needsnum' ? needsNumberList : filter === 'held' ? held : ready;
   list = [...list].sort((a, b) => surplusOf(b) - surplusOf(a));
 
   const chip = (id, label, n, accent) => (
@@ -7688,6 +7728,7 @@ function CallQueueView({ deals, onSelect, setView }) {
         {chip('review', '🔎 Needs review', flagged.length, '#fbbf24')}
         {chip('quiet', 'Gone quiet', quiet.length)}
         {chip('needsnum', '📵 Needs #', needsNumberList.length, '#f87171')}
+        {chip('held', '⏸ On hold', held.length, '#93c5fd')}
       </div>
       {toPrep.length > 0 && (
         <button onClick={() => setView('leads-phase')} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', textAlign: 'left', padding: '9px 12px', borderRadius: 8, background: '#11233a', border: '1px solid #1e3a5f', color: '#93c5fd', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', marginBottom: 14 }}>
@@ -7704,11 +7745,11 @@ function CallQueueView({ deals, onSelect, setView }) {
           <div key={d.id} onClick={() => onSelect(d.id)} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '10px 12px', marginBottom: 6, background: '#1c1917', border: '1px solid #292524', borderLeft: '3px solid ' + (rv ? (fm.color || '#fbbf24') : '#22c55e'), borderRadius: 6, cursor: 'pointer' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#fafaf9' }}>{d.name || d.id}{rv && <span style={{ fontSize: 11, color: fm.color, fontWeight: 500 }}> · {fm.icon} {fm.label}</span>}</div>
-              <div style={{ fontSize: 11, color: '#78716c', marginTop: 2 }}>{ph || 'no phone'} · {lastWorked(d)}</div>
+              <div style={{ fontSize: 11, color: dealHold(d) ? '#93c5fd' : '#78716c', marginTop: 2 }}>{dealHold(d) ? `⏸ ${dealHold(d).reason}` : `${ph || 'no phone'} · ${lastWorked(d)}`}</div>
             </div>
             <span style={{ fontSize: 13, fontWeight: 700, color: '#6ee7b7', fontFamily: "'DM Mono', monospace" }}>{fmt$(surplusOf(d))}</span>
             <button onClick={(e) => flagNeedsNumber(e, d.id, !needsNum(d))} disabled={busyId === d.id} title={needsNum(d) ? 'Found a number — put back in the call queue' : 'No good number — flag for skip-trace (pulls it off the call queue)'} style={{ fontSize: 11, padding: '4px 9px', borderRadius: 6, background: 'transparent', color: needsNum(d) ? '#6ee7b7' : '#a8a29e', border: '1px solid ' + (needsNum(d) ? '#166534' : '#44403c'), cursor: busyId === d.id ? 'wait' : 'pointer', fontFamily: 'inherit', fontWeight: 700, whiteSpace: 'nowrap' }}>{busyId === d.id ? '…' : needsNum(d) ? '✓ got #' : '📵'}</button>
-            <span style={{ fontSize: 11, padding: '4px 12px', borderRadius: 6, background: rv ? '#332a12' : '#14532d', color: rv ? '#fbbf24' : '#bbf7d0', border: '1px solid ' + (rv ? '#854d0e' : '#166534'), fontWeight: 700, whiteSpace: 'nowrap' }}>{rv ? 'Open →' : 'Call →'}</span>
+            <span style={{ fontSize: 11, padding: '4px 12px', borderRadius: 6, background: dealHold(d) ? '#172554' : rv ? '#332a12' : '#14532d', color: dealHold(d) ? '#93c5fd' : rv ? '#fbbf24' : '#bbf7d0', border: '1px solid ' + (dealHold(d) ? '#1e40af' : rv ? '#854d0e' : '#166534'), fontWeight: 700, whiteSpace: 'nowrap' }}>{dealHold(d) ? '⏸ Held' : rv ? 'Open →' : 'Call →'}</span>
           </div>
         );
       })}
@@ -10916,20 +10957,28 @@ function HealthView() {
 // get_daily_worklist() (urgency×value ranking, dedups each deal to its single
 // most-urgent action, respects the review gate). Surfaces + ranks only — the
 // human opens the deal and decides. Rendered atop the Today landing view.
-function DailyWorklist({ onSelect }) {
-  const [items, setItems] = React.useState(null);
+function DailyWorklist({ onSelect, deals }) {
+  const [itemsRaw, setItemsRaw] = React.useState(null);
   const [err, setErr] = React.useState(null);
   const [expanded, setExpanded] = React.useState({});
+  // ⏸ Held leads drop out of the actionable kinds (call / follow up / review)
+  // client-side — the RPC stays hold-agnostic so hold semantics live in ONE
+  // place (dealHold). Deadlines stay visible: a court date doesn't pause.
+  const heldIds = React.useMemo(() => new Set((deals || []).filter(d => dealHold(d)).map(d => d.id)), [deals]);
+  const items = React.useMemo(
+    () => (itemsRaw || []).filter(it => it.kind === 'deadline' || !heldIds.has(it.deal_id)),
+    [itemsRaw, heldIds]
+  );
   React.useEffect(() => {
     let alive = true;
     sb.rpc('get_daily_worklist', { p_limit: 300 }).then(({ data, error }) => {
       if (!alive) return;
-      if (error) setErr(error.message); else setItems(data || []);
+      if (error) setErr(error.message); else setItemsRaw(data || []);
     });
     return () => { alive = false; };
   }, []);
   if (err) return null;                 // fail quiet — never block the Today page
-  if (!items) return <div style={{ padding: '12px 0', color: '#78716c', fontSize: 13 }}>Building today's worklist…</div>;
+  if (!itemsRaw) return <div style={{ padding: '12px 0', color: '#78716c', fontSize: 13 }}>Building today's worklist…</div>;
   if (!items.length) return null;
 
   const KINDS = [
@@ -14870,6 +14919,7 @@ function MyDayView({ deals, onSelect, startCall, callStatus, userName }) {
       const m = d.meta || {};
       if (m.reviewFlag === 'verify_senior_liens') continue;
       if ((m.auctionStatus || '').toUpperCase() === 'CANCELLED') continue;
+      if (dealHold(d)) continue; // ⏸ on hold — deliberately no outreach right now
       const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
       if (!sd || !/^\d{4}-\d{2}-\d{2}$/.test(sd)) continue;
       const days = Math.round((todayMid - new Date(sd + 'T00:00:00')) / 86400000);
@@ -14881,7 +14931,7 @@ function MyDayView({ deals, onSelect, startCall, callStatus, userName }) {
     const picks = []; const used = new Set();
     const add = (d, why) => { if (d && !used.has(d.id) && picks.length < 3) { used.add(d.id); picks.push({ d, why }); } };
     fresh.filter(f => f.days <= 1 && f.uncalled).forEach(f => add(f.d, f.days === 0 ? '🔥 Auction was TODAY — first caller usually wins' : 'Auction yesterday — still fresh'));
-    clicked.forEach(id => { const d = liveDeal(id); if (d && d.meta?.reviewFlag !== 'verify_senior_liens') add(d, 'Opened their money page — never replied'); });
+    clicked.forEach(id => { const d = liveDeal(id); if (d && d.meta?.reviewFlag !== 'verify_senior_liens' && !dealHold(d)) add(d, 'Opened their money page — never replied'); });
     fresh.forEach(f => add(f.d, `Auction ${f.days} day${f.days === 1 ? '' : 's'} ago${f.uncalled ? ' — not called yet' : ''}`));
     return picks;
   }, [deals, clicked, dealById]);
@@ -14983,6 +15033,7 @@ function FreshAuctionStrip({ deals, onSelect, setView }) {
     if (d.type !== 'surplus' || d.deleted_at || d.status !== 'new-lead') continue;
     const m = d.meta || {};
     if ((m.auctionStatus || '').toUpperCase() === 'CANCELLED') continue;
+    if (dealHold(d)) continue; // ⏸ on hold — deliberately no outreach right now
     const sd = typeof m.saleDate === 'string' ? m.saleDate.slice(0, 10) : null;
     if (!sd || !/^\d{4}-\d{2}-\d{2}$/.test(sd)) continue;
     const saleMid = new Date(sd + 'T00:00:00');
@@ -17489,6 +17540,38 @@ function NotesDrawerTrigger({ count, onClick, isOpen }) {
   );
 }
 
+// ─── HoldModal — pause outreach with a reason (Nathan 2026-08-04) ───────────
+// Born from Colleen Doherty: loss mitigation approved + court stay on the
+// docket = nothing to outreach right now, but the lead is NOT dead. Writes
+// meta.hold; dealHold() + the queue filters do the rest.
+function HoldModal({ onSave, onClose }) {
+  const [reason, setReason] = useState('');
+  const [until, setUntil] = useState('');
+  const reasonRef = useRef(null);
+  useEffect(() => { reasonRef.current && reasonRef.current.focus(); }, []);
+  const ok = !!reason.trim();
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#1c1917', border: '1px solid #44403c', borderRadius: 14, padding: 24, width: '100%', maxWidth: 460 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: '#fafaf9', marginBottom: 4 }}>⏸ Put this lead on hold</div>
+        <div style={{ fontSize: 12, color: '#a8a29e', marginBottom: 16, lineHeight: 1.5 }}>Not dead — just no outreach right now. It stays in the pipeline wearing the reason and drops out of every calling queue.</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', marginBottom: 6, letterSpacing: '0.06em' }}>WHY? — shows on the lead</div>
+        <textarea ref={reasonRef} value={reason} onChange={e => setReason(e.target.value)} rows={3} placeholder="e.g. Loss mitigation approved — court granted a stay (see docket)"
+          style={{ width: '100%', boxSizing: 'border-box', background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', fontSize: 13, padding: 10, fontFamily: 'inherit', resize: 'vertical' }} />
+        <div style={{ fontSize: 11, fontWeight: 700, color: '#78716c', margin: '14px 0 6px', letterSpacing: '0.06em' }}>CHECK BACK ON — optional</div>
+        <input type="date" value={until} onChange={e => setUntil(e.target.value)}
+          style={{ background: '#0c0a09', border: '1px solid #44403c', borderRadius: 8, color: '#fafaf9', fontSize: 13, padding: '8px 10px', fontFamily: 'inherit', colorScheme: 'dark' }} />
+        <div style={{ fontSize: 11, color: '#57534e', marginTop: 4 }}>After this date it walks back into the calling queues on its own. Leave blank to hold until someone clears it.</div>
+        <div style={{ display: 'flex', gap: 10, marginTop: 20, justifyContent: 'flex-end' }}>
+          <button onClick={onClose} style={{ background: 'transparent', border: '1px solid #44403c', color: '#a8a29e', borderRadius: 8, padding: '8px 18px', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>Cancel</button>
+          <button onClick={() => ok && onSave(reason.trim(), until || null)} disabled={!ok}
+            style={{ background: ok ? '#1e40af' : '#292524', border: 'none', color: ok ? '#dbeafe' : '#57534e', borderRadius: 8, padding: '8px 18px', fontSize: 13, fontWeight: 800, cursor: ok ? 'pointer' : 'default', fontFamily: 'inherit' }}>⏸ Hold lead</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, initialTab, peerNav, startCall, callStatus, onOpenCallDisposition }) {
   // Tasks + Lauren were removed from the deal tab bar (5/27). If an old
   // deep-link lands on one of those, fall back to overview so the user
@@ -17500,6 +17583,7 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
   const [unreadCounts, setUnreadCounts] = useState({ docket: 0, comms: 0 });
   const [notesDrawerOpen, setNotesDrawerOpen] = useState(false);
   const [notesCount, setNotesCount] = useState(0);
+  const [holdModal, setHoldModal] = useState(false);
 
   // Light count poll for the floating Notes pill so it surfaces "there are
   // N notes" without opening the drawer. Realtime sub keeps it live as
@@ -17738,6 +17822,27 @@ function DealDetail({ deal, userName, userId, teamMembers, onUpdateDeal, onReque
             ? <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title={`${deal.meta.dispositionDetail ? `Reasoning: ${deal.meta.dispositionDetail}\n` : ''}${Array.isArray(deal.meta.dispositionEvidence) && deal.meta.dispositionEvidence.length ? `📎 ${deal.meta.dispositionEvidence.length} evidence file(s) — see Docs tab\n` : ''}\n(click to edit)`} style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', display: 'inline-flex', alignItems: 'center', gap: 5 }}>🪦 {dispositionLabel(deal.meta.dispositionReason)}{deal.meta.dispositionDetail ? <span style={{ color: '#57534e' }}> · 📝</span> : null}{Array.isArray(deal.meta.dispositionEvidence) && deal.meta.dispositionEvidence.length ? <span style={{ color: '#57534e' }}> · 📎{deal.meta.dispositionEvidence.length}</span> : null} <span style={{ color: '#57534e' }}>✎</span></button>
             : <button onClick={() => onRequestDisposition && onRequestDisposition(deal)} title="Record why this lead died — required for surplus leads" style={{ background: '#3a1d0e', color: '#fdba74', border: '1px solid #7c2d12', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>⚠ Set reason this died</button>
         )}
+        {/* ⏸ Hold — deliberately pause outreach without killing the lead
+            (stay granted, loss mit in progress, family situation…). */}
+        {!["closed", "recovered", "dead"].includes(deal.status) && (
+          dealHold(deal)
+            ? <button onClick={() => {
+                const h = dealHold(deal);
+                if (!window.confirm(`Take this lead off hold?\n\nHold reason: ${h.reason}\n\nIt goes back into the calling queues immediately.`)) return;
+                onUpdateDeal({ meta: { ...(deal.meta || {}), hold: null } });
+                logAct('▶ Hold cleared — lead is back in the calling queues', ['team']);
+              }}
+                title={`On hold — no outreach right now.\n${dealHold(deal).reason}${typeof dealHold(deal).until === 'string' ? `\nBack in the queues ${dealHold(deal).until.slice(0, 10)}` : ''}\n\n(click to clear the hold)`}
+                style={{ background: '#172554', color: '#93c5fd', border: '1px solid #1e40af', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit' }}>⏸ On hold ✕</button>
+            : <button onClick={() => setHoldModal(true)}
+                title="Pause outreach — keeps the lead in the pipeline with a reason, drops it out of every calling queue. Not a kill."
+                style={{ background: '#1c1917', color: '#a8a29e', border: '1px solid #44403c', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>⏸ Hold</button>
+        )}
+        {holdModal && <HoldModal onClose={() => setHoldModal(false)} onSave={(reason, until) => {
+          onUpdateDeal({ meta: { ...(deal.meta || {}), hold: { reason, until, by: userName || 'Team', at: new Date().toISOString() } } });
+          logAct(`⏸ Lead put on hold — ${reason}${until ? ` · back in the queues ${until}` : ''}`, ['team']);
+          setHoldModal(false);
+        }} />}
         {isLeadStatus(deal) && POST_ENGAGEMENT_STATUS[deal.type] && (
           <button
             onClick={() => {
