@@ -16918,10 +16918,15 @@ function RecentlyHiddenModal({ onClose, onRestored }) {
 
   const restore = async (row) => {
     if (busyId) return;
-    if (!window.confirm(`Move "${row.name}" back into the active pipeline?\n\nCurrent status: ${row.status.toUpperCase()}\nNew status: ENGAGED (you can change it from the deal page).`)) return;
+    // Type-aware landing status (2026-08-04). 'engaged' was the flip-era
+    // default, but it isn't in the surplus/preforeclosure lifecycles — a
+    // surplus lead restored to 'engaged' fell off every kanban lane. Those
+    // types land back at their lead status ('new-lead') instead.
+    const backTo = row.type === 'flip' ? 'engaged' : ((LEAD_STATUSES[row.type] || [])[0] || 'engaged');
+    if (!window.confirm(`Move "${row.name}" back into the active pipeline?\n\nCurrent status: ${row.status.toUpperCase()}\nNew status: ${backTo.replace(/-/g, ' ').toUpperCase()} (you can change it from the deal page).`)) return;
     setBusyId(row.id);
     const { error } = await sb.from('deals').update({
-      status: 'engaged',
+      status: backTo,
       closed_at: null,
     }).eq('id', row.id);
     setBusyId(null);
