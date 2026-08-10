@@ -2,9 +2,11 @@
 //
 // Called by pg_cron via send_payroll_reminder() SQL function whenever
 // there is outstanding payroll at 9am ET or 4pm ET. Fans out a Resend
-// email + Twilio SMS to Justin with the per-VA breakdown.
+// email + Twilio SMS to Nathan with the per-VA breakdown.
 //
-// Per Justin, 2026-05-26: refire every day at 9am + 4pm ET, just him,
+// 2026-08-10: repointed from Justin to Nathan (separation decoupling,
+// F-35 Decision 3 + Nathan's "turn off all recurring sends to Justin").
+// Original spec (2026-05-26): refire every day at 9am + 4pm ET,
 // title format "Payroll due and how much is due to each person."
 // Auto-silences when every VA with hours has a matching `payments` row
 // for the current period (i.e., the "Mark Paid" button in the Time tab
@@ -25,8 +27,8 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const RECIPIENT_EMAIL = 'justin@fundlocators.com';
-const RECIPIENT_PHONE = '+14797196859';            // Justin's cell
+const RECIPIENT_EMAIL = 'nathan@fundlocators.com';
+const RECIPIENT_PHONE = '+15135162306';            // Nathan's cell (see phone map — NOT 998-2306)
 const FROM_EMAIL      = 'FundLocators <hello@fundlocators.com>';  // internal exec mail
 const APP_URL         = 'https://app.refundlocators.com/#/view/time';
 

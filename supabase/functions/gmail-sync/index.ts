@@ -1,6 +1,7 @@
 // gmail-sync — Business Communications Pipeline
 //
-// Pulls Gmail (Justin + Nathan) and Granola meeting notes for the past 7 days.
+// Pulls Gmail (Nathan) and Granola meeting notes for the past 7 days.
+// 2026-08-10: Justin's inbox dropped per the separation decoupling (F-35 Decision 3).
 // Summarizes each with Claude, writes to team_communications table.
 // Run Saturday night so Monday Memo has fresh context.
 //
@@ -19,7 +20,6 @@
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const TEAM_MEMBERS = [
-  { person: 'justin', email: 'justin@fundlocators.com' },
   { person: 'nathan', email: 'nathan@fundlocators.com' },
 ];
 

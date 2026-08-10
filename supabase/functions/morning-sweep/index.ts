@@ -20,7 +20,8 @@
 
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-const DIGEST_EMAILS = ['nathan@fundlocators.com', 'justin@fundlocators.com'];
+// 2026-08-10: Justin removed (separation decoupling — recurring sends off).
+const DIGEST_EMAILS = ['nathan@fundlocators.com'];
 const FROM_EMAIL = 'RefundLocators <hello@refundlocators.com>';
 
 const LATE_STAGE = new Set(['filed', 'awaiting-distribution', 'probate', 'paid-out']);
