@@ -3952,6 +3952,10 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // out of sight in the last 30 days is one click away regardless of
   // which mechanism was used.
   const [showRecentlyHidden, setShowRecentlyHidden] = useState(false);
+  // ☑ Check-to-export selection (Eric 2026-08-12): checked cards export alone;
+  // empty selection = export everything visible (original behavior).
+  const [checkedIds, setCheckedIds] = useState(() => new Set());
+  const toggleChecked = (id) => setCheckedIds(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   // Advanced filters — same modal Pipeline uses. Per Eric 2026-05-11:
   // Leads / Deal-list views need tag + money + date + boolean filters
   // (he tried filtering by `nod` / `need-more-info` tags and the UI
@@ -4169,16 +4173,21 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
   // fields. Fetches each visible deal's live personalized link before writing
   // (the URL lives in personalized_links, not on the deal row).
   const exportCSV = async () => {
+    // Checked cards export alone; no checks ON THIS VIEW = the whole visible
+    // list (checks made on other sub-views don't count here — matches the
+    // "N checked" chip, so the button label and the file always agree).
+    const sel = visible.filter(d => checkedIds.has(d.id));
+    const pool = sel.length ? sel : visible;
     let clickedSet = new Set();
     try {
-      const ids = visible.map(d => d.id);
+      const ids = pool.map(d => d.id);
       if (ids.length) {
         const { data: pls } = await sb.from('personalized_links').select('deal_id').gt('view_count', 0).in('deal_id', ids);
         clickedSet = new Set((pls || []).map(p => p.deal_id));
       }
     } catch (_) { /* export still works without the clicked flag */ }
     const m$ = (v) => { const n = parseFloat(v); return Number.isFinite(n) && n !== 0 ? n : ""; };
-    const rows = visible.map(d => {
+    const rows = pool.map(d => {
       const m = d.meta || {};
       return {
         dcc_deal_id: d.id, intel_case_id: m.intel_case_id || "", type: d.type,
@@ -4201,7 +4210,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
         created: d.created || "",
       };
     });
-    downloadCSV(rows, `deals-${view}-${new Date().toISOString().slice(0,10)}.csv`);
+    downloadCSV(rows, `deals-${view}${sel.length ? `-checked-${rows.length}` : ''}-${new Date().toISOString().slice(0,10)}.csv`);
   };
 
   const viewBtn = (id, label, count) => (
@@ -4283,7 +4292,15 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
               🗑 Deleted leads
             </button>
           )}
-          <button onClick={exportCSV} style={btnGhost}>Export CSV</button>
+          {(() => { const n = visible.filter(d => checkedIds.has(d.id)).length; return (<>
+            {n > 0 && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 11, fontWeight: 700, color: '#fbbf24', background: '#292009', border: '1px solid #78350f', borderRadius: 6, padding: '4px 10px' }}>
+                ☑ {n} checked
+                <button onClick={() => setCheckedIds(new Set())} title="Clear the selection" style={{ background: 'transparent', border: 'none', color: '#a8a29e', cursor: 'pointer', fontSize: 11, padding: 0, fontFamily: 'inherit' }}>clear</button>
+              </span>
+            )}
+            <button onClick={exportCSV} style={n > 0 ? { ...btnGhost, borderColor: '#78350f', color: '#fbbf24' } : btnGhost}>{n > 0 ? `Export ${n} checked` : 'Export CSV'}</button>
+          </>); })()}
           <button className="desktop-new-deal" onClick={onNew} style={btnPrimary}>+ New Deal</button>
         </div>
       )}
@@ -4586,7 +4603,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                   : "Real Estate Flips"
                 } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginBottom: 28 }}>
-                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />)}
+                  {flips.map(d => <DealCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} checked={checkedIds.has(d.id)} onToggleCheck={() => toggleChecked(d.id)} />)}
                 </div>
               </>)}
               {surplus.length > 0 && (<>
@@ -4598,7 +4615,7 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                   : "Surplus Fund Cases"
                 } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
-                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} />)}
+                  {surplus.map(d => <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} checked={checkedIds.has(d.id)} onToggleCheck={() => toggleChecked(d.id)} />)}
                 </div>
               </>)}
               {preforeclosures.length > 0 && (<>
@@ -4609,8 +4626,8 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
                 } />
                 <div className="deal-grid" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 14 }}>
                   {preforeclosures.map(d => d.type === "preforeclosure"
-                    ? <PreforeclosureCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} />
-                    : <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} />)}
+                    ? <PreforeclosureCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} checked={checkedIds.has(d.id)} onToggleCheck={() => toggleChecked(d.id)} />
+                    : <SurplusCard key={d.id} deal={d} onClick={() => onSelect(d.id)} onDelete={() => onDelete(d.id)} onToggleFlag={() => onToggleFlag(d.id)} relativePhoneOk={deceasedRelPhone.has(d.id)} contactExtra={contactMap[d.id] || {}} onLog={setLogDeal} checked={checkedIds.has(d.id)} onToggleCheck={() => toggleChecked(d.id)} />)}
                 </div>
               </>)}
               {visible.length === 0 && (
@@ -15566,7 +15583,7 @@ const HYGIENE_LABELS = {
 };
 const hygieneLabel = (k) => HYGIENE_LABELS[k] || k;
 
-function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
+function DealCard({ deal, onClick, onDelete, onToggleFlag, checked, onToggleCheck }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const dl = deadlineInfo(m.deadline || deal.deadline);
@@ -15604,6 +15621,7 @@ function DealCard({ deal, onClick, onDelete, onToggleFlag }) {
         {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+        {onToggleCheck && <button onClick={e => { e.stopPropagation(); onToggleCheck(); }} title={checked ? "Remove from export selection" : "Check to export"} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: checked ? 1 : 0.4, color: checked ? "#fbbf24" : "#78716c", fontWeight: 800 }}>{checked ? "☑" : "☐"}</button>}
         <button onClick={e => { e.stopPropagation(); onToggleFlag(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: flagged ? 1 : 0.4, color: flagged ? "#f59e0b" : "#78716c" }} title={flagged ? "Remove flag" : "Flag for review"}>⚑</button>
         <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
       </div>
@@ -15744,7 +15762,7 @@ function MiniDocketPulse({ dealId }) {
 // NOD filed, auction hasn't happened. The money number is potential equity =
 // Zillow value − judgment. Deliberately NOT SurplusCard — different lane,
 // different fields, no surplus/outreach-readiness machinery.
-function PreforeclosureCard({ deal, onClick, onDelete, onToggleFlag }) {
+function PreforeclosureCard({ deal, onClick, onDelete, onToggleFlag, checked, onToggleCheck }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const flagged = m.flagged;
@@ -15757,6 +15775,7 @@ function PreforeclosureCard({ deal, onClick, onDelete, onToggleFlag }) {
         <StatusBadge status={deal.status} />
         <span title="Pre-foreclosure — Defender / homeowner-advocate lane" style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.06em', color: '#93c5fd', background: '#0c1a2e', border: '1px solid #1e3a5f', borderRadius: 4, padding: '2px 6px', whiteSpace: 'nowrap' }}>🛡 DEFENDER</span>
       </div>
+      {onToggleCheck && <button onClick={e => { e.stopPropagation(); onToggleCheck(); }} title={checked ? "Remove from export selection" : "Check to export"} style={{ ...btnGhost, position: "absolute", top: 8, right: 8, fontSize: 12, padding: "2px 8px", opacity: checked ? 1 : 0.4, color: checked ? "#fbbf24" : "#78716c", fontWeight: 800 }}>{checked ? "☑" : "☐"}</button>}
       <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         {flagged && <span style={{ fontSize: 14, marginTop: 1 }} title="Flagged for review">⚑</span>}
         <div>
@@ -15775,7 +15794,7 @@ function PreforeclosureCard({ deal, onClick, onDelete, onToggleFlag }) {
   );
 }
 
-function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = false, contactExtra = {}, onLog }) {
+function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = false, contactExtra = {}, onLog, checked, onToggleCheck }) {
   const sc = STATUS_COLORS[deal.status] || "#78716c";
   const m = deal.meta || {};
   const dl = deadlineInfo(m.deadline || deal.deadline);
@@ -15927,6 +15946,7 @@ function SurplusCard({ deal, onClick, onDelete, onToggleFlag, relativePhoneOk = 
         {(deal.assigned_to || m.assigned_to) && <span style={{ fontSize: 9, fontWeight: 700, padding: "3px 8px", borderRadius: 4, background: personColor(deal.assigned_to || m.assigned_to), color: "#fafaf9", letterSpacing: "0.04em" }}>{deal.assigned_to || m.assigned_to}</span>}
       </div>
       <div style={{ position: "absolute", top: 8, right: 8, display: "flex", gap: 4 }}>
+        {onToggleCheck && <button onClick={e => { e.stopPropagation(); onToggleCheck(); }} title={checked ? "Remove from export selection" : "Check to export"} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: checked ? 1 : 0.4, color: checked ? "#fbbf24" : "#78716c", fontWeight: 800 }}>{checked ? "☑" : "☐"}</button>}
         <button onClick={e => { e.stopPropagation(); onToggleFlag(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: flagged ? 1 : 0.4, color: flagged ? "#f59e0b" : "#78716c" }} title={flagged ? "Remove flag" : "Flag for review"}>⚑</button>
         <button onClick={e => { e.stopPropagation(); onDelete(); }} style={{ ...btnGhost, fontSize: 12, padding: "2px 8px", opacity: 0.4 }}>×</button>
       </div>
