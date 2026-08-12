@@ -4164,15 +4164,43 @@ function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view,
     return last && daysSince(last) > 14;
   });
 
-  const exportCSV = () => {
-    const rows = visible.map(d => ({
-      id: d.id, type: d.type, name: d.name, address: d.address || "",
-      status: d.status, flagged: d.meta?.flagged ? "Y" : "", lead_source: d.meta?.lead_source || d.lead_source || "", deadline: d.meta?.deadline || d.deadline || "",
-      filed_at: d.meta?.filed_at || d.filed_at || "", actual_net: d.actual_net || "",
-      list_price: d.meta?.listPrice || "", contract_price: d.meta?.contractPrice || "",
-      estimated_surplus: d.meta?.estimatedSurplus || "", county: d.meta?.county || "",
-      created: d.created || "",
-    }));
+  // Full-contract export (Nathan 2026-08-11): every case/money field the DCC
+  // knows rides the CSV, headers named to map cleanly onto the GHL custom
+  // fields. Fetches each visible deal's live personalized link before writing
+  // (the URL lives in personalized_links, not on the deal row).
+  const exportCSV = async () => {
+    let clickedSet = new Set();
+    try {
+      const ids = visible.map(d => d.id);
+      if (ids.length) {
+        const { data: pls } = await sb.from('personalized_links').select('deal_id').gt('view_count', 0).in('deal_id', ids);
+        clickedSet = new Set((pls || []).map(p => p.deal_id));
+      }
+    } catch (_) { /* export still works without the clicked flag */ }
+    const m$ = (v) => { const n = parseFloat(v); return Number.isFinite(n) && n !== 0 ? n : ""; };
+    const rows = visible.map(d => {
+      const m = d.meta || {};
+      return {
+        dcc_deal_id: d.id, intel_case_id: m.intel_case_id || "", type: d.type,
+        name: d.name, homeowner_name: m.homeownerName || "", address: d.address || "",
+        county: m.county || "", state: m.state || "", case_number: m.courtCase || "",
+        status: d.status, claim_status: m.reviewFlag || (m.manual_review && !m.review_cleared_at ? "in_review" : ""),
+        phone: m.homeownerPhone || m.phone || "",
+        foreclosure_filed: (m.foreclosureFileDate || "").slice(0, 10),
+        sale_date: (m.saleDate || "").slice(0, 10),
+        sold_amount: m$(m.salePrice), confirmation_date: (m.confirmationOfSaleDate || m.confirmation_of_sale_date || "").slice(0, 10),
+        judgment_amount: m$(m.judgmentAmount), total_debt: m$(m.totalDebt),
+        verified_surplus: m$(m.verifiedSurplus),
+        estimated_surplus: m$(m.estimatedSurplus) || m$(m.estimated_surplus) || m$(m.estimatedAvailableEquity) || m$(d.surplus_estimate),
+        personalized_link: d.refundlocators_token ? `https://refundlocators.com/s/${d.refundlocators_token}` : "",
+        link_clicked: clickedSet.has(d.id) ? "Y" : "",
+        last_contacted: (d.last_contacted_at || "").slice(0, 10),
+        on_hold: dealHold(d) ? (dealHold(d).reason || "Y") : "",
+        flagged: m.flagged ? "Y" : "", lead_source: m.lead_source || d.lead_source || "",
+        deadline: m.deadline || d.deadline || "", actual_net: d.actual_net || "",
+        created: d.created || "",
+      };
+    });
     downloadCSV(rows, `deals-${view}-${new Date().toISOString().slice(0,10)}.csv`);
   };
 
