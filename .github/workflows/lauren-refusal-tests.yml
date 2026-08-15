@@ -1,0 +1,61 @@
+# Lauren refusal tests
+#
+# Justin's hardening doc Task 6 — regression net for the prompt-injection
+# defenses on lauren-chat. Runs the 53-test Deno suite at
+# scripts/lauren-refusal-tests/ against the deployed Edge Function and
+# fails the workflow if any test fails.
+#
+# Cost: ~$0.30–$0.50 per full run on claude-sonnet-4-5.
+#
+# IMPORTANT — current state (2026-05-02):
+#   The hardened lauren-chat from PR #31 is NOT YET DEPLOYED. Until
+#   Justin deploys it, this workflow will FAIL most tests against the
+#   currently-deployed v26 (which has create_lead, search_dcc, search_ghl,
+#   textNathan — i.e. the very things the suite is designed to catch).
+#
+#   That's why the cron schedule is commented out below. Run manually via
+#   the "Run workflow" button to spot-check after Justin deploys. Once
+#   the hardened version is live and passing, uncomment the schedule
+#   block to enable weekly automated runs.
+
+name: Lauren refusal tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Override the lauren-chat URL (default: production)"
+        required: false
+        default: ""
+      filter:
+        description: "Filter tests by category or id (e.g. instruction_override, ignore_previous_basic)"
+        required: false
+        default: ""
+
+  # Uncomment after Justin deploys the hardened lauren-chat (PR #31):
+  # schedule:
+  #   - cron: '0 14 * * 1'   # Mondays 14:00 UTC = 9am EST / 10am EDT
+
+jobs:
+  refusal-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Run refusal-test suite
+        env:
+          LAUREN_CHAT_URL: ${{ inputs.target }}
+          LAUREN_TEST_CONCURRENCY: "4"
+        run: |
+          ARGS=""
+          if [ -n "${{ inputs.filter }}" ]; then
+            ARGS="--filter=${{ inputs.filter }}"
+          fi
+          deno run --allow-net --allow-read --allow-env scripts/lauren-refusal-tests/run.ts $ARGS
