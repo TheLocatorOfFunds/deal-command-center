@@ -206,26 +206,34 @@ Deno.serve(async (req: Request) => {
       const nameParts = String(p.name || 'Unknown').trim().split(/\s+/);
       const isHomeowner = p.kind === 'homeowner';
       const dnd = !!(p.do_not_call || p.do_not_text || (isHomeowner && deceased));
-      const up = await ghl('POST', '/contacts/upsert', contactPayload({
-        firstName: nameParts[0] || 'Unknown', lastName: nameParts.slice(1).join(' ') || '—',
-        phone: String(p.phone || '').split(',')[0], email: p.email || '',
-        address: street, city, state: stateAbbr,
-        dnd, caseNumber: caseNo, county,
-        claimStatus: isHomeowner ? claim : '', intelCaseId: m.intel_case_id || '',
-        linkUrl: isHomeowner ? linkUrl : '', source: 'dcc-migration',
-      }));
-      const cid = up.contact?.id;
-      if (cid) {
-        const tags = ['dcc-migrated'];
-        if (!isHomeowner) tags.push(p.kind || 'family');
-        await ghl('POST', `/contacts/${cid}/tags`, { tags });
-        await db.from('ghl_contact_map').upsert({
-          ghl_contact_id: cid, dcc_contact_id: p.id,
-          phone_bare10: bare10(String(p.phone || '').split(',')[0]) || null,
-        });
-        if (isHomeowner) homeownerGhlId = cid;
+      // DCC stores comma-lists in BOTH phone and email — GHL takes one each.
+      // One contact's rejection must never sink the whole deal: catch, record,
+      // continue (found the hard way: a two-email field 500'd Nicholas Kennedy).
+      const firstEmail = String(p.email || '').split(/[,;]/)[0].trim();
+      try {
+        const up = await ghl('POST', '/contacts/upsert', contactPayload({
+          firstName: nameParts[0] || 'Unknown', lastName: nameParts.slice(1).join(' ') || '—',
+          phone: String(p.phone || '').split(',')[0], email: firstEmail,
+          address: street, city, state: stateAbbr,
+          dnd, caseNumber: caseNo, county,
+          claimStatus: isHomeowner ? claim : '', intelCaseId: m.intel_case_id || '',
+          linkUrl: isHomeowner ? linkUrl : '', source: 'dcc-migration',
+        }));
+        const cid = up.contact?.id;
+        if (cid) {
+          const tags = ['dcc-migrated'];
+          if (!isHomeowner) tags.push(p.kind || 'family');
+          await ghl('POST', `/contacts/${cid}/tags`, { tags });
+          await db.from('ghl_contact_map').upsert({
+            ghl_contact_id: cid, dcc_contact_id: p.id,
+            phone_bare10: bare10(String(p.phone || '').split(',')[0]) || null,
+          });
+          if (isHomeowner) homeownerGhlId = cid;
+        }
+        results.push({ contact: p.id, kind: p.kind, ghl_id: cid, dnd, new: up.new ?? null });
+      } catch (e) {
+        results.push({ contact: p.id, kind: p.kind, ghl_id: null, dnd, error: String(e).slice(0, 200) });
       }
-      results.push({ contact: p.id, kind: p.kind, ghl_id: cid, dnd, new: up.new ?? null });
     }
 
     let oppId = m.ghl_opportunity_id || null;
