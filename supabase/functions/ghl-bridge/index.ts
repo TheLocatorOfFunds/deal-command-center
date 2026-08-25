@@ -246,8 +246,12 @@ Deno.serve(async (req: Request) => {
         let isNew: boolean | null = null;
         const hasIdentifier = bare10(String(p.phone || '').split(',')[0]).length === 10 || !!firstEmail;
         if (p.id === null && m.ghl_contact_id) {
-          // synthesized homeowner already exists in GHL — update, never re-create
-          await ghl('PUT', `/contacts/${m.ghl_contact_id}`, payload);
+          // synthesized homeowner already exists in GHL — update, never re-create.
+          // GHL's contact UPDATE rejects locationId in the body (create-only
+          // field) — sending it 422'd every re-push silently (found 2026-08-25:
+          // 29 equity re-pushes "succeeded" with zero write-backs).
+          const { locationId: _locOnly, ...updatePayload } = payload as Record<string, unknown>;
+          await ghl('PUT', `/contacts/${m.ghl_contact_id}`, updatePayload);
           cid = m.ghl_contact_id; isNew = false;
         } else if (!hasIdentifier) {
           // GHL upsert REQUIRES phone or email; identifier-less NOD shells go
@@ -310,7 +314,12 @@ Deno.serve(async (req: Request) => {
         contactId: homeownerGhlId,
         name: `${d.name}${caseNo ? ' — ' + caseNo : ''}`,
         status: 'open',
-        monetaryValue: money(m.verifiedSurplus) ?? money(m.estimatedSurplus) ?? money(d.surplus_estimate) ?? 0,
+        // Value cascade: court/verified figures first; for NOD-stage cards the
+        // BatchData EQUITY estimate fills last so the board sorts by upside —
+        // but ONLY when a lien balance is known (equity computed without lien
+        // data equals the home value and overstates wildly — Ohio 2026-08-25).
+        monetaryValue: money(m.verifiedSurplus) ?? money(m.estimatedSurplus) ?? money(d.surplus_estimate)
+          ?? (nonEmpty(m.openLienBalance) ? money(m.equity) : null) ?? 0,
         customFields: [
           ...cf(oId('Case Number'), caseNo),
           ...cf(oId('County'), county),
@@ -330,11 +339,19 @@ Deno.serve(async (req: Request) => {
           ...cf(oId('Work Order Rank'), m.workOrderRank),
         ],
       };
-      if (oppId) {
-        await ghl('PUT', `/opportunities/${oppId}`, oppPayload);
-      } else {
-        const created = await ghl('POST', '/opportunities/', oppPayload);
-        oppId = created.opportunity?.id || null;
+      try {
+        if (oppId) {
+          // Opportunity UPDATE rejects create-only fields (locationId /
+          // pipelineId / contactId) just like contact update — strip them.
+          // pipelineStageId stays: re-staging is the point of re-pushes.
+          const { locationId: _l, pipelineId: _p, contactId: _c, ...oppUpdate } = oppPayload as Record<string, unknown>;
+          await ghl('PUT', `/opportunities/${oppId}`, oppUpdate);
+        } else {
+          const created = await ghl('POST', '/opportunities/', oppPayload);
+          oppId = created.opportunity?.id || null;
+        }
+      } catch (e) {
+        return new Response(JSON.stringify({ ok: false, deal: d.id, contacts: results, opportunity: oppId, error: `opportunity write failed: ${String(e).slice(0, 200)}` }), { headers: { 'Content-Type': 'application/json' } });
       }
       // Write-back EVERY push (create AND update): ids, human-plane stamp,
       // and the stage we synced — the nod-batch action keys off ghl_synced_stage.
@@ -374,7 +391,10 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, deal: d.id, contacts: results, opportunity: oppId, stage: wantStageName, stage_fallback: stageFallback }), { headers: { 'Content-Type': 'application/json' } });
+    // A deal without a successfully-pushed homeowner did NOT really push —
+    // say so (the write-back and opportunity update were skipped).
+    const homeownerOk = results.some((r) => r.kind === 'homeowner' && r.ghl_id);
+    return new Response(JSON.stringify({ ok: homeownerOk, deal: d.id, contacts: results, opportunity: homeownerOk ? oppId : null, stage: wantStageName, stage_fallback: stageFallback, ...(homeownerOk ? {} : { error: 'homeowner contact push failed — see contacts[]' }) }), { headers: { 'Content-Type': 'application/json' } });
   }
 
   // ── NOD BATCH (cron): push new/stage-advanced lifecycle deals ─────────
