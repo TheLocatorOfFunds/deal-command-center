@@ -38,6 +38,15 @@ const STAGE_BY_STATUS: Record<string, string> = {
   'awaiting-distribution': 'Motion for Distribution',
   'recovered': 'Check Received (Closed)',
 };
+// Core-5 NOD lifecycle (Ohio ferry 2026-08-25, Nathan's spec): pre-sale
+// stages driven by meta.lifecycleStage, ahead of the status-based back half.
+// Stage names resolve at runtime — until the GHL Pro adds these stages to
+// the pipeline, pushes fall back to "New Lead" and report stage_fallback.
+const STAGE_BY_LIFECYCLE: Record<string, string> = {
+  'nod': 'NOD Filed',
+  '30day': '30 Days Out',
+  'saleday': 'Sale Day',
+};
 
 const bare10 = (p: unknown): string => {
   const d = String(p ?? '').replace(/\D/g, '');
@@ -169,7 +178,7 @@ Deno.serve(async (req: Request) => {
   if (body.action === 'push_deal') {
     const dealId = String(body.deal_id || '');
     const { data: d, error } = await db.from('deals')
-      .select('id, name, address, status, type, lead_tier, deleted_at, last_contacted_at, refundlocators_token, surplus_estimate, meta')
+      .select('id, name, address, status, type, lead_tier, deleted_at, last_contacted_at, refundlocators_token, surplus_estimate, tags, meta')
       .eq('id', dealId).single();
     if (error || !d) return new Response(JSON.stringify({ ok: false, error: 'deal not found' }), { status: 404 });
 
@@ -187,9 +196,23 @@ Deno.serve(async (req: Request) => {
 
     const { data: links } = await db.from('contact_deals').select('contact_id').eq('deal_id', d.id);
     const ids = (links || []).map(l => l.contact_id);
-    const { data: people } = ids.length
+    const { data: peopleRows } = ids.length
       ? await db.from('contacts').select('id, name, kind, phone, email, do_not_call, do_not_text').in('id', ids)
       : { data: [] as any[] };
+    const people: any[] = [...(peopleRows || [])];
+    // NOD-pipeline deals arrive with no contact rows — the homeowner exists
+    // only as deal meta (defendant name, usually no phone yet). Synthesize
+    // the homeowner card so the opportunity has an anchor; meta.ghl_contact_id
+    // reuse (below) keeps identifier-less contacts from duplicating on re-push.
+    if (!people.some((p) => p.kind === 'homeowner')) {
+      people.unshift({
+        id: null, kind: 'homeowner',
+        name: m.homeownerName || m.defendant || d.name || 'Unknown Owner',
+        phone: m.homeownerPhone || m.phone || '',
+        email: m.homeownerEmail || '',
+        do_not_call: false, do_not_text: false,
+      });
+    }
 
     const deceased = ['true', 'Y', 'yes'].includes(String(m.deceased ?? m.isDeceased ?? ''));
     const caseNo = m.courtCase || '';
@@ -211,36 +234,79 @@ Deno.serve(async (req: Request) => {
       // continue (found the hard way: a two-email field 500'd Nicholas Kennedy).
       const firstEmail = String(p.email || '').split(/[,;]/)[0].trim();
       try {
-        const up = await ghl('POST', '/contacts/upsert', contactPayload({
+        const payload = contactPayload({
           firstName: nameParts[0] || 'Unknown', lastName: nameParts.slice(1).join(' ') || '—',
           phone: String(p.phone || '').split(',')[0], email: firstEmail,
           address: street, city, state: stateAbbr,
           dnd, caseNumber: caseNo, county,
           claimStatus: isHomeowner ? claim : '', intelCaseId: m.intel_case_id || '',
           linkUrl: isHomeowner ? linkUrl : '', source: 'dcc-migration',
-        }));
-        const cid = up.contact?.id;
+        });
+        let cid: string | null = null;
+        let isNew: boolean | null = null;
+        const hasIdentifier = bare10(String(p.phone || '').split(',')[0]).length === 10 || !!firstEmail;
+        if (p.id === null && m.ghl_contact_id) {
+          // synthesized homeowner already exists in GHL — update, never re-create
+          await ghl('PUT', `/contacts/${m.ghl_contact_id}`, payload);
+          cid = m.ghl_contact_id; isNew = false;
+        } else if (!hasIdentifier) {
+          // GHL upsert REQUIRES phone or email; identifier-less NOD shells go
+          // through plain create — the meta.ghl_contact_id write-back + the
+          // PUT branch above make re-pushes update instead of duplicate.
+          const created = await ghl('POST', '/contacts/', payload);
+          cid = created.contact?.id || null; isNew = true;
+        } else {
+          const up = await ghl('POST', '/contacts/upsert', payload);
+          cid = up.contact?.id || null; isNew = up.new ?? null;
+        }
         if (cid) {
           const tags = ['dcc-migrated'];
+          if (m.lifecycleStage) tags.push('nod-pipeline');
+          // deal-level tags (stage + county + brand, per the Ohio NOD contract)
+          // ride on the HOMEOWNER card; additive endpoint, never replaces.
+          if (isHomeowner && Array.isArray(d.tags)) tags.push(...d.tags.map((t: unknown) => String(t)).filter(Boolean).slice(0, 10));
           if (!isHomeowner) tags.push(p.kind || 'family');
           await ghl('POST', `/contacts/${cid}/tags`, { tags });
-          await db.from('ghl_contact_map').upsert({
-            ghl_contact_id: cid, dcc_contact_id: p.id,
-            phone_bare10: bare10(String(p.phone || '').split(',')[0]) || null,
-          });
+          if (p.id) {
+            await db.from('ghl_contact_map').upsert({
+              ghl_contact_id: cid, dcc_contact_id: p.id,
+              phone_bare10: bare10(String(p.phone || '').split(',')[0]) || null,
+            });
+          }
           if (isHomeowner) homeownerGhlId = cid;
         }
-        results.push({ contact: p.id, kind: p.kind, ghl_id: cid, dnd, new: up.new ?? null });
+        results.push({ contact: p.id, kind: p.kind, ghl_id: cid, dnd, new: isNew });
       } catch (e) {
         results.push({ contact: p.id, kind: p.kind, ghl_id: null, dnd, error: String(e).slice(0, 200) });
       }
     }
 
+    // Stage: lifecycle first (pre-sale NOD flow), then status; if the mapped
+    // stage doesn't exist in the pipeline yet, fall back to "New Lead" and
+    // say so in the result rather than failing the push.
+    const wantStageName = STAGE_BY_LIFECYCLE[String(m.lifecycleStage || '')] || STAGE_BY_STATUS[d.status] || 'New Lead';
+    let stageIdResolved = stageId(wantStageName);
+    let stageFallback: string | null = null;
+    if (!stageIdResolved) { stageFallback = wantStageName; stageIdResolved = stageId('New Lead'); }
+
+    // Court files STAY in Supabase (approved migration pattern) — the card
+    // carries long-lived signed links, not copies. Cap 5, newest first.
+    const docLinks: string[] = [];
+    try {
+      const { data: docs } = await db.from('documents')
+        .select('name, path').eq('deal_id', d.id).order('created_at', { ascending: false }).limit(5);
+      for (const doc of docs || []) {
+        if (!doc.path) continue;
+        const { data: signed } = await db.storage.from('deal-docs').createSignedUrl(doc.path, 60 * 60 * 24 * 365);
+        if (signed?.signedUrl) docLinks.push(`${doc.name || 'document'}: ${signed.signedUrl}`);
+      }
+    } catch (_) { /* links are best-effort — never block a push on them */ }
+
     let oppId = m.ghl_opportunity_id || null;
     if (homeownerGhlId) {
       const oppPayload = {
         locationId: loc, pipelineId: pipe.id,
-        pipelineStageId: stageId(STAGE_BY_STATUS[d.status] || 'New Lead'),
+        pipelineStageId: stageIdResolved,
         contactId: homeownerGhlId,
         name: `${d.name}${caseNo ? ' — ' + caseNo : ''}`,
         status: 'open',
@@ -269,27 +335,78 @@ Deno.serve(async (req: Request) => {
       } else {
         const created = await ghl('POST', '/opportunities/', oppPayload);
         oppId = created.opportunity?.id || null;
-        if (oppId) {
-          await db.from('deals').update({
-            meta: { ...m, ghl_opportunity_id: oppId, ghl_contact_id: homeownerGhlId },
-          }).eq('id', d.id).select('id');
+      }
+      // Write-back EVERY push (create AND update): ids, human-plane stamp,
+      // and the stage we synced — the nod-batch action keys off ghl_synced_stage.
+      await db.from('deals').update({
+        meta: {
+          ...m,
+          ghl_opportunity_id: oppId,
+          ghl_contact_id: homeownerGhlId,
+          plane: m.plane === 'machine' ? m.plane : 'ghl',
+          ghl_synced_stage: String(m.lifecycleStage || d.status || ''),
+        },
+      }).eq('id', d.id).select('id');
+
+      // Document links onto the homeowner card (best-effort)
+      if (docLinks.length) {
+        const dlId = cId('Document Links');
+        if (dlId) {
+          await ghl('PUT', `/contacts/${homeownerGhlId}`, {
+            customFields: [{ id: dlId, field_value: docLinks.join('\n') }],
+          }).catch(() => {});
         }
       }
+
       // the migration note (once — skip if we updated an existing opp)
       if (homeownerGhlId && !m.ghl_opportunity_id) {
         const note = [
           `Migrated from the DCC engine ${new Date().toISOString().slice(0, 10)}.`,
           caseNo ? `Case ${caseNo} (${county} County${stateAbbr ? ', ' + stateAbbr : ''}).` : '',
+          m.lifecycleStageLabel ? `Lifecycle: ${m.lifecycleStageLabel}.` : '',
           money(m.verifiedSurplus) ? `Verified surplus $${money(m.verifiedSurplus)}.` : (money(m.estimatedSurplus) ? `Estimated surplus $${money(m.estimatedSurplus)} (unverified).` : ''),
           d.last_contacted_at ? `Last contacted ${String(d.last_contacted_at).slice(0, 10)}.` : 'Never contacted.',
           claim ? `Claim/review status: ${claim}.` : '',
+          docLinks.length ? `Documents:\n${docLinks.join('\n')}` : '',
           `Full history + court files: https://app.refundlocators.com/#/deal/${d.id}`,
         ].filter(Boolean).join('\n');
         await ghl('POST', `/contacts/${homeownerGhlId}/notes`, { body: note, userId: undefined });
       }
     }
 
-    return new Response(JSON.stringify({ ok: true, deal: d.id, contacts: results, opportunity: oppId }), { headers: { 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ ok: true, deal: d.id, contacts: results, opportunity: oppId, stage: wantStageName, stage_fallback: stageFallback }), { headers: { 'Content-Type': 'application/json' } });
+  }
+
+  // ── NOD BATCH (cron): push new/stage-advanced lifecycle deals ─────────
+  // Reuses push_deal via an internal self-call (bounded, secret-gated) so
+  // there is exactly ONE code path into GHL.
+  if (body.action === 'push_nod_batch') {
+    const limit = Math.min(Number(body.limit) || 20, 40);
+    const { data: cands, error: candErr } = await db.from('deals')
+      .select('id, meta').is('deleted_at', null).eq('status', 'new-lead')
+      .like('id', 'nod-oh-%').limit(400);
+    if (candErr) return new Response(JSON.stringify({ ok: false, error: candErr.message }), { status: 500 });
+    const due = (cands || []).filter((r: any) => {
+      const mm = r.meta || {};
+      if (mm.plane === 'machine' || mm.hold?.reason) return false;
+      if (!mm.lifecycleStage) return false;
+      return !mm.ghl_opportunity_id || String(mm.lifecycleStage) !== String(mm.ghl_synced_stage || '');
+    }).slice(0, limit);
+    const out: any[] = [];
+    for (const r of due) {
+      try {
+        const resp = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/ghl-bridge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Ghl-Sync-Secret': secret },
+          body: JSON.stringify({ action: 'push_deal', deal_id: r.id }),
+        });
+        const j = await resp.json().catch(() => ({ ok: false, error: `HTTP ${resp.status}` }));
+        out.push({ deal: r.id, ok: !!j.ok, opportunity: j.opportunity || null, stage_fallback: j.stage_fallback || null, error: j.error || null });
+      } catch (e) {
+        out.push({ deal: r.id, ok: false, error: String(e).slice(0, 150) });
+      }
+    }
+    return new Response(JSON.stringify({ ok: true, candidates: due.length, pushed: out.filter(o => o.ok).length, results: out }), { headers: { 'Content-Type': 'application/json' } });
   }
 
   return new Response(JSON.stringify({ ok: false, error: 'unknown action' }), { status: 400 });
