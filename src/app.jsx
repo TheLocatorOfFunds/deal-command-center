@@ -6124,6 +6124,9 @@ function EodReportModal({ me, activeThread, onClose, onPosted }) {
   const submit = async () => {
     if (saving) return;
     if (!workedOn.trim()) { setErr('"What did you work on today" is required'); return; }
+    // Guard the invisible-failure class (Eric 2026-08-25: submits died in the
+    // browser with no request ever sent — likely a stale tab's broken state).
+    if (!me?.id) { setErr('Your profile did not load — hard-refresh the page (Cmd+Shift+R) and try again.'); return; }
     setSaving(true); setErr(null);
     try {
       const row = {
@@ -6133,9 +6136,11 @@ function EodReportModal({ me, activeThread, onClose, onPosted }) {
         blocked: blocked.trim() || null,
         next_up: nextUp.trim() || null,
       };
-      const { error: upErr } = await sb.from('eod_reports')
-        .upsert(row, { onConflict: 'user_id,report_date' });
+      const { data: saved, error: upErr } = await sb.from('eod_reports')
+        .upsert(row, { onConflict: 'user_id,report_date' })
+        .select('id');
       if (upErr) throw upErr;
+      if (!saved || saved.length === 0) throw new Error('The save came back empty — hard-refresh and try again, and tell Nathan if it repeats.');
 
       // Post a summary to the active thread so the team sees it.
       if (activeThread?.id) {
@@ -32992,30 +32997,43 @@ function TimeTrackingView({ userId, isAdmin }) {
 
   const clockIn = async () => {
     if (busy || openEntry) return;
+    if (!userId) { alert('Clock-in failed: your login state did not load — hard-refresh the page (Cmd+Shift+R) and try again.'); return; }
     setBusy(true);
-    const { error } = await sb.from('time_entries').insert({
-      user_id: userId,
-      start_at: new Date().toISOString(),
-      notes: notes || null,
-    });
-    setBusy(false);
-    if (error) { alert('Clock-in failed: ' + error.message); return; }
-    setNotes('');
-    loadMine();
+    try {
+      const { data: ins, error } = await sb.from('time_entries').insert({
+        user_id: userId,
+        start_at: new Date().toISOString(),
+        notes: notes || null,
+      }).select('id');
+      if (error) throw error;
+      if (!ins || ins.length === 0) throw new Error('the save came back empty — hard-refresh and try again');
+      setNotes('');
+      loadMine();
+    } catch (e) {
+      alert('Clock-in failed: ' + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const clockOut = async () => {
     if (busy || !openEntry) return;
     setBusy(true);
-    const updates = { end_at: new Date().toISOString() };
-    if (notes && notes.trim()) {
-      updates.notes = openEntry.notes ? openEntry.notes + ' / ' + notes.trim() : notes.trim();
+    try {
+      const updates = { end_at: new Date().toISOString() };
+      if (notes && notes.trim()) {
+        updates.notes = openEntry.notes ? openEntry.notes + ' / ' + notes.trim() : notes.trim();
+      }
+      const { data: upd, error } = await sb.from('time_entries').update(updates).eq('id', openEntry.id).select('id');
+      if (error) throw error;
+      if (!upd || upd.length === 0) throw new Error('the save came back empty (0 rows) — hard-refresh and try again');
+      setNotes('');
+      loadMine();
+    } catch (e) {
+      alert('Clock-out failed: ' + (e?.message || e));
+    } finally {
+      setBusy(false);
     }
-    const { error } = await sb.from('time_entries').update(updates).eq('id', openEntry.id);
-    setBusy(false);
-    if (error) { alert('Clock-out failed: ' + error.message); return; }
-    setNotes('');
-    loadMine();
   };
 
   const deleteEntry = async (id) => {
