@@ -108,6 +108,13 @@ Deno.serve(async (req: Request) => {
   for (const c of dccDnc || []) {
     String(c.phone || '').split(',').map(bare10).filter(Boolean).forEach(n => dccDncNums.add(n));
   }
+  // wrong_person / wrong_number quarantined numbers (#340): a GHL contact
+  // whose phone IS that number must stop receiving texts → DND it too.
+  const { data: badNums } = await db.from('bad_phone_numbers')
+    .select('phone').in('reason', ['wrong_person', 'wrong_number']);
+  for (const b of badNums || []) {
+    const n = bare10(b.phone); if (n) dccDncNums.add(n);
+  }
   let ghlProtected = 0;
   const needProtect = mirrorRows.filter(r => !r.dnd && r.phone_bare10 && dccDncNums.has(r.phone_bare10));
   for (const r of needProtect) {
