@@ -10250,9 +10250,15 @@ function RelayView({ supabase, onOpenDeal, mode }) {
       const [enrollRes, seqRes, pendingRes] = await Promise.all([
         supabase.from('relay_enrollments').select('*').order('enrolled_at', { ascending: false }).limit(100),
         supabase.from('relay_sequences').select('id, name'),
+        // ALL pending drafts — Relay-enrolled AND plain cadence rows. This
+        // used to filter `.not('relay_enrollment_id','is',null)`, which made
+        // the Ready-to-Approve tab Relay-only: cadence Day-0 intro drafts
+        // (relay_enrollment_id null) sat invisible in the table forever
+        // (found 2026-08-26 with 5 stranded drafts from 8/17). Day-0 rows
+        // are never auto-fired (fire_scheduled_outreach + the dispatch EF
+        // both gate cadence_day>=1), so this surface is their ONLY exit.
         supabase.from('outreach_queue')
           .select('*')
-          .not('relay_enrollment_id', 'is', null)
           .eq('status', 'pending')
           .order('scheduled_for', { ascending: true })
           .limit(50),
