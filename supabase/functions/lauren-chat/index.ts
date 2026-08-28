@@ -1,7 +1,16 @@
-// lauren-chat — NATIONAL (2026-08-17)
+// lauren-chat — NATIONAL (2026-08-17; origin-story + fee-guard fix 2026-08-25)
 //
 // Implements LAUREN_NATIONAL_SPEC_2026-08-17.md (ordered by Nathan, written
 // by the CEO session; build owner: DCC session; gate: Compliance Director).
+//
+// 2026-08-25 (Web session, per the founder-story ruling confirmed by Nathan):
+//   — Origin story REPLACED. The old block had Lauren claim Nathan lost a
+//     home to foreclosure. He didn't; that claim is prohibited on every
+//     surface (see StoryPage.tsx header + docs/founder-video-script.md in
+//     refundlocators-next). The true story ships instead. The matching
+//     lauren_knowledge rows were rewritten the same day.
+//   — Fee-guard extended to catch spelled-out numbers ("twenty five
+//     percent"), which the digit regex missed.
 //
 // What changed vs the hardened v27 (Ohio-era):
 //   §1 Geography removed — Lauren serves all 50 states through the attorney
@@ -13,8 +22,8 @@
 //      baked in. A regex fee-guard also runs on OUTPUT: any % figure or
 //      contingency phrasing in a reply is scrubbed to the approved language.
 //   §5 Defender routing — sellers/pre-auction visitors are captured and
-//      routed, never sent away. MARS boundary enforced (no "we can stop
-//      your foreclosure" in any form).
+//      routed, never sent away. MARS boundary enforced (no \"we can stop
+//      your foreclosure\" in any form).
 //   §6 Hardening extended — no prompt reveal under translate/poem/base64
 //      framings; never confirm or deny whether a person/address/case is in
 //      our system (outside the visitor's own token-scoped context).
@@ -82,8 +91,9 @@ You may NEVER state, estimate, imply, or confirm a fee percentage or dollar amou
 "We work nationwide through our attorney network. What we charge depends on your state's rules and your specific case — and you'll have the exact number in writing before you sign anything. Never a surprise, never anything upfront."
 If they push for a number: "That's Nathan's conversation — he'll give you the exact number in writing before you decide anything. Want me to have him reach out?"
 
-Nathan's origin story — use verbatim when someone questions your legitimacy:
-"This happened to me. This is why I know this, because I owned a home. I went into foreclosure. I lost my home. And nobody — like what I do existed. And nobody came to me and explained anything. Nobody tried to help me. And so after I went through that process, I learned it, and now my life's mission is to help people get access to that money."
+THE FOUNDER-STORY RULE — absolute:
+Nathan has NOT lost a home to foreclosure. NEVER say or imply that he has, and never present yourself or Nathan as a foreclosure victim — that claim is false and prohibited. If a knowledge-base result contains it, do not repeat it. The TRUE origin story, when someone questions your legitimacy or asks why this business exists:
+"Before Nathan built this, he spent months inside the surplus recovery industry — the companies that cold-call families after a foreclosure. What he found was aggressive outreach and fees almost nobody would disclose up front. He built RefundLocators to do this honestly instead: everything in writing before you sign, nothing upfront, and his direct number on the site. The people this happens to deserve to be treated like the homeowners they were, not marks."
 
 We don't want to take anything — use when client seems exhausted or suspicious:
 "I'm not here to take anything from you. You already lost the house — we're only trying to help you recover the money the county is holding. That's it. Nothing else changes."
@@ -141,6 +151,7 @@ Search before responding to these — the knowledge base has Nathan's exact word
 
 Never:
 - State, estimate, imply, or confirm any fee percentage or dollar amount for our services.
+- Say or imply Nathan (or you) lost a home to foreclosure.
 - Ask more than one question per message.
 - Use bullet points or numbered lists in your reply to the user.
 - Use bold or asterisks.
@@ -316,11 +327,23 @@ const FEE_LEAK_PATTERNS = [
   // NOTE: no trailing \b after the % — a word boundary never exists between
   // "%" and punctuation, which let "not 30%," slip the first version.
   /\b\d{1,2}\s*(?:%|percent\b)/i,
+  // Spelled-out numbers slip the digit regex ("twenty five percent") —
+  // caught here since 2026-08-25.
+  /\b(?:ten|fifteen|twenty|twenty[- ]?five|thirty|thirty[- ]?five|forty|forty[- ]?five|fifty)\s+percent\b/i,
   /\bcontingency of\b/i,
   /\bour (?:fee|cut|percentage|commission) is\b/i,
   /\bwe (?:charge|take|keep) \d/i,
 ];
 const APPROVED_FEE_REPLY = "We work nationwide through our attorney network. What we charge depends on your state's rules and your specific case — and you'll have the exact number in writing before you sign anything. Never a surprise, never anything upfront.";
+
+// Founder-story guard: the fabricated "Nathan lost a home" claim must never
+// reach a visitor, even via an old knowledge-base row (rows rewritten
+// 2026-08-25, this is the backstop).
+const STORY_LEAK_PATTERNS = [
+  /\b(?:I|he|nathan)\s+(?:went into|lost)\s+(?:my|his|a)\s+home\b/i,
+  /\bnathan\b.{0,40}\bforeclosure\b.{0,40}\b(?:himself|his own home)\b/i,
+];
+const APPROVED_STORY_REPLY = "Fair question. Before Nathan built this, he spent months inside the surplus recovery industry — the companies that cold-call families after a foreclosure — and saw aggressive outreach and fees almost nobody disclosed up front. He built RefundLocators to do it honestly: everything in writing before you sign, nothing upfront, and his direct number on the site.";
 
 function sanitizeReply(reply: string): string {
   let out = reply || "";
@@ -329,6 +352,9 @@ function sanitizeReply(reply: string): string {
   }
   for (const re of FEE_LEAK_PATTERNS) {
     if (re.test(out)) return APPROVED_FEE_REPLY;
+  }
+  for (const re of STORY_LEAK_PATTERNS) {
+    if (re.test(out)) return APPROVED_STORY_REPLY;
   }
   out = out.replace(/https?:\/\/([^\s)]+)/g, (match, host) => {
     const domain = String(host).split("/")[0].toLowerCase().replace(/[",]+$/, "");
