@@ -34,6 +34,28 @@ const SUPABASE_URL = 'https://rcfaashkfpurkvtmsmeb.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_BjBJSBQC2iJXQodut3y3Ag_8aKyPmwv';
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// ── Usage audit trail ────────────────────────────────────────────────
+// Logs navigation, searches, and deal-opens to user_events so "what did
+// X do in the DCC today" has a real answer — reads leave no trace in the
+// activity table. Fire-and-forget: must never break or slow the app.
+// Searches are debounced so we record the settled query, not keystrokes.
+let _useqTimers = {};
+function logUsage(event_type, detail) {
+  try {
+    sb.auth.getUser().then(({ data }) => {
+      const uid = data?.user?.id;
+      if (!uid) return;
+      sb.from('user_events').insert({ user_id: uid, event_type, detail: detail || {} }).then(() => {}, () => {});
+    }, () => {});
+  } catch (_) {}
+}
+function logUsageDebounced(key, event_type, detail, ms = 1600) {
+  try {
+    clearTimeout(_useqTimers[key]);
+    _useqTimers[key] = setTimeout(() => logUsage(event_type, detail), ms);
+  } catch (_) {}
+}
+
 // ─── ErrorBoundary ───────────────────────────────────────────────────
 // Catches render-time crashes inside a tab (e.g. Comms) so the whole app
 // doesn't black-screen. Surfaces the actual error message + stack so we
@@ -1167,6 +1189,12 @@ function DealCommandCenter({ session, profile }) {
   // Seed from hash so refresh keeps the user on the same view. Falls back
   // to "today" when no #/view/<x> or deal route is present.
   const [view, setView] = useState(() => parseHash().view || "today");
+
+  // Usage audit: one row on app open, one per view change, one per deal
+  // open — whichever button or route triggered it.
+  React.useEffect(() => { logUsage('app_open', {}); }, []);
+  React.useEffect(() => { logUsage('view', { view }); }, [view]);
+  React.useEffect(() => { if (activeDealId) logUsage('deal_open', { deal_id: activeDealId }); }, [activeDealId]);
 
   // ── Sidebar ────────────────────────────────────────────────────────────
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() =>
@@ -3908,6 +3936,8 @@ function CallHistoryView({ onSelect, isAdmin }) {
 // ─── Deal List ───────────────────────────────────────────────────────
 function DealList({ deals, activity, onSelect, onNew, onDelete, onOpenLog, view, setView, onToggleFlag, teamMembers, onUpdateDeal, onRequestDisposition, isAdmin, isOwner, isMyDay, userName, userId, userRole, chatJumpThreadId, onChatJumpConsumed, startCall, callStatus, onOpenCallDisposition }) {
   const [searchQ, setSearchQ] = useState("");
+  // Usage audit: record the settled deal-list search (min 3 chars, debounced).
+  React.useEffect(() => { if (searchQ.trim().length >= 3) logUsageDebounced('deals', 'search', { q: searchQ.trim(), where: 'deal-list' }); }, [searchQ]);
   const [statusFilter, setStatusFilter] = useState("all");
   // Tier filter — Eric wanted to filter the kanban by lead_tier (A/B/C).
   // 'all' = show everything, 'A'|'B'|'C' = only that tier, 'untiered' =
@@ -28418,6 +28448,8 @@ const statusFg = (s) => ({ new: '#fbbf24', contacted: '#93c5fd', qualified: '#c4
 // ─── Global Search Modal (⌘K) ─────────────────────────
 function SearchModal({ deals, onClose, onSelect }) {
   const [q, setQ] = useState("");
+  // Usage audit: record the settled ⌘K query (min 3 chars, debounced).
+  React.useEffect(() => { if (q.trim().length >= 3) logUsageDebounced('cmdk', 'search', { q: q.trim(), where: 'cmdk' }); }, [q]);
   const inputRef = useRef(null);
 
   useEffect(() => {
