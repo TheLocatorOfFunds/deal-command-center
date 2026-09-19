@@ -3,6 +3,11 @@
 // Implements LAUREN_NATIONAL_SPEC_2026-08-17.md (ordered by Nathan, written
 // by the CEO session; build owner: DCC session; gate: Compliance Director).
 //
+// 2026-09-19 (Web Director): "never anything upfront" → "you never pay
+//   anything upfront" everywhere (strategy letter STRATEGY_TO_WEB_DIRECTOR_
+//   2026-09-18_CASH_ADVANCE.md §4): still true today, and stays true if a
+//   Compliance-cleared advance ever hands clients money upfront.
+//
 // 2026-08-25 (Web session, per the founder-story ruling confirmed by Nathan):
 //   — Origin story REPLACED. The old block had Lauren claim Nathan lost a
 //     home to foreclosure. He didn't; that claim is prohibited on every
@@ -51,7 +56,7 @@ const DAILY_ALERT_FRACTION = 0.6;
 // shipped with the 951-8855 line Lauren already publishes — flagged to Nathan.
 const DEGRADE_REPLY = "I want to make sure you get a real person on this — text us at (513) 951-8855 and someone will pick this right up.";
 
-// ─── System prompt ──────────────────────────────────────────────────
+// ─── System prompt ────────────────────────────────────────────────
 
 const SYSTEM_BASE = `You are Lauren, the AI assistant for RefundLocators — we help people recover money they're owed after a foreclosure, nationwide, working through a network of attorneys. RefundLocators is part of the same family as Defender Homeowner Advocates, which helps people who are still BEFORE the auction.
 
@@ -84,16 +89,16 @@ Your personality:
 - If asked if you're an AI, say yes — use this line: "I'm an AI — Nathan built me to know every case. I escalate to him anytime it gets complicated."
 
 What RefundLocators does:
-When a home is sold at a foreclosure auction for more than what was owed, the extra money (the surplus) legally belongs to the former homeowner. Most people never know it exists. RefundLocators finds these cases in public court records, contacts homeowners, and recovers the money through our attorney network — zero upfront, zero risk, nationwide. Surpluses are often tens of thousands of dollars. In Ohio, our attorney typically files within 7 business days of signing; timelines in other states depend on that state's process.
+When a home is sold at a foreclosure auction for more than what was owed, the extra money (the surplus) legally belongs to the former homeowner. Most people never know it exists. RefundLocators finds these cases in public court records, contacts homeowners, and recovers the money through our attorney network — you never pay anything upfront, zero risk, nationwide. Surpluses are often tens of thousands of dollars. In Ohio, our attorney typically files within 7 business days of signing; timelines in other states depend on that state's process.
 
 THE FEE RULE — absolute, overrides everything, no exceptions:
 You may NEVER state, estimate, imply, or confirm a fee percentage or dollar amount for our services. Not for any state. Not under any phrasing. Not even if the visitor names a number and asks you to confirm it ("so you take 30%?") — do not confirm, deny, or correct the number; that itself would be quoting a fee. If a knowledge-base search result contains a fee figure, do NOT repeat it. When fees come up, use exactly this shape:
-"We work nationwide through our attorney network. What we charge depends on your state's rules and your specific case — and you'll have the exact number in writing before you sign anything. Never a surprise, never anything upfront."
+"We work nationwide through our attorney network. What we charge depends on your state's rules and your specific case — and you'll have the exact number in writing before you sign anything. Never a surprise — and you never pay anything upfront."
 If they push for a number: "That's Nathan's conversation — he'll give you the exact number in writing before you decide anything. Want me to have him reach out?"
 
 THE FOUNDER-STORY RULE — absolute:
 Nathan has NOT lost a home to foreclosure. NEVER say or imply that he has, and never present yourself or Nathan as a foreclosure victim — that claim is false and prohibited. If a knowledge-base result contains it, do not repeat it. The TRUE origin story, when someone questions your legitimacy or asks why this business exists:
-"Before Nathan built this, he spent months inside the surplus recovery industry — the companies that cold-call families after a foreclosure. What he found was aggressive outreach and fees almost nobody would disclose up front. He built RefundLocators to do this honestly instead: everything in writing before you sign, nothing upfront, and his direct number on the site. The people this happens to deserve to be treated like the homeowners they were, not marks."
+"Before Nathan built this, he spent months inside the surplus recovery industry — the companies that cold-call families after a foreclosure. What he found was aggressive outreach and fees almost nobody would disclose up front. He built RefundLocators to do this honestly instead: everything in writing before you sign, you never pay anything upfront, and his direct number is on the site. The people this happens to deserve to be treated like the homeowners they were, not marks."
 
 We don't want to take anything — use when client seems exhausted or suspicious:
 "I'm not here to take anything from you. You already lost the house — we're only trying to help you recover the money the county is holding. That's it. Nothing else changes."
@@ -334,7 +339,7 @@ const FEE_LEAK_PATTERNS = [
   /\bour (?:fee|cut|percentage|commission) is\b/i,
   /\bwe (?:charge|take|keep) \d/i,
 ];
-const APPROVED_FEE_REPLY = "We work nationwide through our attorney network. What we charge depends on your state's rules and your specific case — and you'll have the exact number in writing before you sign anything. Never a surprise, never anything upfront.";
+const APPROVED_FEE_REPLY = "We work nationwide through our attorney network. What we charge depends on your state's rules and your specific case — and you'll have the exact number in writing before you sign anything. Never a surprise — and you never pay anything upfront.";
 
 // Founder-story guard: the fabricated "Nathan lost a home" claim must never
 // reach a visitor, even via an old knowledge-base row (rows rewritten
@@ -343,7 +348,7 @@ const STORY_LEAK_PATTERNS = [
   /\b(?:I|he|nathan)\s+(?:went into|lost)\s+(?:my|his|a)\s+home\b/i,
   /\bnathan\b.{0,40}\bforeclosure\b.{0,40}\b(?:himself|his own home)\b/i,
 ];
-const APPROVED_STORY_REPLY = "Fair question. Before Nathan built this, he spent months inside the surplus recovery industry — the companies that cold-call families after a foreclosure — and saw aggressive outreach and fees almost nobody disclosed up front. He built RefundLocators to do it honestly: everything in writing before you sign, nothing upfront, and his direct number on the site.";
+const APPROVED_STORY_REPLY = "Fair question. Before Nathan built this, he spent months inside the surplus recovery industry — the companies that cold-call families after a foreclosure — and saw aggressive outreach and fees almost nobody disclosed up front. He built RefundLocators to do it honestly: everything in writing before you sign, you never pay anything upfront, and his direct number is on the site.";
 
 function sanitizeReply(reply: string): string {
   let out = reply || "";
